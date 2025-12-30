@@ -1,0 +1,16 @@
+[package]
+name = "binding-cpp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["staticlib"]
+
+[dependencies]
+cxx = "1.0"
+cqlib-core = { path = "../cqlib-core", version = "0.1.0" }
+
+[build-dependencies]
+cxx-build = "1.0"

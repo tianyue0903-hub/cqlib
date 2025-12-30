@@ -1,0 +1,55 @@
+fail_fast: false
+repos:
+  # 1. 基础文件检查 (通用)
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-added-large-files
+        args: ['--maxkb=1024'] # 防止上传超过 1MB 的文件
+
+  # 2. Rust 检查 (Core & Bindings)
+  - repo: https://github.com/doublify/pre-commit-rust
+    rev: v1.0
+    hooks:
+      - id: fmt
+        name: Rust Fmt
+        description: Format Rust code
+      - id: cargo-check
+        name: Cargo Check
+        description: Check for compilation errors
+      - id: clippy
+        name: Cargo Clippy
+        description: Lint Rust code
+        args: ["--", "-D", "warnings"] # 将警告视为错误
+
+  # 3. Python 检查 (Binding-Python)
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.14.10
+    hooks:
+      - id: ruff
+        args: [ --fix ]
+      - id: ruff-format
+
+  # 4. C++ 格式化 (Binding-Cpp)
+  - repo: https://github.com/pre-commit/mirrors-clang-format
+    rev: v21.1.8
+    hooks:
+      - id: clang-format
+        types_or: [c++, c]
+
+  # 5. 拼写检查 (防止 API 拼写错误)
+  - repo: https://github.com/crate-ci/typos
+    rev: v1
+    hooks:
+      - id: typos
+        # 排除不需要检查的文件
+        exclude: |
+            (?x)^(
+                .*\.lock|
+                .*\.svg|
+                .*\.ipynb
+            )$

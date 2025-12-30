@@ -1,0 +1,48 @@
+[project]
+name = "cqlib"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+readme = "README.md"
+classifiers = [
+    "Environment :: Console",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development :: Libraries"
+]
+keywords = [
+    "cqlib",
+    "quantum circuit",
+    "quantum computing",
+    "quantum programming language",
+    "quantum",
+    "sdk",
+]
+
+dependencies = ["numpy>=2.1.0"]
+
+[project.urls]
+Homepage = "https://qc.zdxlz.com/"
+Documentation = "https://qc.zdxlz.com/learn/#/resource/informationSpace?lang=zh&cId=/mkdocs/zh/cqlib/01-overview.html"
+Repository = "https://gitee.com/cq-lib/cqlib"
+Issues = "https://gitee.com/cq-lib/cqlib/issues"
+
+
+[build-system]
+requires = ["maturin>=1.10,<2.0"]
+build-backend = "maturin"
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+module-name = "cqlib._native"
+include-python-files = ["cqlib/**", ]
+sdist-include = ["Cargo.toml", "Cargo.lock", "src/**/*", "cqlib/**/*"]
