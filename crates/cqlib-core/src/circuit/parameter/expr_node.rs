@@ -474,7 +474,15 @@ impl ExprNode {
                     write!(f, " + ")?;
                     rhs_inner.format_with_parent(f, my_prec, true)
                 } else {
-                    format_infix(lhs, "-", rhs, my_prec, f)
+                    lhs.format_with_parent(f, my_prec, false)?;
+                    write!(f, " - ")?;
+                    if rhs.is_negative() {
+                        write!(f, "(")?;
+                        rhs.format_with_parent(f, u8::MAX, false)?;
+                        write!(f, ")")
+                    } else {
+                        rhs.format_with_parent(f, my_prec, true)
+                    }
                 }
             }
 
@@ -608,6 +616,7 @@ impl ExprNode {
             ExprNode::Neg(_) => true,
             ExprNode::Integer(i) => *i < 0,
             ExprNode::Float(f) => *f < 0.0,
+            ExprNode::Mul(lhs, _) | ExprNode::Div(lhs, _) => lhs.is_negative(),
             _ => false,
         }
     }
@@ -636,5 +645,5 @@ fn format_call(name: &str, arg: &Arc<ExprNode>, f: &mut fmt::Formatter<'_>) -> f
 }
 
 #[cfg(test)]
-#[path = "./test_expr_node.rs"]
-mod test_expr_node;
+#[path = "./expr_node_test.rs"]
+mod expr_node_test;

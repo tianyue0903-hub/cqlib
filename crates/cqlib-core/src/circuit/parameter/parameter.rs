@@ -1,3 +1,14 @@
+// This code is part of Cqlib.
+//
+// (C) Copyright China Telecom Quantum Group 2025
+//
+// This code is licensed under the Apache License, Version 2.0. You may
+// obtain a copy of this license in the LICENSE.txt file in the root directory
+// of this source tree or at http://www.apache.org/licenses/LICENSE-2.0.
+//
+// Any modifications or derivative works of this code must retain this
+// copyright notice, and modified files need to carry a notice indicating
+// that they have been altered from the originals.
 use crate::circuit::parameter::expr_node::{EvalError, ExprNode};
 use std::collections::HashMap;
 use std::fmt;
@@ -140,6 +151,60 @@ impl Parameter {
         }
     }
 
+    /// Applies various algebraic and trigonometric simplification rules to this parameter's
+    /// underlying expression tree.
+    ///
+    /// This method is a convenience wrapper around [`ExprNode::simplify`], applying the
+    /// simplification logic to the internal `ExprNode` and returning a new `Parameter`
+    /// with the simplified expression.
+    ///
+    /// The simplification process is iterative, meaning it applies rules repeatedly
+    /// until the expression no longer changes or a maximum number of iterations is reached.
+    /// This allows for multi-step simplifications.
+    ///
+    /// # Arguments
+    ///
+    /// * `max_iterations` - An `Option<i32>` specifying the maximum number of simplification
+    ///   passes to attempt. If `None`, a default of `100` iterations is used. A higher number
+    ///   allows for more complex simplifications but increases computation time.
+    ///
+    /// # Returns
+    ///
+    /// A new `Parameter` instance containing the simplified expression.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    /// use cqlib_core::circuit::parameter::parameter::Parameter;
+    ///
+    /// let x = Parameter::from("x");
+    ///
+    /// // Example 1: Basic algebraic simplification
+    /// let expr1 = x.clone() + Parameter::from(0); // x + 0
+    /// let simplified1 = expr1.simplify(None);
+    /// assert_eq!(simplified1, x);
+    ///
+    /// // Example 2: Constant folding and term combination
+    /// let two_x = Parameter::from(2.0) * x.clone(); // 2*x
+    /// let three_x = Parameter::from(3.0) * x.clone(); // 3*x
+    /// let expr2 = two_x + three_x; // 2*x + 3*x
+    /// let expected2 = Parameter::from(5.0) * x.clone(); // 5*x
+    /// let simplified2 = expr2.simplify(None);
+    /// assert_eq!(simplified2, expected2);
+    ///
+    /// // Example 3: Trigonometric identity (e.g., tan(arctan(y)))
+    /// let y = Parameter::from("y");
+    /// let expr3 = y.atan().tan(); // tan(arctan(y))
+    /// let simplified3 = expr3.simplify(None);
+    /// assert_eq!(simplified3, y);
+    ///
+    /// ```
+    pub fn simplify(&self, max_iterations: Option<i32>) -> Self {
+        let max_iterations = max_iterations.unwrap_or(100);
+        Self::new(self.node.simplify(max_iterations))
+    }
+
     /// Retrieves all unique symbols (variables) used in this parameter expression.
     ///
     /// # Caching Strategy
@@ -232,6 +297,36 @@ impl Parameter {
             None => Self::new(ExprNode::Ln(self.node.clone())),
             Some(base_obj) => Self::new(ExprNode::Log(self.node.clone(), base_obj.node.clone())),
         }
+    }
+
+    /// Returns a new parameter representing the mathematical constant Pi (π).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use std::f64::consts;
+    /// use cqlib_core::circuit::parameter::parameter::Parameter;
+    /// let pi_param = Parameter::pi();
+    /// assert_eq!(pi_param.evaluate(&None).unwrap(), consts::PI)
+    /// // Now `pi_param` represents the constant π in an expression tree.
+    /// ```
+    pub fn pi() -> Self {
+        Self::new(ExprNode::Pi)
+    }
+
+    /// Returns a new parameter representing the mathematical constant Euler's number (e).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use std::f64::consts;
+    /// use cqlib_core::circuit::parameter::parameter::Parameter;
+    /// let e_param = Parameter::e();
+    /// assert_eq!(e_param.evaluate(&None).unwrap(), consts::E)
+    /// // Now `e_param` represents the constant e in an expression tree.
+    /// ```
+    pub fn e() -> Self {
+        Self::new(ExprNode::E)
     }
 }
 
@@ -391,3 +486,7 @@ impl_binary_op_ref! {
     Div, div, Div,
     Rem, rem, Mod,
 }
+
+#[cfg(test)]
+#[path = "./parameter_simplify_test.rs"]
+mod parameter_simplify_test;
