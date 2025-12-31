@@ -634,3 +634,7 @@ fn format_call(name: &str, arg: &Arc<ExprNode>, f: &mut fmt::Formatter<'_>) -> f
     arg.format_with_parent(f, u8::MAX, false)?;
     write!(f, ")")
 }
+
+#[cfg(test)]
+#[path = "./test_expr_node.rs"]
+mod test_expr_node;
