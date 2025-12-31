@@ -9,7 +9,8 @@
 // Any modifications or derivative works of this code must retain this
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
-#[allow(clippy::module_inception)]
+pub mod bit;
 pub mod parameter;
 
-pub use parameter::parameter::Parameter;
+pub use bit::{ClassicalRegister, Clbit, QuantumRegister, Qubit};
+pub use parameter::impls::Parameter;

@@ -9,6 +9,57 @@
 // Any modifications or derivative works of this code must retain this
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
+
+//! # Symbolic Parameters
+//!
+//! This module provides the core infrastructure for creating and manipulating symbolic
+//! parameters in quantum circuits. It is designed to support **Parameterized Quantum Circuits (PQC)**
+//! and **Variational Quantum Algorithms (VQA)** where circuit gates depend on adjustable variables
+//! (e.g., rotation angles).
+//!
+//! ## Core Architecture
+//!
+//! The central type is [`Parameter`]. It acts as a thread-safe wrapper around an Abstract Syntax Tree (AST)
+//! represented by [`ExprNode`](super::expr_node::ExprNode). This design allows for:
+//!
+//! - **Lazy Evaluation**: Expressions are built symbolically and evaluated only when variable bindings are provided.
+//! - **Automatic Differentiation**: Compute gradients symbolically using `.derivative()`, essential for gradient-descent optimization.
+//! - **Algebraic Simplification**: Optimize expressions via `.simplify()` to reduce computational overhead.
+//!
+//! ## Usage Features
+//!
+//! - **Construction**: Create parameters from strings (symbols) or numbers (constants).
+//! - **Arithmetic**: Standard operators (`+`, `-`, `*`, `/`) are overloaded.
+//! - **Functions**: Support for trigonometric (`sin`, `cos`, `tan`), exponential, and logarithmic functions.
+//!
+//! ## Examples
+//!
+//! ```rust
+//! use cqlib_core::circuit::parameter::impls::Parameter;
+//! use std::collections::HashMap;
+//!
+//! // 1. Define symbols
+//! let theta = Parameter::from("theta");
+//! let phi = Parameter::from("phi");
+//!
+//! // 2. Construct an expression: sin(theta) + 2 * phi
+//! let expr = theta.sin() + Parameter::from(2.0) * phi.clone();
+//!
+//! // 3. Evaluate with concrete values
+//! let mut bindings = HashMap::new();
+//! bindings.insert("theta".to_string(), std::f64::consts::PI / 2.0); // sin(pi/2) = 1
+//! bindings.insert("phi".to_string(), 3.0);
+//!
+//! let result = expr.evaluate(&Some(bindings)).unwrap();
+//! assert!((result - 7.0).abs() < 1e-6); // 1.0 + 2.0 * 3.0 = 7.0
+//!
+//! // 4. Symbolic Differentiation
+//! // d(sin(theta) + 2*phi) / d(theta) = cos(theta)
+//! let deriv = expr.derivative("theta");
+//! // Note: Display format might vary slightly depending on simplification
+//! println!("Derivative: {}", deriv);
+//! ```
+
 use crate::circuit::parameter::expr_node::{EvalError, ExprNode};
 use std::collections::HashMap;
 use std::fmt;
@@ -33,7 +84,7 @@ use std::sync::{Arc, RwLock};
 /// Creating a parameter and performing arithmetic:
 ///
 /// ```rust
-/// use cqlib_core::circuit::parameter::parameter::Parameter;
+/// use cqlib_core::circuit::parameter::impls::Parameter;
 ///
 /// let theta = Parameter::from("theta");
 /// let phi = Parameter::from("phi");
@@ -176,7 +227,7 @@ impl Parameter {
     ///
     /// ```rust
     /// use std::sync::Arc;
-    /// use cqlib_core::circuit::parameter::parameter::Parameter;
+    /// use cqlib_core::circuit::parameter::impls::Parameter;
     ///
     /// let x = Parameter::from("x");
     ///
@@ -316,7 +367,7 @@ impl Parameter {
     ///
     /// ```rust
     /// use std::f64::consts;
-    /// use cqlib_core::circuit::parameter::parameter::Parameter;
+    /// use cqlib_core::circuit::parameter::impls::Parameter;
     /// let pi_param = Parameter::pi();
     /// assert_eq!(pi_param.evaluate(&None).unwrap(), consts::PI)
     /// // Now `pi_param` represents the constant π in an expression tree.
@@ -331,7 +382,7 @@ impl Parameter {
     ///
     /// ```rust
     /// use std::f64::consts;
-    /// use cqlib_core::circuit::parameter::parameter::Parameter;
+    /// use cqlib_core::circuit::parameter::impls::Parameter;
     /// let e_param = Parameter::e();
     /// assert_eq!(e_param.evaluate(&None).unwrap(), consts::E)
     /// // Now `e_param` represents the constant e in an expression tree.

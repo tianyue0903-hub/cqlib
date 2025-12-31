@@ -11,5 +11,5 @@
 // that they have been altered from the originals.
 pub mod derivative;
 pub mod expr_node;
-pub mod parameter;
+pub mod impls;
 pub mod simplify;
