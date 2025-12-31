@@ -29,9 +29,9 @@ impl ExprNode {
     pub fn simplify_basic(&self) -> ExprNode {
         match self {
             // x + 0 = x
-            ExprNode::Add(lhs, rhs) if is_zero(rhs) => lhs.simplify(2),
+            ExprNode::Add(lhs, rhs) if rhs.is_zero() => lhs.simplify(2),
             // 0 + x = x
-            ExprNode::Add(lhs, rhs) if is_zero(lhs) => rhs.simplify(2),
+            ExprNode::Add(lhs, rhs) if lhs.is_zero() => rhs.simplify(2),
             // x + x = 2x
             ExprNode::Add(lhs, rhs) if lhs == rhs => {
                 ExprNode::Mul(Arc::new(ExprNode::Integer(2)), Arc::new(lhs.simplify(2)))
@@ -90,11 +90,11 @@ impl ExprNode {
             }
 
             // x - 0 = x
-            ExprNode::Sub(lhs, rhs) if is_zero(rhs) => lhs.simplify(2),
+            ExprNode::Sub(lhs, rhs) if rhs.is_zero() => lhs.simplify(2),
             // x - x = 0
             ExprNode::Sub(lhs, rhs) if lhs == rhs => ExprNode::Integer(0),
             // 0 - x = -x
-            ExprNode::Sub(lhs, rhs) if is_zero(lhs) => ExprNode::Neg(Arc::new(rhs.simplify(2))),
+            ExprNode::Sub(lhs, rhs) if lhs.is_zero() => ExprNode::Neg(Arc::new(rhs.simplify(2))),
 
             ExprNode::Sub(lhs, rhs) => {
                 let l = lhs.simplify(2);
@@ -148,12 +148,12 @@ impl ExprNode {
             }
 
             // x * 0 = 0
-            ExprNode::Mul(_, rhs) if is_zero(rhs) => ExprNode::Integer(0),
-            ExprNode::Mul(lhs, _) if is_zero(lhs) => ExprNode::Integer(0),
+            ExprNode::Mul(_, rhs) if rhs.is_zero() => ExprNode::Integer(0),
+            ExprNode::Mul(lhs, _) if lhs.is_zero() => ExprNode::Integer(0),
 
             // x * 1 = x
-            ExprNode::Mul(lhs, rhs) if is_one(rhs) => lhs.simplify(2),
-            ExprNode::Mul(lhs, rhs) if is_one(lhs) => rhs.simplify(2),
+            ExprNode::Mul(lhs, rhs) if rhs.is_one() => lhs.simplify(2),
+            ExprNode::Mul(lhs, rhs) if lhs.is_one() => rhs.simplify(2),
 
             // x * x = x²
             ExprNode::Mul(lhs, rhs) if lhs == rhs => {
@@ -178,7 +178,7 @@ impl ExprNode {
             }
 
             // x / 1 = x
-            ExprNode::Div(lhs, rhs) if is_one(rhs) => lhs.simplify(2),
+            ExprNode::Div(lhs, rhs) if rhs.is_one() => lhs.simplify(2),
             // x / x = 1
             ExprNode::Div(lhs, rhs) if lhs == rhs => ExprNode::Integer(1),
 
@@ -197,11 +197,11 @@ impl ExprNode {
             }
 
             // x^0 = 1
-            ExprNode::Pow(_, exp) if is_zero(exp) => ExprNode::Integer(1),
+            ExprNode::Pow(_, exp) if exp.is_zero() => ExprNode::Integer(1),
             // x^1 = x
-            ExprNode::Pow(base, exp) if is_one(exp) => base.simplify(2),
+            ExprNode::Pow(base, exp) if exp.is_one() => base.simplify(2),
             // 1^x = 1
-            ExprNode::Pow(base, _) if is_one(base) => ExprNode::Integer(1),
+            ExprNode::Pow(base, _) if base.is_one() => ExprNode::Integer(1),
 
             ExprNode::Pow(base, exp) => {
                 let b = base.simplify(2);
@@ -244,7 +244,7 @@ impl ExprNode {
                 let simplified = inner.simplify(2);
 
                 // e^0 = 1
-                if is_zero(&simplified) {
+                if simplified.is_zero() {
                     return ExprNode::Integer(1);
                 }
                 // e^2 = e^2
@@ -258,7 +258,7 @@ impl ExprNode {
                 let simplified = inner.simplify(2);
 
                 // ln(1) = 0
-                if is_one(&simplified) {
+                if simplified.is_one() {
                     return ExprNode::Integer(0);
                 }
 
@@ -483,18 +483,18 @@ impl ExprNode {
 
         current
     }
-}
 
-/// Checks if an expression node represents the integer 0 or a float close to 0.0.
-fn is_zero(node: &ExprNode) -> bool {
-    matches!(node, ExprNode::Integer(0))
-        || matches!(node, ExprNode::Float(f) if f.abs() < f64::EPSILON)
-}
+    /// Checks if an expression node represents the integer 0 or a float close to 0.0.
+    pub fn is_zero(&self) -> bool {
+        matches!(self, ExprNode::Integer(0))
+            || matches!(self, ExprNode::Float(f) if f.abs() < f64::EPSILON)
+    }
 
-/// Checks if an expression node represents the integer 1 or a float close to 1.0.
-fn is_one(node: &ExprNode) -> bool {
-    matches!(node, ExprNode::Integer(1))
-        || matches!(node, ExprNode::Float(f) if (f - 1.0).abs() < f64::EPSILON)
+    /// Checks if an expression node represents the integer 1 or a float close to 1.0.
+    pub fn is_one(&self) -> bool {
+        matches!(self, ExprNode::Integer(1))
+            || matches!(self, ExprNode::Float(f) if (f - 1.0).abs() < f64::EPSILON)
+    }
 }
 
 /// Attempts to extract a constant numerical value from an expression node.

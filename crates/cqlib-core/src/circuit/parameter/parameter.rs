@@ -205,6 +205,17 @@ impl Parameter {
         Self::new(self.node.simplify(max_iterations))
     }
 
+    ///  Calculate the derivative of the expression with respect to the specified variable (symbolic differentiation)
+    ///
+    /// # Arguments
+    /// * `var` - Which variable to differentiate with respect to
+    ///
+    /// # Returns
+    /// New Parameter object representing the derivative expression
+    pub fn derivative(&self, var: &str) -> Self {
+        Self::new(self.node.derivative(var))
+    }
+
     /// Retrieves all unique symbols (variables) used in this parameter expression.
     ///
     /// # Caching Strategy
@@ -327,6 +338,15 @@ impl Parameter {
     /// ```
     pub fn e() -> Self {
         Self::new(ExprNode::E)
+    }
+
+    /// Returns a new parameter representing the power `self ^ val`.
+    ///
+    /// # Arguments
+    ///
+    /// * `val` - The exponent parameter.
+    pub fn pow(&self, val: &Self) -> Self {
+        Self::new(ExprNode::Pow(self.node.clone(), val.node.clone()))
     }
 }
 
@@ -490,3 +510,7 @@ impl_binary_op_ref! {
 #[cfg(test)]
 #[path = "./parameter_simplify_test.rs"]
 mod parameter_simplify_test;
+
+#[cfg(test)]
+#[path = "./parameter_derivative_test.rs"]
+mod parameter_derivative_test;
