@@ -12,9 +12,9 @@ documentation = "https://docs.rs/cqlib-core"
 readme = "README.md"
 keywords = [
     "quantum",
-    "quantum circuit",
-    "quantum computing",
-    "quantum programming language",
+    "quantum_circuit",
+    "quantum_computing",
+    "quantum_programming",
     "physics",
 ]
 categories = [
@@ -26,3 +26,6 @@ categories = [
 ]
 
 [dependencies]
+ndarray.workspace = true
+num.workspace = true
+num-complex.workspace = true

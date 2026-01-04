@@ -18,3 +18,8 @@ license-file = "LICENSE.txt"
 lto = true
 codegen-units = 1
 strip = true
+
+[workspace.dependencies]
+ndarray = "0.17.1"
+num = "0.4.3"
+num-complex = "0.4.6"
