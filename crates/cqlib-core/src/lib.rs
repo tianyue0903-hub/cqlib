@@ -10,6 +10,9 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
+extern crate alloc;
+extern crate core;
+
 pub mod circuit;
 
 pub fn add(left: u64, right: u64) -> u64 {

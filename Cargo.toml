@@ -20,6 +20,11 @@ codegen-units = 1
 strip = true
 
 [workspace.dependencies]
-ndarray = "0.17.1"
-num = "0.4.3"
-num-complex = "0.4.6"
+approx = "0.5"
+indexmap = "2.12"
+ndarray = "0.17"
+num = "0.4"
+num-complex = "0.4"
+rustworkx-core = "0.17"
+smallvec = "1.15"
+uuid = { version = "1.19", features = ["v4", "serde"] }

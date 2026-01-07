@@ -26,6 +26,11 @@ categories = [
 ]
 
 [dependencies]
+approx.workspace = true
+indexmap.workspace = true
 ndarray.workspace = true
 num.workspace = true
 num-complex.workspace = true
+rustworkx-core.workspace = true
+smallvec.workspace = true
+uuid.workspace = true

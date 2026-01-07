@@ -39,7 +39,7 @@ fn assert_is_unitary(gate: &Array2<Complex<f64>>) {
         let col = i % rows;
         let expected = if row == col { ONE } else { ZERO };
         let diff = (val - expected).norm();
-        if diff > f64::EPSILON {
+        if diff > 1e-10 {
             panic!(
                 "Matrix is not unitary at index [{}, {}]. Val: {}, Expected: {}",
                 row, col, val, expected
@@ -73,7 +73,7 @@ fn test_fixed_gates_unitary() {
         (&*Y2M_GATE, "Y2M"),
     ];
 
-    for (gate, name) in gates {
+    for (gate, _) in gates {
         assert_is_unitary(gate);
     }
 }

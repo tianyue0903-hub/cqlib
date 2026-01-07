@@ -27,41 +27,64 @@
 //! The types in this module are typically used when defining the structure of a quantum circuit.
 //! Registers act as containers that manage the lifecycle and identification of bits.
 
-use std::fmt;
-use std::ops::Index;
+use std::sync::Arc;
+use std::{fmt, hash::Hash, ops::Index};
 
 /// Represents a single quantum bit (qubit) within a quantum circuit.
 ///
 /// `Qubit` is the fundamental unit of information in quantum computing. It is lightweight,
-/// identified by a simple index, and supports hashing and equality checks, making it
-/// suitable for use as a key in maps or sets (e.g., for circuit DAGs or connectivity graphs).
+/// identified by a simple index within a named register, and supports hashing and equality checks.
 ///
 /// # Examples
 ///
 /// ```rust
 /// use cqlib_core::circuit::bit::Qubit;
 ///
-/// let q = Qubit { id: 0 };
-/// println!("Allocated qubit: {}", q); // Output: Q0
+/// let q = Qubit::new(0, "q");
+/// println!("qubit: {}", q); // qubit: q[0]
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Qubit {
     /// The unique identifier or index of the qubit within its register context.
-    pub id: usize,
+    id: usize,
+    /// The name of the register this qubit belongs to.
+    register_name: Arc<String>,
 }
 
 impl fmt::Display for Qubit {
-    /// Formats the qubit as "Q{id}".
+    /// Formats the qubit as "register_name[id]".
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Q{}", self.id)
+        write!(f, "{}[{}]", self.register_name, self.id)
+    }
+}
+
+impl Qubit {
+    /// Creates a new `Qubit` instance.
+    ///
+    /// This is typically used for testing or standalone qubit creation.
+    /// In a circuit context, qubits are usually created via [`QuantumRegister`].
+    pub fn new(id: usize, register_name: &str) -> Qubit {
+        Qubit {
+            id,
+            register_name: Arc::new(register_name.to_string()),
+        }
+    }
+
+    /// Returns the index of the qubit within its register.
+    pub fn id(&self) -> usize {
+        self.id
+    }
+
+    /// Returns the name of the register this qubit belongs to.
+    pub fn register_name(&self) -> &str {
+        &self.register_name
     }
 }
 
 /// A named collection of quantum bits.
 ///
-/// `QuantumRegister` provides a convenient way to group qubits together, similar to array
-/// declarations in classical programming. It manages the lifecycle and indexing of a
-/// logical set of qubits.
+/// `QuantumRegister` provides a convenient way to group qubits together.
+/// It manages the lifecycle and indexing of a logical set of qubits.
 ///
 /// # Examples
 ///
@@ -74,10 +97,10 @@ impl fmt::Display for Qubit {
 /// assert_eq!(qreg.len(), 3);
 /// println!("Created: {}", qreg); // Output: QuantumRegister(name='q', size=3)
 /// ```
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, Hash)]
 pub struct QuantumRegister {
     /// The human-readable name of the register (e.g., "q", "ancilla").
-    pub name: String,
+    name: String,
     /// The internal vector of qubits contained in this register.
     qubits: Vec<Qubit>,
 }
@@ -100,17 +123,7 @@ impl Index<usize> for QuantumRegister {
     ///
     /// # Panics
     ///
-    /// Panics if the index is out of bounds (greater than or equal to `self.len()`).
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use cqlib_core::circuit::bit::QuantumRegister;
-    ///
-    /// let qreg = QuantumRegister::new("q", 2);
-    /// let q0 = qreg[0]; // Access the first qubit
-    /// // let q_panic = qreg[5]; // This would panic
-    /// ```
+    /// Panics if the index is out of bounds.
     fn index(&self, index: usize) -> &Self::Output {
         &self.qubits[index]
     }
@@ -121,19 +134,6 @@ impl<'a> IntoIterator for &'a QuantumRegister {
     type IntoIter = std::slice::Iter<'a, Qubit>;
 
     /// Creates an iterator over references to the qubits in the register.
-    ///
-    /// This allows iterating over a register without consuming ownership.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use cqlib_core::circuit::bit::QuantumRegister;
-    ///
-    /// let qreg = QuantumRegister::new("q", 2);
-    /// for qubit in &qreg {
-    ///     println!("Iterating: {}", qubit);
-    /// }
-    /// ```
     fn into_iter(self) -> Self::IntoIter {
         self.qubits.iter()
     }
@@ -142,16 +142,18 @@ impl<'a> IntoIterator for &'a QuantumRegister {
 impl QuantumRegister {
     /// Creates a new quantum register with the specified name and size.
     ///
-    /// This initializes a vector of `Qubit` instances with IDs ranging from `0` to `size - 1`.
-    ///
     /// # Arguments
     ///
     /// * `name` - The name of the register.
     /// * `size` - The number of qubits to allocate.
     pub fn new(name: &str, size: usize) -> Self {
+        let name_arc = Arc::new(name.to_string());
         let mut qubits = Vec::with_capacity(size);
         for i in 0..size {
-            qubits.push(Qubit { id: i });
+            qubits.push(Qubit {
+                id: i,
+                register_name: name_arc.clone(),
+            });
         }
 
         Self {
@@ -169,31 +171,57 @@ impl QuantumRegister {
     pub fn is_empty(&self) -> bool {
         self.qubits.is_empty()
     }
+
+    /// Returns the name of the register.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
 }
 
 /// Represents a single classical bit (clbit) within a quantum circuit.
 ///
-/// `Clbit` is used to store measurement results from quantum operations. Like [`Qubit`],
-/// it is a lightweight identifier.
+/// `Clbit` is used to store measurement results from quantum operations.
 ///
 /// # Examples
 ///
 /// ```rust
 /// use cqlib_core::circuit::bit::Clbit;
 ///
-/// let c = Clbit { id: 0 };
-/// println!("Classical bit: {}", c); // Output: C0
+/// let c = Clbit::new(0, "c");
+/// println!("Classical bit: {}", c); // Output: c[0]
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Clbit {
     /// The unique identifier or index of the classical bit.
-    pub id: usize,
+    id: usize,
+    /// The name of the register this clbit belongs to.
+    register_name: Arc<String>,
+}
+
+impl Clbit {
+    /// Creates a new `Clbit` instance.
+    pub fn new(id: usize, register_name: &str) -> Self {
+        Self {
+            id,
+            register_name: Arc::new(register_name.to_string()),
+        }
+    }
+
+    /// Returns the index of the classical bit within its register.
+    pub fn id(&self) -> usize {
+        self.id
+    }
+
+    /// Returns the name of the register this clbit belongs to.
+    pub fn register_name(&self) -> &str {
+        &self.register_name
+    }
 }
 
 impl fmt::Display for Clbit {
-    /// Formats the classical bit as "C{id}".
+    /// Formats the classical bit as "register_name[id]".
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "C{}", self.id)
+        write!(f, "{}[{}]", self.register_name, self.id)
     }
 }
 
@@ -214,7 +242,7 @@ impl fmt::Display for Clbit {
 #[derive(Debug, Default, Clone)]
 pub struct ClassicalRegister {
     /// The human-readable name of the register (e.g., "c", "meas").
-    pub name: String,
+    name: String,
     /// The internal vector of classical bits contained in this register.
     clbits: Vec<Clbit>,
 }
@@ -258,8 +286,12 @@ impl ClassicalRegister {
     /// * `size` - The number of bits to allocate.
     pub fn new(name: &str, size: usize) -> Self {
         let mut clbits = Vec::with_capacity(size);
+        let name_arc = Arc::new(name.to_string());
         for i in 0..size {
-            clbits.push(Clbit { id: i });
+            clbits.push(Clbit {
+                id: i,
+                register_name: name_arc.clone(),
+            });
         }
 
         Self {
@@ -276,6 +308,11 @@ impl ClassicalRegister {
     /// Returns `true` if the register contains no bits.
     pub fn is_empty(&self) -> bool {
         self.clbits.is_empty()
+    }
+
+    /// Returns the name of the register.
+    pub fn name(&self) -> &str {
+        &self.name
     }
 }
 
