@@ -10,8 +10,12 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 pub mod bit;
+pub mod circuit;
+mod error;
 pub mod gate;
+mod operation;
+mod param;
 pub mod parameter;
 
-pub use bit::{ClassicalRegister, Clbit, QuantumRegister, Qubit};
+pub use bit::Qubit;
 pub use parameter::impls::Parameter;

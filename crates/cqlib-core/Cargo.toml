@@ -33,4 +33,5 @@ num.workspace = true
 num-complex.workspace = true
 rustworkx-core.workspace = true
 smallvec.workspace = true
+thiserror.workspace = true
 uuid.workspace = true

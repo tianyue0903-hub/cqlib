@@ -21,12 +21,13 @@
 //! By using `Instruction`, the circuit can store a heterogeneous list of operations in a single vector.
 
 use crate::circuit::Parameter;
+use crate::circuit::gate::circuit_gate::CircuitGate;
+use crate::circuit::gate::directive::Directive;
 use crate::circuit::gate::extended_gate::ExtendedGate;
-use crate::circuit::gate::operation::Operation;
 use crate::circuit::gate::standard_gate::StandardGate;
 use alloc::borrow::Cow;
 use ndarray::Array2;
-use num::complex::Complex64;
+use num_complex::Complex64;
 use smallvec::SmallVec;
 use std::fmt;
 
@@ -41,9 +42,10 @@ pub enum Instruction {
     /// A standard, natively supported quantum gate (e.g., `H`, `CX`).
     Standard(StandardGate),
     /// An extended gate, such as a multi-controlled gate or a user-defined unitary.
-    Extended(ExtendedGate),
+    Extended(Box<ExtendedGate>),
+    Circuit(Box<CircuitGate>),
     /// A non-unitary operation, such as `Measure`, `Barrier`, or `Reset`.
-    Operation(Operation),
+    Directive(Directive),
 }
 
 impl Instruction {
@@ -61,7 +63,8 @@ impl Instruction {
         match self {
             Instruction::Standard(g) => Some(g.matrix(params)),
             Instruction::Extended(g) => Some(g.matrix(params)),
-            Instruction::Operation(_) => None,
+            Instruction::Circuit(_) => todo!(),
+            Instruction::Directive(_) => None,
         }
     }
 
@@ -87,12 +90,13 @@ impl Instruction {
             }
             Instruction::Extended(g) => {
                 if let Some((gate, ps)) = g.inverse(params) {
-                    Some((Self::Extended(gate), ps))
+                    Some((Self::Extended(Box::from(gate)), ps))
                 } else {
                     None
                 }
             }
-            Instruction::Operation(_) => None,
+            Instruction::Circuit(_) => todo!(),
+            Instruction::Directive(_) => None,
         }
     }
 
@@ -156,13 +160,13 @@ impl Instruction {
                 if let Some(std) = try_compose_std(base, total_ctrls) {
                     Some(Instruction::Standard(std))
                 } else {
-                    Some(Instruction::Extended(ExtendedGate::MCGate(
+                    Some(Instruction::Extended(Box::from(ExtendedGate::MCGate(
                         total_ctrls as u8,
                         base,
-                    )))
+                    ))))
                 }
             }
-            Instruction::Extended(ext) => match ext {
+            Instruction::Extended(ext) => match &**ext {
                 ExtendedGate::MCGate(curr_ctrls, base) => {
                     let total_ctrls = *curr_ctrls as usize + num_new_ctrls;
                     // Attempt to re-canonicalize to StandardGate even from extended state.
@@ -170,22 +174,23 @@ impl Instruction {
                     if let Some(std) = try_compose_std(*base, total_ctrls) {
                         Some(Instruction::Standard(std))
                     } else {
-                        Some(Instruction::Extended(ExtendedGate::MCGate(
+                        Some(Instruction::Extended(Box::from(ExtendedGate::MCGate(
                             total_ctrls as u8,
                             *base,
-                        )))
+                        ))))
                     }
                 }
                 ExtendedGate::Unitary(curr_ctrls, target, def) => {
                     let total_ctrls = *curr_ctrls as usize + num_new_ctrls;
-                    Some(Instruction::Extended(ExtendedGate::Unitary(
+                    Some(Instruction::Extended(Box::from(ExtendedGate::Unitary(
                         total_ctrls as u8,
                         *target,
                         def.clone(),
-                    )))
+                    ))))
                 }
             },
-            Instruction::Operation(_) => None,
+            Instruction::Circuit(_) => todo!(),
+            Instruction::Directive(_) => None,
         }
     }
 }
@@ -195,7 +200,8 @@ impl fmt::Display for Instruction {
         match self {
             Instruction::Standard(g) => write!(f, "{}", g),
             Instruction::Extended(g) => write!(f, "{}", g),
-            Instruction::Operation(i) => write!(f, "{}", i),
+            Instruction::Circuit(_) => todo!(),
+            Instruction::Directive(i) => write!(f, "{}", i),
         }
     }
 }

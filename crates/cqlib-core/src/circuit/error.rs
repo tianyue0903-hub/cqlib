@@ -60,6 +60,13 @@ pub enum CircuitError {
     #[error("Duplicate qubits found in circuit definition")]
     DuplicateQubits,
 
+    /// Thrown when an operation references a qubit that is not part of the circuit.
+    ///
+    /// All qubits used in operations (gates, measurements) must be explicitly added to the circuit
+    /// via `add_qubits` or `new` before use.
+    #[error("Qubit {0} not found in circuit")]
+    QubitNotFound(u32),
+
     /// Thrown when an operation is requested to provide a unitary matrix, but none exists.
     ///
     /// This typically happens when calling `.matrix()` on non-unitary instructions such as:

@@ -14,13 +14,13 @@ use std::fmt;
 
 #[repr(u8)]
 #[derive(Eq, Hash, PartialEq, Debug, Clone, Copy)]
-pub enum Operation {
+pub enum Directive {
     Barrier,
     Measure,
     Reset,
 }
 
-impl fmt::Display for Operation {
+impl fmt::Display for Directive {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Barrier => write!(f, "Barrier"),
