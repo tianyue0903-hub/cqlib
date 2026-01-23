@@ -10,8 +10,10 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
+use crate::circuit::error::EvalError;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
+use std::hash::Hash;
 use std::sync::Arc;
 
 /// Represents a node in the mathematical expression syntax tree.
@@ -89,33 +91,6 @@ pub enum ExprNode {
     Mod(Arc<ExprNode>, Arc<ExprNode>),
     /// Power operation `base ^ exponent`.
     Pow(Arc<ExprNode>, Arc<ExprNode>),
-}
-
-/// Errors that occur during the evaluation of an expression.
-#[derive(Debug)]
-pub enum EvalError {
-    /// A symbol was encountered in the expression but was not found in the bindings map.
-    UndefinedSymbol(String),
-    /// Attempted to divide by zero or modulo by zero.
-    DivisionByZero,
-    /// The input value is outside the definition domain of the function.
-    ///
-    /// Examples include `sqrt(-1)`, `ln(0)`, or `asin(2)`.
-    DomainError(String),
-    /// The calculation resulted in a NaN (Not a Number).
-    NaN(String),
-}
-
-impl std::error::Error for EvalError {}
-impl fmt::Display for EvalError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            EvalError::UndefinedSymbol(name) => write!(f, "Symbol '{}' value not provided", name),
-            EvalError::DivisionByZero => write!(f, "Division by zero occurred"),
-            EvalError::DomainError(msg) => write!(f, "Function domain error: {}", msg),
-            EvalError::NaN(msg) => write!(f, "Calculation result is not a real number: {}", msg),
-        }
-    }
 }
 
 impl ExprNode {
@@ -364,6 +339,59 @@ impl fmt::Display for ExprNode {
     /// operator precedence and parentheses generation recursively.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.format_with_parent(f, 0, false)
+    }
+}
+
+impl Hash for ExprNode {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        std::mem::discriminant(self).hash(state);
+        match self {
+            ExprNode::Integer(i) => i.hash(state),
+            ExprNode::Float(f) => f.to_bits().hash(state),
+            ExprNode::Symbol(s) => s.hash(state),
+            ExprNode::Sign(inner) => inner.hash(state),
+            ExprNode::Pi => {} // Discriminant already hashed
+            ExprNode::E => {}  // Discriminant already hashed
+            ExprNode::Abs(inner) => inner.hash(state),
+            ExprNode::Sqrt(inner) => inner.hash(state),
+            ExprNode::Exp(inner) => inner.hash(state),
+            ExprNode::Neg(inner) => inner.hash(state),
+            ExprNode::Log(arg, base) => {
+                arg.hash(state);
+                base.hash(state);
+            }
+            ExprNode::Ln(inner) => inner.hash(state),
+            ExprNode::Sin(inner) => inner.hash(state),
+            ExprNode::ASin(inner) => inner.hash(state),
+            ExprNode::Cos(inner) => inner.hash(state),
+            ExprNode::ACos(inner) => inner.hash(state),
+            ExprNode::Tan(inner) => inner.hash(state),
+            ExprNode::ATan(inner) => inner.hash(state),
+            ExprNode::Add(lhs, rhs) => {
+                lhs.hash(state);
+                rhs.hash(state);
+            }
+            ExprNode::Sub(lhs, rhs) => {
+                lhs.hash(state);
+                rhs.hash(state);
+            }
+            ExprNode::Mul(lhs, rhs) => {
+                lhs.hash(state);
+                rhs.hash(state);
+            }
+            ExprNode::Div(lhs, rhs) => {
+                lhs.hash(state);
+                rhs.hash(state);
+            }
+            ExprNode::Mod(lhs, rhs) => {
+                lhs.hash(state);
+                rhs.hash(state);
+            }
+            ExprNode::Pow(lhs, rhs) => {
+                lhs.hash(state);
+                rhs.hash(state);
+            }
+        }
     }
 }
 

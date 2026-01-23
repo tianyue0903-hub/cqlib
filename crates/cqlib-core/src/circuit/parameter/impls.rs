@@ -60,9 +60,11 @@
 //! println!("Derivative: {}", deriv);
 //! ```
 
-use crate::circuit::parameter::expr_node::{EvalError, ExprNode};
+use crate::circuit::error::EvalError;
+use crate::circuit::parameter::expr_node::ExprNode;
 use std::collections::HashMap;
 use std::fmt;
+use std::hash::{Hash, Hasher};
 use std::ops::{Add, Div, Mul, Rem, Sub};
 use std::sync::{Arc, RwLock};
 
@@ -101,6 +103,12 @@ pub struct Parameter {
     pub node: Arc<ExprNode>,
 }
 
+impl Hash for Parameter {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.node.hash(state);
+    }
+}
+
 impl fmt::Display for Parameter {
     /// Formats the parameter as a mathematical string.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -127,6 +135,8 @@ impl PartialEq for Parameter {
         self.node == other.node
     }
 }
+
+impl Eq for Parameter {}
 
 impl From<ExprNode> for Parameter {
     /// Wraps a raw `ExprNode` into a `Parameter`.

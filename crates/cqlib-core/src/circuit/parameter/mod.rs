@@ -13,3 +13,5 @@ pub mod derivative;
 pub mod expr_node;
 pub mod impls;
 pub mod simplify;
+
+pub use impls::Parameter;
