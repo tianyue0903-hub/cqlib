@@ -90,6 +90,33 @@ impl Qubit {
     }
 }
 
+macro_rules! impl_qubit_from_unsigned {
+    ($($t:ty),*) => {
+        $(
+            impl From<$t> for Qubit {
+                fn from(idx: $t) -> Self {
+                    Self(idx as u32)
+                }
+            }
+        )*
+    };
+}
+macro_rules! impl_qubit_from_integer {
+    ($($t:ty),*) => {
+        $(
+            impl From<$t> for Qubit {
+                fn from(idx: $t) -> Self {
+                    assert!(idx >= 0, "Qubit index must be non-negative");
+                    Self(idx as u32)
+                }
+            }
+        )*
+    };
+}
+
+impl_qubit_from_unsigned!(usize, u32, u16, u8);
+impl_qubit_from_integer!(i32, i16, i8, isize);
+
 #[test]
 fn test_qubit_creation_and_display() {
     let q0 = Qubit(0);

@@ -13,8 +13,8 @@ pub mod bit;
 pub mod circuit;
 mod error;
 pub mod gate;
-mod operation;
-mod param;
+pub mod operation;
+pub mod param;
 pub mod parameter;
 
 pub use bit::Qubit;

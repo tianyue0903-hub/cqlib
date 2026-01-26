@@ -67,6 +67,12 @@ pub enum CircuitError {
     #[error("Qubit {0} not found in circuit")]
     QubitNotFound(u32),
 
+    /// Thrown when the number of qubits provided for an operation does not match its definition.
+    ///
+    /// For example, applying a 2-qubit CNOT gate to 3 qubits, or a 1-qubit Custom Unitary to 2 qubits.
+    #[error("Qubit count mismatch: expected {expected}, got {actual}")]
+    QubitCountMismatch { expected: usize, actual: usize },
+
     /// Thrown when an operation is requested to provide a unitary matrix, but none exists.
     ///
     /// This typically happens when calling `.matrix()` on non-unitary instructions such as:
@@ -82,4 +88,7 @@ pub enum CircuitError {
     /// or gate inversion fail due to invalid parameter bindings.
     #[error("Failed to evaluate parameters: {0}")]
     ParamEvaluationFailed(#[from] EvalError),
+
+    #[error("Operation is irreversible")]
+    IrreversibleOperation,
 }
