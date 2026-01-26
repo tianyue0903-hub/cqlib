@@ -11,29 +11,70 @@
 // that they have been altered from the originals.
 
 use crate::circuit::circuit::Circuit;
-use crate::circuit::gate::instruction::Instruction;
+use crate::circuit::error::CircuitError;
 use crate::circuit::parameter::impls::Parameter;
 use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub struct FrozenCircuit {
-    instructions: Arc<[Instruction]>,
-    num_qubits: usize,
-    num_params: usize,
-    params: Vec<Parameter>,
+    pub(crate) circuit: Circuit,
 }
 
 #[derive(Debug, Clone)]
 pub struct CircuitGate {
     pub name: Arc<String>,
-    num_qubits: usize,
-    num_params: usize,
-    params: Vec<Parameter>,
+    pub(crate) num_qubits: usize,
+    pub(crate) num_params: usize,
+    pub(crate) params: Vec<Parameter>,
     pub(crate) circuit: Arc<FrozenCircuit>,
 }
 
 impl CircuitGate {
+    pub fn new(
+        name: impl Into<String>,
+        circuit: FrozenCircuit,
+        params: Vec<Parameter>,
+    ) -> Result<Self, CircuitError> {
+        let num_qubits = circuit.circuit.qubits().len();
+        let num_params = circuit.circuit.symbols().len();
+
+        if params.len() != num_params {
+            return Err(CircuitError::ParameterCountMismatch {
+                expected: num_params,
+                actual: params.len(),
+            });
+        }
+
+        Ok(Self {
+            name: Arc::new(name.into()),
+            num_qubits,
+            num_params,
+            params,
+            circuit: Arc::new(circuit),
+        })
+    }
+
+    pub fn num_qubits(&self) -> usize {
+        self.num_qubits
+    }
+
+    pub fn num_params(&self) -> usize {
+        self.num_params
+    }
+
     pub fn circuit(&self) -> Arc<FrozenCircuit> {
         self.circuit.clone()
+    }
+
+    pub fn inverse(&self) -> Result<Self, CircuitError> {
+        let inverted_circuit = self.circuit.circuit.inverse()?;
+        let frozen_inverted = FrozenCircuit {
+            circuit: inverted_circuit,
+        };
+        CircuitGate::new(
+            format!("{}_dg", self.name),
+            frozen_inverted,
+            self.params.clone(),
+        )
     }
 }

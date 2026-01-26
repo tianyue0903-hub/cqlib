@@ -48,6 +48,7 @@
 
 use crate::circuit::bit::Qubit;
 use crate::circuit::error::CircuitError;
+use crate::circuit::gate::circuit_gate::{CircuitGate, FrozenCircuit};
 use crate::circuit::gate::{Directive, ExtendedGate, Instruction, StandardGate, UnitaryDef};
 use crate::circuit::operation::Operation;
 use crate::circuit::param::{CircuitParam, ParameterValue};
@@ -198,6 +199,14 @@ impl Circuit {
         self.qubits.len()
     }
 
+    /// Returns the parameters of the circuit.
+    pub fn parameters(&self) -> &IndexSet<Parameter> {
+        &self.parameters
+    }
+
+    pub fn symbols(&self) -> &IndexSet<String> {
+        &self.symbols
+    }
     /// Returns a vector of all qubits in the circuit, preserving their insertion order.
     pub fn qubits(&self) -> Vec<Qubit> {
         self.qubits.iter().cloned().collect()
@@ -1021,9 +1030,6 @@ impl Circuit {
         for op in self.data.iter().rev() {
             // Special handling for Directives
             match &op.instruction {
-                Instruction::Circuit(directive) => {
-                    todo!()
-                }
                 Instruction::Directive(directive) => match directive {
                     Directive::Barrier => {
                         new_circuit.append(
@@ -1072,6 +1078,31 @@ impl Circuit {
         }
 
         Ok(new_circuit)
+    }
+
+    /// Converts the circuit into a `CircuitGate` instruction.
+    ///
+    /// This method "freezes" the current circuit and wraps it into an instruction that can be
+    /// appended to another circuit. The provided `params` are bound to the circuit's free symbols
+    /// in the order they were defined.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - A name for the new gate.
+    /// * `params` - A list of parameters to bind to the circuit's symbols.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CircuitError::QubitCountMismatch`] if the number of provided parameters does not
+    /// match the number of free symbols in the circuit.
+    pub fn to_gate(
+        self,
+        name: impl Into<String>,
+        params: Vec<Parameter>,
+    ) -> Result<Instruction, CircuitError> {
+        let frozen = FrozenCircuit { circuit: self };
+        let gate = CircuitGate::new(name, frozen, params)?;
+        Ok(Instruction::Circuit(Box::new(gate)))
     }
 
     fn check_qubits_unique(qubits: &[Qubit]) -> bool {

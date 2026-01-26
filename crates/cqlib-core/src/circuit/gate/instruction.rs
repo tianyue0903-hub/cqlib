@@ -95,7 +95,16 @@ impl Instruction {
                     None
                 }
             }
-            Instruction::Circuit(_) => todo!("Nested circuit inversion not yet implemented"),
+            Instruction::Circuit(circuit_gate) => {
+                if let Ok(inv_gate) = circuit_gate.inverse() {
+                    Some((
+                        Instruction::Circuit(Box::new(inv_gate)),
+                        params.iter().cloned().collect(),
+                    ))
+                } else {
+                    None
+                }
+            }
             Instruction::Directive(d) => match d {
                 Directive::Barrier => Some((Self::Directive(Directive::Barrier), SmallVec::new())),
                 _ => None,

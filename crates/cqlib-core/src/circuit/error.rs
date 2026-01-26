@@ -73,6 +73,9 @@ pub enum CircuitError {
     #[error("Qubit count mismatch: expected {expected}, got {actual}")]
     QubitCountMismatch { expected: usize, actual: usize },
 
+    #[error("Parameter count mismatch: expected {expected}, got {actual}")]
+    ParameterCountMismatch { expected: usize, actual: usize },
+
     /// Thrown when an operation is requested to provide a unitary matrix, but none exists.
     ///
     /// This typically happens when calling `.matrix()` on non-unitary instructions such as:
