@@ -195,6 +195,17 @@ impl Parameter {
         }
     }
 
+    /// Creates a new symbolic parameter.
+    ///
+    /// # Example
+    /// ```
+    /// use cqlib_core::circuit::parameter::impls::Parameter;
+    /// let theta = Parameter::symbol("theta");
+    /// ```
+    pub fn symbol(name: impl Into<String>) -> Self {
+        Self::new(ExprNode::Symbol(name.into()))
+    }
+
     /// Evaluates the parameter expression given a set of variable bindings.
     ///
     /// # Arguments
