@@ -884,14 +884,34 @@ impl Circuit {
     /// // Equivalent to CCX(q0, q1, q2)
     /// circuit.multi_control(StandardGate::X, [q0, q1], vec![q2], []).unwrap();
     /// ```
-    pub fn multi_control<C, T, P>(
+    /// Appends a controlled operation to the circuit.
+    ///
+    /// This method generalizes `multi_control` to accept any instruction that can be controlled
+    /// (e.g., `StandardGate`, `ExtendedGate`, or `Unitary`). It delegates the logic of
+    /// creating the controlled gate to [`Instruction::control`], ensuring consistent behavior.
+    ///
+    /// # Example
+    /// ```rust
+    /// # use cqlib_core::circuit::circuit::Circuit;
+    /// # use cqlib_core::circuit::Qubit;
+    /// # use cqlib_core::circuit::gate::{StandardGate, Instruction};
+    /// let mut circuit = Circuit::new(3);
+    /// let q0 = Qubit::new(0);
+    /// let q1 = Qubit::new(1);
+    /// let q2 = Qubit::new(2);
+    ///
+    /// // Standard Gate (X -> CCX)
+    /// circuit.multi_control(StandardGate::X, [q0, q1], vec![q2], []).unwrap();
+    /// ```
+    pub fn multi_control<I, C, T, P>(
         &mut self,
-        gate: StandardGate,
+        instruction: I,
         controls: C,
         targets: T,
         params: P,
     ) -> Result<(), CircuitError>
     where
+        I: Into<Instruction>,
         C: IntoIterator,
         C::Item: Into<Qubit>,
         T: IntoIterator,
@@ -901,27 +921,16 @@ impl Circuit {
         let controls_sv: SmallVec<[Qubit; 3]> = controls.into_iter().map(|q| q.into()).collect();
         let targets_sv: SmallVec<[Qubit; 1]> = targets.into_iter().map(|q| q.into()).collect();
         let num_controls = controls_sv.len();
-        let instruction = if num_controls == 0 {
-            Instruction::Standard(gate)
-        } else {
-            match (gate, num_controls) {
-                (StandardGate::X, 1) => Instruction::Standard(StandardGate::CX),
-                (StandardGate::X, 2) => Instruction::Standard(StandardGate::CCX),
-                (StandardGate::CX, 1) => Instruction::Standard(StandardGate::CCX),
-                (StandardGate::Y, 1) => Instruction::Standard(StandardGate::CY),
-                (StandardGate::Z, 1) => Instruction::Standard(StandardGate::CZ),
-                (StandardGate::RX, 1) => Instruction::Standard(StandardGate::CRX),
-                (StandardGate::RY, 1) => Instruction::Standard(StandardGate::CRY),
-                (StandardGate::RZ, 1) => Instruction::Standard(StandardGate::CRZ),
-                _ => {
-                    Instruction::Extended(Box::new(ExtendedGate::MCGate(num_controls as u8, gate)))
-                }
-            }
-        };
+
+        let inst: Instruction = instruction.into();
+
+        let controlled_inst = inst
+            .control(num_controls)
+            .ok_or_else(|| CircuitError::InvalidControlOperation(inst.to_string()))?;
 
         let mut all_qubits = controls_sv;
         all_qubits.extend(targets_sv);
-        self.append(instruction, all_qubits, params, None)
+        self.append(controlled_inst, all_qubits, params, None)
     }
 
     /// Appends a custom unitary gate to the circuit.

@@ -91,4 +91,7 @@ pub enum CircuitError {
 
     #[error("Operation is irreversible")]
     IrreversibleOperation,
+
+    #[error("Operation cannot be controlled: {0}")]
+    InvalidControlOperation(String),
 }

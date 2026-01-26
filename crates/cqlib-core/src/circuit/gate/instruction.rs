@@ -208,3 +208,21 @@ impl fmt::Display for Instruction {
         }
     }
 }
+
+impl From<StandardGate> for Instruction {
+    fn from(g: StandardGate) -> Self {
+        Self::Standard(g)
+    }
+}
+
+impl From<ExtendedGate> for Instruction {
+    fn from(g: ExtendedGate) -> Self {
+        Self::Extended(Box::new(g))
+    }
+}
+
+impl From<Directive> for Instruction {
+    fn from(d: Directive) -> Self {
+        Self::Directive(d)
+    }
+}
