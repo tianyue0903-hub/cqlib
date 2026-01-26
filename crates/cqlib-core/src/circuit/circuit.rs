@@ -979,6 +979,92 @@ impl Circuit {
         )
     }
 
+    /// Creates the inverse (adjoint) of the circuit.
+    ///
+    /// The inverse circuit represents the unitary $U^\dagger$ such that $U^\dagger U = I$.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CircuitError::IrreversibleOperation`] if the circuit contains non-unitary
+    /// operations (e.g., `Measure`, `Reset`) or gates that cannot be symbolically inverted.
+    pub fn inverse(&self) -> Result<Circuit, CircuitError> {
+        let mut new_circuit = Circuit::from_qubits(self.qubits())?;
+        new_circuit.data.reserve(self.data.len());
+        // 1. Invert Global Phase
+        let current_phase_param = self.global_phase();
+        // New phase = -1.0 * old_phase
+        let new_phase_param = Parameter::from(-1.0) * current_phase_param;
+
+        // Try to simplify/evaluate to keep it clean (e.g. Fixed(-0.5))
+        if let Ok(val) = new_phase_param.evaluate(&None) {
+            new_circuit.global_phase = CircuitParam::Fixed(val);
+        } else {
+            let (index, is_new) = new_circuit.parameters.insert_full(new_phase_param.clone());
+            if is_new {
+                for sym in new_phase_param.get_symbols() {
+                    new_circuit.symbols.insert(sym);
+                }
+            }
+            new_circuit.global_phase = CircuitParam::Index(index as u32);
+        }
+
+        // 2. Iterate backwards
+        for op in self.data.iter().rev() {
+            // Special handling for Directives
+            match &op.instruction {
+                Instruction::Circuit(directive) => {
+                    todo!()
+                }
+                Instruction::Directive(directive) => match directive {
+                    Directive::Barrier => {
+                        new_circuit.append(
+                            Instruction::Directive(Directive::Barrier),
+                            op.qubits.clone(),
+                            std::iter::empty(),
+                            op.label.as_deref(),
+                        )?;
+                        continue;
+                    }
+                    _ => return Err(CircuitError::IrreversibleOperation),
+                },
+                _ => {
+                    // Resolve parameters
+                    let params: SmallVec<[Parameter; 3]> = op
+                        .params
+                        .iter()
+                        .map(|p| match p {
+                            CircuitParam::Fixed(val) => Parameter::from(*val),
+                            CircuitParam::Index(idx) => self.parameters[*idx as usize].clone(),
+                        })
+                        .collect();
+
+                    // Invert instruction
+                    if let Some((inv_inst, inv_params)) = op.instruction.inverse(&params) {
+                        // Convert back to CircuitParam/ParameterValue
+                        let param_values: SmallVec<[ParameterValue; 3]> = inv_params
+                            .into_iter()
+                            .map(|p| match p.evaluate(&None) {
+                                Ok(val) => ParameterValue::Fixed(val),
+                                Err(_) => ParameterValue::Param(p),
+                            })
+                            .collect();
+
+                        new_circuit.append(
+                            inv_inst,
+                            op.qubits.clone(),
+                            param_values,
+                            op.label.as_deref(),
+                        )?;
+                    } else {
+                        return Err(CircuitError::IrreversibleOperation);
+                    }
+                }
+            }
+        }
+
+        Ok(new_circuit)
+    }
+
     fn check_qubits_unique(qubits: &[Qubit]) -> bool {
         let mut seen = HashSet::with_capacity(qubits.len());
         for q in qubits {
@@ -989,3 +1075,7 @@ impl Circuit {
         true
     }
 }
+
+#[cfg(test)]
+#[path = "./circuit_test.rs"]
+mod circuit_test;

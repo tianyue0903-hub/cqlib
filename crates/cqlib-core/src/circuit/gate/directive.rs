@@ -10,6 +10,9 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
+use crate::circuit::Parameter;
+use crate::circuit::gate::ExtendedGate;
+use smallvec::SmallVec;
 use std::fmt;
 
 #[repr(u8)]
@@ -26,6 +29,15 @@ impl fmt::Display for Directive {
             Self::Barrier => write!(f, "Barrier"),
             Self::Measure => write!(f, "Measure"),
             Self::Reset => write!(f, "Reset"),
+        }
+    }
+}
+
+impl Directive {
+    pub fn inverse(&self) -> Option<Self> {
+        match self {
+            Directive::Barrier => Some(Directive::Barrier),
+            _ => None,
         }
     }
 }

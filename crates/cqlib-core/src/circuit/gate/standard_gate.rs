@@ -27,6 +27,7 @@ use ndarray::prelude::*;
 use num::complex::Complex;
 use smallvec::{SmallVec, smallvec};
 use std::borrow::Cow;
+use std::f64::consts::PI;
 use std::fmt;
 use std::hash::Hash;
 
@@ -280,8 +281,8 @@ impl StandardGate {
             Self::X2M => Some((Self::X2P, smallvec![])),
             Self::Y2P => Some((Self::Y2M, smallvec![])),
             Self::Y2M => Some((Self::Y2P, smallvec![])),
-            Self::XY2P => Some((Self::XY2M, smallvec![])),
-            Self::XY2M => Some((Self::XY2P, smallvec![])),
+            Self::XY2P => Some((Self::XY2M, smallvec![params[0].clone()])),
+            Self::XY2M => Some((Self::XY2P, smallvec![params[0].clone()])),
 
             // Parametric gates: usually negate the parameter
             // RX(theta)† = RX(-theta)
@@ -325,8 +326,8 @@ impl StandardGate {
                 ],
             )),
 
-            // XY gate (theta) -> Inverse is XY(-theta)
-            Self::XY => Some((Self::XY, smallvec![-1.0 * params[0].clone()])),
+            // XY gate (theta) -> Inverse is XY(pi+theta)
+            Self::XY => Some((Self::XY, smallvec![PI + params[0].clone()])),
         }
     }
 

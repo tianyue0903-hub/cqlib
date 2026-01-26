@@ -95,8 +95,11 @@ impl Instruction {
                     None
                 }
             }
-            Instruction::Circuit(_) => todo!(),
-            Instruction::Directive(_) => None,
+            Instruction::Circuit(_) => todo!("Nested circuit inversion not yet implemented"),
+            Instruction::Directive(d) => match d {
+                Directive::Barrier => Some((Self::Directive(Directive::Barrier), SmallVec::new())),
+                _ => None,
+            },
         }
     }
 
