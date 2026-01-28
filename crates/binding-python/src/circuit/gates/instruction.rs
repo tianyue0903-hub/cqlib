@@ -10,8 +10,8 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
+use cqlib_core::circuit::gate::{Directive, Instruction};
 use cqlib_core::circuit::Parameter;
-use cqlib_core::circuit::gate::Instruction;
 use num_complex::Complex64;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -34,7 +34,7 @@ impl PyInstruction {
         // Instruction in core doesn't derive PartialEq automatically for all variants in a simple way
         // that matches Python's expectation strictly (e.g. Box<ExtendedGate> pointer vs value).
         // For now, we format debug strings or rely on specific matching if implemented in core.
-        // Let's assume for now strict equality is hard without core support,
+        // Let's assume for now strict equality is hard without core support, 
         // but for StandardGate variants it works.
         // A simple workaround for this binding:
         format!("{:?}", self.inner) == format!("{:?}", other.inner)
@@ -44,6 +44,42 @@ impl PyInstruction {
         let mut hasher = DefaultHasher::new();
         format!("{:?}", self.inner).hash(&mut hasher);
         hasher.finish()
+    }
+
+    // --- Properties ---
+
+    #[getter]
+    fn num_qubits(&self) -> usize {
+        match &self.inner {
+            Instruction::Standard(g) => g.num_qubits(),
+            Instruction::Extended(g) => g.num_qubits(),
+            Instruction::Circuit(g) => g.num_qubits(),
+            Instruction::Directive(d) => match d {
+                Directive::Measure => 1,
+                Directive::Reset => 1,
+                Directive::Barrier => 0, // Represents variable/undefined
+            },
+        }
+    }
+
+    #[getter]
+    fn num_ctrl_qubits(&self) -> usize {
+        match &self.inner {
+            Instruction::Standard(g) => g.num_ctrl_qubits(),
+            Instruction::Extended(g) => g.num_ctrl_qubits(),
+            Instruction::Circuit(_) => 0,
+            Instruction::Directive(_) => 0,
+        }
+    }
+
+    #[getter]
+    fn num_params(&self) -> usize {
+        match &self.inner {
+            Instruction::Standard(g) => g.num_params(),
+            Instruction::Extended(g) => g.num_params(),
+            Instruction::Circuit(g) => g.num_params(),
+            Instruction::Directive(_) => 0,
+        }
     }
 
     /// Returns the unitary matrix of the instruction.

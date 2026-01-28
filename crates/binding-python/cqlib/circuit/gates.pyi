@@ -13,13 +13,27 @@
 from typing import List, Optional, Union, Any, final
 
 
-@final
 class Instruction:
     """
-    A unified representation of any operation in a quantum circuit.
+    The base class for all quantum instructions (gates, directives, etc).
     
-    This class wraps standard gates, extended gates, and directives.
+    This class serves as a unified interface for operations in a quantum circuit.
     """
+
+    @property
+    def num_qubits(self) -> int:
+        """The total number of qubits this instruction acts on."""
+        ...
+
+    @property
+    def num_ctrl_qubits(self) -> int:
+        """The number of control qubits involved in this instruction."""
+        ...
+
+    @property
+    def num_params(self) -> int:
+        """The number of floating-point parameters this instruction uses."""
+        ...
 
     def matrix(self, params: Optional[List[float]] = None) -> List[List[complex]]:
         """
@@ -67,12 +81,11 @@ class Instruction:
 
 
 @final
-class StandardGate:
+class StandardGate(Instruction):
     """
     Represents the set of standard quantum logic gates supported natively by Cqlib.
     
-    This class provides static access to singleton gate instances and methods to 
-    query their properties.
+    Inherits from Instruction.
     """
 
     # --- Singleton Gates ---
@@ -119,62 +132,63 @@ class StandardGate:
 
     FSIM: "StandardGate"
 
-    # --- Properties ---
-
-    @property
-    def num_qubits(self) -> int:
-        """The total number of qubits this gate acts on."""
-        ...
-
-    @property
-    def num_ctrl_qubits(self) -> int:
-        """The number of control qubits defined for this gate."""
-        ...
-
-    @property
-    def num_params(self) -> int:
-        """The number of floating-point parameters this gate accepts."""
-        ...
-
-    # --- Methods ---
-
-    def matrix(self, params: Optional[List[float]] = None) -> List[List[complex]]:
-        """
-        Returns the unitary matrix of the gate.
-
-        Args:
-            params (Optional[List[float]]): Parameters for the gate. Required for parametric gates.
-
-        Returns:
-            List[List[complex]]: The unitary matrix.
-        """
-        ...
-
-    def control(self, num_ctrls: int) -> Instruction:
-        """
-        Returns a controlled version of this gate.
-
-        Args:
-            num_ctrls (int): Number of control qubits to add.
-
-        Returns:
-            Instruction: The controlled instruction.
-        """
-        ...
+    # StandardGate specific methods (if any) or overrides
+    # Note: methods like matrix, control, inverse are inherited from Instruction 
+    # but defined in Rust StandardGate too.
 
     def inverse(self) -> "StandardGate":
         """
         Returns the type of the inverse gate.
-
-        Returns:
-            StandardGate: The standard gate type that corresponds to the inverse operation.
+        For StandardGate, this returns the specific gate type (e.g., S -> SDG).
         """
         ...
 
-    def __eq__(self, other: object) -> bool: ...
+# --- Module-level aliases for convenience ---
 
-    def __hash__(self) -> int: ...
+# Single Qubit
+I: StandardGate
+H: StandardGate
+X: StandardGate
+Y: StandardGate
+Z: StandardGate
+S: StandardGate
+SDG: StandardGate
+T: StandardGate
+TDG: StandardGate
 
-    def __str__(self) -> str: ...
+# Parametric
+RX: StandardGate
+RY: StandardGate
+RZ: StandardGate
+U: StandardGate
+Phase: StandardGate
+GPhase: StandardGate
 
-    def __repr__(self) -> str: ...
+# Two Qubit
+CX: StandardGate
+CY: StandardGate
+CZ: StandardGate
+SWAP: StandardGate
+RXX: StandardGate
+RYY: StandardGate
+RZZ: StandardGate
+RZX: StandardGate
+RXY: StandardGate
+FSIM: StandardGate
+
+# Multi-Controlled
+CCX: StandardGate
+
+# Controlled Rotation
+CRX: StandardGate
+CRY: StandardGate
+CRZ: StandardGate
+
+# Other
+XY: StandardGate
+X2P: StandardGate
+X2M: StandardGate
+XY2P: StandardGate
+XY2M: StandardGate
+Y2P: StandardGate
+Y2M: StandardGate

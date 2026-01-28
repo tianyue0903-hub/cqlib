@@ -182,14 +182,17 @@ impl PyStandardGate {
 
     // --- Properties ---
 
+    #[getter]
     fn num_qubits(&self) -> usize {
         self.inner.num_qubits()
     }
 
+    #[getter]
     fn num_ctrl_qubits(&self) -> usize {
         self.inner.num_ctrl_qubits()
     }
 
+    #[getter]
     fn num_params(&self) -> usize {
         self.inner.num_params()
     }
