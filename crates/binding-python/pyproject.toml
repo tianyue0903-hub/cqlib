@@ -29,6 +29,7 @@ keywords = [
 ]
 
 dependencies = ["numpy>=2.1.0"]
+dynamic = ["version"]
 
 [project.urls]
 Homepage = "https://qc.zdxlz.com/"
