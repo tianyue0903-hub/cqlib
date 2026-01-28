@@ -10,20 +10,8 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
-pub mod circuit;
+pub mod instruction;
+pub mod standard;
 
-use pyo3::prelude::*;
-
-use circuit::{PyCircuit, PyInstruction, PyParameter, PyQubit, PyStandardGate};
-
-/// A Python module implemented in Rust.
-#[pymodule]
-#[pyo3(name = "_native")]
-fn binding_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_class::<PyQubit>()?;
-    m.add_class::<PyCircuit>()?;
-    m.add_class::<PyParameter>()?;
-    m.add_class::<PyStandardGate>()?;
-    m.add_class::<PyInstruction>()?;
-    Ok(())
-}
+pub use instruction::PyInstruction;
+pub use standard::PyStandardGate;
