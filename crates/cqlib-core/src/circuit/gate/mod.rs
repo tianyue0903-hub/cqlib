@@ -30,13 +30,15 @@
 
 pub mod circuit_gate;
 pub mod directive;
-pub mod extended_gate;
 pub mod gate_matrix;
 pub mod instruction;
+pub mod mc_gate;
 pub mod standard_gate;
+pub mod unitary_gate;
 
 // Re-export key types for easier access
 pub use directive::Directive;
-pub use extended_gate::{ExtendedGate, UnitaryDef};
 pub use instruction::Instruction;
+pub use mc_gate::MCGate;
 pub use standard_gate::StandardGate;
+pub use unitary_gate::UnitaryGate;

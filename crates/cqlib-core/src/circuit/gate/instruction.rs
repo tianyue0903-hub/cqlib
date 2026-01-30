@@ -20,16 +20,18 @@
 //!
 //! By using `Instruction`, the circuit can store a heterogeneous list of operations in a single vector.
 
-use crate::circuit::Parameter;
-use crate::circuit::gate::circuit_gate::CircuitGate;
+use crate::circuit::gate::circuit_gate::{CircuitGate, FrozenCircuit};
 use crate::circuit::gate::directive::Directive;
-use crate::circuit::gate::extended_gate::ExtendedGate;
 use crate::circuit::gate::standard_gate::StandardGate;
+use crate::circuit::gate::{MCGate, UnitaryGate, gate_matrix};
+use crate::circuit::{Circuit, Parameter};
 use alloc::borrow::Cow;
 use ndarray::Array2;
 use num_complex::Complex64;
 use smallvec::SmallVec;
 use std::fmt;
+use std::ops::Deref;
+use std::sync::Arc;
 
 /// A unified representation of any operation in a quantum circuit.
 ///
@@ -42,8 +44,9 @@ pub enum Instruction {
     /// A standard, natively supported quantum gate (e.g., `H`, `CX`).
     Standard(StandardGate),
     /// An extended gate, such as a multi-controlled gate or a user-defined unitary.
-    Extended(Box<ExtendedGate>),
-    Circuit(Box<CircuitGate>),
+    McGate(Box<MCGate>),
+    UnitaryGate(Box<UnitaryGate>),
+    CircuitGate(Box<CircuitGate>),
     /// A non-unitary operation, such as `Measure`, `Barrier`, or `Reset`.
     Directive(Directive),
 }
@@ -62,8 +65,9 @@ impl Instruction {
     pub fn matrix(&self, params: &[f64]) -> Option<Cow<'_, Array2<Complex64>>> {
         match self {
             Instruction::Standard(g) => Some(g.matrix(params)),
-            Instruction::Extended(g) => Some(g.matrix(params)),
-            Instruction::Circuit(_) => todo!(),
+            Instruction::McGate(g) => Some(g.matrix(params)),
+            Instruction::UnitaryGate(g) => g.matrix().map(Cow::Borrowed),
+            Instruction::CircuitGate(_) => todo!(),
             Instruction::Directive(_) => None,
         }
     }
@@ -88,22 +92,39 @@ impl Instruction {
                     None
                 }
             }
-            Instruction::Extended(g) => {
+            Instruction::McGate(g) => {
                 if let Some((gate, ps)) = g.inverse(params) {
-                    Some((Self::Extended(Box::from(gate)), ps))
+                    Some((Self::McGate(Box::new(gate)), ps))
                 } else {
                     None
                 }
             }
-            Instruction::Circuit(circuit_gate) => {
-                if let Ok(inv_gate) = circuit_gate.inverse() {
-                    Some((
-                        Instruction::Circuit(Box::new(inv_gate)),
-                        params.iter().cloned().collect(),
-                    ))
-                } else {
-                    None
+            Instruction::UnitaryGate(g) => {
+                // Try to invert via circuit representation first
+                if let Some(c) = g.circuit().as_ref() {
+                    // Invert the internal circuit
+                    if let Ok(c_inv) = c.circuit.inverse() {
+                        // Create frozen circuit from inverted circuit
+                        let frozen_inv = FrozenCircuit { circuit: c_inv };
+                        // Create new UnitaryGate with inverted circuit
+                        let u_inv =
+                            UnitaryGate::new(format!("{}_dg", g.label()).as_str(), g.num_qubits())
+                                .with_circuit(Arc::new(frozen_inv));
+                        return Some((Self::UnitaryGate(Box::new(u_inv)), SmallVec::new()));
+                    }
                 }
+                None
+            }
+            Instruction::CircuitGate(circuit_gate) => {
+                // if let Ok(inv_gate) = circuit_gate.inverse() {
+                //     Some((
+                //         Instruction::Circuit(Box::new(inv_gate)),
+                //         params.iter().cloned().collect(),
+                //     ))
+                // } else {
+                //     None
+                // }
+                todo!()
             }
             Instruction::Directive(d) => match d {
                 Directive::Barrier => Some((Self::Directive(Directive::Barrier), SmallVec::new())),
@@ -172,36 +193,38 @@ impl Instruction {
                 if let Some(std) = try_compose_std(base, total_ctrls) {
                     Some(Instruction::Standard(std))
                 } else {
-                    Some(Instruction::Extended(Box::from(ExtendedGate::MCGate(
+                    Some(Instruction::McGate(Box::from(MCGate::new(
                         total_ctrls as u8,
                         base,
                     ))))
                 }
             }
-            Instruction::Extended(ext) => match &**ext {
-                ExtendedGate::MCGate(curr_ctrls, base) => {
-                    let total_ctrls = *curr_ctrls as usize + num_new_ctrls;
-                    // Attempt to re-canonicalize to StandardGate even from extended state.
-                    // e.g., if we had MCGate(1, X) and add 1 control -> Total 2 controls with X -> CCX.
-                    if let Some(std) = try_compose_std(*base, total_ctrls) {
-                        Some(Instruction::Standard(std))
-                    } else {
-                        Some(Instruction::Extended(Box::from(ExtendedGate::MCGate(
-                            total_ctrls as u8,
-                            *base,
-                        ))))
-                    }
-                }
-                ExtendedGate::Unitary(curr_ctrls, target, def) => {
-                    let total_ctrls = *curr_ctrls as usize + num_new_ctrls;
-                    Some(Instruction::Extended(Box::from(ExtendedGate::Unitary(
+            Instruction::McGate(mc) => {
+                let total_ctrls = mc.num_qubits() + num_new_ctrls;
+                let base = mc.base_gate().to_owned();
+
+                if let Some(std) = try_compose_std(base, total_ctrls) {
+                    Some(Instruction::Standard(std))
+                } else {
+                    Some(Instruction::McGate(Box::from(MCGate::new(
                         total_ctrls as u8,
-                        *target,
-                        def.clone(),
+                        base,
                     ))))
                 }
-            },
-            Instruction::Circuit(_) => todo!(),
+            }
+            Instruction::UnitaryGate(uni) => {
+                let mut g = UnitaryGate::new(
+                    format!("ctl_{}_{}", num_new_ctrls, uni.label()).as_str(),
+                    uni.num_qubits() + num_new_ctrls as u16,
+                );
+                if let Some(m) = g.matrix() {
+                    let controlled = gate_matrix::control_matrix(m, num_new_ctrls);
+                    g = g.with_matrix(controlled).unwrap();
+                }
+
+                Some(Instruction::UnitaryGate(Box::from(g)))
+            }
+            Instruction::CircuitGate(_) => todo!(),
             Instruction::Directive(_) => None,
         }
     }
@@ -211,8 +234,9 @@ impl fmt::Display for Instruction {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Instruction::Standard(g) => write!(f, "{}", g),
-            Instruction::Extended(g) => write!(f, "{}", g),
-            Instruction::Circuit(_) => todo!(),
+            Instruction::McGate(g) => write!(f, "{}", g),
+            Instruction::UnitaryGate(g) => write!(f, "{}", g),
+            Instruction::CircuitGate(_) => todo!(),
             Instruction::Directive(i) => write!(f, "{}", i),
         }
     }
@@ -221,12 +245,6 @@ impl fmt::Display for Instruction {
 impl From<StandardGate> for Instruction {
     fn from(g: StandardGate) -> Self {
         Self::Standard(g)
-    }
-}
-
-impl From<ExtendedGate> for Instruction {
-    fn from(g: ExtendedGate) -> Self {
-        Self::Extended(Box::new(g))
     }
 }
 

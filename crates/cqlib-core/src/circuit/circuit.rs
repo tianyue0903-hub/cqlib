@@ -49,7 +49,7 @@
 use crate::circuit::bit::Qubit;
 use crate::circuit::error::CircuitError;
 use crate::circuit::gate::circuit_gate::{CircuitGate, FrozenCircuit};
-use crate::circuit::gate::{Directive, ExtendedGate, Instruction, StandardGate, UnitaryDef};
+use crate::circuit::gate::{Directive, Instruction, StandardGate, UnitaryGate};
 use crate::circuit::operation::Operation;
 use crate::circuit::param::{CircuitParam, ParameterValue};
 use crate::circuit::parameter::Parameter;
@@ -92,7 +92,7 @@ pub struct Circuit {
     /// The ordered sequence of operations (quantum gates, measurements, etc.) in the circuit.
     ///
     /// This vector represents the circuit schedule.
-    pub(crate) data: Vec<Operation>,
+    data: Vec<Operation>,
     ///  The global phase of the circuit, representing a scalar factor $e^{i\theta}$.
     ///
     /// While the global phase is unobservable in isolated systems, it is critical for:
@@ -218,6 +218,10 @@ impl Circuit {
             CircuitParam::Index(index) => self.parameters[index as usize].clone(),
             CircuitParam::Fixed(value) => Parameter::from(value),
         }
+    }
+
+    pub fn operations(&self) -> &[Operation] {
+        &self.data
     }
 
     /// Appends a generic instruction to the circuit.
@@ -970,32 +974,26 @@ impl Circuit {
     /// // Apply the custom gate
     /// circuit.unitary(u_gate, vec![q0]).unwrap();
     /// ```
-    pub fn unitary(
-        &mut self,
-        definition: UnitaryDef,
-        qubits: Vec<Qubit>,
-    ) -> Result<(), CircuitError> {
+    pub fn unitary(&mut self, gate: UnitaryGate, qubits: Vec<Qubit>) -> Result<(), CircuitError> {
         let qubits_sv: SmallVec<[Qubit; 3]> = qubits.into();
 
         // 检查 qubits 数量是否匹配 definition.num_qubits
-        if qubits_sv.len() != definition.num_qubits as usize {
+        if qubits_sv.len() != gate.num_qubits() as usize {
             return Err(CircuitError::QubitCountMismatch {
-                expected: definition.num_qubits as usize,
+                expected: gate.num_qubits() as usize,
                 actual: qubits_sv.len(),
             });
         }
 
         self.append(
-            Instruction::Extended(Box::new(ExtendedGate::Unitary(
-                0, // num_controls (初始为0)
-                definition.num_qubits as u8,
-                definition,
-            ))),
+            Instruction::UnitaryGate(Box::new(gate)),
             qubits_sv,
             std::iter::empty(),
             None,
         )
     }
+
+    // pub fn circuit_gate(&mut self, gate: CircuitGate, qubits: Vec<Qubit>, params: ) -> Result<(), CircuitError> {}
 
     /// Creates the inverse (adjoint) of the circuit.
     ///
@@ -1089,20 +1087,10 @@ impl Circuit {
     /// # Arguments
     ///
     /// * `name` - A name for the new gate.
-    /// * `params` - A list of parameters to bind to the circuit's symbols.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`CircuitError::QubitCountMismatch`] if the number of provided parameters does not
-    /// match the number of free symbols in the circuit.
-    pub fn to_gate(
-        self,
-        name: impl Into<String>,
-        params: Vec<Parameter>,
-    ) -> Result<Instruction, CircuitError> {
+    pub fn to_gate(self, name: impl Into<String>) -> Result<Instruction, CircuitError> {
         let frozen = FrozenCircuit { circuit: self };
-        let gate = CircuitGate::new(name, frozen, params)?;
-        Ok(Instruction::Circuit(Box::new(gate)))
+        let gate = CircuitGate::new(name, frozen)?;
+        Ok(Instruction::CircuitGate(Box::new(gate)))
     }
 
     fn check_qubits_unique(qubits: &[Qubit]) -> bool {
