@@ -4,127 +4,77 @@
 #
 # This code is licensed under the Apache License, Version 2.0. You may
 # obtain a copy of this license in the LICENSE.txt file in the root directory
-# of this source tree or at http:#www.apache.org/licenses/LICENSE-2.0.
+# of this source tree or at http://www.apache.org/licenses/LICENSE-2.0.
 #
 # Any modifications or derivative works of this code must retain this
 # copyright notice, and modified files need to carry a notice indicating
 # that they have been altered from the originals.
 
-from typing import Optional, Dict, List, Union
+from typing import List, Union, Optional
 
 class Parameter:
-    """
-    A symbolic parameter for quantum circuits.
-    """
+    """A symbolic parameter used in parameterized quantum circuits (PQC)."""
 
     def __init__(self, name: str) -> None:
-        """
-        Creates a new symbolic parameter with the given name.
-
-        Args:
-            name (str): The name of the symbol.
-        """
+        """Create a symbolic parameter from a name."""
         ...
 
     @staticmethod
     def from_float(val: float) -> "Parameter":
-        """
-        Creates a constant parameter from a float value.
-
-        Args:
-            val (float): The constant value.
-        """
+        """Create a parameter from a float value."""
         ...
 
     @staticmethod
     def pi() -> "Parameter":
-        """
-        Returns a parameter representing the mathematical constant Pi (π).
-        """
+        """Returns a new parameter representing the mathematical constant Pi (π)."""
         ...
 
     @staticmethod
     def e() -> "Parameter":
-        """
-        Returns a parameter representing the mathematical constant Euler's number (e).
-        """
+        """Returns a new parameter representing the mathematical constant Euler's number (e)."""
         ...
 
-    def evaluate(self, bindings: Optional[Dict[str, float]] = None) -> float:
-        """
-        Evaluates the parameter expression given a set of variable bindings.
-
-        Args:
-            bindings (Optional[Dict[str, float]]): A dictionary mapping symbol names to their values.
-
-        Returns:
-            float: The computed value.
-
-        Raises:
-            ValueError: If a symbol is missing or a math error occurs.
-        """
+    def evaluate(self, bindings: Optional[dict[str, float]] = None) -> float:
+        """Evaluates the parameter expression given a set of variable bindings."""
         ...
 
     def simplify(self, max_iterations: Optional[int] = None) -> "Parameter":
-        """
-        Simplifies the parameter expression.
-
-        Args:
-            max_iterations (Optional[int]): The maximum number of simplification passes.
-
-        Returns:
-            Parameter: A new simplified parameter.
-        """
+        """Applies algebraic and trigonometric simplification rules."""
         ...
 
     def derivative(self, var: str) -> "Parameter":
-        """
-        Computes the symbolic derivative with respect to a variable.
-
-        Args:
-            var (str): The variable to differentiate by.
-
-        Returns:
-            Parameter: The derivative expression.
-        """
+        """Calculate the derivative of the expression with respect to the specified variable."""
         ...
 
     @property
     def symbols(self) -> List[str]:
-        """
-        Returns a list of unique symbols in the expression.
-        """
+        """Retrieves all unique symbols (variables) used in this parameter expression."""
         ...
 
-    def abs(self) -> "Parameter": ...
-    def sqrt(self) -> "Parameter": ...
-    def exp(self) -> "Parameter": ...
+    # Arithmetic operators
+    def __add__(self, other: Union["Parameter", float]) -> "Parameter": ...
+    def __sub__(self, other: Union["Parameter", float]) -> "Parameter": ...
+    def __mul__(self, other: Union["Parameter", float]) -> "Parameter": ...
+    def __truediv__(self, other: Union["Parameter", float]) -> "Parameter": ...
+    def __pow__(self, other: Union["Parameter", float]) -> "Parameter": ...
+    def __neg__(self) -> "Parameter": ...
+
+    # Reverse arithmetic operators
+    def __radd__(self, other: float) -> "Parameter": ...
+    def __rsub__(self, other: float) -> "Parameter": ...
+    def __rmul__(self, other: float) -> "Parameter": ...
+    def __rtruediv__(self, other: float) -> "Parameter": ...
+
+    # Mathematical functions
     def sin(self) -> "Parameter": ...
     def cos(self) -> "Parameter": ...
     def tan(self) -> "Parameter": ...
     def asin(self) -> "Parameter": ...
     def acos(self) -> "Parameter": ...
     def atan(self) -> "Parameter": ...
+    def exp(self) -> "Parameter": ...
     def ln(self) -> "Parameter": ...
-    def log(self, base: Optional["Parameter"] = None) -> "Parameter":
-        """
-        Logarithm with an arbitrary base.
-
-        Args:
-            base (Optional[Parameter]): The base of the logarithm. If None, uses natural logarithm (base e).
-        """
-        ...
-
-    def __add__(self, other: Union["Parameter", float]) -> "Parameter": ...
-    def __radd__(self, other: Union["Parameter", float]) -> "Parameter": ...
-    def __sub__(self, other: Union["Parameter", float]) -> "Parameter": ...
-    def __rsub__(self, other: Union["Parameter", float]) -> "Parameter": ...
-    def __mul__(self, other: Union["Parameter", float]) -> "Parameter": ...
-    def __rmul__(self, other: Union["Parameter", float]) -> "Parameter": ...
-    def __truediv__(self, other: Union["Parameter", float]) -> "Parameter": ...
-    def __rtruediv__(self, other: Union["Parameter", float]) -> "Parameter": ...
-    def __pow__(self, other: Union["Parameter", float]) -> "Parameter": ...
-    def __neg__(self) -> "Parameter": ...
-    def __eq__(self, other: object) -> bool: ...
+    def sqrt(self) -> "Parameter": ...
+    def abs(self) -> "Parameter": ...
     def __str__(self) -> str: ...
     def __repr__(self) -> str: ...

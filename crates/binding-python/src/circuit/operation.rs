@@ -10,8 +10,11 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
-pub mod standard;
-pub mod unitary;
+use cqlib_core::circuit::operation::Operation;
+use pyo3::pyclass;
 
-pub use standard::PyStandardGate;
-pub use unitary::PyUnitaryGate;
+#[pyclass(name = "Operation", module = "cqlib.circuit")]
+#[derive(Debug, Clone)]
+pub struct PyOperation {
+    pub(crate) operation: Operation,
+}

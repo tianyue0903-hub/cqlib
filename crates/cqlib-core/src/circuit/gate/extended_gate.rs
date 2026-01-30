@@ -68,6 +68,21 @@ impl UnitaryDef {
         }
     }
 
+    /// Returns the label of the gate.
+    pub fn label(&self) -> &str {
+        &self.label
+    }
+
+    /// Returns the number of qubits.
+    pub fn num_qubits(&self) -> u16 {
+        self.num_qubits
+    }
+
+    /// Returns the matrix representation if available.
+    pub fn matrix(&self) -> Option<&Array2<Complex<f64>>> {
+        self.matrix.as_deref()
+    }
+
     /// Attaches a matrix to the unitary definition.
     ///
     /// # Arguments

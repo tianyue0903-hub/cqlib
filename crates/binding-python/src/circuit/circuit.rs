@@ -10,22 +10,26 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
+use super::bit::PyQubit;
+use super::gates::{PyStandardGate, PyUnitaryGate};
 use super::parameter::PyParameter;
+use cqlib_core::circuit::param::ParameterValue;
 use cqlib_core::circuit::{Circuit, Qubit};
+use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 
-/// 这是一个辅助枚举，用于接收 Python 传入的参数（可能是浮点数，也可能是 Parameter 对象）
+/// A helper enum to accept either a float or a Parameter object from Python.
 #[derive(FromPyObject)]
 pub enum PyParamLike {
     Float(f64),
     Param(PyParameter),
 }
 
-impl Into<cqlib_core::circuit::param::ParameterValue> for PyParamLike {
-    fn into(self) -> cqlib_core::circuit::param::ParameterValue {
-        match self {
-            PyParamLike::Float(f) => cqlib_core::circuit::param::ParameterValue::Fixed(f),
-            PyParamLike::Param(p) => cqlib_core::circuit::param::ParameterValue::Param(p.inner),
+impl From<PyParamLike> for ParameterValue {
+    fn from(val: PyParamLike) -> Self {
+        match val {
+            PyParamLike::Float(f) => ParameterValue::Fixed(f),
+            PyParamLike::Param(p) => ParameterValue::Param(p.inner),
         }
     }
 }
@@ -35,55 +39,384 @@ pub struct PyCircuit {
     pub inner: Circuit,
 }
 
+#[derive(FromPyObject)]
+pub enum PyIntQubitList {
+    // 1. 单个整数 (比特数)
+    NumQubits(usize),
+    // 2. 整数列表 (比特索引列表)
+    IndexList(Vec<usize>),
+    // 3. Qubit 对象列表 (直接拷贝 PyQubit，因为它是 Copy 的)
+    QubitList(Vec<PyQubit>),
+}
+
 #[pymethods]
 impl PyCircuit {
+    /// Creates a new quantum circuit.
+    ///
+    /// The circuit can be initialized in three ways:
+    /// 1. By number of qubits: `Circuit(5)` creates a circuit with qubits 0-4.
+    /// 2. By list of integers: `Circuit([0, 2, 4])` creates a circuit with specific qubits.
+    /// 3. By list of Qubit objects: `Circuit([Qubit(0), Qubit(1)])`.
+    ///
+    /// Args:
+    ///     qubits (Union[int, List[int], List[Qubit]]): The qubits to include in the circuit.
     #[new]
-    fn new(num_qubits: usize) -> Self {
-        PyCircuit {
-            inner: Circuit::new(num_qubits),
+    fn new(qubits: PyIntQubitList) -> PyResult<Self> {
+        match qubits {
+            PyIntQubitList::NumQubits(num) => Ok(PyCircuit {
+                inner: Circuit::new(num),
+            }),
+            PyIntQubitList::IndexList(indices) => {
+                let core_qubits: Vec<Qubit> = indices
+                    .into_iter()
+                    .map(|idx| Qubit::new(idx as u32))
+                    .collect();
+                let inner = Circuit::from_qubits(core_qubits)
+                    .map_err(|e| PyValueError::new_err(e.to_string()))?;
+                Ok(PyCircuit { inner })
+            }
+            PyIntQubitList::QubitList(qubits) => {
+                let core_qubits: Vec<Qubit> = qubits.into_iter().map(|q| q.inner).collect();
+                let inner = Circuit::from_qubits(core_qubits)
+                    .map_err(|e| PyValueError::new_err(e.to_string()))?;
+                Ok(PyCircuit { inner })
+            }
         }
     }
 
+    #[getter]
     fn num_qubits(&self) -> usize {
         self.inner.num_qubits()
     }
 
-    // --- Gates ---
+    #[getter]
+    fn qubits(&self) -> Vec<PyQubit> {
+        self.inner
+            .qubits()
+            .iter()
+            .map(|&q| PyQubit::from(q))
+            .collect()
+    }
+
+    /// Appends an instruction to the circuit.
+    ///
+    /// Args:
+    ///     instruction (StandardGate): The gate to append.
+    ///     qubits (List[int]): The list of qubit indices to apply the gate to.
+    fn append(&mut self, instruction: &Bound<'_, PyAny>, qubits: Vec<usize>) -> PyResult<()> {
+        let qubits_core: Vec<Qubit> = qubits
+            .into_iter()
+            .map(|idx| Qubit::new(idx as u32))
+            .collect();
+
+        if let Ok(std_gate) = instruction.extract::<PyStandardGate>() {
+            // StandardGate: needs to be converted to Instruction::Standard
+            // And its parameters need to be passed.
+            let inst = cqlib_core::circuit::gate::Instruction::Standard(std_gate.inner);
+
+            // Extract parameters from the PyStandardGate object
+            // We need to convert Vec<Parameter> to iterator of ParameterValue
+            let params_core: Vec<cqlib_core::circuit::param::ParameterValue> = std_gate
+                .params
+                .into_iter()
+                .map(cqlib_core::circuit::param::ParameterValue::Param)
+                .collect();
+
+            self.inner
+                .append(inst, qubits_core, params_core, None)
+                .map_err(|e| PyValueError::new_err(e.to_string()))?;
+            Ok(())
+        } else {
+            Err(PyTypeError::new_err(
+                "Currently only StandardGate objects are supported in append().",
+            ))
+        }
+    }
+
+    // --- Single Qubit Gates ---
+
+    fn i(&mut self, qubit: usize) -> PyResult<()> {
+        self.inner
+            .i(Qubit::new(qubit as u32))
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
 
     fn h(&mut self, qubit: usize) -> PyResult<()> {
         self.inner
             .h(Qubit::new(qubit as u32))
-            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
+            .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
-    fn cx(&mut self, control: usize, target: usize) -> PyResult<()> {
+    fn x(&mut self, qubit: usize) -> PyResult<()> {
         self.inner
-            .cx(Qubit::new(control as u32), Qubit::new(target as u32))
-            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
+            .x(Qubit::new(qubit as u32))
+            .map_err(|e| PyValueError::new_err(e.to_string()))
     }
+
+    fn y(&mut self, qubit: usize) -> PyResult<()> {
+        self.inner
+            .y(Qubit::new(qubit as u32))
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    fn z(&mut self, qubit: usize) -> PyResult<()> {
+        self.inner
+            .z(Qubit::new(qubit as u32))
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    fn s(&mut self, qubit: usize) -> PyResult<()> {
+        self.inner
+            .s(Qubit::new(qubit as u32))
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    fn sdg(&mut self, qubit: usize) -> PyResult<()> {
+        self.inner
+            .sdg(Qubit::new(qubit as u32))
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    fn t(&mut self, qubit: usize) -> PyResult<()> {
+        self.inner
+            .t(Qubit::new(qubit as u32))
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    fn tdg(&mut self, qubit: usize) -> PyResult<()> {
+        self.inner
+            .tdg(Qubit::new(qubit as u32))
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    fn x2p(&mut self, qubit: usize) -> PyResult<()> {
+        self.inner
+            .x2p(Qubit::new(qubit as u32))
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    fn x2m(&mut self, qubit: usize) -> PyResult<()> {
+        self.inner
+            .x2m(Qubit::new(qubit as u32))
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    fn y2p(&mut self, qubit: usize) -> PyResult<()> {
+        self.inner
+            .y2p(Qubit::new(qubit as u32))
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    fn y2m(&mut self, qubit: usize) -> PyResult<()> {
+        self.inner
+            .y2m(Qubit::new(qubit as u32))
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    // --- Parametric Single Qubit Gates ---
 
     fn rx(&mut self, qubit: usize, theta: PyParamLike) -> PyResult<()> {
         self.inner
             .rx(Qubit::new(qubit as u32), theta)
-            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
+            .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
     fn ry(&mut self, qubit: usize, theta: PyParamLike) -> PyResult<()> {
         self.inner
             .ry(Qubit::new(qubit as u32), theta)
-            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
+            .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
     fn rz(&mut self, qubit: usize, theta: PyParamLike) -> PyResult<()> {
         self.inner
             .rz(Qubit::new(qubit as u32), theta)
-            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
+            .map_err(|e| PyValueError::new_err(e.to_string()))
     }
+
+    fn phase(&mut self, qubit: usize, lambda: PyParamLike) -> PyResult<()> {
+        self.inner
+            .phase(Qubit::new(qubit as u32), lambda)
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    fn xy(&mut self, qubit: usize, theta: PyParamLike) -> PyResult<()> {
+        self.inner
+            .xy(Qubit::new(qubit as u32), theta)
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    fn xy2p(&mut self, qubit: usize, theta: PyParamLike) -> PyResult<()> {
+        self.inner
+            .xy2p(Qubit::new(qubit as u32), theta)
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    fn xy2m(&mut self, qubit: usize, theta: PyParamLike) -> PyResult<()> {
+        self.inner
+            .xy2m(Qubit::new(qubit as u32), theta)
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    #[pyo3(signature = (qubit, theta, phi, lambda))]
+    fn u(
+        &mut self,
+        qubit: usize,
+        theta: PyParamLike,
+        phi: PyParamLike,
+        lambda: PyParamLike,
+    ) -> PyResult<()> {
+        self.inner
+            .u(Qubit::new(qubit as u32), theta, phi, lambda)
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    fn rxy(&mut self, qubit: usize, theta: PyParamLike, phi: PyParamLike) -> PyResult<()> {
+        self.inner
+            .rxy(Qubit::new(qubit as u32), theta, phi)
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    // --- Two Qubit Gates ---
+
+    fn cx(&mut self, control: usize, target: usize) -> PyResult<()> {
+        self.inner
+            .cx(Qubit::new(control as u32), Qubit::new(target as u32))
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    fn cy(&mut self, control: usize, target: usize) -> PyResult<()> {
+        self.inner
+            .cy(Qubit::new(control as u32), Qubit::new(target as u32))
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    fn cz(&mut self, control: usize, target: usize) -> PyResult<()> {
+        self.inner
+            .cz(Qubit::new(control as u32), Qubit::new(target as u32))
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    fn swap(&mut self, a: usize, b: usize) -> PyResult<()> {
+        self.inner
+            .swap(Qubit::new(a as u32), Qubit::new(b as u32))
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    fn rxx(&mut self, a: usize, b: usize, theta: PyParamLike) -> PyResult<()> {
+        self.inner
+            .rxx(Qubit::new(a as u32), Qubit::new(b as u32), theta)
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    fn ryy(&mut self, a: usize, b: usize, theta: PyParamLike) -> PyResult<()> {
+        self.inner
+            .ryy(Qubit::new(a as u32), Qubit::new(b as u32), theta)
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    fn rzz(&mut self, a: usize, b: usize, theta: PyParamLike) -> PyResult<()> {
+        self.inner
+            .rzz(Qubit::new(a as u32), Qubit::new(b as u32), theta)
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    fn rzx(&mut self, a: usize, b: usize, theta: PyParamLike) -> PyResult<()> {
+        self.inner
+            .rzx(Qubit::new(a as u32), Qubit::new(b as u32), theta)
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    fn fsim(&mut self, a: usize, b: usize, theta: PyParamLike, phi: PyParamLike) -> PyResult<()> {
+        self.inner
+            .fsim(Qubit::new(a as u32), Qubit::new(b as u32), theta, phi)
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    // --- Controlled Rotations ---
+
+    fn crx(&mut self, control: usize, target: usize, theta: PyParamLike) -> PyResult<()> {
+        self.inner
+            .crx(Qubit::new(control as u32), Qubit::new(target as u32), theta)
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    fn cry(&mut self, control: usize, target: usize, theta: PyParamLike) -> PyResult<()> {
+        self.inner
+            .cry(Qubit::new(control as u32), Qubit::new(target as u32), theta)
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    fn crz(&mut self, control: usize, target: usize, theta: PyParamLike) -> PyResult<()> {
+        self.inner
+            .crz(Qubit::new(control as u32), Qubit::new(target as u32), theta)
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    // --- Multi-Controlled ---
+
+    pub fn ccx(&mut self, control1: usize, control2: usize, target: usize) -> PyResult<()> {
+        self.inner
+            .ccx(
+                Qubit::new(control1 as u32),
+                Qubit::new(control2 as u32),
+                Qubit::new(target as u32),
+            )
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    #[pyo3(signature = (instruction, controls, targets, params=None))]
+    pub fn multi_control(
+        &mut self,
+        instruction: PyStandardGate,
+        controls: Vec<usize>,
+        targets: Vec<usize>,
+        params: Option<Vec<PyParamLike>>,
+    ) -> PyResult<()> {
+        let mut ps = vec![];
+        if let Some(params) = params {
+            for p in params {
+                match p {
+                    PyParamLike::Float(f) => ps.push(ParameterValue::Fixed(f)),
+                    PyParamLike::Param(p) => ps.push(ParameterValue::Param(p.inner)),
+                }
+            }
+        }
+        self.inner
+            .multi_control(instruction.inner, controls, targets, ps)
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    /// Appends a custom unitary gate to the circuit.
+    ///
+    /// Args:
+    ///     gate (UnitaryGate): The custom unitary gate definition.
+    ///     qubits (List[int]): The list of qubit indices to apply the gate to.
+    fn unitary(&mut self, gate: PyUnitaryGate, qubits: Vec<usize>) -> PyResult<()> {
+        let qubits_core: Vec<Qubit> = qubits.into_iter().map(|q| Qubit::new(q as u32)).collect();
+        self.inner
+            .unitary(gate.into(), qubits_core)
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    // --- Directives ---
 
     fn measure(&mut self, qubit: usize) -> PyResult<()> {
         self.inner
             .measure(Qubit::new(qubit as u32))
-            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    fn reset(&mut self, qubit: usize) -> PyResult<()> {
+        self.inner
+            .reset(Qubit::new(qubit as u32))
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    fn barrier(&mut self, qubits: Vec<usize>) -> PyResult<()> {
+        let qubits_core: Vec<Qubit> = qubits.into_iter().map(|q| Qubit::new(q as u32)).collect();
+        self.inner
+            .barrier(qubits_core)
+            .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
     // --- Advanced ---
@@ -92,7 +425,7 @@ impl PyCircuit {
         let new_inner = self
             .inner
             .inverse()
-            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
         Ok(PyCircuit { inner: new_inner })
     }
 }

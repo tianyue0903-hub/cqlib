@@ -10,7 +10,7 @@
 # copyright notice, and modified files need to carry a notice indicating
 # that they have been altered from the originals.
 
-from .._native import StandardGate, Instruction
+from .._native import StandardGate, UnitaryGate
 
 # --- Single Qubit Gates ---
 I = StandardGate.I
@@ -62,17 +62,47 @@ Y2M = StandardGate.Y2M
 
 __all__ = [
     "StandardGate",
-    "Instruction",
+    "UnitaryGate",
     # Single Qubit
-    "I", "H", "X", "Y", "Z", "S", "SDG", "T", "TDG",
+    "I",
+    "H",
+    "X",
+    "Y",
+    "Z",
+    "S",
+    "SDG",
+    "T",
+    "TDG",
     # Parametric
-    "RX", "RY", "RZ", "U", "Phase", "GPhase",
+    "RX",
+    "RY",
+    "RZ",
+    "U",
+    "Phase",
+    "GPhase",
     # Two Qubit
-    "CX", "CY", "CZ", "SWAP", "RXX", "RYY", "RZZ", "RZX", "RXY", "FSIM",
+    "CX",
+    "CY",
+    "CZ",
+    "SWAP",
+    "RXX",
+    "RYY",
+    "RZZ",
+    "RZX",
+    "RXY",
+    "FSIM",
     # Multi-Controlled
     "CCX",
     # Controlled Rotation
-    "CRX", "CRY", "CRZ",
+    "CRX",
+    "CRY",
+    "CRZ",
     # Other
-    "XY", "X2P", "X2M", "XY2P", "XY2M", "Y2P", "Y2M",
+    "XY",
+    "X2P",
+    "X2M",
+    "XY2P",
+    "XY2M",
+    "Y2P",
+    "Y2M",
 ]

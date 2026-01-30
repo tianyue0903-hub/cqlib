@@ -18,4 +18,5 @@ pub mod param;
 pub mod parameter;
 
 pub use bit::Qubit;
+pub use circuit::Circuit;
 pub use parameter::impls::Parameter;

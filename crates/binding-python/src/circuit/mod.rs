@@ -13,9 +13,11 @@
 pub mod bit;
 pub mod circuit;
 pub mod gates;
+mod operation;
 pub mod parameter;
 
 pub use bit::PyQubit;
 pub use circuit::PyCircuit;
-pub use gates::{PyInstruction, PyStandardGate};
+pub use gates::PyStandardGate;
+pub use gates::PyUnitaryGate;
 pub use parameter::PyParameter;

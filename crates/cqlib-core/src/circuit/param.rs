@@ -40,6 +40,12 @@ impl From<f64> for ParameterValue {
     }
 }
 
+impl From<i64> for ParameterValue {
+    fn from(v: i64) -> Self {
+        Self::Fixed(v as f64)
+    }
+}
+
 impl From<Parameter> for ParameterValue {
     fn from(para: Parameter) -> Self {
         Self::Param(para)
