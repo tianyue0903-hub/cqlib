@@ -14,7 +14,8 @@ pub mod circuit;
 
 use pyo3::prelude::*;
 
-use circuit::{PyCircuit, PyParameter, PyQubit, PyStandardGate, PyUnitaryGate};
+use crate::circuit::gates::{PyCircuitGate, PyMcGate, PyStandardGate, PyUnitaryGate};
+use circuit::{PyCircuit, PyInstruction, PyOperation, PyParameter, PyQubit};
 
 /// A Python module implemented in Rust.
 #[pymodule]
@@ -25,6 +26,10 @@ fn binding_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyParameter>()?;
     m.add_class::<PyStandardGate>()?;
     m.add_class::<PyUnitaryGate>()?;
+    m.add_class::<PyMcGate>()?;
+    m.add_class::<PyCircuitGate>()?;
+    m.add_class::<PyOperation>()?;
+    m.add_class::<PyInstruction>()?;
 
     // Register static gate instances (H, X, etc.) to StandardGate class
     circuit::gates::standard::register_gates(m)?;

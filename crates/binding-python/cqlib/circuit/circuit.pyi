@@ -13,8 +13,10 @@
 from typing import List, Union, Optional
 from .bit import Qubit
 from .parameter import Parameter
+from .operation import Operation
 from .gates.standard import StandardGate
 from .gates.unitary import UnitaryGate
+
 
 class Circuit:
     """A quantum circuit representation serving as the core IR for quantum programs.
@@ -41,6 +43,15 @@ class Circuit:
     @property
     def qubits(self) -> List[Qubit]:
         """Returns a list of all qubits in the circuit."""
+        ...
+
+    @property
+    def operations(self) -> List[Operation]:
+        """Returns the list of operations in this circuit.
+        
+        Each operation represents a gate application or directive
+        (measure, barrier, reset) with specific qubits and parameters.
+        """
         ...
 
     # --- Generic Instruction ---
@@ -131,17 +142,17 @@ class Circuit:
         ...
 
     def u(
-        self,
-        qubit: int,
-        theta: Union[float, Parameter],
-        phi: Union[float, Parameter],
-        lambda_: Union[float, Parameter],
+            self,
+            qubit: int,
+            theta: Union[float, Parameter],
+            phi: Union[float, Parameter],
+            lambda_: Union[float, Parameter],
     ) -> None:
         """Appends a generic single-qubit rotation gate U(theta, phi, lambda)."""
         ...
 
     def rxy(
-        self, qubit: int, theta: Union[float, Parameter], phi: Union[float, Parameter]
+            self, qubit: int, theta: Union[float, Parameter], phi: Union[float, Parameter]
     ) -> None:
         """Appends a rotation in the XY plane."""
         ...
@@ -180,11 +191,11 @@ class Circuit:
         ...
 
     def fsim(
-        self,
-        a: int,
-        b: int,
-        theta: Union[float, Parameter],
-        phi: Union[float, Parameter],
+            self,
+            a: int,
+            b: int,
+            theta: Union[float, Parameter],
+            phi: Union[float, Parameter],
     ) -> None:
         """Appends a Fermionic Simulation gate (fSim)."""
         ...
@@ -208,11 +219,11 @@ class Circuit:
         ...
 
     def multi_control(
-        self,
-        instruction: StandardGate,
-        controls: List[int],
-        targets: List[int],
-        params: Optional[List[Union[float, Parameter]]] = None,
+            self,
+            instruction: StandardGate,
+            controls: List[int],
+            targets: List[int],
+            params: Optional[List[Union[float, Parameter]]] = None,
     ) -> None:
         """Appends a multi-controlled version of a standard gate."""
         ...

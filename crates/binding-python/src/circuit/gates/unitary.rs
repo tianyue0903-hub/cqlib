@@ -10,9 +10,12 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
-use cqlib_core::circuit::gate::UnitaryDef;
+use cqlib_core::circuit::gate::UnitaryGate;
 use num_complex::Complex64;
+use std::sync::Arc;
 
+use crate::circuit::PyCircuit;
+use cqlib_core::circuit::gate::circuit_gate::FrozenCircuit;
 use numpy::{PyArray2, PyArrayMethods};
 use pyo3::prelude::*;
 use pyo3::{PyResult, Python, pyclass, pymethods};
@@ -20,7 +23,7 @@ use pyo3::{PyResult, Python, pyclass, pymethods};
 #[pyclass(name = "UnitaryGate", module = "cqlib.circuit.gates")]
 #[derive(Debug, Clone)]
 pub struct PyUnitaryGate {
-    inner: UnitaryDef,
+    inner: UnitaryGate,
 }
 
 #[pymethods]
@@ -28,14 +31,15 @@ impl PyUnitaryGate {
     #[new]
     pub fn new(label: String, num_qubits: u16) -> PyResult<Self> {
         Ok(Self {
-            inner: UnitaryDef::new(label.as_ref(), num_qubits),
+            inner: UnitaryGate::new(label.as_ref(), num_qubits),
         })
     }
 
-    pub fn with_matrix<'py>(&self, py: Python<'py>, mat: Bound<'py, PyAny>) -> PyResult<Self> {
+    #[pyo3(signature = (matrix))]
+    pub fn with_matrix<'py>(&self, py: Python<'py>, matrix: Bound<'py, PyAny>) -> PyResult<Self> {
         let np = py.import("numpy")?;
         // Allow flexible input (list, int array, float array) by casting to complex128 via numpy
-        let array_obj = np.call_method1("array", (mat, "complex128"))?;
+        let array_obj = np.call_method1("array", (matrix, "complex128"))?;
 
         let array: Bound<'py, PyArray2<Complex64>> = array_obj.cast_into().map_err(|_| {
             pyo3::exceptions::PyValueError::new_err(
@@ -49,6 +53,15 @@ impl PyUnitaryGate {
             .clone()
             .with_matrix(array.to_owned_array())
             .map_err(pyo3::exceptions::PyValueError::new_err)?;
+        Ok(Self { inner: new_inner })
+    }
+
+    #[pyo3(signature = (circuit))]
+    pub fn with_circuit(&self, circuit: PyCircuit) -> PyResult<Self> {
+        // Convert PyCircuit to FrozenCircuit
+        let frozen = FrozenCircuit::new(circuit.inner);
+        // Create new UnitaryGate with the circuit attached
+        let new_inner = self.inner.clone().with_circuit(Arc::new(frozen));
         Ok(Self { inner: new_inner })
     }
 
@@ -86,13 +99,13 @@ impl PyUnitaryGate {
     }
 }
 
-impl From<UnitaryDef> for PyUnitaryGate {
-    fn from(inner: UnitaryDef) -> Self {
+impl From<UnitaryGate> for PyUnitaryGate {
+    fn from(inner: UnitaryGate) -> Self {
         Self { inner }
     }
 }
 
-impl From<PyUnitaryGate> for UnitaryDef {
+impl From<PyUnitaryGate> for UnitaryGate {
     fn from(py: PyUnitaryGate) -> Self {
         py.inner
     }

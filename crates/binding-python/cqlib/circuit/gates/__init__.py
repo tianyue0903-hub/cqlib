@@ -10,7 +10,7 @@
 # copyright notice, and modified files need to carry a notice indicating
 # that they have been altered from the originals.
 
-from .._native import StandardGate, UnitaryGate
+from ..._native import StandardGate, UnitaryGate, McGate, CircuitGate
 
 # --- Single Qubit Gates ---
 I = StandardGate.I
@@ -63,6 +63,7 @@ Y2M = StandardGate.Y2M
 __all__ = [
     "StandardGate",
     "UnitaryGate",
+    "McGate",
     # Single Qubit
     "I",
     "H",

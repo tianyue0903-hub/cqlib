@@ -10,8 +10,12 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
+pub mod circuit_gate;
+pub mod mc_gate;
 pub mod standard;
 pub mod unitary;
 
+pub use circuit_gate::PyCircuitGate;
+pub use mc_gate::PyMcGate;
 pub use standard::PyStandardGate;
 pub use unitary::PyUnitaryGate;

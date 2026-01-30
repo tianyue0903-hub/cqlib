@@ -13,6 +13,7 @@
 from .bit import Qubit
 from .circuit import Circuit
 from .parameter import Parameter
+from .operation import Operation, Instruction
 from .gates import StandardGate, UnitaryGate
 
-__all__ = ["Qubit", "Circuit", "Parameter", "StandardGate", "UnitaryGate"]
+__all__ = ["Qubit", "Circuit", "Parameter", "Operation", "Instruction", "StandardGate", "UnitaryGate"]

@@ -35,8 +35,15 @@ impl From<PyParamLike> for ParameterValue {
 }
 
 #[pyclass(name = "Circuit", module = "cqlib.circuit")]
+#[derive(Debug, Clone)]
 pub struct PyCircuit {
     pub inner: Circuit,
+}
+
+impl From<Circuit> for PyCircuit {
+    fn from(circuit: Circuit) -> Self {
+        PyCircuit { inner: circuit }
+    }
 }
 
 #[derive(FromPyObject)]
@@ -427,5 +434,18 @@ impl PyCircuit {
             .inverse()
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
         Ok(PyCircuit { inner: new_inner })
+    }
+
+    /// Returns the list of operations in this circuit.
+    ///
+    /// Each operation represents a gate application or directive (measure, barrier, reset)
+    /// with specific qubits and parameters.
+    #[getter]
+    fn operations(&self) -> Vec<super::PyOperation> {
+        self.inner
+            .operations()
+            .iter()
+            .map(|op| super::PyOperation::from(op.clone()))
+            .collect()
     }
 }
