@@ -55,7 +55,7 @@ use crate::circuit::param::{CircuitParam, ParameterValue};
 use crate::circuit::parameter::Parameter;
 use indexmap::IndexSet;
 use smallvec::{SmallVec, smallvec};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// A quantum circuit representation serving as the core IR for quantum programs.
 ///
@@ -959,12 +959,12 @@ impl Circuit {
     /// use ndarray::Array2;
     /// use num_complex::Complex64;
     /// use cqlib_core::circuit::circuit::Circuit;
-    /// use cqlib_core::circuit::gate::UnitaryDef;
+    /// use cqlib_core::circuit::gate::UnitaryGate;
     /// use cqlib_core::circuit::Qubit;
     ///
     /// // Define a custom gate (e.g., Identity)
     /// let mat = Array2::eye(2).mapv(|x| Complex64::new(x, 0.0));
-    /// let u_gate = UnitaryDef::new("MyGate", 1)
+    /// let u_gate = UnitaryGate::new("MyGate", 1)
     ///      .with_matrix(mat)
     ///      .unwrap();
     ///
@@ -1101,6 +1101,74 @@ impl Circuit {
             }
         }
         true
+    }
+
+    pub fn assign_parameters(
+        &self,
+        bindings: &Option<HashMap<String, f64>>,
+    ) -> Result<Circuit, CircuitError> {
+        use crate::circuit::parameter::expr_node::ExprNode;
+
+        let mut new_circuit = Circuit::from_qubits(self.qubits())?;
+
+        // Map from old parameter index to new CircuitParam (either Fixed or Index)
+        let mut index_map: Vec<CircuitParam> = Vec::with_capacity(self.parameters.len());
+
+        let empty_bindings = HashMap::new();
+        let bind_map = bindings.as_ref().unwrap_or(&empty_bindings);
+
+        for param in self.parameters.iter() {
+            if let Ok(val) = param.evaluate(bindings) {
+                index_map.push(CircuitParam::Fixed(val));
+            } else {
+                // Otherwise perform partial evaluation/simplification
+                let expr = param.node.evaluate_partial(bind_map)?;
+                match expr {
+                    ExprNode::Integer(i) => index_map.push(CircuitParam::Fixed(i as f64)),
+                    ExprNode::Float(f) => index_map.push(CircuitParam::Fixed(f)),
+                    ExprNode::Pi => index_map.push(CircuitParam::Fixed(std::f64::consts::PI)),
+                    ExprNode::E => index_map.push(CircuitParam::Fixed(std::f64::consts::E)),
+                    _ => {
+                        // Still symbolic
+                        let new_param = Parameter::new(expr);
+                        // Intern the new parameter (deduplicates automatically)
+                        let (idx, is_new) = new_circuit.parameters.insert_full(new_param.clone());
+
+                        // If it's a new symbolic parameter, track its symbols
+                        if is_new {
+                            for sym in new_param.get_symbols() {
+                                new_circuit.symbols.insert(sym);
+                            }
+                        }
+                        index_map.push(CircuitParam::Index(idx as u32));
+                    }
+                }
+            }
+        }
+
+        // Remap operations to use new parameter indices or fixed values
+        new_circuit.data.reserve(self.data.len());
+        for op in &self.data {
+            let mut new_op = op.clone();
+            for p in &mut new_op.params {
+                if let CircuitParam::Index(old_idx) = p {
+                    *p = index_map[*old_idx as usize].clone();
+                }
+            }
+            new_circuit.data.push(new_op);
+        }
+
+        // Remap global phase
+        match self.global_phase {
+            CircuitParam::Index(old_idx) => {
+                new_circuit.global_phase = index_map[old_idx as usize].clone();
+            }
+            CircuitParam::Fixed(val) => {
+                new_circuit.global_phase = CircuitParam::Fixed(val);
+            }
+        }
+
+        Ok(new_circuit)
     }
 }
 
