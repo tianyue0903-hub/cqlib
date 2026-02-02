@@ -18,14 +18,27 @@ use numpy::{PyArray2, ToPyArray};
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyTuple;
+use std::cell::Cell;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use std::sync::RwLock;
 
 #[pyclass(name = "StandardGate", module = "cqlib.circuit.gates")]
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct PyStandardGate {
     pub inner: StandardGate,
     pub params: Vec<Parameter>,
+    hash: RwLock<Option<u64>>,
+}
+
+impl Clone for PyStandardGate {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner,
+            params: self.params.clone(),
+            hash: RwLock::new(None),
+        }
+    }
 }
 
 #[pymethods]
@@ -82,6 +95,7 @@ impl PyStandardGate {
         Ok(PyStandardGate {
             inner: self.inner,
             params: new_params,
+            hash: RwLock::new(None),
         })
     }
 
@@ -99,13 +113,22 @@ impl PyStandardGate {
     }
 
     fn __hash__(&self) -> u64 {
+        match self.hash.read() {
+            Ok(guard) if guard.is_some() => return guard.unwrap(),
+            _ => {}
+        }
+        let mut guard = self.hash.write().expect("Hash cache lock poisoned");
+        if let Some(hash) = *guard {
+            return hash;
+        }
         let mut hasher = DefaultHasher::new();
         self.inner.hash(&mut hasher);
         self.params.hash(&mut hasher);
-        hasher.finish()
-    }
+        let hash = hasher.finish();
 
-    // --- Properties ---
+        *guard = Some(hash);
+        hash
+    }
 
     #[getter]
     fn num_qubits(&self) -> usize {
@@ -193,6 +216,7 @@ impl PyStandardGate {
                 Ok(PyStandardGate {
                     inner: std_gate,
                     params: self.params.clone(),
+                    hash: RwLock::new(None),
                 })
             }
             Some(_) => {
@@ -220,6 +244,7 @@ impl PyStandardGate {
             Some((inv_gate, inv_params)) => Ok(PyStandardGate {
                 inner: inv_gate,
                 params: inv_params.into_vec(),
+                hash: RwLock::new(None),
             }),
             None => Err(PyValueError::new_err(format!(
                 "Gate {:?} is not invertible",
@@ -244,6 +269,7 @@ pub fn register_gates(m: &Bound<'_, PyModule>) -> PyResult<()> {
             PyStandardGate {
                 inner: gate,
                 params: Vec::new(),
+                hash: RwLock::new(None),
             },
         )?;
         cls.setattr(name, instance)?;
@@ -297,4 +323,14 @@ pub fn register_gates(m: &Bound<'_, PyModule>) -> PyResult<()> {
     add_gate("FSIM", StandardGate::FSIM)?;
 
     Ok(())
+}
+
+impl PyStandardGate {
+    pub fn from(gate: StandardGate, params: Vec<Parameter>) -> Self {
+        Self {
+            inner: gate,
+            params,
+            hash: RwLock::new(None),
+        }
+    }
 }

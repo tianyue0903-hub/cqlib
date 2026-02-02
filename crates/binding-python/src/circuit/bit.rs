@@ -43,12 +43,12 @@ impl PyQubit {
         format!("{}", self.inner)
     }
 
-    fn __eq__(&self, other: &Bound<'_, PyAny>) -> bool {
-        if let Ok(other_qubit) = other.extract::<PyQubit>() {
-            self.inner == other_qubit.inner
-        } else {
-            false
+    fn __eq__(&self, other: &Bound<'_, PyAny>) -> PyResult<bool> {
+        if !other.is_instance_of::<PyQubit>() {
+            return Ok(false);
         }
+        let other_qubit = other.extract::<PyQubit>()?;
+        Ok(self.inner == other_qubit.inner)
     }
 
     fn __hash__(&self) -> u64 {

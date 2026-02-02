@@ -66,7 +66,7 @@ impl PyMcGate {
         let params_core: Vec<Parameter> = params
             .unwrap_or_default()
             .into_iter()
-            .map(|p| p.inner)
+            .map(|p| p.into_inner())
             .collect();
 
         match self.inner.inverse(&params_core) {
@@ -102,10 +102,7 @@ impl PyMcGate {
     /// Returns the base gate (without controls).
     #[getter]
     pub fn base_gate(&self) -> PyStandardGate {
-        PyStandardGate {
-            inner: *self.inner.base_gate(),
-            params: vec![],
-        }
+        PyStandardGate::from(*self.inner.base_gate(), vec![])
     }
 }
 

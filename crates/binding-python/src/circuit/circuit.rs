@@ -13,10 +13,14 @@
 use super::bit::PyQubit;
 use super::gates::{PyStandardGate, PyUnitaryGate};
 use super::parameter::PyParameter;
+use crate::circuit::PyOperation;
+use crate::circuit::operation::PyOperationIter;
 use cqlib_core::circuit::param::ParameterValue;
 use cqlib_core::circuit::{Circuit, Qubit};
-use pyo3::exceptions::{PyTypeError, PyValueError};
+use pyo3::IntoPyObjectExt;
+use pyo3::exceptions::{PyIndexError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
+use pyo3::types::{PyList, PySlice, PyTuple};
 
 /// A helper enum to accept either a float or a Parameter object from Python.
 #[derive(FromPyObject)]
@@ -29,7 +33,7 @@ impl From<PyParamLike> for ParameterValue {
     fn from(val: PyParamLike) -> Self {
         match val {
             PyParamLike::Float(f) => ParameterValue::Fixed(f),
-            PyParamLike::Param(p) => ParameterValue::Param(p.inner),
+            PyParamLike::Param(p) => ParameterValue::Param(p.into_inner()),
         }
     }
 }
@@ -97,12 +101,8 @@ impl PyCircuit {
     }
 
     #[getter]
-    fn qubits(&self) -> Vec<PyQubit> {
-        self.inner
-            .qubits()
-            .iter()
-            .map(|&q| PyQubit::from(q))
-            .collect()
+    fn qubits<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        PyTuple::new(py, self.inner.qubits().iter().map(|&q| PyQubit::from(q)))
     }
 
     /// Appends an instruction to the circuit.
@@ -384,7 +384,7 @@ impl PyCircuit {
             for p in params {
                 match p {
                     PyParamLike::Float(f) => ps.push(ParameterValue::Fixed(f)),
-                    PyParamLike::Param(p) => ps.push(ParameterValue::Param(p.inner)),
+                    PyParamLike::Param(p) => ps.push(ParameterValue::Param(p.into_inner())),
                 }
             }
         }
@@ -426,8 +426,6 @@ impl PyCircuit {
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
-    // --- Advanced ---
-
     fn inverse(&self) -> PyResult<Self> {
         let new_inner = self
             .inner
@@ -436,16 +434,63 @@ impl PyCircuit {
         Ok(PyCircuit { inner: new_inner })
     }
 
-    /// Returns the list of operations in this circuit.
-    ///
-    /// Each operation represents a gate application or directive (measure, barrier, reset)
-    /// with specific qubits and parameters.
     #[getter]
-    fn operations(&self) -> Vec<super::PyOperation> {
-        self.inner
-            .operations()
-            .iter()
-            .map(|op| super::PyOperation::from(op.clone()))
-            .collect()
+    fn operations(&self) -> PyOperationIter {
+        PyOperationIter::new(self.inner.operations().to_vec(), 0)
+    }
+
+    fn __getitem__<'py>(
+        &self,
+        py: Python<'py>,
+        idx: Bound<'_, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let ops = self.inner.operations();
+        let len = ops.len();
+
+        // 处理单个整数索引
+        if let Ok(index) = idx.extract::<isize>() {
+            let idx = if index < 0 {
+                let neg = len as isize + index;
+                if neg < 0 {
+                    return Err(PyIndexError::new_err(format!(
+                        "Index {} out of range for circuit with {} operations",
+                        index, len
+                    )));
+                }
+                neg as usize
+            } else {
+                if index as usize >= len {
+                    return Err(PyIndexError::new_err(format!(
+                        "Index {} out of range for circuit with {} operations",
+                        index, len
+                    )));
+                }
+                index as usize
+            };
+
+            let op = PyOperation::from(ops[idx].clone());
+            return op.into_bound_py_any(py);
+        }
+
+        if let Ok(slice) = idx.cast_into::<PySlice>() {
+            let indices = slice.indices(len as isize)?;
+
+            // indices 是 PySliceIndices 结构体，不是元组
+            let mut result = Vec::with_capacity(indices.slicelength);
+            let mut i = indices.start;
+
+            while (indices.step > 0 && i < indices.stop) || (indices.step < 0 && i > indices.stop) {
+                result.push(PyOperation::from(ops[i as usize].clone()));
+                i += indices.step;
+            }
+
+            return Ok(PyList::new(py, result)?.into_any());
+        }
+
+        Err(PyTypeError::new_err("Index must be integer or slice"))
+    }
+
+    fn __len__(&self) -> usize {
+        self.inner.operations().len()
     }
 }

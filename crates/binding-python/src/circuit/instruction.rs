@@ -93,10 +93,7 @@ impl PyInstruction {
     #[getter]
     fn standard_gate(&self) -> Option<PyStandardGate> {
         match &self.inner {
-            Instruction::Standard(g) => Some(PyStandardGate {
-                inner: *g,
-                params: vec![],
-            }),
+            Instruction::Standard(g) => Some(PyStandardGate::from(*g, vec![])),
             _ => None,
         }
     }
@@ -107,10 +104,7 @@ impl PyInstruction {
         match &self.inner {
             Instruction::McGate(g) => Some(PyMcGate::new(
                 g.num_ctrl_qubits() as u8,
-                PyStandardGate {
-                    inner: *g.base_gate(),
-                    params: vec![],
-                },
+                PyStandardGate::from(*g.base_gate(), vec![]),
             )),
             _ => None,
         }

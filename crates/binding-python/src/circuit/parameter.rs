@@ -18,7 +18,7 @@ use std::collections::HashMap;
 #[pyclass(name = "Parameter", module = "cqlib.circuit")]
 #[derive(Clone)]
 pub struct PyParameter {
-    pub inner: Parameter,
+    pub(crate) inner: Parameter,
 }
 
 #[pymethods]
@@ -267,6 +267,16 @@ impl PyParameter {
         } else {
             false
         }
+    }
+}
+
+impl PyParameter {
+    pub fn inner(&self) -> &Parameter {
+        &self.inner
+    }
+
+    pub fn into_inner(self) -> Parameter {
+        self.inner.clone()
     }
 }
 

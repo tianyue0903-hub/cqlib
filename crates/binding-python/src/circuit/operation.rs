@@ -13,10 +13,10 @@
 use cqlib_core::circuit::operation::Operation;
 use cqlib_core::circuit::param::CircuitParam;
 use pyo3::prelude::*;
+use std::sync::Arc;
 
 use crate::circuit::bit::PyQubit;
 use crate::circuit::instruction::PyInstruction;
-
 
 #[pyclass(name = "Operation", module = "cqlib.circuit")]
 #[derive(Debug, Clone)]
@@ -103,12 +103,49 @@ impl PyOperation {
         format!(
             "Operation({}, qubits={:?}, params={})",
             self.name(),
-            self.operation.qubits.iter().map(|q| q.index()).collect::<Vec<_>>(),
+            self.operation
+                .qubits
+                .iter()
+                .map(|q| q.index())
+                .collect::<Vec<_>>(),
             self.operation.params.len()
         )
     }
 
     fn __str__(&self) -> String {
         format!("{}", self.operation.instruction)
+    }
+}
+
+#[pyclass]
+pub struct PyOperationIter {
+    ops: Arc<Vec<Operation>>,
+    index: usize,
+}
+
+#[pymethods]
+impl PyOperationIter {
+    fn __iter__(slf: PyRef<'_, Self>) -> Py<Self> {
+        slf.into()
+    }
+
+    fn __next__(&mut self) -> Option<PyOperation> {
+        self.ops.get(self.index).map(|op| {
+            self.index += 1;
+            PyOperation::from(op.clone())
+        })
+    }
+
+    fn __len__(&self) -> usize {
+        self.ops.len().saturating_sub(self.index)
+    }
+}
+
+impl PyOperationIter {
+    pub fn new(ops: Vec<Operation>, index: usize) -> Self {
+        Self {
+            ops: Arc::new(ops),
+            index,
+        }
     }
 }
