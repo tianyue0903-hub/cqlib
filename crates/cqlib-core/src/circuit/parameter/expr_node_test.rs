@@ -188,3 +188,115 @@ fn test_div() {
     let v = exp.evaluate(&bindings).unwrap();
     assert_eq!(v, 2.0);
 }
+
+#[test]
+fn test_evaluate_partial_edge_cases() {
+    let empty_bindings = HashMap::new();
+
+    // ASin(0) -> 0
+    let asin_0 = ExprNode::ASin(Arc::new(ExprNode::Integer(0)));
+    let res = asin_0.evaluate_partial(&empty_bindings).unwrap();
+    assert_eq!(res, ExprNode::Integer(0));
+
+    // ASin(1) -> PI/2
+    let asin_1 = ExprNode::ASin(Arc::new(ExprNode::Integer(1)));
+    let res = asin_1.evaluate_partial(&empty_bindings).unwrap();
+    if let ExprNode::Float(v) = res {
+        assert!((v - std::f64::consts::FRAC_PI_2).abs() < 1e-10);
+    } else {
+        panic!("Expected Float(PI/2)");
+    }
+
+    // Cos(Pi) -> -1.0
+    let cos_pi = ExprNode::Cos(Arc::new(ExprNode::Pi));
+    let res = cos_pi.evaluate_partial(&empty_bindings).unwrap();
+    assert_eq!(res, ExprNode::Float(-1.0));
+
+    // Cos(0) -> 1
+    let cos_0 = ExprNode::Cos(Arc::new(ExprNode::Integer(0)));
+    let res = cos_0.evaluate_partial(&empty_bindings).unwrap();
+    assert_eq!(res, ExprNode::Integer(1));
+
+    // ACos(1) -> 0
+    let acos_1 = ExprNode::ACos(Arc::new(ExprNode::Integer(1)));
+    let res = acos_1.evaluate_partial(&empty_bindings).unwrap();
+    assert_eq!(res, ExprNode::Integer(0));
+    
+    // Tan(Pi) -> 0.0
+    let tan_pi = ExprNode::Tan(Arc::new(ExprNode::Pi));
+    let res = tan_pi.evaluate_partial(&empty_bindings).unwrap();
+    assert_eq!(res, ExprNode::Float(0.0));
+
+    // ATan(0) -> 0
+    let atan_0 = ExprNode::ATan(Arc::new(ExprNode::Integer(0)));
+    let res = atan_0.evaluate_partial(&empty_bindings).unwrap();
+    assert_eq!(res, ExprNode::Integer(0));
+}
+
+#[test]
+fn test_partial_substitution_scenarios() {
+    let a = ExprNode::Symbol("a".to_string());
+    let b = ExprNode::Symbol("b".to_string());
+    let c = ExprNode::Symbol("c".to_string());
+
+    // Case 1: a + b, set a = 1.0 -> 1.0 + b
+    let expr1 = ExprNode::Add(Arc::new(a.clone()), Arc::new(b.clone()));
+    let mut bindings1 = HashMap::new();
+    bindings1.insert("a".to_string(), 1.0);
+    let res1 = expr1.evaluate_partial(&bindings1).unwrap();
+    match res1 {
+        ExprNode::Add(lhs, rhs) => {
+            assert_eq!(*lhs, ExprNode::Float(1.0));
+            assert_eq!(*rhs, b);
+        }
+        _ => panic!("Expected Add(Float(1.0), Symbol(b)), got {:?}", res1),
+    }
+
+    // Case 2: a * b * c, set a = 2.0, b = 3.0 -> 6.0 * c
+    // (a * b) * c
+    let expr2 = ExprNode::Mul(
+        Arc::new(ExprNode::Mul(Arc::new(a.clone()), Arc::new(b.clone()))),
+        Arc::new(c.clone())
+    );
+    let mut bindings2 = HashMap::new();
+    bindings2.insert("a".to_string(), 2.0);
+    bindings2.insert("b".to_string(), 3.0);
+    let res2 = expr2.evaluate_partial(&bindings2).unwrap();
+    // (2.0 * 3.0) * c -> 6.0 * c
+    match res2 {
+        ExprNode::Mul(lhs, rhs) => {
+            assert_eq!(*lhs, ExprNode::Float(6.0));
+            assert_eq!(*rhs, c);
+        }
+        _ => panic!("Expected Mul(Float(6.0), Symbol(c)), got {:?}", res2),
+    }
+
+    // Case 3: sin(a + b), set b = 0 -> sin(a)
+    let expr3 = ExprNode::Sin(Arc::new(ExprNode::Add(Arc::new(a.clone()), Arc::new(b.clone()))));
+    let mut bindings3 = HashMap::new();
+    bindings3.insert("b".to_string(), 0.0);
+    let res3 = expr3.evaluate_partial(&bindings3).unwrap();
+    // inner: a + 0 -> a
+    // outer: sin(a)
+    match res3 {
+        ExprNode::Sin(inner) => {
+            assert_eq!(*inner, a);
+        }
+        _ => panic!("Expected Sin(Symbol(a)), got {:?}", res3),
+    }
+
+    // Case 4: x * 0 + y, set x = 5 -> y
+    let x = ExprNode::Symbol("x".to_string());
+    let y = ExprNode::Symbol("y".to_string());
+    // (x * 0) + y
+    let expr4 = ExprNode::Add(
+        Arc::new(ExprNode::Mul(Arc::new(x.clone()), Arc::new(ExprNode::Integer(0)))),
+        Arc::new(y.clone())
+    );
+    let mut bindings4 = HashMap::new();
+    bindings4.insert("x".to_string(), 5.0); // substitution
+    let res4 = expr4.evaluate_partial(&bindings4).unwrap();
+    // 5.0 * 0 -> 0 (Integer or Float)
+    // 0 + y -> y
+    assert_eq!(res4, y);
+}

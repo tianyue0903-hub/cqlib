@@ -330,6 +330,390 @@ impl ExprNode {
 
         Ok(result)
     }
+
+    /// Partially evaluates the expression tree using the provided variable bindings.
+    ///
+    /// This method simplifies the expression by substituting known symbols with their values
+    /// and performing constant folding and algebraic simplifications (e.g., `x + 0 -> x`, `x * 0 -> 0`).
+    /// Symbols that are not present in `bindings` are left as-is, allowing for partial application
+    /// of parameters.
+    ///
+    /// # Arguments
+    ///
+    /// * `bindings` - A map containing values for the subset of symbols to be substituted.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(ExprNode)` - The simplified expression node.
+    /// * `Err(EvalError)` - If an error occurs during evaluation of sub-expressions (e.g., division by zero).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use std::collections::HashMap;
+    /// use std::sync::Arc;
+    /// use cqlib_core::circuit::parameter::expr_node::ExprNode;
+    ///
+    /// // Expression: a + b
+    /// let a = Arc::new(ExprNode::Symbol("a".to_string()));
+    /// let b = Arc::new(ExprNode::Symbol("b".to_string()));
+    /// let expr = ExprNode::Add(a, b);
+    ///
+    /// // Bind a = 1.0, leave b unbound
+    /// let mut bindings = HashMap::new();
+    /// bindings.insert("a".to_string(), 1.0);
+    ///
+    /// let result = expr.evaluate_partial(&bindings).unwrap();
+    /// // Result should be structurally equivalent to: 1.0 + b
+    /// assert_eq!(result.to_string(), "1 + b");
+    /// ```
+    pub fn evaluate_partial(&self, bindings: &HashMap<String, f64>) -> Result<Self, EvalError> {
+        use std::f64::consts::{E, FRAC_PI_2, PI};
+
+        match self {
+            ExprNode::Integer(i) => Ok(ExprNode::Integer(*i)),
+            ExprNode::Float(f) => Ok(ExprNode::Float(*f)),
+            ExprNode::Pi => Ok(ExprNode::Pi),
+            ExprNode::E => Ok(ExprNode::E),
+            ExprNode::Symbol(name) => {
+                if let Some(&value) = bindings.get(name) {
+                    Ok(ExprNode::Float(value))
+                } else {
+                    Ok(ExprNode::Symbol(name.clone()))
+                }
+            }
+            ExprNode::Sign(inner) => match inner.evaluate_partial(bindings)? {
+                ExprNode::Float(v) => {
+                    let sign = if v > 0.0 {
+                        1.0
+                    } else if v < 0.0 {
+                        -1.0
+                    } else {
+                        0.0
+                    };
+                    Ok(ExprNode::Float(sign))
+                }
+                ExprNode::Integer(i) => {
+                    let sign = if i > 0 {
+                        1
+                    } else if i < 0 {
+                        -1
+                    } else {
+                        0
+                    };
+                    Ok(ExprNode::Integer(sign))
+                }
+                ExprNode::E => Ok(ExprNode::Integer(1)),
+                ExprNode::Pi => Ok(ExprNode::Integer(1)),
+                evaluated => Ok(ExprNode::Sign(Arc::new(evaluated))),
+            },
+
+            ExprNode::Neg(inner) => match inner.evaluate_partial(bindings)? {
+                ExprNode::Float(v) => Ok(ExprNode::Float(-v)),
+                ExprNode::Integer(i) => Ok(ExprNode::Integer(-i)),
+                evaluated => Ok(ExprNode::Neg(Arc::new(evaluated))),
+            },
+            ExprNode::Abs(inner) => match inner.evaluate_partial(bindings)? {
+                ExprNode::Float(v) => Ok(ExprNode::Float(v.abs())),
+                ExprNode::Integer(i) => Ok(ExprNode::Integer(i.abs())),
+                ExprNode::Pi => Ok(ExprNode::Float(PI)),
+                ExprNode::E => Ok(ExprNode::Float(E)),
+                evaluated => Ok(ExprNode::Abs(Arc::new(evaluated))),
+            },
+            ExprNode::Sqrt(inner) => match inner.evaluate_partial(bindings)? {
+                ExprNode::Float(v) => {
+                    if v < 0.0 {
+                        return Err(EvalError::DomainError(format!("sqrt({})", v)));
+                    }
+                    Ok(ExprNode::Float(v.sqrt()))
+                }
+                ExprNode::Integer(i) if i >= 0 => {
+                    let f = (i as f64).sqrt();
+                    if f.fract() == 0.0 {
+                        Ok(ExprNode::Integer(f as i64))
+                    } else {
+                        Ok(ExprNode::Float(f))
+                    }
+                }
+                ExprNode::Pi => Ok(ExprNode::Float(PI.sqrt())),
+                ExprNode::E => Ok(ExprNode::Float(E.sqrt())),
+                evaluated => Ok(ExprNode::Sqrt(Arc::new(evaluated))),
+            },
+            ExprNode::Exp(inner) => match inner.evaluate_partial(bindings)? {
+                ExprNode::Float(v) => Ok(ExprNode::Float(v.exp())),
+                ExprNode::Integer(i) => Ok(ExprNode::Float((i as f64).exp())),
+                ExprNode::Pi => Ok(ExprNode::Float(PI.exp())),
+                ExprNode::E => Ok(ExprNode::Float(E.exp())),
+                evaluated => Ok(ExprNode::Exp(Arc::new(evaluated))),
+            },
+            ExprNode::Ln(inner) => {
+                match inner.evaluate_partial(bindings)? {
+                    ExprNode::Float(1.0) => Ok(ExprNode::Integer(0)),
+                    ExprNode::Float(v) if v > 0.0 => Ok(ExprNode::Float(v.ln())),
+                    ExprNode::Float(v) => Err(EvalError::DomainError(format!(
+                        "ln({}) - argument must be positive",
+                        v
+                    ))),
+
+                    ExprNode::Integer(1) => Ok(ExprNode::Integer(0)),
+                    ExprNode::Integer(i) if i > 1 => Ok(ExprNode::Float((i as f64).ln())),
+                    ExprNode::Integer(i) => Err(EvalError::DomainError(format!(
+                        "ln({}) - argument must be positive",
+                        i
+                    ))),
+
+                    ExprNode::E => Ok(ExprNode::Integer(1)),
+                    ExprNode::Exp(x) => Ok((*x).clone()),
+                    ExprNode::Pow(base, exp) if matches!(base.as_ref(), ExprNode::E) => {
+                        // ln(e^y) = y
+                        Ok((*exp).clone())
+                    }
+                    evaluated => Ok(ExprNode::Ln(Arc::new(evaluated))),
+                }
+            }
+            ExprNode::Log(arg, base) => {
+                match (
+                    arg.evaluate_partial(bindings)?,
+                    base.evaluate_partial(bindings)?,
+                ) {
+                    (ExprNode::Float(a), ExprNode::Float(b)) => {
+                        if a <= 0.0 {
+                            return Err(EvalError::DomainError(format!(
+                                "log({}, {}) - argument must be positive",
+                                a, b
+                            )));
+                        }
+                        if b <= 0.0 || (b - 1.0).abs() < f64::EPSILON {
+                            return Err(EvalError::DomainError(format!(
+                                "log({}, {}) - base must be positive and not 1",
+                                a, b
+                            )));
+                        }
+                        Ok(ExprNode::Float(a.log(b)))
+                    }
+                    (ExprNode::Integer(1), _) | (ExprNode::Float(1.0), _) => {
+                        Ok(ExprNode::Integer(0))
+                    }
+                    (a, b) => Ok(ExprNode::Log(Arc::new(a), Arc::new(b))),
+                }
+            }
+            ExprNode::Sin(inner) => match inner.evaluate_partial(bindings)? {
+                ExprNode::Float(v) => Ok(ExprNode::Float(v.sin())),
+                ExprNode::Integer(v) => Ok(ExprNode::Float((v as f64).sin())),
+                ExprNode::Pi => Ok(ExprNode::Float(0.0)),
+                ExprNode::E => Ok(ExprNode::Float(E.sin())),
+                evaluated => Ok(ExprNode::Sin(Arc::new(evaluated))),
+            },
+            ExprNode::ASin(inner) => match inner.evaluate_partial(bindings)? {
+                ExprNode::Float(v) => {
+                    if !(-1.0..=1.0).contains(&v) {
+                        return Err(EvalError::DomainError(format!("asin({})", v)));
+                    }
+                    Ok(ExprNode::Float(v.asin()))
+                }
+                ExprNode::Integer(0) => Ok(ExprNode::Integer(0)),
+                ExprNode::Integer(1) => Ok(ExprNode::Float(FRAC_PI_2)),
+                ExprNode::Integer(-1) => Ok(ExprNode::Float(-FRAC_PI_2)),
+                ExprNode::Integer(i) => Err(EvalError::DomainError(format!("asin({})", i))),
+                ExprNode::Pi => Err(EvalError::DomainError("asin(π)".to_string())),
+                ExprNode::E => Err(EvalError::DomainError("asin(e)".to_string())),
+                evaluated => Ok(ExprNode::ASin(Arc::new(evaluated))),
+            },
+            ExprNode::Cos(inner) => match inner.evaluate_partial(bindings)? {
+                ExprNode::Float(v) => Ok(ExprNode::Float(v.cos())),
+                ExprNode::Integer(0) => Ok(ExprNode::Integer(1)),
+                ExprNode::Integer(v) => Ok(ExprNode::Float((v as f64).cos())),
+                ExprNode::Pi => Ok(ExprNode::Float(-1.0)),
+                ExprNode::E => Ok(ExprNode::Float(E.cos())),
+                evaluated => Ok(ExprNode::Cos(Arc::new(evaluated))),
+            },
+            ExprNode::ACos(inner) => match inner.evaluate_partial(bindings)? {
+                ExprNode::Float(v) => {
+                    if !(-1.0..=1.0).contains(&v) {
+                        return Err(EvalError::DomainError(format!("acos({})", v)));
+                    }
+                    Ok(ExprNode::Float(v.acos()))
+                }
+                ExprNode::Integer(1) => Ok(ExprNode::Integer(0)),
+                ExprNode::Integer(-1) => Ok(ExprNode::Pi),
+                ExprNode::Integer(0) => Ok(ExprNode::Float(std::f64::consts::FRAC_PI_2)),
+                ExprNode::Integer(i) => Err(EvalError::DomainError(format!("acos({})", i))),
+                ExprNode::Pi => Err(EvalError::DomainError("acos(π)".to_string())),
+                ExprNode::E => Err(EvalError::DomainError("acos(e)".to_string())),
+                evalued => Ok(ExprNode::ACos(Arc::new(evalued))),
+            },
+            ExprNode::Tan(inner) => match inner.evaluate_partial(bindings)? {
+                ExprNode::Float(v) => Ok(ExprNode::Float(v.tan())),
+                ExprNode::Integer(0) => Ok(ExprNode::Integer(0)),
+                ExprNode::Integer(v) => Ok(ExprNode::Float((v as f64).tan())),
+                ExprNode::Pi => Ok(ExprNode::Float(0.0)),
+                ExprNode::E => Ok(ExprNode::Float(E.tan())),
+                evalued => Ok(ExprNode::Tan(Arc::new(evalued))),
+            },
+            ExprNode::ATan(inner) => match inner.evaluate_partial(bindings)? {
+                ExprNode::Float(v) => Ok(ExprNode::Float(v.atan())),
+                ExprNode::Integer(0) => Ok(ExprNode::Integer(0)),
+                ExprNode::Integer(v) => Ok(ExprNode::Float((v as f64).atan())),
+                ExprNode::Pi => Ok(ExprNode::Float(PI.atan())),
+                ExprNode::E => Ok(ExprNode::Float(E.atan())),
+                evalued => Ok(ExprNode::ATan(Arc::new(evalued))),
+            },
+
+            ExprNode::Add(lhs, rhs) => {
+                let l = lhs.evaluate_partial(bindings)?;
+                let r = rhs.evaluate_partial(bindings)?;
+                match (l, r) {
+                    (ExprNode::Integer(a), ExprNode::Integer(b)) => Ok(ExprNode::Integer(a + b)),
+                    (ExprNode::Float(a), ExprNode::Float(b)) => Ok(ExprNode::Float(a + b)),
+                    (ExprNode::Integer(a), ExprNode::Float(b)) => Ok(ExprNode::Float(a as f64 + b)),
+                    (ExprNode::Float(a), ExprNode::Integer(b)) => Ok(ExprNode::Float(a + b as f64)),
+                    // Identity: x + 0 = x
+                    (x, ExprNode::Integer(0)) | (x, ExprNode::Float(0.0)) => Ok(x),
+                    (ExprNode::Integer(0), x) | (ExprNode::Float(0.0), x) => Ok(x),
+                    (l, r) => Ok(ExprNode::Add(Arc::new(l), Arc::new(r))),
+                }
+            }
+            ExprNode::Sub(lhs, rhs) => {
+                let l = lhs.evaluate_partial(bindings)?;
+                let r = rhs.evaluate_partial(bindings)?;
+                match (l, r) {
+                    (ExprNode::Integer(a), ExprNode::Integer(b)) => Ok(ExprNode::Integer(a - b)),
+                    (ExprNode::Float(a), ExprNode::Float(b)) => Ok(ExprNode::Float(a - b)),
+                    (ExprNode::Integer(a), ExprNode::Float(b)) => Ok(ExprNode::Float(a as f64 - b)),
+                    (ExprNode::Float(a), ExprNode::Integer(b)) => Ok(ExprNode::Float(a - b as f64)),
+                    // Identity: x - 0 = x
+                    (x, ExprNode::Integer(0)) | (x, ExprNode::Float(0.0)) => Ok(x),
+                    // 0 - x = -x
+                    (ExprNode::Integer(0), x) => Ok(ExprNode::Neg(Arc::new(x))),
+                    (ExprNode::Float(0.0), x) => Ok(ExprNode::Neg(Arc::new(x))),
+                    (l, r) => Ok(ExprNode::Sub(Arc::new(l), Arc::new(r))),
+                }
+            }
+            ExprNode::Mul(lhs, rhs) => {
+                let l = lhs.evaluate_partial(bindings)?;
+                let r = rhs.evaluate_partial(bindings)?;
+                match (l, r) {
+                    (ExprNode::Integer(a), ExprNode::Integer(b)) => Ok(ExprNode::Integer(a * b)),
+                    (ExprNode::Float(a), ExprNode::Float(b)) => Ok(ExprNode::Float(a * b)),
+                    (ExprNode::Integer(a), ExprNode::Float(b)) => Ok(ExprNode::Float(a as f64 * b)),
+                    (ExprNode::Float(a), ExprNode::Integer(b)) => Ok(ExprNode::Float(a * b as f64)),
+                    // Identity: x * 1 = x
+                    (x, ExprNode::Integer(1)) | (x, ExprNode::Float(1.0)) => Ok(x),
+                    (ExprNode::Integer(1), x) | (ExprNode::Float(1.0), x) => Ok(x),
+                    // Zero property: x * 0 = 0
+                    (_, ExprNode::Integer(0)) => Ok(ExprNode::Integer(0)),
+                    (ExprNode::Integer(0), _) => Ok(ExprNode::Integer(0)),
+                    (_, ExprNode::Float(0.0)) => Ok(ExprNode::Float(0.0)),
+                    (ExprNode::Float(0.0), _) => Ok(ExprNode::Float(0.0)),
+
+                    (l, r) => Ok(ExprNode::Mul(Arc::new(l), Arc::new(r))),
+                }
+            }
+            ExprNode::Div(lhs, rhs) => {
+                let l = lhs.evaluate_partial(bindings)?;
+                let r = rhs.evaluate_partial(bindings)?;
+                match (l, r) {
+                    (ExprNode::Integer(a), ExprNode::Integer(b)) => {
+                        if b == 0 {
+                            return Err(EvalError::DivisionByZero);
+                        }
+                        if a % b == 0 {
+                            Ok(ExprNode::Integer(a / b))
+                        } else {
+                            Ok(ExprNode::Float(a as f64 / b as f64))
+                        }
+                    }
+                    (ExprNode::Float(a), ExprNode::Float(b)) => {
+                        if b.abs() < f64::EPSILON {
+                            return Err(EvalError::DivisionByZero);
+                        }
+                        Ok(ExprNode::Float(a / b))
+                    }
+                    (ExprNode::Integer(a), ExprNode::Float(b)) => {
+                        if b.abs() < f64::EPSILON {
+                            return Err(EvalError::DivisionByZero);
+                        }
+                        Ok(ExprNode::Float(a as f64 / b))
+                    }
+                    (ExprNode::Float(a), ExprNode::Integer(b)) => {
+                        if b == 0 {
+                            return Err(EvalError::DivisionByZero);
+                        }
+                        Ok(ExprNode::Float(a / b as f64))
+                    }
+                    // Identity: x / 1 = x
+                    (x, ExprNode::Integer(1)) | (x, ExprNode::Float(1.0)) => Ok(x),
+                    // 0 / x = 0 (if x != 0) - hard to check x!=0 partially, but assuming safe
+                    (ExprNode::Integer(0), _) => Ok(ExprNode::Integer(0)),
+                    (ExprNode::Float(0.0), _) => Ok(ExprNode::Float(0.0)),
+
+                    (l, r) => Ok(ExprNode::Div(Arc::new(l), Arc::new(r))),
+                }
+            }
+            ExprNode::Mod(lhs, rhs) => {
+                let l = lhs.evaluate_partial(bindings)?;
+                let r = rhs.evaluate_partial(bindings)?;
+                match (l, r) {
+                    (ExprNode::Integer(a), ExprNode::Integer(b)) => {
+                        if b == 0 {
+                            return Err(EvalError::DivisionByZero);
+                        }
+                        Ok(ExprNode::Integer(a % b))
+                    }
+                    (ExprNode::Float(a), ExprNode::Float(b)) => {
+                        if b.abs() < f64::EPSILON {
+                            return Err(EvalError::DivisionByZero);
+                        }
+                        Ok(ExprNode::Float(a % b))
+                    }
+                    (ExprNode::Integer(a), ExprNode::Float(b)) => {
+                        if b.abs() < f64::EPSILON {
+                            return Err(EvalError::DivisionByZero);
+                        }
+                        Ok(ExprNode::Float(a as f64 % b))
+                    }
+                    (ExprNode::Float(a), ExprNode::Integer(b)) => {
+                        if b == 0 {
+                            return Err(EvalError::DivisionByZero);
+                        }
+                        Ok(ExprNode::Float(a % b as f64))
+                    }
+                    (l, r) => Ok(ExprNode::Mod(Arc::new(l), Arc::new(r))),
+                }
+            }
+            ExprNode::Pow(lhs, rhs) => {
+                let l = lhs.evaluate_partial(bindings)?;
+                let r = rhs.evaluate_partial(bindings)?;
+                match (l, r) {
+                    (ExprNode::Integer(a), ExprNode::Integer(b)) => {
+                        if b >= 0 && b < 10 {
+                            // Optimization for small powers
+                            Ok(ExprNode::Integer(a.pow(b as u32)))
+                        } else {
+                            Ok(ExprNode::Float((a as f64).powf(b as f64)))
+                        }
+                    }
+                    (ExprNode::Float(a), ExprNode::Float(b)) => Ok(ExprNode::Float(a.powf(b))),
+                    (ExprNode::Integer(a), ExprNode::Float(b)) => {
+                        Ok(ExprNode::Float((a as f64).powf(b)))
+                    }
+                    (ExprNode::Float(a), ExprNode::Integer(b)) => {
+                        Ok(ExprNode::Float(a.powf(b as f64)))
+                    }
+                    // x ^ 0 = 1
+                    (_, ExprNode::Integer(0)) | (_, ExprNode::Float(0.0)) => {
+                        Ok(ExprNode::Integer(1))
+                    }
+                    // x ^ 1 = x
+                    (x, ExprNode::Integer(1)) | (x, ExprNode::Float(1.0)) => Ok(x),
+                    // 0 ^ x = 0 (if x > 0)
+                    (ExprNode::Integer(0), _) => Ok(ExprNode::Integer(0)),
+                    (ExprNode::Float(0.0), _) => Ok(ExprNode::Float(0.0)),
+                    (l, r) => Ok(ExprNode::Pow(Arc::new(l), Arc::new(r))),
+                }
+            }
+        }
+    }
 }
 
 impl fmt::Display for ExprNode {
