@@ -211,12 +211,7 @@ fn test_inverse_parametric() {
     ));
 
     if let CircuitParam::Index(idx) = op.params[0] {
-        let param_expr = &inv_circuit.parameters[idx as usize];
-        // Verification of the expression structure is hard without evaluation
-        // But we can check if it evaluates correctly with theta=1.0
-        // -theta should be -1.0
-        // Note: The evaluation system needs binding support which might be complex to test here
-        // For now, we trust the construction
+        let _ = &inv_circuit.parameters[idx as usize];
     } else {
         panic!("Expected indexed parameter for inverted rotation");
     }

@@ -10,7 +10,6 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
-use crate::circuit::Parameter;
 use crate::circuit::error::EvalError;
 use std::collections::{HashMap, HashSet};
 use std::fmt;

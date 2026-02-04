@@ -116,15 +116,14 @@ impl Instruction {
                 None
             }
             Instruction::CircuitGate(circuit_gate) => {
-                // if let Ok(inv_gate) = circuit_gate.inverse() {
-                //     Some((
-                //         Instruction::Circuit(Box::new(inv_gate)),
-                //         params.iter().cloned().collect(),
-                //     ))
-                // } else {
-                //     None
-                // }
-                todo!()
+                if let Ok(inv_gate) = circuit_gate.inverse() {
+                    Some((
+                        Instruction::CircuitGate(Box::new(inv_gate)),
+                        params.iter().cloned().collect(),
+                    ))
+                } else {
+                    None
+                }
             }
             Instruction::Directive(d) => match d {
                 Directive::Barrier => Some((Self::Directive(Directive::Barrier), SmallVec::new())),
@@ -236,7 +235,7 @@ impl fmt::Display for Instruction {
             Instruction::Standard(g) => write!(f, "{}", g),
             Instruction::McGate(g) => write!(f, "{}", g),
             Instruction::UnitaryGate(g) => write!(f, "{}", g),
-            Instruction::CircuitGate(_) => todo!(),
+            Instruction::CircuitGate(g) => write!(f, "{}", g.name),
             Instruction::Directive(i) => write!(f, "{}", i),
         }
     }
