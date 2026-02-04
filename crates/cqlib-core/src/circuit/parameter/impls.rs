@@ -420,6 +420,13 @@ impl Parameter {
     pub fn pow(&self, val: &Self) -> Self {
         Self::new(ExprNode::Pow(self.node.clone(), val.node.clone()))
     }
+
+    pub fn replace(&mut self, symbol: &str, param: &Parameter) -> Self {
+        Self {
+            node: Arc::new(self.node.replace(symbol, &param.node)),
+            symbols_cache: Arc::new(RwLock::new(None)),
+        }
+    }
 }
 
 /// A helper trait for converting primitive numeric types into `Arc<ExprNode>`.
@@ -586,3 +593,7 @@ mod parameter_simplify_test;
 #[cfg(test)]
 #[path = "./parameter_derivative_test.rs"]
 mod parameter_derivative_test;
+
+#[cfg(test)]
+#[path = "./parameter_test.rs"]
+mod parameter_test;

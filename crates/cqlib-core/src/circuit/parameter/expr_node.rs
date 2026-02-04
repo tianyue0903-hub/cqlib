@@ -10,6 +10,7 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
+use crate::circuit::Parameter;
 use crate::circuit::error::EvalError;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -710,6 +711,137 @@ impl ExprNode {
                     (ExprNode::Integer(0), _) => Ok(ExprNode::Integer(0)),
                     (ExprNode::Float(0.0), _) => Ok(ExprNode::Float(0.0)),
                     (l, r) => Ok(ExprNode::Pow(Arc::new(l), Arc::new(r))),
+                }
+            }
+        }
+    }
+
+    pub fn replace(&self, symbol: &str, node: &ExprNode) -> Self {
+        self.replace_internal(symbol, node)
+            .unwrap_or_else(|| self.clone())
+    }
+
+    fn replace_internal(&self, symbol: &str, node: &ExprNode) -> Option<Self> {
+        match self {
+            ExprNode::Float(_) | ExprNode::Integer(_) | ExprNode::E | ExprNode::Pi => None,
+            ExprNode::Symbol(f) => {
+                if f.as_str() == symbol {
+                    Some(node.clone())
+                } else {
+                    None
+                }
+            }
+            ExprNode::Sign(sub_node) => sub_node
+                .replace_internal(symbol, node)
+                .map(|n| ExprNode::Sign(Arc::new(n))),
+            ExprNode::Abs(sub_node) => sub_node
+                .replace_internal(symbol, node)
+                .map(|n| ExprNode::Abs(Arc::new(n))),
+            ExprNode::Sqrt(sub_node) => sub_node
+                .replace_internal(symbol, node)
+                .map(|n| ExprNode::Sqrt(Arc::new(n))),
+            ExprNode::Exp(sub_node) => sub_node
+                .replace_internal(symbol, node)
+                .map(|n| ExprNode::Exp(Arc::new(n))),
+            ExprNode::Neg(sub_node) => sub_node
+                .replace_internal(symbol, node)
+                .map(|n| ExprNode::Neg(Arc::new(n))),
+            ExprNode::Log(value, base) => {
+                let v = value.replace_internal(symbol, node);
+                let b = base.replace_internal(symbol, node);
+                match (v, b) {
+                    (None, None) => None,
+                    (v, b) => Some(ExprNode::Log(
+                        v.map(Arc::new).unwrap_or_else(|| value.clone()),
+                        b.map(Arc::new).unwrap_or_else(|| base.clone()),
+                    )),
+                }
+            }
+            ExprNode::Ln(value) => value
+                .replace_internal(symbol, node)
+                .map(|n| ExprNode::Ln(Arc::new(n))),
+            ExprNode::Sin(sub_node) => sub_node
+                .replace_internal(symbol, node)
+                .map(|n| ExprNode::Sin(Arc::new(n))),
+            ExprNode::ASin(sub_node) => sub_node
+                .replace_internal(symbol, node)
+                .map(|n| ExprNode::ASin(Arc::new(n))),
+            ExprNode::Cos(sub_node) => sub_node
+                .replace_internal(symbol, node)
+                .map(|n| ExprNode::Cos(Arc::new(n))),
+            ExprNode::ACos(sub_node) => sub_node
+                .replace_internal(symbol, node)
+                .map(|n| ExprNode::ACos(Arc::new(n))),
+            ExprNode::Tan(sub_node) => sub_node
+                .replace_internal(symbol, node)
+                .map(|n| ExprNode::Tan(Arc::new(n))),
+            ExprNode::ATan(sub_node) => sub_node
+                .replace_internal(symbol, node)
+                .map(|n| ExprNode::ATan(Arc::new(n))),
+            ExprNode::Add(n0, n1) => {
+                let r0 = n0.replace_internal(symbol, node);
+                let r1 = n1.replace_internal(symbol, node);
+                match (r0, r1) {
+                    (None, None) => None,
+                    (l, r) => Some(ExprNode::Add(
+                        l.map(Arc::new).unwrap_or_else(|| n0.clone()),
+                        r.map(Arc::new).unwrap_or_else(|| n1.clone()),
+                    )),
+                }
+            }
+            ExprNode::Sub(n0, n1) => {
+                let r0 = n0.replace_internal(symbol, node);
+                let r1 = n1.replace_internal(symbol, node);
+                match (r0, r1) {
+                    (None, None) => None,
+                    (l, r) => Some(ExprNode::Sub(
+                        l.map(Arc::new).unwrap_or_else(|| n0.clone()),
+                        r.map(Arc::new).unwrap_or_else(|| n1.clone()),
+                    )),
+                }
+            }
+            ExprNode::Mul(n0, n1) => {
+                let r0 = n0.replace_internal(symbol, node);
+                let r1 = n1.replace_internal(symbol, node);
+                match (r0, r1) {
+                    (None, None) => None,
+                    (l, r) => Some(ExprNode::Mul(
+                        l.map(Arc::new).unwrap_or_else(|| n0.clone()),
+                        r.map(Arc::new).unwrap_or_else(|| n1.clone()),
+                    )),
+                }
+            }
+            ExprNode::Div(n0, n1) => {
+                let r0 = n0.replace_internal(symbol, node);
+                let r1 = n1.replace_internal(symbol, node);
+                match (r0, r1) {
+                    (None, None) => None,
+                    (l, r) => Some(ExprNode::Div(
+                        l.map(Arc::new).unwrap_or_else(|| n0.clone()),
+                        r.map(Arc::new).unwrap_or_else(|| n1.clone()),
+                    )),
+                }
+            }
+            ExprNode::Mod(n0, n1) => {
+                let r0 = n0.replace_internal(symbol, node);
+                let r1 = n1.replace_internal(symbol, node);
+                match (r0, r1) {
+                    (None, None) => None,
+                    (l, r) => Some(ExprNode::Mod(
+                        l.map(Arc::new).unwrap_or_else(|| n0.clone()),
+                        r.map(Arc::new).unwrap_or_else(|| n1.clone()),
+                    )),
+                }
+            }
+            ExprNode::Pow(n0, n1) => {
+                let r0 = n0.replace_internal(symbol, node);
+                let r1 = n1.replace_internal(symbol, node);
+                match (r0, r1) {
+                    (None, None) => None,
+                    (l, r) => Some(ExprNode::Pow(
+                        l.map(Arc::new).unwrap_or_else(|| n0.clone()),
+                        r.map(Arc::new).unwrap_or_else(|| n1.clone()),
+                    )),
                 }
             }
         }

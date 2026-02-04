@@ -221,7 +221,7 @@ fn test_evaluate_partial_edge_cases() {
     let acos_1 = ExprNode::ACos(Arc::new(ExprNode::Integer(1)));
     let res = acos_1.evaluate_partial(&empty_bindings).unwrap();
     assert_eq!(res, ExprNode::Integer(0));
-    
+
     // Tan(Pi) -> 0.0
     let tan_pi = ExprNode::Tan(Arc::new(ExprNode::Pi));
     let res = tan_pi.evaluate_partial(&empty_bindings).unwrap();
@@ -256,7 +256,7 @@ fn test_partial_substitution_scenarios() {
     // (a * b) * c
     let expr2 = ExprNode::Mul(
         Arc::new(ExprNode::Mul(Arc::new(a.clone()), Arc::new(b.clone()))),
-        Arc::new(c.clone())
+        Arc::new(c.clone()),
     );
     let mut bindings2 = HashMap::new();
     bindings2.insert("a".to_string(), 2.0);
@@ -272,7 +272,10 @@ fn test_partial_substitution_scenarios() {
     }
 
     // Case 3: sin(a + b), set b = 0 -> sin(a)
-    let expr3 = ExprNode::Sin(Arc::new(ExprNode::Add(Arc::new(a.clone()), Arc::new(b.clone()))));
+    let expr3 = ExprNode::Sin(Arc::new(ExprNode::Add(
+        Arc::new(a.clone()),
+        Arc::new(b.clone()),
+    )));
     let mut bindings3 = HashMap::new();
     bindings3.insert("b".to_string(), 0.0);
     let res3 = expr3.evaluate_partial(&bindings3).unwrap();
@@ -290,8 +293,11 @@ fn test_partial_substitution_scenarios() {
     let y = ExprNode::Symbol("y".to_string());
     // (x * 0) + y
     let expr4 = ExprNode::Add(
-        Arc::new(ExprNode::Mul(Arc::new(x.clone()), Arc::new(ExprNode::Integer(0)))),
-        Arc::new(y.clone())
+        Arc::new(ExprNode::Mul(
+            Arc::new(x.clone()),
+            Arc::new(ExprNode::Integer(0)),
+        )),
+        Arc::new(y.clone()),
     );
     let mut bindings4 = HashMap::new();
     bindings4.insert("x".to_string(), 5.0); // substitution
@@ -299,4 +305,75 @@ fn test_partial_substitution_scenarios() {
     // 5.0 * 0 -> 0 (Integer or Float)
     // 0 + y -> y
     assert_eq!(res4, y);
+}
+
+#[test]
+fn test_replace_basic() {
+    let x = ExprNode::Symbol("x".to_string());
+    let y = ExprNode::Symbol("y".to_string());
+    let z = ExprNode::Symbol("z".to_string());
+
+    // Expression: x + y
+    let expr = ExprNode::Add(Arc::new(x), Arc::new(y.clone()));
+
+    // Replace x with z -> z + y
+    let new_expr = expr.replace("x", &z);
+    assert_eq!(new_expr.to_string(), "z + y");
+
+    // Replace y with 2 -> z + 2
+    let two = ExprNode::Integer(2);
+    let final_expr = new_expr.replace("y", &two);
+    assert_eq!(final_expr.to_string(), "z + 2");
+}
+
+#[test]
+fn test_replace_structural_sharing() {
+    let x = ExprNode::Symbol("x".to_string());
+    let y = ExprNode::Symbol("y".to_string());
+    let z = ExprNode::Symbol("z".to_string());
+
+    let y_node = Arc::new(y);
+    // Expression: x + y
+    let expr = ExprNode::Add(Arc::new(x), y_node.clone());
+
+    // Replace x with z. The right hand side (y) should not be deeply copied,
+    // it should be the same Arc.
+    let new_expr = expr.replace("x", &z);
+
+    match new_expr {
+        ExprNode::Add(lhs, rhs) => {
+            assert_eq!(lhs.to_string(), "z");
+            // Verify structural sharing: pointers should be equal
+            assert!(
+                Arc::ptr_eq(&rhs, &y_node),
+                "Structural sharing failed: rhs should be the exact same Arc"
+            );
+        }
+        _ => panic!("Expected Add node"),
+    }
+}
+
+#[test]
+fn test_replace_no_change() {
+    let x = ExprNode::Symbol("x".to_string());
+    let one = ExprNode::Integer(1);
+
+    // Expression: x + 1
+    let expr = ExprNode::Add(Arc::new(x.clone()), Arc::new(one));
+
+    // Replace "y" with "z" (y is not in the expression)
+    // The resulting expression should be structurally identical to the original
+    let z = ExprNode::Symbol("z".to_string());
+    let new_expr = expr.replace("y", &z);
+
+    if let ExprNode::Add(lhs, rhs) = new_expr {
+        if let ExprNode::Add(old_lhs, old_rhs) = expr {
+            assert!(Arc::ptr_eq(&lhs, &old_lhs));
+            assert!(Arc::ptr_eq(&rhs, &old_rhs));
+        } else {
+            panic!("Original expression changed type?!");
+        }
+    } else {
+        panic!("New expression changed type?!");
+    }
 }
