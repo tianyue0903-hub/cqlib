@@ -23,7 +23,7 @@ use std::fmt;
 #[pyclass(name = "McGate", module = "cqlib.circuit.gates")]
 #[derive(Debug, Clone)]
 pub struct PyMcGate {
-    inner: MCGate,
+    pub inner: MCGate,
 }
 
 #[pymethods]

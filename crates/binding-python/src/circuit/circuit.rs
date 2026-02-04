@@ -11,16 +11,18 @@
 // that they have been altered from the originals.
 
 use super::bit::PyQubit;
-use super::gates::{PyStandardGate, PyUnitaryGate};
+use super::gates::{PyCircuitGate, PyMcGate, PyStandardGate, PyUnitaryGate};
 use super::parameter::PyParameter;
-use crate::circuit::PyOperation;
 use crate::circuit::operation::PyOperationIter;
+use crate::circuit::{PyInstruction, PyOperation};
+use cqlib_core::circuit::gate::Instruction;
 use cqlib_core::circuit::param::ParameterValue;
 use cqlib_core::circuit::{Circuit, Qubit};
 use pyo3::IntoPyObjectExt;
 use pyo3::exceptions::{PyIndexError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyList, PySlice, PyTuple};
+use std::ops::Deref;
 
 /// A helper enum to accept either a float or a Parameter object from Python.
 #[derive(FromPyObject)]
@@ -105,42 +107,42 @@ impl PyCircuit {
         PyTuple::new(py, self.inner.qubits().iter().map(|&q| PyQubit::from(q)))
     }
 
+    #[getter]
+    fn parameters<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        PyTuple::new(
+            py,
+            self.inner
+                .parameters()
+                .iter()
+                .map(|p| PyParameter::from(p.clone())),
+        )
+    }
+
     /// Appends an instruction to the circuit.
     ///
     /// Args:
     ///     instruction (StandardGate): The gate to append.
     ///     qubits (List[int]): The list of qubit indices to apply the gate to.
-    fn append(&mut self, instruction: &Bound<'_, PyAny>, qubits: Vec<usize>) -> PyResult<()> {
+    #[pyo3(signature = (instruction, qubits))]
+    fn append(&mut self, instruction: PyStandardGate, qubits: Vec<usize>) -> PyResult<()> {
         let qubits_core: Vec<Qubit> = qubits
             .into_iter()
             .map(|idx| Qubit::new(idx as u32))
             .collect();
 
-        if let Ok(std_gate) = instruction.extract::<PyStandardGate>() {
-            // StandardGate: needs to be converted to Instruction::Standard
-            // And its parameters need to be passed.
-            let inst = cqlib_core::circuit::gate::Instruction::Standard(std_gate.inner);
+        let inst = Instruction::Standard(instruction.inner);
+        let params_core: Vec<ParameterValue> = instruction
+            .params
+            .into_iter()
+            .map(ParameterValue::Param)
+            .collect();
 
-            // Extract parameters from the PyStandardGate object
-            // We need to convert Vec<Parameter> to iterator of ParameterValue
-            let params_core: Vec<cqlib_core::circuit::param::ParameterValue> = std_gate
-                .params
-                .into_iter()
-                .map(cqlib_core::circuit::param::ParameterValue::Param)
-                .collect();
+        self.inner
+            .append(inst, qubits_core, params_core, None)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
 
-            self.inner
-                .append(inst, qubits_core, params_core, None)
-                .map_err(|e| PyValueError::new_err(e.to_string()))?;
-            Ok(())
-        } else {
-            Err(PyTypeError::new_err(
-                "Currently only StandardGate objects are supported in append().",
-            ))
-        }
+        Ok(())
     }
-
-    // --- Single Qubit Gates ---
 
     fn i(&mut self, qubit: usize) -> PyResult<()> {
         self.inner
@@ -359,8 +361,6 @@ impl PyCircuit {
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
-    // --- Multi-Controlled ---
-
     pub fn ccx(&mut self, control1: usize, control2: usize, target: usize) -> PyResult<()> {
         self.inner
             .ccx(
@@ -393,6 +393,26 @@ impl PyCircuit {
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
+    #[pyo3(signature = (instruction, qubits, params=None))]
+    pub fn multi_control_gate(
+        &mut self,
+        instruction: PyMcGate,
+        qubits: Vec<usize>,
+        params: Option<Vec<PyParamLike>>,
+    ) -> PyResult<()> {
+        let qubits_core: Vec<Qubit> = qubits.into_iter().map(Qubit::from).collect();
+        let inst = Instruction::McGate(Box::new(instruction.inner));
+        let params_core: Vec<ParameterValue> = params
+            .unwrap_or_default()
+            .into_iter()
+            .map(ParameterValue::from)
+            .collect();
+
+        self.inner
+            .append(inst, qubits_core, params_core, None)
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
     /// Appends a custom unitary gate to the circuit.
     ///
     /// Args:
@@ -404,8 +424,6 @@ impl PyCircuit {
             .unitary(gate.into(), qubits_core)
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
-
-    // --- Directives ---
 
     fn measure(&mut self, qubit: usize) -> PyResult<()> {
         self.inner
@@ -426,6 +444,31 @@ impl PyCircuit {
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
+    #[pyo3(signature = (instruction, qubits, params=None))]
+    fn circuit_gate(
+        &mut self,
+        instruction: PyCircuitGate,
+        qubits: Vec<usize>,
+        params: Option<Vec<PyParamLike>>,
+    ) -> PyResult<()> {
+        let qubits_core: Vec<Qubit> = qubits
+            .into_iter()
+            .map(|idx| Qubit::new(idx as u32))
+            .collect();
+
+        let inst = Instruction::CircuitGate(Box::new(instruction.inner));
+        let params_core: Vec<ParameterValue> = params
+            .unwrap_or_default()
+            .into_iter()
+            .map(|p| p.into())
+            .collect();
+        self.inner
+            .append(inst, qubits_core, params_core, None)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+
+        Ok(())
+    }
+
     fn inverse(&self) -> PyResult<Self> {
         let new_inner = self
             .inner
@@ -437,6 +480,28 @@ impl PyCircuit {
     #[getter]
     fn operations(&self) -> PyOperationIter {
         PyOperationIter::new(self.inner.operations().to_vec(), 0)
+    }
+
+    fn to_gate(&self, name: String) -> PyResult<PyCircuitGate> {
+        let instruction = self
+            .inner
+            .clone()
+            .to_gate(name)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+
+        if let Instruction::CircuitGate(gate) = instruction {
+            Ok(PyCircuitGate { inner: *gate })
+        } else {
+            Err(PyValueError::new_err(
+                "Unexpected instruction type returned from to_gate",
+            ))
+        }
+    }
+
+    fn decompose(&self) -> Self {
+        Self {
+            inner: self.inner.decompose(),
+        }
     }
 
     fn __getitem__<'py>(
