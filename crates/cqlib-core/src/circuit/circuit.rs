@@ -1103,6 +1103,168 @@ impl Circuit {
         true
     }
 
+    /// decompose 本质上，是自线路的参数需要使用父线路的参数替换，以及量子比特的替换。
+    /// 比如自线路是  Rx(theta+1) Q0，名称是 SubGate(theta)，
+    /// 复线路是 SubGate(beta+theta) Q1,
+    /// 那么decompose 里面的结果就是 Rx(beta+theta+1) Q1
+    pub fn decompose(&self) -> Self {
+        let mut new_circuit = Circuit::from_qubits(self.qubits()).unwrap();
+        // Preserve the order of symbols from the original circuit.
+        new_circuit.symbols = self.symbols.clone();
+
+        // Copy global phase
+        match &self.global_phase {
+            CircuitParam::Fixed(f) => new_circuit.global_phase = CircuitParam::Fixed(*f),
+            CircuitParam::Index(i) => {
+                let p = self.parameters[*i as usize].clone();
+                let (idx, is_new) = new_circuit.parameters.insert_full(p.clone());
+                if is_new {
+                    for sym in p.get_symbols() {
+                        new_circuit.symbols.insert(sym);
+                    }
+                }
+                new_circuit.global_phase = CircuitParam::Index(idx as u32);
+            }
+        }
+
+        let initial_qubit_map: HashMap<Qubit, Qubit> =
+            self.qubits.iter().map(|q| (*q, *q)).collect();
+        let initial_param_map: HashMap<String, Parameter> = HashMap::new();
+
+        for op in &self.data {
+            Self::decompose_recursive(
+                op,
+                self,
+                &initial_qubit_map,
+                &initial_param_map,
+                &mut new_circuit,
+            );
+        }
+
+        new_circuit
+    }
+
+    fn decompose_recursive(
+        op: &Operation,
+        context_circuit: &Circuit,
+        qubit_map: &HashMap<Qubit, Qubit>,
+        param_map: &HashMap<String, Parameter>,
+        target_circuit: &mut Circuit,
+    ) {
+        match &op.instruction {
+            Instruction::CircuitGate(cg) => {
+                // 1. Resolve Parameters in current context
+                let mut resolved_params = Vec::with_capacity(op.params.len());
+                for p in &op.params {
+                    let mut param = match p {
+                        CircuitParam::Fixed(v) => Parameter::from(*v),
+                        CircuitParam::Index(idx) => {
+                            context_circuit.parameters[*idx as usize].clone()
+                        }
+                    };
+
+                    // Apply substitution from the *parent* scope (if we are deep in recursion)
+                    // We need simultaneous substitution here too
+                    param = Self::apply_param_map(param, param_map);
+                    resolved_params.push(param);
+                }
+
+                // 2. Build maps for the next level
+                // Param Map: Inner Symbol -> Resolved Value
+                let mut next_param_map = HashMap::new();
+                for (i, sym) in cg.symbols().iter().enumerate() {
+                    if i < resolved_params.len() {
+                        next_param_map.insert(sym.clone(), resolved_params[i].clone());
+                    }
+                }
+
+                // Qubit Map: Inner Qubit -> Outer Qubit
+                // op.qubits are the qubits in 'context_circuit' that the gate acts on.
+                // We need to map them through 'qubit_map' to get 'target_circuit' qubits.
+                let mut next_qubit_map = HashMap::new();
+                for (i, inner_q) in cg.circuit.circuit.qubits().iter().enumerate() {
+                    if i < op.qubits.len() {
+                        let local_q = op.qubits[i];
+                        let global_q = qubit_map.get(&local_q).unwrap_or(&local_q);
+                        next_qubit_map.insert(*inner_q, *global_q);
+                    }
+                }
+
+                // 3. Recurse
+                for sub_op in &cg.circuit.circuit.data {
+                    Self::decompose_recursive(
+                        sub_op,
+                        &cg.circuit.circuit,
+                        &next_qubit_map,
+                        &next_param_map,
+                        target_circuit,
+                    );
+                }
+            }
+            _ => {
+                // Base case: Standard/Unitary/Directive
+                // Map Qubits
+                let mapped_qubits: SmallVec<[Qubit; 3]> = op
+                    .qubits
+                    .iter()
+                    .map(|q| *qubit_map.get(q).unwrap_or(q))
+                    .collect();
+
+                // Map Parameters
+                let mut mapped_params: SmallVec<[ParameterValue; 3]> = smallvec![];
+                for p in &op.params {
+                    let mut param = match p {
+                        CircuitParam::Fixed(v) => Parameter::from(*v),
+                        CircuitParam::Index(idx) => {
+                            context_circuit.parameters[*idx as usize].clone()
+                        }
+                    };
+
+                    param = Self::apply_param_map(param, param_map);
+
+                    if let Ok(val) = param.evaluate(&None) {
+                        mapped_params.push(ParameterValue::Fixed(val));
+                    } else {
+                        mapped_params.push(ParameterValue::Param(param));
+                    }
+                }
+
+                target_circuit
+                    .append(
+                        op.instruction.clone(),
+                        mapped_qubits,
+                        mapped_params,
+                        op.label.as_deref(),
+                    )
+                    .unwrap();
+            }
+        }
+    }
+
+    fn apply_param_map(mut param: Parameter, map: &HashMap<String, Parameter>) -> Parameter {
+        if map.is_empty() {
+            return param;
+        }
+
+        // Simultaneous substitution strategy using temporary placeholders
+        // 1. Replace all target symbols with unique temp symbols
+        let mut temp_map = HashMap::new();
+        for (key, val) in map {
+            // Use a specific internal prefix to avoid collisions during the two-step replacement.
+            // This acts as a simultaneous substitution.
+            let temp_key = format!("__INTERNAL_SUB_{}", key);
+            param = param.replace(key, &Parameter::from(temp_key.as_str()));
+            temp_map.insert(temp_key, val);
+        }
+
+        // 2. Replace temp symbols with actual values
+        for (temp_key, val) in temp_map {
+            param = param.replace(&temp_key, val);
+        }
+
+        param
+    }
+
     pub fn assign_parameters(
         &self,
         bindings: &Option<HashMap<String, f64>>,

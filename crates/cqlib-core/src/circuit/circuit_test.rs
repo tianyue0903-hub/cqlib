@@ -14,7 +14,7 @@ use crate::circuit::Qubit;
 use crate::circuit::circuit::Circuit;
 use crate::circuit::error::CircuitError;
 use crate::circuit::gate::{Instruction, StandardGate};
-use crate::circuit::param::CircuitParam;
+use crate::circuit::param::{CircuitParam, ParameterValue};
 use crate::circuit::parameter::impls::Parameter;
 use smallvec::smallvec;
 use std::f64::consts::PI;
@@ -344,4 +344,129 @@ fn test_assign_parameters() {
             assigned_circuit.data[1].params[0]
         );
     }
+}
+
+#[test]
+fn test_decompose() {
+    use std::collections::HashMap;
+
+    let mut inner = Circuit::new(2);
+    let q0 = Qubit::new(0);
+    let q1 = Qubit::new(1);
+    let theta = Parameter::symbol("theta");
+    let beta = Parameter::symbol("beta");
+
+    inner.h(q0).unwrap();
+    inner.rx(q0, theta).unwrap();
+    inner.rz(q1, beta.clone() + 1.0).unwrap();
+
+    let gate = inner.to_gate("c1").unwrap();
+
+    let mut outer = Circuit::new(2);
+    let qa = Qubit::new(0);
+    let qb = Qubit::new(1);
+    let gamma = Parameter::symbol("gamma");
+    let delta = Parameter::symbol("delta");
+
+    outer
+        .append(
+            gate,
+            vec![qb, qa],
+            vec![
+                ParameterValue::Param(gamma.clone()),
+                ParameterValue::Param(gamma.clone() + delta.clone()),
+            ],
+            None,
+        )
+        .unwrap();
+
+    // 3. Decompose
+    let decomposed = outer.decompose();
+
+    // 4. Verify
+    assert_eq!(decomposed.num_qubits(), 2);
+    assert_eq!(
+        decomposed.symbols().get_index(0),
+        Some(&"gamma".to_string())
+    );
+    assert_eq!(
+        decomposed.symbols().get_index(1),
+        Some(&"delta".to_string())
+    );
+
+    assert_eq!(decomposed.data.len(), 3);
+
+    assert!(matches!(
+        decomposed.data[0].instruction,
+        Instruction::Standard(StandardGate::H)
+    ));
+    assert_eq!(decomposed.data[0].qubits[0], qb);
+
+    assert!(matches!(
+        decomposed.data[1].instruction,
+        Instruction::Standard(StandardGate::RX)
+    ));
+    assert_eq!(decomposed.data[1].qubits[0], qb);
+    if let CircuitParam::Index(idx) = decomposed.data[1].params[0] {
+        let p = &decomposed.parameters[idx as usize];
+        // Should evaluate to same as gamma with bindings
+        let mut bind = HashMap::new();
+        bind.insert("gamma".to_string(), 2.0);
+        bind.insert("delta".to_string(), 3.0);
+        assert_eq!(p.evaluate(&Some(bind)).unwrap(), 2.0);
+    } else {
+        panic!("Expected Index param for RX");
+    }
+
+    // Op 3: RZ(gamma+delta+1, qA)
+    assert!(matches!(
+        decomposed.data[2].instruction,
+        Instruction::Standard(StandardGate::RZ)
+    ));
+    assert_eq!(decomposed.data[2].qubits[0], qa);
+    if let CircuitParam::Index(idx) = decomposed.data[2].params[0] {
+        let p = &decomposed.parameters[idx as usize];
+        // gamma=2, delta=3 -> 2+3+1 = 6.0
+        let mut bind = HashMap::new();
+        bind.insert("gamma".to_string(), 2.0);
+        bind.insert("delta".to_string(), 3.0);
+        assert_eq!(p.evaluate(&Some(bind)).unwrap(), 6.0);
+    } else {
+        panic!("Expected Index param for RZ");
+    }
+}
+
+#[test]
+fn test_decompose_nested() {
+    let mut l1 = Circuit::new(1);
+    l1.h(Qubit::new(0)).unwrap();
+    let g1 = l1.to_gate("g1").unwrap();
+
+    let mut l2 = Circuit::new(1);
+    let theta = Parameter::symbol("theta");
+    l2.rx(Qubit::new(0), theta.clone()).unwrap();
+    l2.append(g1, [Qubit::new(0)], [], None).unwrap();
+    let g2 = l2.to_gate("g2").unwrap();
+
+    let mut top = Circuit::new(1);
+    let phi = Parameter::symbol("phi");
+    top.append(g2, [Qubit::new(0)], [ParameterValue::Param(phi)], None)
+        .unwrap();
+
+    let flat = top.decompose();
+    assert_eq!(flat.data.len(), 2);
+
+    assert!(matches!(
+        flat.data[0].instruction,
+        Instruction::Standard(StandardGate::RX)
+    ));
+    if let CircuitParam::Index(idx) = flat.data[0].params[0] {
+        let p = &flat.parameters[idx as usize];
+        assert_eq!(p.get_symbols(), vec!["phi"]);
+    }
+
+    assert!(matches!(
+        flat.data[1].instruction,
+        Instruction::Standard(StandardGate::H)
+    ));
 }
