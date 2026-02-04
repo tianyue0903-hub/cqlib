@@ -16,6 +16,8 @@ from .parameter import Parameter
 from .operation import Operation
 from .gates.standard import StandardGate
 from .gates.unitary import UnitaryGate
+from .gates.circuit_gate import CircuitGate
+from .gates.mc_gate import McGate
 
 
 class Circuit:
@@ -57,6 +59,35 @@ class Circuit:
     # --- Generic Instruction ---
     def append(self, instruction: StandardGate, qubits: List[int]) -> None:
         """Appends an instruction to the circuit."""
+        ...
+
+    def circuit_gate(
+            self,
+            instruction: CircuitGate,
+            qubits: List[int],
+            params: Optional[List[Union[float, Parameter]]] = None,
+    ) -> None:
+        """Appends a circuit gate to the circuit."""
+        ...
+
+    def multi_control_gate(
+            self,
+            instruction: McGate,
+            qubits: List[int],
+            params: Optional[List[Union[float, Parameter]]] = None,
+    ) -> None:
+        """Appends a multi-controlled gate (McGate) to the circuit."""
+        ...
+
+    def to_gate(self, name: str) -> CircuitGate:
+        """Converts the circuit to a gate.
+        
+        Args:
+            name: A name for the new gate.
+            
+        Returns:
+            A new CircuitGate object wrapping this circuit.
+        """
         ...
 
     # --- Single Qubit Gates ---
@@ -257,4 +288,8 @@ class Circuit:
     # --- Advanced ---
     def inverse(self) -> "Circuit":
         """Creates the inverse (adjoint) of the circuit."""
+        ...
+
+    def decompose(self) -> "Circuit":
+        """Decomposes the circuit into a new circuit with simpler operations."""
         ...

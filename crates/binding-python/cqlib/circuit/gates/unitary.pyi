@@ -14,6 +14,8 @@ from typing import Union, List
 import numpy as np
 import numpy.typing as npt
 from typing_extensions import final
+from ..circuit import Circuit
+
 
 @final
 class UnitaryGate:
@@ -33,7 +35,7 @@ class UnitaryGate:
         ...
 
     def with_matrix(
-        self, mat: Union[npt.NDArray[np.complex128], List[List[complex]]]
+            self, mat: Union[npt.NDArray[np.complex128], List[List[complex]]]
     ) -> "UnitaryGate":
         """Attaches a matrix to the unitary definition.
 
@@ -45,6 +47,17 @@ class UnitaryGate:
 
         Raises:
             ValueError: If the matrix dimensions do not match num_qubits.
+        """
+        ...
+
+    def with_circuit(self, circuit: Circuit) -> "UnitaryGate":
+        """Attaches a circuit to the unitary definition.
+        
+        Args:
+            circuit: A quantum circuit definition.
+            
+        Returns:
+            A new UnitaryGate with the circuit attached.
         """
         ...
 

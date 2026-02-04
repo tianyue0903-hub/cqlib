@@ -17,6 +17,7 @@ from .gates.standard import StandardGate
 from .gates.mc_gate import McGate
 from .gates.unitary import UnitaryGate
 
+
 @final
 class Instruction:
     """A unified representation of any operation in a quantum circuit.
@@ -28,52 +29,53 @@ class Instruction:
     - Circuit gates (sub-circuits)
     - Directives (Measure, Barrier, Reset)
     """
-    
+
     @property
     def instruction_type(self) -> str:
         """Returns the type of instruction: 'standard', 'mcgate', 'unitary', 'circuit', or 'directive'."""
         ...
-    
+
     @property
     def is_standard(self) -> bool:
         """Returns True if this is a standard gate instruction."""
         ...
-    
+
     @property
     def is_mcgate(self) -> bool:
         """Returns True if this is a multi-controlled gate instruction."""
         ...
-    
+
     @property
     def is_unitary(self) -> bool:
         """Returns True if this is a unitary gate instruction."""
         ...
-    
+
     @property
     def is_circuit(self) -> bool:
         """Returns True if this is a circuit gate instruction."""
         ...
-    
+
     @property
     def is_directive(self) -> bool:
         """Returns True if this is a directive (measure, barrier, reset)."""
         ...
-    
+
     @property
     def standard_gate(self) -> Optional[StandardGate]:
         """Returns the standard gate if this is a standard instruction, None otherwise."""
         ...
-    
+
     @property
     def mc_gate(self) -> Optional[McGate]:
         """Returns the multi-controlled gate if this is an mc instruction, None otherwise."""
         ...
-    
+
     @property
     def unitary_gate(self) -> Optional[UnitaryGate]:
         """Returns the unitary gate if this is a unitary instruction, None otherwise."""
         ...
-    
+
+    @property
     def name(self) -> str:
         """Returns the name of the instruction."""
         ...
@@ -92,22 +94,22 @@ class Operation:
         params: The parameters for the operation (float values or symbolic indices).
         label: An optional human-readable label for this operation.
     """
-    
+
     @property
     def instruction(self) -> Instruction:
         """Returns the instruction (gate type) of this operation."""
         ...
-    
+
     @property
     def qubits(self) -> List[Qubit]:
         """Returns the qubits this operation acts on."""
         ...
-    
+
     @property
     def num_qubits(self) -> int:
         """Returns the number of qubits this operation acts on."""
         ...
-    
+
     @property
     def params(self) -> List[Union[float, Tuple[str, int]]]:
         """Returns the parameters of this operation.
@@ -117,17 +119,18 @@ class Operation:
         - Tuples ("param", index) for symbolic parameters
         """
         ...
-    
+
     @property
     def num_params(self) -> int:
         """Returns the number of parameters."""
         ...
-    
+
     @property
     def label(self) -> Optional[str]:
         """Returns the label of this operation, if any."""
         ...
-    
+
+    @property
     def name(self) -> str:
         """Returns the name of the instruction."""
         ...

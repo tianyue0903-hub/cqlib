@@ -16,6 +16,7 @@ import numpy.typing as npt
 from typing_extensions import final
 from ..parameter import Parameter
 
+
 @final
 class StandardGate:
     """Represents the set of standard quantum logic gates supported natively by Cqlib.
@@ -91,7 +92,7 @@ class StandardGate:
         ...
 
     def matrix(
-        self, params: Optional[List[float]] = None
+            self, params: Optional[List[float]] = None
     ) -> npt.NDArray[np.complex128]:
         """Returns the unitary matrix representation of the gate.
 
