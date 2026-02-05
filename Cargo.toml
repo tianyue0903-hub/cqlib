@@ -22,7 +22,7 @@ strip = true
 [workspace.dependencies]
 approx = "0.5"
 indexmap = "2.12"
-ndarray = "0.17"
+ndarray = { version = "0.17", features = ["rayon"] }
 num = "0.4"
 numpy = "0.27"
 num-complex = "0.4"

@@ -24,6 +24,7 @@ impl From<CircuitGate> for PyCircuitGate {
         Self { inner: gate }
     }
 }
+
 impl From<&CircuitGate> for PyCircuitGate {
     fn from(gate: &CircuitGate) -> Self {
         Self {

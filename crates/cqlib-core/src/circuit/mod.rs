@@ -11,6 +11,7 @@
 // that they have been altered from the originals.
 pub mod bit;
 pub mod circuit;
+mod circuit_to_matrix;
 mod error;
 pub mod gate;
 pub mod operation;
@@ -19,4 +20,5 @@ pub mod parameter;
 
 pub use bit::Qubit;
 pub use circuit::Circuit;
+pub use circuit_to_matrix::circuit_to_matrix;
 pub use parameter::impls::Parameter;

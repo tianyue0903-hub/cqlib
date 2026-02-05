@@ -90,11 +90,7 @@ impl Operation {
                     ps.push(*val);
                 }
                 CircuitParam::Index(_index) => {
-                    // TODO: Need access to the parent Circuit's parameter table to resolve the index.
-                    // This signature might need to change to accept a context or parameter map.
-                    todo!(
-                        "Symbolic parameter resolution is not yet implemented in Operation::matrix"
-                    )
+                    return Err(CircuitError::SymbolicParameterError);
                 }
             }
         }

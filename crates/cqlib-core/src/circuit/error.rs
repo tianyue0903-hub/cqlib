@@ -97,4 +97,13 @@ pub enum CircuitError {
 
     #[error("Operation cannot be controlled: {0}")]
     InvalidControlOperation(String),
+
+    #[error("Symbolic parameter cannot be evaluated in this context")]
+    SymbolicParameterError,
+}
+
+#[derive(Debug, Error)]
+pub enum CompileError {
+    #[error("error")]
+    Error,
 }

@@ -10,13 +10,17 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
-use cqlib_core::circuit::operation::Operation;
-use cqlib_core::circuit::param::CircuitParam;
-use pyo3::prelude::*;
-use std::sync::Arc;
-
 use crate::circuit::bit::PyQubit;
 use crate::circuit::instruction::PyInstruction;
+use cqlib_core::circuit::operation::Operation;
+use cqlib_core::circuit::param::CircuitParam;
+use num_complex::Complex64;
+use numpy::ToPyArray;
+use numpy::ndarray::Array2;
+use pyo3::IntoPyObjectExt;
+use pyo3::prelude::*;
+use std::borrow::Cow;
+use std::sync::Arc;
 
 #[pyclass(name = "Operation", module = "cqlib.circuit")]
 #[derive(Debug, Clone)]
@@ -79,6 +83,14 @@ impl PyOperation {
             }
         }
         Ok(result)
+    }
+
+    fn matrix(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let matrix_cow = self
+            .operation
+            .matrix()
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{:?}", e)))?;
+        Ok(matrix_cow.to_pyarray(py).into_py_any(py)?)
     }
 
     /// Returns the number of parameters.
