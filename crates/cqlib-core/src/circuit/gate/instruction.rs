@@ -20,17 +20,16 @@
 //!
 //! By using `Instruction`, the circuit can store a heterogeneous list of operations in a single vector.
 
+use crate::circuit::Parameter;
 use crate::circuit::gate::circuit_gate::{CircuitGate, FrozenCircuit};
 use crate::circuit::gate::directive::Directive;
 use crate::circuit::gate::standard_gate::StandardGate;
 use crate::circuit::gate::{MCGate, UnitaryGate, gate_matrix};
-use crate::circuit::{Circuit, Parameter};
 use alloc::borrow::Cow;
 use ndarray::Array2;
 use num_complex::Complex64;
 use smallvec::SmallVec;
 use std::fmt;
-use std::ops::Deref;
 use std::sync::Arc;
 
 /// A unified representation of any operation in a quantum circuit.
@@ -199,7 +198,7 @@ impl Instruction {
                 }
             }
             Instruction::McGate(mc) => {
-                let total_ctrls = mc.num_qubits() + num_new_ctrls;
+                let total_ctrls = mc.num_ctrl_qubits() + num_new_ctrls;
                 let base = mc.base_gate().to_owned();
 
                 if let Some(std) = try_compose_std(base, total_ctrls) {

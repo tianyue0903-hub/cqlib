@@ -12,7 +12,6 @@
 
 use crate::circuit::circuit::Circuit;
 use crate::circuit::error::CircuitError;
-use crate::circuit::parameter::impls::Parameter;
 use indexmap::IndexSet;
 use std::sync::Arc;
 

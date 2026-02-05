@@ -14,12 +14,9 @@ use crate::circuit::bit::PyQubit;
 use crate::circuit::instruction::PyInstruction;
 use cqlib_core::circuit::operation::Operation;
 use cqlib_core::circuit::param::CircuitParam;
-use num_complex::Complex64;
 use numpy::ToPyArray;
-use numpy::ndarray::Array2;
 use pyo3::IntoPyObjectExt;
 use pyo3::prelude::*;
-use std::borrow::Cow;
 use std::sync::Arc;
 
 #[pyclass(name = "Operation", module = "cqlib.circuit")]
