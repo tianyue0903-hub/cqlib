@@ -10,7 +10,8 @@
 # copyright notice, and modified files need to carry a notice indicating
 # that they have been altered from the originals.
 
-from typing import List, Union, Optional
+from typing import List, Union, Optional, Dict
+import numpy as np
 from .bit import Qubit
 from .parameter import Parameter
 from .operation import Operation
@@ -18,7 +19,6 @@ from .gates.standard import StandardGate
 from .gates.unitary import UnitaryGate
 from .gates.circuit_gate import CircuitGate
 from .gates.mc_gate import McGate
-
 
 class Circuit:
     """A quantum circuit representation serving as the core IR for quantum programs.
@@ -50,7 +50,7 @@ class Circuit:
     @property
     def operations(self) -> List[Operation]:
         """Returns the list of operations in this circuit.
-        
+
         Each operation represents a gate application or directive
         (measure, barrier, reset) with specific qubits and parameters.
         """
@@ -62,29 +62,29 @@ class Circuit:
         ...
 
     def circuit_gate(
-            self,
-            instruction: CircuitGate,
-            qubits: List[int],
-            params: Optional[List[Union[float, Parameter]]] = None,
+        self,
+        instruction: CircuitGate,
+        qubits: List[int],
+        params: Optional[List[Union[float, Parameter]]] = None,
     ) -> None:
         """Appends a circuit gate to the circuit."""
         ...
 
     def multi_control_gate(
-            self,
-            instruction: McGate,
-            qubits: List[int],
-            params: Optional[List[Union[float, Parameter]]] = None,
+        self,
+        instruction: McGate,
+        qubits: List[int],
+        params: Optional[List[Union[float, Parameter]]] = None,
     ) -> None:
         """Appends a multi-controlled gate (McGate) to the circuit."""
         ...
 
     def to_gate(self, name: str) -> CircuitGate:
         """Converts the circuit to a gate.
-        
+
         Args:
             name: A name for the new gate.
-            
+
         Returns:
             A new CircuitGate object wrapping this circuit.
         """
@@ -173,17 +173,17 @@ class Circuit:
         ...
 
     def u(
-            self,
-            qubit: int,
-            theta: Union[float, Parameter],
-            phi: Union[float, Parameter],
-            lambda_: Union[float, Parameter],
+        self,
+        qubit: int,
+        theta: Union[float, Parameter],
+        phi: Union[float, Parameter],
+        lambda_: Union[float, Parameter],
     ) -> None:
         """Appends a generic single-qubit rotation gate U(theta, phi, lambda)."""
         ...
 
     def rxy(
-            self, qubit: int, theta: Union[float, Parameter], phi: Union[float, Parameter]
+        self, qubit: int, theta: Union[float, Parameter], phi: Union[float, Parameter]
     ) -> None:
         """Appends a rotation in the XY plane."""
         ...
@@ -222,11 +222,11 @@ class Circuit:
         ...
 
     def fsim(
-            self,
-            a: int,
-            b: int,
-            theta: Union[float, Parameter],
-            phi: Union[float, Parameter],
+        self,
+        a: int,
+        b: int,
+        theta: Union[float, Parameter],
+        phi: Union[float, Parameter],
     ) -> None:
         """Appends a Fermionic Simulation gate (fSim)."""
         ...
@@ -250,11 +250,11 @@ class Circuit:
         ...
 
     def multi_control(
-            self,
-            instruction: StandardGate,
-            controls: List[int],
-            targets: List[int],
-            params: Optional[List[Union[float, Parameter]]] = None,
+        self,
+        instruction: StandardGate,
+        controls: List[int],
+        targets: List[int],
+        params: Optional[List[Union[float, Parameter]]] = None,
     ) -> None:
         """Appends a multi-controlled version of a standard gate."""
         ...
@@ -292,4 +292,48 @@ class Circuit:
 
     def decompose(self) -> "Circuit":
         """Decomposes the circuit into a new circuit with simpler operations."""
+        ...
+
+    def assign_parameters(
+        self, bindings: Optional[Dict[str, float]] = None
+    ) -> "Circuit":
+        """Assign values to symbolic parameters and return a new circuit.
+
+        Args:
+            bindings: A dictionary mapping parameter names to float values.
+                If None, all symbolic parameters remain symbolic.
+
+        Returns:
+            A new Circuit with parameters assigned. The original circuit is not modified.
+
+        Example:
+            >>> circuit = Circuit(1)
+            >>> theta = Parameter.symbol("theta")
+            >>> circuit.rx(0, theta)
+            >>> assigned = circuit.assign_parameters({"theta": 3.14159})
+            >>> # assigned is a new circuit with theta = 3.14159
+        """
+        ...
+
+    def to_matrix(self, qubits_order: Optional[List[int]] = None) -> np.ndarray:
+        """Convert the circuit to its unitary matrix representation.
+
+        Args:
+            qubits_order: Optional list specifying the order of qubits in the output matrix.
+                If None, uses the natural qubit order (0, 1, 2, ...).
+
+        Returns:
+            A 2D numpy array representing the unitary matrix of the circuit.
+
+        Raises:
+            ValueError: If the circuit contains unbound symbolic parameters or
+                if qubits_order contains invalid qubit indices.
+
+        Example:
+            >>> circuit = Circuit(1)
+            >>> circuit.h(0)
+            >>> matrix = circuit.to_matrix()
+            >>> matrix.shape
+            (2, 2)
+        """
         ...

@@ -23,7 +23,8 @@ use numpy::{PyArray2, ToPyArray};
 use pyo3::IntoPyObjectExt;
 use pyo3::exceptions::{PyIndexError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyList, PySlice, PyTuple};
+use pyo3::types::{PyDict, PyList, PySlice, PyTuple};
+use std::collections::HashMap;
 
 /// A helper enum to accept either a float or a Parameter object from Python.
 #[derive(FromPyObject)]
@@ -474,6 +475,29 @@ impl PyCircuit {
         let new_inner = self
             .inner
             .inverse()
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        Ok(PyCircuit { inner: new_inner })
+    }
+
+    /// Assign parameters to the circuit and return a new circuit with the assigned values.
+    ///
+    /// Args:
+    ///     bindings (dict[str, float], optional): A dictionary mapping parameter names to values.
+    ///         If None, all symbolic parameters remain symbolic.
+    ///
+    /// Returns:
+    ///     Circuit: A new circuit with parameters assigned.
+    ///
+    /// Example:
+    ///     >>> circuit = Circuit(1)
+    ///     >>> theta = Parameter.symbol("theta")
+    ///     >>> circuit.rx(0, theta)
+    ///     >>> assigned = circuit.assign_parameters({"theta": 3.14159})
+    #[pyo3(signature = (bindings=None))]
+    fn assign_parameters(&self, bindings: Option<HashMap<String, f64>>) -> PyResult<Self> {
+        let new_inner = self
+            .inner
+            .assign_parameters(&bindings)
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
         Ok(PyCircuit { inner: new_inner })
     }
