@@ -21,6 +21,8 @@ strip = true
 
 [workspace.dependencies]
 approx = "0.5"
+lalrpop = "0.22"
+lalrpop-util = "0.22"
 indexmap = "2.12"
 ndarray = { version = "0.17", features = ["rayon"] }
 num = "0.4"

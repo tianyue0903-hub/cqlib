@@ -27,6 +27,7 @@ categories = [
 
 [dependencies]
 approx.workspace = true
+lalrpop-util = { workspace = true, features = ["lexer"] }
 indexmap.workspace = true
 ndarray.workspace = true
 num.workspace = true
@@ -35,3 +36,6 @@ rustworkx-core.workspace = true
 smallvec.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
+
+[build-dependencies]
+lalrpop.workspace = true

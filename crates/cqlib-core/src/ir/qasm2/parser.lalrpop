@@ -1,0 +1,118 @@
+// This code is part of Cqlib.
+//
+// (C) Copyright China Telecom Quantum Group 2026
+//
+// This code is licensed under the Apache License, Version 2.0. You may
+// obtain a copy of this license in the LICENSE.txt file in the root directory
+// of this source tree or at http://www.apache.org/licenses/LICENSE-2.0.
+//
+// Any modifications or derivative works of this code must retain this
+// copyright notice, and modified files need to carry a notice indicating
+// that they have been altered from the originals.
+
+use std::str::FromStr;
+use crate::ir::qasm2::ast::*;
+
+grammar;
+
+pub Main: OpenQASMProgram = {
+    "OPENQASM" <v:Real> ";" <s:Statement*> => OpenQASMProgram { version: v, statements: s }
+};
+
+Statement: Statement = {
+    "qreg" <id:Id> "[" <n:Int> "]" ";" => Statement::QReg(id, n),
+    "creg" <id:Id> "[" <n:Int> "]" ";" => Statement::CReg(id, n),
+    "include" <s:QuotedStr> ";" => Statement::Include(s),
+    "barrier" <a:ArgList> ";" => Statement::Barrier(a),
+    "reset" <a:Arg> ";" => Statement::Reset(a),
+    "measure" <q:Arg> "->" <c:Arg> ";" => Statement::Measure(q, c),
+    "if" "(" <id:Id> "==" <n:Int> ")" <s:Statement> => Statement::If(id, n, Box::new(s)),
+    // 门声明
+    "gate" <name:Id> <p:("(" <IdList> ")")?> <q:IdList> "{" <body:Statement*> "}" => {
+        Statement::GateDecl(Box::new(GateDeclData {
+            name,
+            params: p.unwrap_or(vec![]),
+            qubits: q,
+            body
+        }))
+    },
+    "opaque" <name:Id> <p:("(" <IdList> ")")?> <q:IdList> ";" => Statement::Opaque(name, p.unwrap_or(vec![]), q),
+    // 门调用
+    <name:GateId> <p:("(" <ExpList> ")")?> <args:ArgList> ";" =>
+        Statement::CustomGate(name, p.unwrap_or(vec![]), args),
+};
+
+GateId: String = {
+    <id:Id> => id,
+    "U" => "U".to_string(),
+    "CX" => "CX".to_string(),
+};
+
+// 表达式优先级处理 - 使用 LALRPOP 的优先级宏
+// 注意：Exp 返回 Expression（而非 Box），因为 AST 的 CustomGate 期望 Vec<Expression>
+pub Exp: Expression = {
+    <l:Exp> "+" <r:Term> => Expression::BinaryOp(Box::new(l), OpCode::Add, Box::new(r)),
+    <l:Exp> "-" <r:Term> => Expression::BinaryOp(Box::new(l), OpCode::Sub, Box::new(r)),
+    Term,
+};
+
+Term: Expression = {
+    <l:Term> "*" <r:Factor> => Expression::BinaryOp(Box::new(l), OpCode::Mul, Box::new(r)),
+    <l:Term> "/" <r:Factor> => Expression::BinaryOp(Box::new(l), OpCode::Div, Box::new(r)),
+    Factor,
+};
+
+Factor: Expression = {
+    <l:Unary> "^" <r:Factor> => Expression::BinaryOp(Box::new(l), OpCode::Pow, Box::new(r)),
+    Unary,
+};
+
+Unary: Expression = {
+    <op:UnaryOp> "(" <e:Exp> ")" => Expression::UnaryOp(op, Box::new(e)),
+    "-" <e:Unary> => Expression::UnaryOp(UnaryOpCode::Neg, Box::new(e)),
+    Primary,
+};
+
+Primary: Expression = {
+    <r:Real> => Expression::Real(r),
+    <n:Int> => Expression::Integer(n),
+    "pi" => Expression::Pi,
+    <id:Id> => Expression::Id(id),
+    "(" <e:Exp> ")" => e,
+};
+
+UnaryOp: UnaryOpCode = {
+    "sin" => UnaryOpCode::Sin,
+    "cos" => UnaryOpCode::Cos,
+    "tan" => UnaryOpCode::Tan,
+    "exp" => UnaryOpCode::Exp,
+    "ln" => UnaryOpCode::Ln,
+    "sqrt" => UnaryOpCode::Sqrt,
+    "asin" => UnaryOpCode::Asin,
+    "acos" => UnaryOpCode::Acos,
+    "atan" => UnaryOpCode::Atan,
+};
+
+Arg: Argument = {
+    <id:Id> => Argument::Id(id),
+    <id:Id> "[" <n:Int> "]" => Argument::IndexedId(id, n),
+};
+
+// 基础词法规则
+Id: String = <s:r"[a-z][a-zA-Z0-9_]*"> => s.to_string();
+Int: i64 = <s:r"[0-9]+"> => i64::from_str(s).unwrap();
+Real: f64 = <s:r"([0-9]+\.[0-9]*|\.[0-9]+)([eE][-+]?[0-9]+)?|[0-9]+[eE][-+]?[0-9]+"> => f64::from_str(s).unwrap();
+QuotedStr: String = <s:r#""[^"]*""#> => s[1..s.len()-1].to_string();
+
+// 列表宏
+Comma<T>: Vec<T> = { <v:(<T> ",")*> <e:T?> => match e { None => v, Some(e) => { let mut v = v; v.push(e); v } } };
+IdList = Comma<Id>;
+ExpList = Comma<Exp>;
+ArgList = Comma<Arg>;
+
+// 忽略空白字符 [cite: 42]
+match {
+    r"\s*" => { },
+    r"//[^\n\r]*" => { },
+    _
+}
