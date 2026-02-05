@@ -157,11 +157,10 @@ fn apply_single_qubit(state: &mut Array1<Complex64>, matrix: &Array2<Complex64>,
     }
 }
 
+use std::cell::UnsafeCell;
+
 struct UnsafeSlice<'a> {
-    // 改用裸指针，它不受 Rust 标准借用规则的限制
-    ptr: *mut Complex64,
-    // 使用 PhantomData 告诉编译器这个结构体实际上持有 &'a mut [Complex64]
-    // 这对生命周期检查至关重要
+    ptr: *const UnsafeCell<Complex64>,
     _marker: PhantomData<&'a mut [Complex64]>,
 }
 unsafe impl<'a> Sync for UnsafeSlice<'a> {}
@@ -169,15 +168,15 @@ unsafe impl<'a> Send for UnsafeSlice<'a> {}
 
 impl<'a> UnsafeSlice<'a> {
     fn new(slice: &'a mut [Complex64]) -> Self {
+        let ptr = slice.as_mut_ptr() as *const UnsafeCell<Complex64>;
         Self {
-            ptr: slice.as_mut_ptr(),
+            ptr,
             _marker: PhantomData,
         }
     }
 
-    // 关键点：这里入参是 &self (不可变引用)，但返回的是 &mut (可变引用)
     unsafe fn get_mut(&self, idx: usize) -> &mut Complex64 {
-        unsafe { &mut *self.ptr.add(idx) }
+        unsafe { &mut *(*self.ptr.add(idx)).get() }
     }
 }
 

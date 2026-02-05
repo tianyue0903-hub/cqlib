@@ -13,16 +13,17 @@
 use super::bit::PyQubit;
 use super::gates::{PyCircuitGate, PyMcGate, PyStandardGate, PyUnitaryGate};
 use super::parameter::PyParameter;
+use crate::circuit::PyOperation;
 use crate::circuit::operation::PyOperationIter;
-use crate::circuit::{PyInstruction, PyOperation};
 use cqlib_core::circuit::gate::Instruction;
 use cqlib_core::circuit::param::ParameterValue;
 use cqlib_core::circuit::{Circuit, Qubit};
+use num_complex::Complex64;
+use numpy::{PyArray2, ToPyArray};
 use pyo3::IntoPyObjectExt;
 use pyo3::exceptions::{PyIndexError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyList, PySlice, PyTuple};
-use std::ops::Deref;
 
 /// A helper enum to accept either a float or a Parameter object from Python.
 #[derive(FromPyObject)]
@@ -496,6 +497,15 @@ impl PyCircuit {
                 "Unexpected instruction type returned from to_gate",
             ))
         }
+    }
+
+    #[pyo3(signature = (qubits_order=None))]
+    fn to_matrix<'py>(
+        &self,
+        py: Python<'py>,
+        qubits_order: Option<Vec<usize>>,
+    ) -> PyResult<Bound<'py, PyArray2<Complex64>>> {
+        Ok(self.inner.to_matrix(qubits_order.as_ref()).to_pyarray(py))
     }
 
     fn decompose(&self) -> Self {

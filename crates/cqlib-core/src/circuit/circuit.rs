@@ -47,6 +47,7 @@
 //! ```
 
 use crate::circuit::bit::Qubit;
+use crate::circuit::circuit_to_matrix;
 use crate::circuit::error::CircuitError;
 use crate::circuit::gate::circuit_gate::{CircuitGate, FrozenCircuit};
 use crate::circuit::gate::{Directive, Instruction, StandardGate, UnitaryGate};
@@ -54,6 +55,8 @@ use crate::circuit::operation::Operation;
 use crate::circuit::param::{CircuitParam, ParameterValue};
 use crate::circuit::parameter::Parameter;
 use indexmap::IndexSet;
+use ndarray::Array2;
+use num_complex::Complex64;
 use smallvec::{SmallVec, smallvec};
 use std::collections::{HashMap, HashSet};
 
@@ -1263,6 +1266,10 @@ impl Circuit {
         }
 
         param
+    }
+
+    pub fn to_matrix(&self, qubits_order: Option<&Vec<usize>>) -> Array2<Complex64> {
+        circuit_to_matrix(self, qubits_order).unwrap()
     }
 
     pub fn assign_parameters(
