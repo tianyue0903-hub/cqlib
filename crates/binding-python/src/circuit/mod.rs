@@ -11,14 +11,14 @@
 // that they have been altered from the originals.
 
 pub mod bit;
-pub mod circuit;
+pub mod circuit_impl;
 pub mod gates;
 pub mod instruction;
 pub mod operation;
 pub mod parameter;
 
 pub use bit::PyQubit;
-pub use circuit::PyCircuit;
+pub use circuit_impl::PyCircuit;
 pub use gates::PyStandardGate;
 pub use gates::PyUnitaryGate;
 pub use instruction::PyInstruction;

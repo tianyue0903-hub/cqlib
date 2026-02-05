@@ -31,7 +31,7 @@ impl PyMcGate {
     #[new]
     pub fn new(num_controls: u8, gate: PyStandardGate) -> Self {
         Self {
-            inner: MCGate::new(num_controls, gate.inner).into(),
+            inner: MCGate::new(num_controls, gate.inner),
         }
     }
 

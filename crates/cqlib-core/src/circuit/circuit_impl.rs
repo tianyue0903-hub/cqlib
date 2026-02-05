@@ -27,7 +27,7 @@
 //! ## Example
 //!
 //! ```rust
-//! use cqlib_core::circuit::circuit::Circuit;
+//! use cqlib_core::circuit::circuit_impl::Circuit;
 //! use cqlib_core::circuit::Qubit;
 //!
 //! // Create a circuit with 2 qubits
@@ -122,7 +122,7 @@ impl Circuit {
     /// # Example
     ///
     /// ```rust
-    /// use cqlib_core::circuit::circuit::Circuit;
+    /// use cqlib_core::circuit::circuit_impl::Circuit;
     ///
     /// let circuit = Circuit::new(5);
     /// assert_eq!(circuit.num_qubits(), 5);
@@ -888,7 +888,7 @@ impl Circuit {
     /// # Example
     ///
     /// ```rust
-    /// use cqlib_core::circuit::circuit::Circuit;
+    /// use cqlib_core::circuit::circuit_impl::Circuit;
     /// use cqlib_core::circuit::Qubit;
     /// use cqlib_core::circuit::gate::StandardGate;
     ///
@@ -908,7 +908,7 @@ impl Circuit {
     ///
     /// # Example
     /// ```rust
-    /// # use cqlib_core::circuit::circuit::Circuit;
+    /// # use cqlib_core::circuit::circuit_impl::Circuit;
     /// # use cqlib_core::circuit::Qubit;
     /// # use cqlib_core::circuit::gate::{StandardGate, Instruction};
     /// let mut circuit = Circuit::new(3);
@@ -961,7 +961,7 @@ impl Circuit {
     /// ```rust
     /// use ndarray::Array2;
     /// use num_complex::Complex64;
-    /// use cqlib_core::circuit::circuit::Circuit;
+    /// use cqlib_core::circuit::circuit_impl::Circuit;
     /// use cqlib_core::circuit::gate::UnitaryGate;
     /// use cqlib_core::circuit::Qubit;
     ///

@@ -11,7 +11,7 @@
 // that they have been altered from the originals.
 
 use crate::circuit::Qubit;
-use crate::circuit::circuit::Circuit;
+use crate::circuit::circuit_impl::Circuit;
 use crate::circuit::error::CircuitError;
 use crate::circuit::gate::{Instruction, StandardGate};
 use crate::circuit::param::{CircuitParam, ParameterValue};

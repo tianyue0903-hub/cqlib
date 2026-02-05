@@ -87,7 +87,7 @@ impl PyOperation {
             .operation
             .matrix()
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{:?}", e)))?;
-        Ok(matrix_cow.to_pyarray(py).into_py_any(py)?)
+        matrix_cow.to_pyarray(py).into_py_any(py)
     }
 
     /// Returns the number of parameters.

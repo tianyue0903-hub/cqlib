@@ -23,7 +23,7 @@ use numpy::{PyArray2, ToPyArray};
 use pyo3::IntoPyObjectExt;
 use pyo3::exceptions::{PyIndexError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList, PySlice, PyTuple};
+use pyo3::types::{PyList, PySlice, PyTuple};
 use std::collections::HashMap;
 
 /// A helper enum to accept either a float or a Parameter object from Python.

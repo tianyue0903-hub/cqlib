@@ -10,6 +10,8 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
+#![allow(clippy::needless_range_loop)]
+
 use crate::circuit::Circuit;
 use crate::circuit::error::CompileError;
 use crate::circuit::gate::{Instruction, StandardGate};
@@ -24,7 +26,7 @@ pub fn circuit_to_matrix(
     circuit: &Circuit,
     qubits_order: Option<&Vec<usize>>,
 ) -> Result<Array2<Complex64>, CompileError> {
-    if circuit.parameters().len() > 0 {
+    if !circuit.parameters().is_empty() {
         return Err(CompileError::Error);
     }
 
@@ -86,7 +88,7 @@ pub fn circuit_to_matrix(
                     .collect();
                 match &op.instruction {
                     Instruction::Standard(std_gate) => {
-                        apply_standard_gate(&mut state_vec, &std_gate, params, qs);
+                        apply_standard_gate(&mut state_vec, std_gate, params, qs);
                     }
                     Instruction::McGate(mc_gate) => {
                         let matrix = mc_gate.matrix(params.as_slice());
@@ -175,6 +177,7 @@ impl<'a> UnsafeSlice<'a> {
         }
     }
 
+    #[allow(clippy::mut_from_ref)]
     unsafe fn get_mut(&self, idx: usize) -> &mut Complex64 {
         unsafe { &mut *(*self.ptr.add(idx)).get() }
     }
@@ -257,12 +260,12 @@ pub fn apply_two_qubits(
 pub fn apply_general_gate(
     state: &mut Array1<Complex64>,
     matrix: &Array2<Complex64>,
-    qubits: &Vec<usize>,
+    qubits: &[usize],
 ) {
     let num_qubits = qubits.len();
     let dim = 1 << num_qubits;
     let len = state.len();
-    let mut sorted_qubits = qubits.clone();
+    let mut sorted_qubits = qubits.to_owned();
     sorted_qubits.sort();
 
     // 预计算：物理偏移量映射

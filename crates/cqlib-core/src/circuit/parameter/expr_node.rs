@@ -686,7 +686,7 @@ impl ExprNode {
                 let r = rhs.evaluate_partial(bindings)?;
                 match (l, r) {
                     (ExprNode::Integer(a), ExprNode::Integer(b)) => {
-                        if b >= 0 && b < 10 {
+                        if (0..10).contains(&b) {
                             // Optimization for small powers
                             Ok(ExprNode::Integer(a.pow(b as u32)))
                         } else {

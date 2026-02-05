@@ -10,7 +10,7 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
-use crate::circuit::circuit::Circuit;
+use crate::circuit::circuit_impl::Circuit;
 use crate::circuit::error::CircuitError;
 use indexmap::IndexSet;
 use std::sync::Arc;
@@ -31,12 +31,14 @@ impl FrozenCircuit {
 }
 
 /// 线路的符号，和线路门的符号不等价
+///
 ///  1. CircuitGate 内部有一个参数表达式：theta + 1
 ///  2. CircuitGate 定义了一个绑定：theta -> 2 * theta（外部参数映射到内部符号）
 ///  3. 当外部传入 theta = 0.5 时：
-///    • 首先计算 CircuitGate 的绑定：2 * 0.5 = 1.0
-///    • 然后用 1.0 替换内部电路的 theta
-///    • 最后计算内部电路的参数：1.0 + 1 = 2.0
+///
+///     - 首先计算 CircuitGate 的绑定：2 * 0.5 = 1.0
+///     - 然后用 1.0 替换内部电路的 theta
+///     - 最后计算内部电路的参数：1.0 + 1 = 2.0
 #[derive(Debug, Clone)]
 pub struct CircuitGate {
     pub name: Arc<String>,
