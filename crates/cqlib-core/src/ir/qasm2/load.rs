@@ -46,6 +46,9 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// Built-in qelib1.inc content
+const QELIB1: &str = include_str!("qelib1.inc");
+
 #[rustfmt::skip]
 mod parser {
     include!(concat!(env!("OUT_DIR"), "/ir/qasm2/parser.rs"));
@@ -307,27 +310,32 @@ impl AstToCircuit {
                     };
 
                     if !self.file_cache.contains_key(&target_path) {
-                        if target_path.exists() {
-                            let content = fs::read_to_string(&target_path).map_err(|e| {
+                        let content_res = if filename == "qelib1.inc" {
+                            Ok(QELIB1.to_string())
+                        } else if target_path.exists() {
+                            fs::read_to_string(&target_path).map_err(|e| {
                                 QasmParseError::IoError(format!("Include {}: {}", filename, e))
-                            })?;
-                            let parser = parser::MainParser::new();
-                            let included_program = parser.parse(&content).map_err(|e| {
-                                QasmParseError::ParseError(format!("In {}: {:?}", filename, e))
-                            })?;
-
-                            // Cache the parsed AST
-                            self.file_cache
-                                .insert(target_path.clone(), included_program.clone());
-
-                            // Recurse
-                            self.discovery_pass(&included_program)?;
+                            })
                         } else {
-                            return Err(QasmParseError::IoError(format!(
+                            Err(QasmParseError::IoError(format!(
                                 "Include file not found: {:?}",
                                 target_path
-                            )));
-                        }
+                            )))
+                        };
+
+                        let content = content_res?;
+                        // Use ProgramBodyParser for included files (no version header required)
+                        let parser = parser::ProgramBodyParser::new();
+                        let included_program = parser.parse(&content).map_err(|e| {
+                            QasmParseError::ParseError(format!("In {}: {:?}", filename, e))
+                        })?;
+
+                        // Cache the parsed AST
+                        self.file_cache
+                            .insert(target_path.clone(), included_program.clone());
+
+                        // Recurse
+                        self.discovery_pass(&included_program)?;
                     }
                 }
                 Statement::Opaque(name, params, qubits) => {
@@ -420,7 +428,7 @@ impl AstToCircuit {
                 let mut resolved_params: SmallVec<[ParameterValue; 3]> = smallvec![];
                 for expr in args {
                     let param = self.expr_to_parameter(expr, param_map)?;
-                    resolved_params.push(ParameterValue::Param(param));
+                    resolved_params.push(ParameterValue::from(param));
                 }
 
                 // Try to find the gate definition
@@ -810,7 +818,7 @@ impl AstToCircuit {
                     let empty_param_map: HashMap<String, Parameter> = HashMap::new();
                     for e in params {
                         let param = self.expr_to_parameter(e, &empty_param_map)?;
-                        param_values.push(ParameterValue::Param(param));
+                        param_values.push(ParameterValue::from(param));
                     }
 
                     let qubits = self.resolve_global_args(args, reg_start_map)?;
@@ -1165,5 +1173,5 @@ impl AstToCircuit {
 }
 
 #[cfg(test)]
-#[path = "./qasm2_test.rs"]
-mod qasm2_test;
+#[path = "./load_test.rs"]
+mod load_test;

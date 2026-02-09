@@ -14,8 +14,7 @@ use super::*;
 use crate::circuit::gate::{Directive, Instruction, StandardGate};
 use crate::circuit::param::CircuitParam;
 use crate::circuit::{Circuit, Qubit};
-
-// --- Helper Functions ---
+use crate::ir::qasm2::dump::dumps;
 
 fn assert_standard_gate(
     circuit: &Circuit,
@@ -340,4 +339,26 @@ fn test_recursion_limit() {
         "Got error: {}",
         err
     );
+}
+
+#[test]
+fn test_dumps() {
+    let qs = (0..3).map(Qubit::new).collect::<Vec<_>>();
+    let mut c = Circuit::new(3);
+    c.h(qs[0]).unwrap();
+    c.cx(qs[1], qs[2]).unwrap();
+    let g = c.to_gate("g").unwrap();
+
+    let qs = (0..4).map(Qubit::new).collect::<Vec<_>>();
+    let mut c = Circuit::new(4);
+    c.h(qs[0]).unwrap();
+    c.append(g, vec![qs[1], qs[0], qs[3]], vec![], None)
+        .unwrap();
+
+    let qasm = dumps(&c);
+    println!("{}", qasm.unwrap());
+
+    // let c = load("/Users/gaojianjian/work/code/jianjian001/cqlib2/tests/qft_n18.qasm").unwrap();
+    // let qasm = dumps(&c);
+    // println!("{:?}", qasm);
 }
