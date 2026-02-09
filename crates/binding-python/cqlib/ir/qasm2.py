@@ -11,3 +11,10 @@
 # that they have been altered from the originals.
 
 from .._native import qasm2_loads as loads, qasm2_load as load, qasm2_dump as dump, qasm2_dumps as dumps
+
+__all__ = [
+    'load',
+    'loads',
+    'dump',
+    'dumps'
+]

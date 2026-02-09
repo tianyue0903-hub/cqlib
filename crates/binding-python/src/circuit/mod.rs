@@ -12,6 +12,7 @@
 
 pub mod bit;
 pub mod circuit_impl;
+pub mod circuit_to_matrix;
 pub mod gates;
 pub mod instruction;
 pub mod operation;

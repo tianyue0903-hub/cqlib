@@ -10,6 +10,6 @@
 # copyright notice, and modified files need to carry a notice indicating
 # that they have been altered from the originals.
 
-from .._native import Parameter, Circuit, Qubit, StandardGate, UnitaryGate
+from .._native import Parameter, Circuit, Qubit, UnitaryGate, StandardGate, circuit_to_matrix
 
-__all__ = ["Parameter", "Circuit", "Qubit", "UnitaryGate", "StandardGate"]
+__all__ = ["Parameter", "Circuit", "Qubit", "UnitaryGate", "StandardGate", "circuit_to_matrix"]

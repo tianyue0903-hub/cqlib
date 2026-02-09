@@ -17,7 +17,7 @@
 
 use super::*;
 use crate::circuit::Qubit;
-use crate::circuit::gate::UnitaryGate;
+use crate::circuit::gate::{StandardGate, UnitaryGate};
 use crate::circuit::param::ParameterValue;
 use crate::circuit::parameter::Parameter;
 use ndarray::array;
@@ -425,10 +425,6 @@ fn test_mcgate_control_higher_than_target() {
     // |100> (q0=1, q1=0, q2=0) -> |100> (unchanged)
     assert!((matrix[[4, 4]] - c(1.0, 0.0)).norm() < 1e-10);
 }
-
-// ============================================================================
-// Custom Unitary Gate Tests
-// ============================================================================
 
 #[test]
 fn test_unitary_gate_single_qubit() {

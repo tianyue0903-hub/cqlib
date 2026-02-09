@@ -254,9 +254,9 @@ impl PyStandardGate {
 }
 
 // 注册静态属性 (H, X, RX...)
-pub fn register_gates(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    let cls = m.getattr("StandardGate")?;
-    let py = m.py();
+pub fn register_gates(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    let cls = module.getattr("StandardGate")?;
+    let py = module.py();
 
     // 辅助宏或函数来创建实例
     // 由于我们没有公开 new，我们需要想办法构造。

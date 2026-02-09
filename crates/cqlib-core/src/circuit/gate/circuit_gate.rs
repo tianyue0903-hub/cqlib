@@ -30,15 +30,25 @@ impl FrozenCircuit {
     }
 }
 
-/// 线路的符号，和线路门的符号不等价
+/// A composite gate defined by a quantum circuit.
 ///
-///  1. CircuitGate 内部有一个参数表达式：theta + 1
-///  2. CircuitGate 定义了一个绑定：theta -> 2 * theta（外部参数映射到内部符号）
-///  3. 当外部传入 theta = 0.5 时：
+/// `CircuitGate` encapsulates a frozen circuit as a reusable gate operation.
+/// When used in a circuit, its parameters are mapped positionally to the
+/// symbolic parameters of the inner circuit.
 ///
-///     - 首先计算 CircuitGate 的绑定：2 * 0.5 = 1.0
-///     - 然后用 1.0 替换内部电路的 theta
-///     - 最后计算内部电路的参数：1.0 + 1 = 2.0
+/// ### Parameter Resolution Logic
+///
+/// It is important to distinguish between the symbols defined inside the `CircuitGate`
+/// and the arguments passed to it from the outside.
+///
+/// **Example Flow:**
+///
+/// 1. **Internal Expression**: The inner circuit contains a gate with a parameter expression, e.g., `theta + 1`.
+/// 2. **Binding**: The `CircuitGate` usage defines a mapping from an external argument to the internal symbol, e.g., `theta` $\leftarrow$ `2 * x`.
+/// 3. **Evaluation**:
+///    If the external argument `x` is `0.5`:
+///    - First, the binding is resolved: `theta` becomes `2 * 0.5 = 1.0`.
+///    - Then, the internal circuit evaluates its expression using this value: `1.0 + 1 = 2.0`.
 #[derive(Debug, Clone)]
 pub struct CircuitGate {
     pub name: Arc<String>,
