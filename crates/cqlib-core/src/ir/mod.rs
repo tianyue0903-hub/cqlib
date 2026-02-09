@@ -12,4 +12,5 @@
 
 pub mod qasm2;
 
+pub use qasm2::dump::{dump as qasm2_dump, dumps as qasm2_dumps};
 pub use qasm2::load::{load as qasm2_load, loads as qasm2_loads};
