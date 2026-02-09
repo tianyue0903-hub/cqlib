@@ -25,7 +25,7 @@ use std::path::Path;
 
 /// Dumps a circuit to a file in OpenQASM 2.0 format.
 pub fn dump<P: AsRef<Path>>(circuit: &Circuit, path: P) -> io::Result<()> {
-    let qasm = dumps(circuit).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+    let qasm = dumps(circuit).map_err(io::Error::other)?;
     let mut file = File::create(path)?;
     file.write_all(qasm.as_bytes())?;
     Ok(())

@@ -10,8 +10,6 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
-#![allow(clippy::needless_range_loop)]
-
 use crate::circuit::Circuit;
 use crate::circuit::error::CompileError;
 use crate::circuit::gate::Instruction;
@@ -315,7 +313,7 @@ fn apply_general_gate(matrix: &mut Array2<Complex64>, gate: &Array2<Complex64>, 
     sorted_bits.sort();
 
     let mut gate_offsets = vec![0usize; gate_dim];
-    for k in 0..gate_dim {
+    for (k, gate_offset_ref) in gate_offsets.iter_mut().enumerate().take(gate_dim) {
         let mut offset = 0;
         for (j, &phy_bit) in bits.iter().enumerate() {
             // Correct Little-Endian Mapping:
@@ -324,7 +322,7 @@ fn apply_general_gate(matrix: &mut Array2<Complex64>, gate: &Array2<Complex64>, 
                 offset |= 1 << phy_bit;
             }
         }
-        gate_offsets[k] = offset;
+        *gate_offset_ref = offset;
     }
 
     let slice = matrix.as_slice_mut().expect("Matrix must be contiguous");
@@ -345,8 +343,8 @@ fn apply_general_gate(matrix: &mut Array2<Complex64>, gate: &Array2<Complex64>, 
 
         unsafe {
             let mut row_ptrs = Vec::with_capacity(gate_dim);
-            for k in 0..gate_dim {
-                row_ptrs.push(unsafe_slice.row_ptr(base | gate_offsets[k], cols));
+            for item in gate_offsets.iter().take(gate_dim) {
+                row_ptrs.push(unsafe_slice.row_ptr(base | item, cols));
             }
 
             let mut input_vec = vec![Complex64::default(); gate_dim];

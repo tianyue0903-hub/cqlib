@@ -428,7 +428,7 @@ impl AstToCircuit {
                 // Resolve parameters - convert expressions to Parameters
                 let mut resolved_params: SmallVec<[ParameterValue; 3]> = smallvec![];
                 for expr in args {
-                    let param = self.expr_to_parameter(expr, param_map)?;
+                    let param = Self::expr_to_parameter(expr, param_map)?;
                     resolved_params.push(ParameterValue::from(param));
                 }
 
@@ -459,13 +459,10 @@ impl AstToCircuit {
             Statement::Barrier(args) => {
                 let mut resolved_qubits = Vec::new();
                 for arg in args {
-                    match arg {
-                        Argument::Id(qname) => {
-                            if let Some(&q) = qubit_map.get(qname) {
-                                resolved_qubits.push(q);
-                            }
+                    if let Argument::Id(qname) = arg {
+                        if let Some(&q) = qubit_map.get(qname) {
+                            resolved_qubits.push(q);
                         }
-                        _ => {}
                     }
                 }
                 circuit
@@ -486,7 +483,6 @@ impl AstToCircuit {
 
     /// Convert an expression to a Parameter
     fn expr_to_parameter(
-        &self,
         expr: &Expression,
         param_map: &HashMap<String, Parameter>,
     ) -> Result<Parameter, QasmParseError> {
@@ -506,8 +502,8 @@ impl AstToCircuit {
                 }
             }
             Expression::BinaryOp(left, op, right) => {
-                let l = self.expr_to_parameter(left, param_map)?;
-                let r = self.expr_to_parameter(right, param_map)?;
+                let l = Self::expr_to_parameter(left, param_map)?;
+                let r = Self::expr_to_parameter(right, param_map)?;
                 Ok(match op {
                     OpCode::Add => l + r,
                     OpCode::Sub => l - r,
@@ -527,7 +523,7 @@ impl AstToCircuit {
                 })
             }
             Expression::UnaryOp(op, expr) => {
-                let v = self.expr_to_parameter(expr, param_map)?;
+                let v = Self::expr_to_parameter(expr, param_map)?;
                 Ok(match op {
                     UnaryOpCode::Sin => v.sin(),
                     UnaryOpCode::Cos => v.cos(),
@@ -805,7 +801,7 @@ impl AstToCircuit {
                     }
 
                     // Apply measurement operations
-                    for (_i, qubit) in qubits.iter().enumerate() {
+                    for qubit in qubits.iter() {
                         // Store measurement result with classical register index
                         // For now, we apply the measurement; classical register tracking would need Circuit support
                         circuit
@@ -818,7 +814,7 @@ impl AstToCircuit {
                     let mut param_values: SmallVec<[ParameterValue; 3]> = smallvec![];
                     let empty_param_map: HashMap<String, Parameter> = HashMap::new();
                     for e in params {
-                        let param = self.expr_to_parameter(e, &empty_param_map)?;
+                        let param = Self::expr_to_parameter(e, &empty_param_map)?;
                         param_values.push(ParameterValue::from(param));
                     }
 
@@ -973,7 +969,7 @@ impl AstToCircuit {
             }
             Argument::IndexedId(name, idx) => {
                 // Single classical bit
-                if self.cregs.get(name).is_none() {
+                if !self.cregs.contains_key(name) {
                     return Err(QasmParseError::UndefinedRegister(format!(
                         "Classical register '{}' not defined",
                         name
