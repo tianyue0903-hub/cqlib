@@ -1057,13 +1057,8 @@ impl Circuit {
                     // Invert instruction
                     if let Some((inv_inst, inv_params)) = op.instruction.inverse(&params) {
                         // Convert back to CircuitParam/ParameterValue
-                        let param_values: SmallVec<[ParameterValue; 3]> = inv_params
-                            .into_iter()
-                            .map(|p| match p.evaluate(&None) {
-                                Ok(val) => ParameterValue::Fixed(val),
-                                Err(_) => ParameterValue::Param(p),
-                            })
-                            .collect();
+                        let param_values: SmallVec<[ParameterValue; 3]> =
+                            inv_params.into_iter().map(ParameterValue::from).collect();
 
                         new_circuit.append(
                             inv_inst,
@@ -1225,11 +1220,7 @@ impl Circuit {
 
                     param = Self::apply_param_map(param, param_map);
 
-                    if let Ok(val) = param.evaluate(&None) {
-                        mapped_params.push(ParameterValue::Fixed(val));
-                    } else {
-                        mapped_params.push(ParameterValue::Param(param));
-                    }
+                    mapped_params.push(ParameterValue::from(param));
                 }
 
                 target_circuit

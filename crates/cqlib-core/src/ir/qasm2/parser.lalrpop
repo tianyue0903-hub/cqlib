@@ -19,6 +19,10 @@ pub Main: OpenQASMProgram = {
     "OPENQASM" <v:Real> ";" <s:Statement*> => OpenQASMProgram { version: v, statements: s }
 };
 
+pub ProgramBody: OpenQASMProgram = {
+    <s:Statement*> => OpenQASMProgram { version: 2.0, statements: s }
+};
+
 Statement: Statement = {
     "qreg" <id:Id> "[" <n:Int> "]" ";" => Statement::QReg(id, n),
     "creg" <id:Id> "[" <n:Int> "]" ";" => Statement::CReg(id, n),

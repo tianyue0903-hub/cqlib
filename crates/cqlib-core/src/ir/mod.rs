@@ -11,3 +11,5 @@
 // that they have been altered from the originals.
 
 pub mod qasm2;
+
+pub use qasm2::load::{load as qasm2_load, loads as qasm2_loads};
