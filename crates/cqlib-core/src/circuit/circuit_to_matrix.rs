@@ -16,8 +16,8 @@ use crate::circuit::Circuit;
 use crate::circuit::error::CompileError;
 use crate::circuit::gate::Instruction;
 use crate::circuit::param::CircuitParam;
+use ndarray::Array2;
 use ndarray::parallel::prelude::*;
-use ndarray::{Array2, Axis};
 use num_complex::Complex64;
 use std::collections::{HashMap, HashSet};
 use std::marker::PhantomData;
@@ -93,15 +93,23 @@ pub fn circuit_to_matrix(
         match &op.instruction {
             Instruction::Standard(std_gate) => {
                 let gate_matrix = std_gate.matrix(params.as_slice());
-                apply_gate_to_matrix(&mut matrix, gate_matrix.as_ref(), &bits);
+                // StandardGate matrices are Big-Endian (Controls/First Args are MSB).
+                // System is Little-Endian. Reverse bits to align.
+                let reversed_bits: Vec<usize> = bits.iter().cloned().rev().collect();
+                apply_gate_to_matrix(&mut matrix, gate_matrix.as_ref(), &reversed_bits);
             }
             Instruction::McGate(mc_gate) => {
                 let gate_matrix = mc_gate.matrix(params.as_slice());
-                apply_gate_to_matrix(&mut matrix, gate_matrix.as_ref(), &bits);
+                // McGate matrices are Big-Endian (Controls MSB).
+                let reversed_bits: Vec<usize> = bits.iter().cloned().rev().collect();
+                apply_gate_to_matrix(&mut matrix, gate_matrix.as_ref(), &reversed_bits);
             }
             Instruction::UnitaryGate(u_gate) => {
                 if let Some(gate_matrix) = u_gate.matrix() {
-                    apply_gate_to_matrix(&mut matrix, gate_matrix, &bits);
+                    // UnitaryGate matrices are assumed to follow standard Big-Endian convention.
+                    // System is Little-Endian. Reverse bits to align.
+                    let reversed_bits: Vec<usize> = bits.iter().cloned().rev().collect();
+                    apply_gate_to_matrix(&mut matrix, gate_matrix, &reversed_bits);
                 } else {
                     panic!("UnitaryGate matrix missing")
                 }

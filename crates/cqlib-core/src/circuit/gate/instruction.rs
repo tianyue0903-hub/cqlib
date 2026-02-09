@@ -20,11 +20,11 @@
 //!
 //! By using `Instruction`, the circuit can store a heterogeneous list of operations in a single vector.
 
-use crate::circuit::Parameter;
 use crate::circuit::gate::circuit_gate::{CircuitGate, FrozenCircuit};
 use crate::circuit::gate::directive::Directive;
 use crate::circuit::gate::standard_gate::StandardGate;
 use crate::circuit::gate::{MCGate, UnitaryGate, gate_matrix};
+use crate::circuit::{Parameter, circuit_to_matrix};
 use alloc::borrow::Cow;
 use ndarray::Array2;
 use num_complex::Complex64;
@@ -66,7 +66,9 @@ impl Instruction {
             Instruction::Standard(g) => Some(g.matrix(params)),
             Instruction::McGate(g) => Some(g.matrix(params)),
             Instruction::UnitaryGate(g) => g.matrix().map(Cow::Borrowed),
-            Instruction::CircuitGate(_) => todo!(),
+            Instruction::CircuitGate(g) => circuit_to_matrix(&g.circuit.circuit, None)
+                .ok()
+                .map(Cow::Owned),
             Instruction::Directive(_) => None,
         }
     }
@@ -222,7 +224,9 @@ impl Instruction {
 
                 Some(Instruction::UnitaryGate(Box::from(g)))
             }
-            Instruction::CircuitGate(_) => todo!(),
+            Instruction::CircuitGate(_) => {
+                panic!("CircuitGate instructions are not supported yet");
+            }
             Instruction::Directive(_) => None,
         }
     }

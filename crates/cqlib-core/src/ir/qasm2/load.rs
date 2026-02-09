@@ -151,6 +151,7 @@ struct AstToCircuit {
 /// A custom gate definition that stores either AST or compiled CircuitGate
 #[derive(Clone, Debug)]
 struct CustomGateDef {
+    #[allow(dead_code)]
     name: String,
     params: Vec<String>,
     qubits: Vec<String>,
