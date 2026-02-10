@@ -285,6 +285,8 @@ class Circuit:
         """Inserts a barrier."""
         ...
 
+    def delay(self, qubit: int, param: Parameter) -> None: ...
+
     # --- Advanced ---
     def inverse(self) -> "Circuit":
         """Creates the inverse (adjoint) of the circuit."""

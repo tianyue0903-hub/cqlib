@@ -996,6 +996,14 @@ impl Circuit {
         )
     }
 
+    pub fn delay(
+        &mut self,
+        qubit: impl Into<Qubit>,
+        delay: ParameterValue,
+    ) -> Result<(), CircuitError> {
+        self.append(Instruction::Delay, vec![qubit], vec![delay], None)
+    }
+
     // pub fn circuit_gate(&mut self, gate: CircuitGate, qubits: Vec<Qubit>, params: ) -> Result<(), CircuitError> {}
 
     /// Creates the inverse (adjoint) of the circuit.

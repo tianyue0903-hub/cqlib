@@ -128,6 +128,7 @@ pub fn circuit_to_matrix(
                 apply_gate_to_matrix(&mut matrix, &sub_matrix, &bits);
             }
             Instruction::Directive(_) => continue,
+            Instruction::Delay => continue,
         }
     }
 

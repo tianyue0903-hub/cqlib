@@ -174,6 +174,16 @@ fn process_circuit_operations(
                     "// UnitaryGate: Custom matrix operations not fully supported in QASM 2.0 dump"
                 )?;
             }
+            Instruction::Delay => {
+                let params_str = format_params(op, circuit, param_map);
+                let mapped_qs = map_qubits(op, qubit_map);
+
+                writeln!(
+                    output,
+                    "Delay({}dt) {:?}; // DelayGate: Native delay not supported in QASM 2.0",
+                    params_str, mapped_qs[0]
+                )?;
+            }
         }
     }
     Ok(())

@@ -48,6 +48,9 @@ pub enum Instruction {
     CircuitGate(Box<CircuitGate>),
     /// A non-unitary operation, such as `Measure`, `Barrier`, or `Reset`.
     Directive(Directive),
+
+    // QCIS 中的I门，这里使用 Delay 表示，单位是 0.5ns
+    Delay,
 }
 
 impl Instruction {
@@ -70,6 +73,7 @@ impl Instruction {
                 .ok()
                 .map(Cow::Owned),
             Instruction::Directive(_) => None,
+            Instruction::Delay => None,
         }
     }
 
@@ -130,6 +134,7 @@ impl Instruction {
                 Directive::Barrier => Some((Self::Directive(Directive::Barrier), SmallVec::new())),
                 _ => None,
             },
+            Instruction::Delay => Some((Self::Delay, SmallVec::new())),
         }
     }
 
@@ -228,6 +233,7 @@ impl Instruction {
                 panic!("CircuitGate instructions are not supported yet");
             }
             Instruction::Directive(_) => None,
+            Instruction::Delay => None,
         }
     }
 }
@@ -240,6 +246,7 @@ impl fmt::Display for Instruction {
             Instruction::UnitaryGate(g) => write!(f, "{}", g),
             Instruction::CircuitGate(g) => write!(f, "{}", g.name),
             Instruction::Directive(i) => write!(f, "{}", i),
+            Instruction::Delay => write!(f, "delay"),
         }
     }
 }

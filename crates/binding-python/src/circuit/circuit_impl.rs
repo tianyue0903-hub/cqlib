@@ -471,6 +471,13 @@ impl PyCircuit {
         Ok(())
     }
 
+    fn delay(&mut self, qubit: usize, param: PyParamLike) -> PyResult<()> {
+        self.inner
+            .delay(Qubit::from(qubit), param.into())
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        Ok(())
+    }
+
     fn inverse(&self) -> PyResult<Self> {
         let new_inner = self
             .inner
