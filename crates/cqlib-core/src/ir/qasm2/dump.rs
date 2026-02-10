@@ -10,18 +10,19 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
-use crate::circuit::gate::circuit_gate::CircuitGate;
+use crate::circuit::gate::circuit_gate::{CircuitGate, FrozenCircuit};
 use crate::circuit::gate::{Directive, Instruction, StandardGate};
 use crate::circuit::operation::Operation;
 use crate::circuit::param::CircuitParam;
 use crate::circuit::parameter::Parameter;
 use crate::circuit::{Circuit, Qubit};
 use indexmap::IndexMap;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 use std::fs::File;
 use std::io::{self, Write as IoWrite};
 use std::path::Path;
+use std::sync::Arc;
 
 /// Dumps a circuit to a file in OpenQASM 2.0 format.
 pub fn dump<P: AsRef<Path>>(circuit: &Circuit, path: P) -> io::Result<()> {
@@ -55,13 +56,64 @@ pub fn dumps(circuit: &Circuit) -> Result<String, std::fmt::Error> {
 
     writeln!(&mut output)?;
 
+    // Pass 0: Collect and output used extended standard gate definitions
+    let mut used_standard_gates = HashSet::new();
+    collect_used_standard_gates(circuit, &mut used_standard_gates);
+
+    let extended_gates = [
+        StandardGate::CRX,
+        StandardGate::CRY,
+        StandardGate::RZZ,
+        StandardGate::RXX,
+        StandardGate::RYY,
+        StandardGate::RZX,
+    ];
+
+    for gate in extended_gates {
+        if used_standard_gates.contains(&gate) {
+            if let Some(def) = get_extended_gate_definition(gate) {
+                writeln!(&mut output, "{}", def)?;
+            }
+        }
+    }
+    writeln!(&mut output)?;
+
     // Pass 1: Collect gate definitions (Dependencies first)
     let mut defined_gates: IndexMap<String, CircuitGate> = IndexMap::new();
-    collect_gates(circuit, &mut defined_gates);
+    let mut unitary_gate_defs: IndexMap<String, Arc<FrozenCircuit>> = IndexMap::new();
+    // UnitaryGate with only matrix (no circuit) - will be declared as opaque
+    let mut opaque_unitary_gates: IndexMap<String, u16> = IndexMap::new();
+    // Track if Delay is used
+    let mut has_delay = false;
+    collect_gates(
+        circuit,
+        &mut defined_gates,
+        &mut unitary_gate_defs,
+        &mut opaque_unitary_gates,
+        &mut has_delay,
+    );
 
-    // Output gate definitions
+    // Output CircuitGate definitions
     for gate in defined_gates.values() {
         dump_gate_definition(gate, &mut output)?;
+        writeln!(&mut output)?;
+    }
+
+    // Output UnitaryGate definitions (with circuit)
+    for (label, fc) in unitary_gate_defs.iter() {
+        dump_unitary_gate_definition(label, fc, &mut output)?;
+        writeln!(&mut output)?;
+    }
+
+    // Output opaque declarations for UnitaryGate without circuit
+    for (label, num_qubits) in opaque_unitary_gates.iter() {
+        dump_opaque_declaration(label, *num_qubits, &mut output)?;
+        writeln!(&mut output)?;
+    }
+
+    // Output opaque declaration for Delay if used
+    if has_delay {
+        writeln!(&mut output, "opaque delay(t) q;")?;
         writeln!(&mut output)?;
     }
 
@@ -80,30 +132,72 @@ pub fn dumps(circuit: &Circuit) -> Result<String, std::fmt::Error> {
     Ok(output)
 }
 
-fn collect_gates(circuit: &Circuit, defined_gates: &mut IndexMap<String, CircuitGate>) {
+fn collect_gates(
+    circuit: &Circuit,
+    defined_gates: &mut IndexMap<String, CircuitGate>,
+    unitary_gate_defs: &mut IndexMap<String, Arc<FrozenCircuit>>,
+    opaque_unitary_gates: &mut IndexMap<String, u16>,
+    has_delay: &mut bool,
+) {
     for op in circuit.operations() {
-        if let Instruction::CircuitGate(cg) = &op.instruction {
-            // Recurse first (Post-order traversal ensures dependencies are collected first)
-            collect_gates(&cg.circuit.circuit, defined_gates);
+        match &op.instruction {
+            Instruction::CircuitGate(cg) => {
+                // Recurse first (Post-order traversal ensures dependencies are collected first)
+                collect_gates(
+                    &cg.circuit.circuit,
+                    defined_gates,
+                    unitary_gate_defs,
+                    opaque_unitary_gates,
+                    has_delay,
+                );
 
-            if let Some(existing) = defined_gates.get(cg.name.as_str()) {
-                // Basic collision detection: Check if interface matches
-                if existing.num_qubits() != cg.num_qubits()
-                    || existing.num_params() != cg.num_params()
-                {
-                    eprintln!(
-                        "Warning: Gate name collision detected for '{}'. Existing: (q={}, p={}), New: (q={}, p={}). The existing definition will be used.",
-                        cg.name,
-                        existing.num_qubits(),
-                        existing.num_params(),
-                        cg.num_qubits(),
-                        cg.num_params()
-                    );
+                if let Some(existing) = defined_gates.get(cg.name.as_str()) {
+                    // Basic collision detection: Check if interface matches
+                    if existing.num_qubits() != cg.num_qubits()
+                        || existing.num_params() != cg.num_params()
+                    {
+                        eprintln!(
+                            "Warning: Gate name collision detected for '{}'. Existing: (q={}, p={}), New: (q={}, p={}). The existing definition will be used.",
+                            cg.name,
+                            existing.num_qubits(),
+                            existing.num_params(),
+                            cg.num_qubits(),
+                            cg.num_params()
+                        );
+                    }
+                    // Deep structural comparison is expensive and requires PartialEq on Circuit, skipping for now.
+                } else {
+                    defined_gates.insert(cg.name.to_string(), *cg.clone());
                 }
-                // Deep structural comparison is expensive and requires PartialEq on Circuit, skipping for now.
-            } else {
-                defined_gates.insert(cg.name.to_string(), *cg.clone());
             }
+            Instruction::UnitaryGate(ug) => {
+                if let Some(fc) = ug.circuit() {
+                    // Recurse into UnitaryGate's internal circuit first
+                    collect_gates(
+                        &fc.circuit,
+                        defined_gates,
+                        unitary_gate_defs,
+                        opaque_unitary_gates,
+                        has_delay,
+                    );
+
+                    // Register this UnitaryGate as a gate definition
+                    let label = ug.label().to_string();
+                    if !unitary_gate_defs.contains_key(&label) {
+                        unitary_gate_defs.insert(label, fc.clone());
+                    }
+                } else {
+                    // UnitaryGate without circuit (only matrix) - will be declared as opaque
+                    let label = ug.label().to_string();
+                    if !opaque_unitary_gates.contains_key(&label) {
+                        opaque_unitary_gates.insert(label, ug.num_qubits());
+                    }
+                }
+            }
+            Instruction::Delay => {
+                *has_delay = true;
+            }
+            _ => {}
         }
     }
 }
@@ -140,6 +234,37 @@ fn dump_gate_definition(cg: &CircuitGate, output: &mut String) -> std::fmt::Resu
     writeln!(output, "}}")
 }
 
+fn dump_unitary_gate_definition(
+    label: &str,
+    frozen_circuit: &FrozenCircuit,
+    output: &mut String,
+) -> std::fmt::Result {
+    let num_qubits = frozen_circuit.circuit.qubits().len();
+    let qubits: Vec<String> = (0..num_qubits).map(|i| format!("q{}", i)).collect();
+    let qubits_str = qubits.join(",");
+
+    writeln!(output, "gate {} {} {{", label, qubits_str)?;
+
+    // Body context
+    let mut body_qubit_map = HashMap::new();
+    let inner_circuit = &frozen_circuit.circuit;
+    for (i, q) in inner_circuit.qubits().iter().enumerate() {
+        body_qubit_map.insert(*q, format!("q{}", i));
+    }
+
+    let body_param_map = HashMap::new();
+    process_circuit_operations(inner_circuit, output, &body_qubit_map, &body_param_map)?;
+
+    writeln!(output, "}}")
+}
+
+fn dump_opaque_declaration(label: &str, num_qubits: u16, output: &mut String) -> std::fmt::Result {
+    let qubits: Vec<String> = (0..num_qubits).map(|i| format!("q{}", i)).collect();
+    let qubits_str = qubits.join(",");
+
+    writeln!(output, "opaque {} {};", label, qubits_str)
+}
+
 fn process_circuit_operations(
     circuit: &Circuit,
     output: &mut String,
@@ -168,21 +293,18 @@ fn process_circuit_operations(
 
                 writeln!(output, "{}{} {};", cg.name, params_str, mapped_qs.join(","))?;
             }
-            Instruction::UnitaryGate(_) => {
-                writeln!(
-                    output,
-                    "// UnitaryGate: Custom matrix operations not fully supported in QASM 2.0 dump"
-                )?;
+            Instruction::UnitaryGate(unitary_gate) => {
+                // Output gate call: label qubits;
+                // (The gate definition or opaque declaration was already output in Pass 1)
+                let mapped_qs = map_qubits(op, qubit_map);
+                writeln!(output, "{} {};", unitary_gate.label(), mapped_qs.join(","))?;
             }
             Instruction::Delay => {
+                // Output delay gate call: delay(value) q[i];
                 let params_str = format_params(op, circuit, param_map);
                 let mapped_qs = map_qubits(op, qubit_map);
 
-                writeln!(
-                    output,
-                    "Delay({}dt) {:?}; // DelayGate: Native delay not supported in QASM 2.0",
-                    params_str, mapped_qs[0]
-                )?;
+                writeln!(output, "delay({}) {};", params_str, mapped_qs[0])?;
             }
         }
     }
@@ -249,15 +371,19 @@ fn dump_standard_gate(
 
     match gate {
         StandardGate::X2P => {
+            writeln!(output, "// x2p {}", mapped_qs[0])?;
             return writeln!(output, "rx(pi/2) {}", mapped_qs[0]);
         }
         StandardGate::X2M => {
+            writeln!(output, "// x2m {}", mapped_qs[0])?;
             return writeln!(output, "rx(-pi/2) {}", mapped_qs[0]);
         }
         StandardGate::Y2P => {
+            writeln!(output, "// y2p {}", mapped_qs[0])?;
             return writeln!(output, "ry(pi/2) {}", mapped_qs[0]);
         }
         StandardGate::Y2M => {
+            writeln!(output, "// y2m {}", mapped_qs[0])?;
             return writeln!(output, "ry(-pi/2) {}", mapped_qs[0]);
         }
         StandardGate::XY2P => {
@@ -266,6 +392,7 @@ fn dump_standard_gate(
             let p3 = theta.clone() - Parameter::pi() / 2.0;
             let q_str = &mapped_qs[0];
 
+            writeln!(output, "// xy2p({}) {}", theta, q_str)?;
             writeln!(output, "rz({}) {}", p1, q_str)?;
             writeln!(output, "ry(pi/2) {}", q_str)?;
             return writeln!(output, "rz({}) {}", p3, q_str);
@@ -276,6 +403,7 @@ fn dump_standard_gate(
             let m3 = theta.clone() + Parameter::pi() / 2.0;
             let q_str = &mapped_qs[0];
 
+            writeln!(output, "// xy2m({}) {}", theta, q_str)?;
             writeln!(output, "rz({}) {}", m1, q_str)?;
             writeln!(output, "ry(pi/2) {}", q_str)?;
             return writeln!(output, "rz({}) {}", m3, q_str);
@@ -307,24 +435,25 @@ fn dump_standard_gate(
         StandardGate::SWAP => "swap",
         StandardGate::CCX => "ccx",
         StandardGate::U => "u3",
-        StandardGate::RXX => "rxx",
-        StandardGate::RYY => "ryy",
-        StandardGate::RZZ => "rzz",
-        StandardGate::RZX => "rzx",
-        StandardGate::CRX => "crx",
-        StandardGate::CRY => "cry",
         StandardGate::CRZ => "crz",
         StandardGate::XY => "xy",
         StandardGate::FSIM => "fsim",
         StandardGate::RXY => "rxy",
 
-        StandardGate::X2P => "_",
-        StandardGate::X2M => "_",
-        StandardGate::Y2P => "_",
-        StandardGate::Y2M => "_",
-        StandardGate::XY2P => "_",
-        StandardGate::XY2M => "_",
-        StandardGate::GPhase => "_",
+        StandardGate::CRX => "crx",
+        StandardGate::CRY => "cry",
+        StandardGate::RXX => "rxx",
+        StandardGate::RYY => "ryy",
+        StandardGate::RZZ => "rzz",
+        StandardGate::RZX => "rzx",
+
+        StandardGate::X2P
+        | StandardGate::X2M
+        | StandardGate::Y2P
+        | StandardGate::Y2M
+        | StandardGate::XY2P
+        | StandardGate::XY2M
+        | StandardGate::GPhase => "_",
     };
 
     let params_str = format_params(op, circuit, param_map);
@@ -404,6 +533,45 @@ fn dump_mc_gate(
     let mapped_qs = map_qubits(op, qubit_map);
 
     writeln!(output, "{}{} {};", name, params_str, mapped_qs.join(","))
+}
+
+fn collect_used_standard_gates(circuit: &Circuit, used_gates: &mut HashSet<StandardGate>) {
+    for op in circuit.operations() {
+        match &op.instruction {
+            Instruction::Standard(sg) => {
+                used_gates.insert(*sg);
+            }
+            Instruction::CircuitGate(cg) => {
+                collect_used_standard_gates(&cg.circuit.circuit, used_gates);
+            }
+            Instruction::UnitaryGate(ug) => {
+                if let Some(fc) = ug.circuit() {
+                    collect_used_standard_gates(&fc.circuit, used_gates);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn get_extended_gate_definition(gate: StandardGate) -> Option<&'static str> {
+    match gate {
+        StandardGate::CRX => {
+            Some("gate crx(theta) a,b { h b;rz(theta/2) b; cx a,b; rz(-theta/2) b; cx a,b; h b;}")
+        }
+        StandardGate::CRY => {
+            Some("gate cry(theta) a,b { ry(theta/2) b; cx a,b; ry(-theta/2) b; cx a,b; }")
+        }
+        StandardGate::RZZ => Some("gate rzz(theta) a,b { cx a,b; rz(theta) b; cx a,b; }"),
+        StandardGate::RXX => {
+            Some("gate rxx(theta) a,b { h a; h b; cx a,b; rz(theta) b; cx a,b; h a; h b; }")
+        }
+        StandardGate::RYY => Some(
+            "gate ryy(theta) a,b { rx(pi/2) a; rx(pi/2) b; cx a,b; rz(theta) b; cx a,b; rx(-pi/2) a; rx(-pi/2) b; }",
+        ),
+        StandardGate::RZX => Some("gate rzx(theta) a,b { h b; cx a,b; rz(theta) b; cx a,b; h b; }"),
+        _ => None,
+    }
 }
 
 #[cfg(test)]

@@ -10,10 +10,12 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
-use crate::circuit::gate::StandardGate;
+use crate::circuit::gate::circuit_gate::FrozenCircuit;
+use crate::circuit::gate::{StandardGate, UnitaryGate};
 use crate::circuit::parameter::Parameter;
 use crate::circuit::{Circuit, Qubit};
 use crate::ir::qasm2::dump::dumps;
+use std::sync::Arc;
 
 fn assert_qasm_contains(qasm: &str, expected_lines: &[&str]) {
     for &line in expected_lines {
@@ -258,6 +260,157 @@ fn test_dump_nested_custom_gates() {
             "gate_leaf(2 * m) q0;", // Simplified check, might need regex if float formatting varies
             "}",
             "gate_mid(theta) q[0];",
+        ],
+    );
+}
+
+#[test]
+fn test_dump_unitary_gate_with_circuit() {
+    // 1. Create an inner circuit for the UnitaryGate
+    let mut inner_circuit = Circuit::new(2);
+    inner_circuit.h(Qubit::new(0)).unwrap();
+    inner_circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
+
+    // 2. Create a UnitaryGate with the inner circuit
+    let frozen_circuit = FrozenCircuit::new(inner_circuit);
+    let u_gate = UnitaryGate::new("MyBell", 2).with_circuit(Arc::new(frozen_circuit));
+
+    // 3. Use the UnitaryGate in a main circuit
+    let mut main_circuit = Circuit::new(3);
+    let q0 = Qubit::new(0);
+    let q1 = Qubit::new(1);
+
+    // Add some standard gates
+    main_circuit.x(q0).unwrap();
+
+    // Add the UnitaryGate
+    main_circuit.unitary(u_gate, vec![q0, q1]).unwrap();
+
+    // Add more gates after
+    main_circuit.z(q1).unwrap();
+
+    // 4. Dump and verify
+    let qasm = dumps(&main_circuit).expect("Dump failed");
+    println!("{}", qasm);
+
+    // The UnitaryGate should be output as a gate definition and then called
+    // Check gate definition
+    assert_qasm_contains(&qasm, &["gate MyBell q0,q1 {", "h q0;", "cx q0,q1;", "}"]);
+
+    // Check gate call
+    assert_qasm_contains(&qasm, &["x q[0];", "MyBell q[0],q[1];", "z q[1];"]);
+}
+
+#[test]
+fn test_dump_unitary_gate_with_circuit_nested() {
+    // Test that UnitaryGate properly handles nested CircuitGate inside it
+    // 1. Create a CircuitGate definition
+    let mut sub_circ = Circuit::new(1);
+    sub_circ.h(Qubit::new(0)).unwrap();
+    sub_circ.s(Qubit::new(0)).unwrap();
+    let gate_def = sub_circ.to_gate("hs_gate").unwrap();
+
+    // 2. Create an inner circuit that uses the CircuitGate
+    let mut inner_circuit = Circuit::new(2);
+    inner_circuit
+        .append(gate_def.clone(), vec![Qubit::new(0)], vec![], None)
+        .unwrap();
+    inner_circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
+    inner_circuit
+        .append(gate_def, vec![Qubit::new(1)], vec![], None)
+        .unwrap();
+
+    // 3. Create a UnitaryGate with this inner circuit
+    let frozen_circuit = FrozenCircuit::new(inner_circuit);
+    let u_gate = UnitaryGate::new("CustomOp", 2).with_circuit(Arc::new(frozen_circuit));
+
+    // 4. Use in main circuit
+    let mut main_circuit = Circuit::new(2);
+    main_circuit
+        .unitary(u_gate, vec![Qubit::new(0), Qubit::new(1)])
+        .unwrap();
+
+    // 5. Dump and verify
+    let qasm = dumps(&main_circuit).expect("Dump failed");
+
+    // Should contain the CircuitGate definition
+    assert_qasm_contains(&qasm, &["gate hs_gate q0 {", "h q0;", "s q0;", "}"]);
+
+    // Should contain the UnitaryGate definition that calls the CircuitGate
+    assert_qasm_contains(
+        &qasm,
+        &[
+            "gate CustomOp q0,q1 {",
+            "hs_gate q0;",
+            "cx q0,q1;",
+            "hs_gate q1;",
+            "}",
+        ],
+    );
+
+    // Should call the UnitaryGate
+    assert_qasm_contains(&qasm, &["CustomOp q[0],q[1];"]);
+}
+
+#[test]
+fn test_dump_unitary_gate_without_circuit() {
+    // Test that UnitaryGate without circuit (only matrix) outputs opaque declaration
+    use ndarray::Array2;
+    use num_complex::Complex64;
+
+    // Create a UnitaryGate with only matrix (no circuit)
+    let mat = Array2::eye(2).mapv(|x| Complex64::new(x, 0.0));
+    let u_gate = UnitaryGate::new("MatrixOnly", 1).with_matrix(mat).unwrap();
+
+    let mut circuit = Circuit::new(1);
+    circuit.unitary(u_gate, vec![Qubit::new(0)]).unwrap();
+
+    let qasm = dumps(&circuit).expect("Dump failed");
+    println!("{}", qasm);
+    // Should output opaque declaration and gate call
+    assert_qasm_contains(&qasm, &["opaque MatrixOnly q0;", "MatrixOnly q[0];"]);
+}
+
+#[test]
+fn test_dump_extended_gates() {
+    let mut circuit = Circuit::new(2);
+    let q0 = Qubit::new(0);
+    let q1 = Qubit::new(1);
+    let theta = 1.0;
+
+    circuit.crx(q0, q1, theta).unwrap();
+    circuit.cry(q0, q1, theta).unwrap();
+    circuit.rzz(q0, q1, theta).unwrap();
+    circuit.rxx(q0, q1, theta).unwrap();
+    circuit.ryy(q0, q1, theta).unwrap();
+    circuit.rzx(q0, q1, theta).unwrap();
+
+    let qasm = dumps(&circuit).expect("Dump failed");
+    println!("{}", qasm);
+
+    // Check Definitions
+    assert_qasm_contains(
+        &qasm,
+        &[
+            "gate crx(theta) a,b { rx(theta/2) b; cx a,b; rx(-theta/2) b; cx a,b; }",
+            "gate cry(theta) a,b { ry(theta/2) b; cx a,b; ry(-theta/2) b; cx a,b; }",
+            "gate rzz(theta) a,b { cx a,b; rz(theta) b; cx a,b; }",
+            "gate rxx(theta) a,b { h a; h b; cx a,b; rz(theta) b; cx a,b; h a; h b; }",
+            "gate ryy(theta) a,b { rx(pi/2) a; rx(pi/2) b; cx a,b; rz(theta) b; cx a,b; rx(-pi/2) a; rx(-pi/2) b; }",
+            "gate rzx(theta) a,b { h b; cx a,b; rz(theta) b; cx a,b; h b; }",
+        ],
+    );
+
+    // Check Usages
+    assert_qasm_contains(
+        &qasm,
+        &[
+            "crx(1) q[0],q[1];",
+            "cry(1) q[0],q[1];",
+            "rzz(1) q[0],q[1];",
+            "rxx(1) q[0],q[1];",
+            "ryy(1) q[0],q[1];",
+            "rzx(1) q[0],q[1];",
         ],
     );
 }
