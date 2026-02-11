@@ -62,6 +62,7 @@
 
 use crate::circuit::error::EvalError;
 use crate::circuit::parameter::expr_node::ExprNode;
+use crate::circuit::parameter::parse::parse_parameter;
 use std::collections::HashMap;
 use std::fmt;
 use std::hash::{Hash, Hasher};
@@ -141,14 +142,48 @@ impl Eq for Parameter {}
 impl From<ExprNode> for Parameter {
     /// Wraps a raw `ExprNode` into a `Parameter`.
     fn from(node: ExprNode) -> Self {
-        Parameter::new(node) // 复用上面的 new
+        Parameter::new(node)
     }
 }
 
 impl From<String> for Parameter {
-    /// Creates a symbolic parameter from a `String`.
+    /// Parse a mathematical expression string into a [`Parameter`].
+    ///
+    /// # Arguments
+    ///
+    /// * `expr` - The expression string to parse
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Parameter)` - The parsed parameter
+    /// * `Err(ParseError)` - If the expression is invalid
+    ///
+    /// # Supported Syntax
+    ///
+    /// - Numbers: `1`, `3.14`, `-2.5`
+    /// - Constants: `pi`, `e`
+    /// - Operators: `+`, `-`, `*`, `/`
+    /// - Parentheses: `(`, `)`
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use cqlib_core::circuit::parameter::impls::Parameter;
+    ///
+    /// // Simple number
+    /// let p = Parameter::parse("1.0").unwrap();
+    ///
+    /// // Expression with pi
+    /// let p = Parameter::parse("pi/2").unwrap();
+    ///
+    /// // Complex expression: pi/2+1
+    /// let p = Parameter::parse("pi/2+1").unwrap();
+    ///
+    /// // Using variables
+    /// let p = Parameter::parse("theta + pi/2").unwrap();
+    /// ```
     fn from(val: String) -> Self {
-        Parameter::new(ExprNode::Symbol(val))
+        parse_parameter(val.as_str()).expect("invalid parameter")
     }
 }
 

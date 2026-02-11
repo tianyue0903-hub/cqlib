@@ -29,6 +29,7 @@
 //! for all supported gates.
 
 pub mod circuit_gate;
+pub mod delay;
 pub mod directive;
 pub mod gate_matrix;
 pub mod instruction;

@@ -12,6 +12,8 @@
 pub mod derivative;
 pub mod expr_node;
 pub mod impls;
+pub mod parse;
 pub mod simplify;
 
 pub use impls::Parameter;
+pub use parse::{ParseError, parse_parameter};

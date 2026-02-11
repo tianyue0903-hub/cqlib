@@ -182,6 +182,7 @@ dependencies = [
  "ndarray 0.17.2",
  "num",
  "num-complex",
+ "regex",
  "rustworkx-core",
  "smallvec",
  "thiserror",
