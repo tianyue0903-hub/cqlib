@@ -310,7 +310,7 @@ class Circuit:
 
         Example:
             >>> circuit = Circuit(1)
-            >>> theta = Parameter.symbol("theta")
+            >>> theta = Parameter("theta")
             >>> circuit.rx(0, theta)
             >>> assigned = circuit.assign_parameters({"theta": 3.14159})
             >>> # assigned is a new circuit with theta = 3.14159
