@@ -1255,7 +1255,7 @@ impl Circuit {
             // Use a specific internal prefix to avoid collisions during the two-step replacement.
             // This acts as a simultaneous substitution.
             let temp_key = format!("__INTERNAL_SUB_{}", key);
-            param = param.replace(key, &Parameter::from(temp_key.as_str()));
+            param = param.replace(key, &Parameter::try_from(temp_key.as_str()).unwrap());
             temp_map.insert(temp_key, val);
         }
 

@@ -209,8 +209,8 @@ fn test_dump_symbolic_parameters() {
     let q0 = Qubit::new(0);
     let q1 = Qubit::new(1);
 
-    let theta = Parameter::from("theta");
-    let phi = Parameter::from("phi");
+    let theta = Parameter::try_from("theta").unwrap();
+    let phi = Parameter::try_from("phi").unwrap();
 
     c.rx(q0, theta.clone()).unwrap();
     c.ry(q1, phi.clone()).unwrap();

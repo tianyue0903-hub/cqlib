@@ -39,8 +39,8 @@
 //! use std::collections::HashMap;
 //!
 //! // 1. Define symbols
-//! let theta = Parameter::from("theta");
-//! let phi = Parameter::from("phi");
+//! let theta = Parameter::try_from("theta").unwrap();
+//! let phi = Parameter::try_from("phi").unwrap();
 //!
 //! // 2. Construct an expression: sin(theta) + 2 * phi
 //! let expr = theta.sin() + Parameter::from(2.0) * phi.clone();
@@ -89,8 +89,8 @@ use std::sync::{Arc, RwLock};
 /// ```rust
 /// use cqlib_core::circuit::parameter::impls::Parameter;
 ///
-/// let theta = Parameter::from("theta");
-/// let phi = Parameter::from("phi");
+/// let theta = Parameter::try_from("theta").unwrap();
+/// let phi = Parameter::try_from("phi").unwrap();
 ///
 /// // Create a new expression: θ + 2 * φ
 /// let expr = theta + 2.0 * phi;
@@ -146,17 +146,14 @@ impl From<ExprNode> for Parameter {
     }
 }
 
-impl From<String> for Parameter {
-    /// Parse a mathematical expression string into a [`Parameter`].
+impl TryFrom<String> for Parameter {
+    type Error = crate::circuit::parameter::parse::ParseError;
+
+    /// Parse a mathematical expression string into a [`Parameter`], returning an error if parsing fails.
     ///
     /// # Arguments
     ///
     /// * `expr` - The expression string to parse
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(Parameter)` - The parsed parameter
-    /// * `Err(ParseError)` - If the expression is invalid
     ///
     /// # Supported Syntax
     ///
@@ -171,26 +168,32 @@ impl From<String> for Parameter {
     /// use cqlib_core::circuit::parameter::impls::Parameter;
     ///
     /// // Simple number
-    /// let p = Parameter::parse("1.0").unwrap();
+    /// let p = Parameter::try_from("1.0".to_string()).unwrap();
+    /// assert_eq!(p, Parameter::from(1.0));
     ///
     /// // Expression with pi
-    /// let p = Parameter::parse("pi/2").unwrap();
+    /// let p = Parameter::try_from("pi/2".to_string()).unwrap();
     ///
     /// // Complex expression: pi/2+1
-    /// let p = Parameter::parse("pi/2+1").unwrap();
+    /// let p = Parameter::try_from("pi/2+1".to_string()).unwrap();
     ///
     /// // Using variables
-    /// let p = Parameter::parse("theta + pi/2").unwrap();
+    /// let p = Parameter::try_from("theta + pi/2".to_string()).unwrap();
+    ///
+    /// // Invalid expression returns an error
+    /// assert!(Parameter::try_from("invalid&expr".to_string()).is_err());
     /// ```
-    fn from(val: String) -> Self {
-        parse_parameter(val.as_str()).expect("invalid parameter")
+    fn try_from(val: String) -> Result<Self, Self::Error> {
+        parse_parameter(val.as_str())
     }
 }
 
-impl From<&str> for Parameter {
-    /// Creates a symbolic parameter from a string slice.
-    fn from(val: &str) -> Self {
-        Parameter::new(ExprNode::Symbol(val.to_string()))
+impl TryFrom<&str> for Parameter {
+    type Error = crate::circuit::parameter::parse::ParseError;
+
+    /// Creates a symbolic parameter from a string slice, returning an error if parsing fails.
+    fn try_from(val: &str) -> Result<Self, Self::Error> {
+        parse_parameter(val)
     }
 }
 
@@ -285,7 +288,7 @@ impl Parameter {
     /// use std::sync::Arc;
     /// use cqlib_core::circuit::parameter::impls::Parameter;
     ///
-    /// let x = Parameter::from("x");
+    /// let x = Parameter::try_from("x").unwrap();
     ///
     /// // Example 1: Basic algebraic simplification
     /// let expr1 = x.clone() + Parameter::from(0); // x + 0
@@ -301,7 +304,7 @@ impl Parameter {
     /// assert_eq!(simplified2, expected2);
     ///
     /// // Example 3: Trigonometric identity (e.g., tan(arctan(y)))
-    /// let y = Parameter::from("y");
+    /// let y = Parameter::try_from("y").unwrap();
     /// let expr3 = y.atan().tan(); // tan(arctan(y))
     /// let simplified3 = expr3.simplify(None);
     /// assert_eq!(simplified3, y);

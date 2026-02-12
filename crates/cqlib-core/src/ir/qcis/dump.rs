@@ -100,9 +100,8 @@ pub fn dumps(circuit: &Circuit) -> Result<String, QcisDumpError> {
     for op in operations {
         let line = operation_to_qcis(op, circuit)?;
         if !line.is_empty() {
-            writeln!(output, "{}", line).map_err(|e| {
-                QcisDumpError::IoError(std::io::Error::new(std::io::ErrorKind::Other, e))
-            })?;
+            writeln!(output, "{}", line)
+                .map_err(|e| QcisDumpError::IoError(std::io::Error::other(e)))?;
         }
     }
 
