@@ -10,8 +10,5 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
-pub mod qasm2;
-pub mod qcis;
-
-pub use qasm2::dump::{dump as qasm2_dump, dumps as qasm2_dumps};
-pub use qasm2::load::{load as qasm2_load, loads as qasm2_loads};
+pub mod dump;
+pub mod load;
