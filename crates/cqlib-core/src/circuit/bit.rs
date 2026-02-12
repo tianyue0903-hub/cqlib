@@ -114,8 +114,36 @@ macro_rules! impl_qubit_from_integer {
     };
 }
 
-impl_qubit_from_unsigned!(usize, u32, u16, u8);
-impl_qubit_from_integer!(i32, i16, i8, isize);
+// Implement From for types that cannot overflow u32
+impl_qubit_from_unsigned!(u32, u16, u8);
+impl_qubit_from_integer!(i32, i16, i8);
+
+// Implement TryFrom for usize/isize which may overflow on 64-bit systems
+impl TryFrom<usize> for Qubit {
+    type Error = &'static str;
+
+    fn try_from(idx: usize) -> Result<Self, Self::Error> {
+        if idx > u32::MAX as usize {
+            Err("Qubit index exceeds u32::MAX")
+        } else {
+            Ok(Self(idx as u32))
+        }
+    }
+}
+
+impl TryFrom<isize> for Qubit {
+    type Error = &'static str;
+
+    fn try_from(idx: isize) -> Result<Self, Self::Error> {
+        if idx < 0 {
+            Err("Qubit index must be non-negative")
+        } else if idx > u32::MAX as isize {
+            Err("Qubit index exceeds u32::MAX")
+        } else {
+            Ok(Self(idx as u32))
+        }
+    }
+}
 
 #[test]
 fn test_qubit_creation_and_display() {
@@ -131,4 +159,59 @@ fn test_qubit_creation_and_display() {
 
     let q0_1 = Qubit(0);
     assert_eq!(q0, q0_1);
+}
+
+#[test]
+fn test_qubit_try_from_usize() {
+    // Valid indices should work
+    assert!(Qubit::try_from(0usize).is_ok());
+    assert!(Qubit::try_from(100usize).is_ok());
+    assert!(Qubit::try_from(u32::MAX as usize).is_ok());
+
+    // Overflow on 64-bit systems
+    if usize::BITS > 32 {
+        let overflow_idx = (u32::MAX as usize) + 1;
+        let result = Qubit::try_from(overflow_idx);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "Qubit index exceeds u32::MAX");
+    }
+}
+
+#[test]
+fn test_qubit_try_from_isize() {
+    // Valid indices should work
+    assert!(Qubit::try_from(0isize).is_ok());
+    assert!(Qubit::try_from(100isize).is_ok());
+    assert!(Qubit::try_from(u32::MAX as isize).is_ok());
+
+    // Negative index should fail
+    let result = Qubit::try_from(-1isize);
+    assert!(result.is_err());
+    assert_eq!(result.unwrap_err(), "Qubit index must be non-negative");
+
+    // Overflow on 64-bit systems
+    if isize::BITS > 32 {
+        let overflow_idx = (u32::MAX as isize) + 1;
+        let result = Qubit::try_from(overflow_idx);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "Qubit index exceeds u32::MAX");
+    }
+}
+
+#[test]
+fn test_qubit_from_small_types() {
+    // These should all work via From (infallible)
+    let _: Qubit = 0u8.into();
+    let _: Qubit = 100u8.into();
+    let _: Qubit = 0u16.into();
+    let _: Qubit = 1000u16.into();
+    let _: Qubit = 0u32.into();
+    let _: Qubit = 100000u32.into();
+
+    let _: Qubit = 0i8.into();
+    let _: Qubit = 100i8.into();
+    let _: Qubit = 0i16.into();
+    let _: Qubit = 1000i16.into();
+    let _: Qubit = 0i32.into();
+    let _: Qubit = 100000i32.into();
 }
