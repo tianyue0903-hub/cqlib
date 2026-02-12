@@ -15,3 +15,9 @@ pub mod qcis;
 
 pub use qasm2::dump::{dump as qasm2_dump, dumps as qasm2_dumps};
 pub use qasm2::load::{load as qasm2_load, loads as qasm2_loads};
+pub use qcis::dump::{dump as qcis_dump, dumps as qcis_dumps};
+pub use qcis::load::{load as qcis_load, loads as qcis_loads};
+
+#[cfg(test)]
+#[path = "./qasm2_to_qcis_test.rs"]
+mod qasm2_to_qcis_test;
