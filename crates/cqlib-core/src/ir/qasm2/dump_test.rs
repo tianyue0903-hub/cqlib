@@ -392,7 +392,7 @@ fn test_dump_extended_gates() {
     assert_qasm_contains(
         &qasm,
         &[
-            "gate crx(theta) a,b { rx(theta/2) b; cx a,b; rx(-theta/2) b; cx a,b; }",
+            "gate crx(theta) a,b { h b;rz(theta/2) b; cx a,b; rz(-theta/2) b; cx a,b; h b;}",
             "gate cry(theta) a,b { ry(theta/2) b; cx a,b; ry(-theta/2) b; cx a,b; }",
             "gate rzz(theta) a,b { cx a,b; rz(theta) b; cx a,b; }",
             "gate rxx(theta) a,b { h a; h b; cx a,b; rz(theta) b; cx a,b; h a; h b; }",

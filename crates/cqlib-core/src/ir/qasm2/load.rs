@@ -95,6 +95,7 @@ pub enum QasmParseError {
     UndefinedGate(String),
     InvalidArgument(String),
     MismatchedQubitCount { expected: usize, actual: usize },
+    MismatchedParameterCount { expected: usize, actual: usize },
     RecursionLimitExceeded(String),
     EvaluationError(String),
 }
@@ -113,6 +114,13 @@ impl std::fmt::Display for QasmParseError {
                 write!(
                     f,
                     "Mismatched qubit count: expected {}, got {}",
+                    expected, actual
+                )
+            }
+            QasmParseError::MismatchedParameterCount { expected, actual } => {
+                write!(
+                    f,
+                    "Mismatched parameter count: expected {}, got {}",
                     expected, actual
                 )
             }
@@ -548,7 +556,15 @@ impl AstToCircuit {
         params: &[ParameterValue],
         qubits: &[Qubit],
     ) -> Result<(), QasmParseError> {
-        let p = |i: usize| params.get(i).cloned().unwrap_or(ParameterValue::Fixed(0.0));
+        let p = |i: usize| {
+            params
+                .get(i)
+                .cloned()
+                .ok_or(QasmParseError::MismatchedParameterCount {
+                    expected: i + 1,
+                    actual: params.len(),
+                })
+        };
         let q = |i: usize| {
             qubits
                 .get(i)
@@ -623,19 +639,19 @@ impl AstToCircuit {
             "rx" | "RX" => {
                 let q0 = q(0)?;
                 circuit
-                    .append(Instruction::Standard(StandardGate::RX), [q0], [p(0)], None)
+                    .append(Instruction::Standard(StandardGate::RX), [q0], [p(0)?], None)
                     .map_err(|e| QasmParseError::ConversionError(e.to_string()))?;
             }
             "ry" | "RY" => {
                 let q0 = q(0)?;
                 circuit
-                    .append(Instruction::Standard(StandardGate::RY), [q0], [p(0)], None)
+                    .append(Instruction::Standard(StandardGate::RY), [q0], [p(0)?], None)
                     .map_err(|e| QasmParseError::ConversionError(e.to_string()))?;
             }
             "rz" | "RZ" | "p" | "P" => {
                 let q0 = q(0)?;
                 circuit
-                    .append(Instruction::Standard(StandardGate::RZ), [q0], [p(0)], None)
+                    .append(Instruction::Standard(StandardGate::RZ), [q0], [p(0)?], None)
                     .map_err(|e| QasmParseError::ConversionError(e.to_string()))?;
             }
             "u1" | "U1" => {
@@ -644,7 +660,7 @@ impl AstToCircuit {
                     .append(
                         Instruction::Standard(StandardGate::Phase),
                         [q0],
-                        [p(0)],
+                        [p(0)?],
                         None,
                     )
                     .map_err(|e| QasmParseError::ConversionError(e.to_string()))?;
@@ -657,7 +673,7 @@ impl AstToCircuit {
                     .append(
                         Instruction::Standard(StandardGate::U),
                         [q0],
-                        [pi_2, p(0), p(1)],
+                        [pi_2, p(0)?, p(1)?],
                         None,
                     )
                     .map_err(|e| QasmParseError::ConversionError(e.to_string()))?;
@@ -669,7 +685,7 @@ impl AstToCircuit {
                     .append(
                         Instruction::Standard(StandardGate::U),
                         [q0],
-                        [p(0), p(1), p(2)],
+                        [p(0)?, p(1)?, p(2)?],
                         None,
                     )
                     .map_err(|e| QasmParseError::ConversionError(e.to_string()))?;
@@ -989,7 +1005,15 @@ impl AstToCircuit {
         params: &[ParameterValue],
         qubits: &[Qubit],
     ) -> Result<(), QasmParseError> {
-        let p = |i: usize| params.get(i).cloned().unwrap_or(ParameterValue::Fixed(0.0));
+        let p = |i: usize| {
+            params
+                .get(i)
+                .cloned()
+                .ok_or(QasmParseError::MismatchedParameterCount {
+                    expected: i + 1,
+                    actual: params.len(),
+                })
+        };
         let q = |i: usize| {
             qubits
                 .get(i)
@@ -1005,7 +1029,7 @@ impl AstToCircuit {
             "U" => {
                 let q0 = q(0)?;
                 circuit
-                    .u(q0, p(0), p(1), p(2))
+                    .u(q0, p(0)?, p(1)?, p(2)?)
                     .map_err(|e| QasmParseError::ConversionError(e.to_string()))?;
             }
             "CX" => {
@@ -1079,44 +1103,44 @@ impl AstToCircuit {
             "rx" | "RX" => {
                 let q0 = q(0)?;
                 circuit
-                    .rx(q0, p(0))
+                    .rx(q0, p(0)?)
                     .map_err(|e| QasmParseError::ConversionError(e.to_string()))?;
             }
             "ry" | "RY" => {
                 let q0 = q(0)?;
                 circuit
-                    .ry(q0, p(0))
+                    .ry(q0, p(0)?)
                     .map_err(|e| QasmParseError::ConversionError(e.to_string()))?;
             }
             "rz" | "RZ" => {
                 let q0 = q(0)?;
                 circuit
-                    .rz(q0, p(0))
+                    .rz(q0, p(0)?)
                     .map_err(|e| QasmParseError::ConversionError(e.to_string()))?;
             }
             "p" | "P" => {
                 let q0 = q(0)?;
                 circuit
-                    .phase(q0, p(0))
+                    .phase(q0, p(0)?)
                     .map_err(|e| QasmParseError::ConversionError(e.to_string()))?;
             }
             "u1" | "U1" => {
                 let q0 = q(0)?;
                 circuit
-                    .phase(q0, p(0))
+                    .phase(q0, p(0)?)
                     .map_err(|e| QasmParseError::ConversionError(e.to_string()))?;
             }
             "u2" | "U2" => {
                 let q0 = q(0)?;
                 let pi_2 = ParameterValue::Param(Parameter::pi() / 2.0);
                 circuit
-                    .u(q0, pi_2, p(0), p(1))
+                    .u(q0, pi_2, p(0)?, p(1)?)
                     .map_err(|e| QasmParseError::ConversionError(e.to_string()))?;
             }
             "u3" | "U3" | "u" => {
                 let q0 = q(0)?;
                 circuit
-                    .u(q0, p(0), p(1), p(2))
+                    .u(q0, p(0)?, p(1)?, p(2)?)
                     .map_err(|e| QasmParseError::ConversionError(e.to_string()))?;
             }
             "cx" => {
