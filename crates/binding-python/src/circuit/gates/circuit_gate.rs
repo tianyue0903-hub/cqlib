@@ -11,12 +11,37 @@
 // that they have been altered from the originals.
 
 use cqlib_core::circuit::gate::circuit_gate::CircuitGate;
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
 #[pyclass(name = "CircuitGate", module = "cqlib.circuit.gates")]
 #[derive(Clone, Debug)]
 pub struct PyCircuitGate {
     pub inner: CircuitGate,
+}
+
+#[pymethods]
+impl PyCircuitGate {
+    #[getter]
+    fn num_qubits(&self) -> usize {
+        self.inner.num_qubits()
+    }
+
+    #[getter]
+    fn num_params(&self) -> usize {
+        self.inner.num_params()
+    }
+
+    fn symbols(&self) -> Vec<String> {
+        self.inner.symbols().into_iter().collect()
+    }
+
+    fn inverse(&self) -> PyResult<Self> {
+        self.inner
+            .inverse()
+            .map(|gate| Self { inner: gate })
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
 }
 
 impl From<CircuitGate> for PyCircuitGate {

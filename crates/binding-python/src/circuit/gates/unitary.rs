@@ -75,7 +75,7 @@ impl PyUnitaryGate {
         self.inner.num_qubits()
     }
 
-    #[getter]
+    /// Returns the unitary matrix of the gate as a NumPy array.
     pub fn matrix<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<Complex64>>> {
         match self.inner.matrix() {
             Some(mat) => Ok(PyArray2::from_array(py, mat)),
@@ -85,10 +85,14 @@ impl PyUnitaryGate {
         }
     }
 
+    /// Implements the numpy array protocol for numpy 2.0+ compatibility.
+    /// Supports the 'copy' keyword argument.
+    #[pyo3(signature = (_dtype=None, _copy=None))]
     pub fn __array__<'py>(
         &self,
         py: Python<'py>,
         _dtype: Option<Bound<'py, PyAny>>,
+        _copy: Option<bool>,
     ) -> PyResult<Bound<'py, PyArray2<Complex64>>> {
         match self.inner.matrix() {
             Some(mat) => Ok(PyArray2::from_array(py, mat)),

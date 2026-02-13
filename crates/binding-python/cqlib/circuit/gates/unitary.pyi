@@ -10,7 +10,7 @@
 # copyright notice, and modified files need to carry a notice indicating
 # that they have been altered from the originals.
 
-from typing import Union, List
+from typing import Union, List, Optional
 import numpy as np
 import numpy.typing as npt
 from typing_extensions import final
@@ -71,7 +71,6 @@ class UnitaryGate:
         """Returns the number of qubits this gate acts on."""
         ...
 
-    @property
     def matrix(self) -> npt.NDArray[np.complex128]:
         """Returns the matrix representation if available.
 
@@ -80,6 +79,13 @@ class UnitaryGate:
         """
         ...
 
-    def __array__(self) -> npt.NDArray[np.complex128]:
-        """Returns the matrix as a numpy array (for numpy interoperability)."""
+    def __array__(
+            self, dtype: Optional[np.dtype] = None, copy: Optional[bool] = None
+    ) -> npt.NDArray[np.complex128]:
+        """Returns the matrix as a numpy array (for numpy interoperability).
+
+        Args:
+            dtype: The desired data type of the array.
+            copy: Whether to copy the data. Defaults to None.
+        """
         ...
