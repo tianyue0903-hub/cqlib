@@ -20,7 +20,7 @@
 //! ## Core Architecture
 //!
 //! The central type is [`Parameter`]. It acts as a thread-safe wrapper around an Abstract Syntax Tree (AST)
-//! represented by [`ExprNode`](super::expr_node::ExprNode). This design allows for:
+//! represented by [`ExprNode`](crate::circuit::parameter::expr_node::ExprNode). This design allows for:
 //!
 //! - **Lazy Evaluation**: Expressions are built symbolically and evaluated only when variable bindings are provided.
 //! - **Automatic Differentiation**: Compute gradients symbolically using `.derivative()`, essential for gradient-descent optimization.
@@ -198,12 +198,12 @@ impl TryFrom<&str> for Parameter {
 }
 
 macro_rules! impl_numeric_from {
-    // 匹配模式：源类型 => Enum变体(强转的目标类型)
+    // Matches pattern: Source Type => Enum Variant(Target Type for casting)
     ($($src_type:ty => $variant:ident($target_type:ty)),* $(,)?) => {
         $(
             impl From<$src_type> for Parameter {
                 fn from(val: $src_type) -> Self {
-                    // val as $target_type 处理了类型转换 (如 u32 -> i64, u64 -> f64)
+                    // val as $target_type handles type conversion (e.g., u32 -> i64, u64 -> f64)
                     Parameter::new(ExprNode::$variant(val as $target_type))
                 }
             }
@@ -315,7 +315,7 @@ impl Parameter {
         Self::new(self.node.simplify(max_iterations))
     }
 
-    ///  Calculate the derivative of the expression with respect to the specified variable (symbolic differentiation)
+    /// Calculates the symbolic derivative of the expression with respect to the specified variable.
     ///
     /// # Arguments
     /// * `var` - Which variable to differentiate with respect to
@@ -459,6 +459,37 @@ impl Parameter {
         Self::new(ExprNode::Pow(self.node.clone(), val.node.clone()))
     }
 
+    /// Replaces all occurrences of a symbol with another parameter expression.
+    ///
+    /// This method performs symbolic substitution, replacing every instance of the
+    /// specified symbol with the given parameter's expression tree.
+    ///
+    /// # Arguments
+    ///
+    /// * `symbol` - The name of the symbol to replace
+    /// * `param` - The parameter expression to substitute
+    ///
+    /// # Returns
+    ///
+    /// A new `Parameter` with the substitution applied. The original parameter is unchanged.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use cqlib_core::circuit::parameter::impls::Parameter;
+    ///
+    /// // Create expression: x + 2
+    /// let x = Parameter::symbol("x");
+    /// let mut expr = x.clone() + Parameter::from(2.0);
+    ///
+    /// // Replace x with y * 3
+    /// let y = Parameter::symbol("y");
+    /// let replacement = y * Parameter::from(3.0);
+    /// let new_expr = expr.replace("x", &replacement);
+    ///
+    /// // Result: (y * 3) + 2
+    /// assert_eq!(new_expr.to_string(), "y * 3 + 2");
+    /// ```
     pub fn replace(&mut self, symbol: &str, param: &Parameter) -> Self {
         Self {
             node: Arc::new(self.node.replace(symbol, &param.node)),
@@ -476,7 +507,9 @@ trait IntoArcExprNode {
     fn into_arc_expr(self) -> Arc<ExprNode>;
 }
 
-// 定义宏
+/// Macro to implement `IntoArcExprNode` for numeric types.
+///
+/// Maps source types to the appropriate `ExprNode` variant with proper casting.
 macro_rules! impl_into_arc_expr {
     // Matches a comma-separated list of type mappings.
     // Pattern: `SourceType => VariantName(CastTargetType)`
@@ -583,7 +616,7 @@ impl_ops_for_type!(u32);
 macro_rules! impl_binary_op_ref {
     ($($trait:ident, $method:ident, $variant:ident),* $(,)?) => {
         $(
-            // 1. Parameter + Parameter (消耗所有权)
+            // 1. Parameter + Parameter (consumes ownership)
             impl $trait<Parameter> for Parameter {
                 type Output = Parameter;
                 fn $method(self, rhs: Parameter) -> Self::Output {
@@ -591,7 +624,7 @@ macro_rules! impl_binary_op_ref {
                 }
             }
 
-            // 2. &Parameter + &Parameter (不消耗所有权，最常用)
+            // 2. &Parameter + &Parameter (does not consume ownership, most commonly used)
             impl<'a, 'b> $trait<&'b Parameter> for &'a Parameter {
                 type Output = Parameter;
                 fn $method(self, rhs: &'b Parameter) -> Self::Output {

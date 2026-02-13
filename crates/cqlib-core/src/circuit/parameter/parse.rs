@@ -88,6 +88,10 @@ impl fmt::Display for ParseError {
 impl Error for ParseError {}
 
 /// Token types for the expression lexer.
+///
+/// This enum represents all lexical tokens that can appear in a mathematical
+/// expression. The lexer converts raw input strings into a sequence of these
+/// tokens for the parser to consume.
 #[derive(Debug, Clone, PartialEq)]
 enum Token {
     Number(f64),
@@ -105,17 +109,36 @@ enum Token {
 }
 
 /// A peekable lexer for mathematical expressions.
+///
+/// The lexer performs lexical analysis, converting raw input strings into
+/// a stream of tokens. It uses a peekable iterator to allow one-character
+/// lookahead during tokenization.
 struct Lexer<'a> {
+    /// Iterator over the input characters with peek capability
     chars: Peekable<Chars<'a>>,
 }
 
 impl<'a> Lexer<'a> {
+    /// Creates a new lexer for the given input string.
+    ///
+    /// # Arguments
+    ///
+    /// * `input` - The mathematical expression to tokenize
     fn new(input: &'a str) -> Self {
         Lexer {
             chars: input.chars().peekable(),
         }
     }
 
+    /// Retrieves the next token from the input.
+    ///
+    /// This method skips whitespace, then attempts to match the next
+    /// character(s) to a valid token type.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Token)` - The next token in the stream
+    /// * `Err(ParseError)` - If an invalid character is encountered
     fn next_token(&mut self) -> Result<Token, ParseError> {
         self.skip_whitespace();
 
@@ -173,6 +196,7 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    /// Skips over whitespace characters in the input.
     fn skip_whitespace(&mut self) {
         while let Some(&c) = self.chars.peek() {
             if c.is_whitespace() {
@@ -183,6 +207,15 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    /// Reads a numeric literal from the input.
+    ///
+    /// Handles integers, floating-point numbers, and scientific notation
+    /// (e.g., `1e-5`, `3.14`, `.5`).
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Token::Number(f64))` - The parsed number
+    /// * `Err(ParseError::InvalidNumber)` - If the number format is invalid
     fn read_number(&mut self) -> Result<Token, ParseError> {
         let mut s = String::new();
         let mut has_dot = false;
@@ -220,6 +253,14 @@ impl<'a> Lexer<'a> {
             .map_err(|_| ParseError::InvalidNumber(s))
     }
 
+    /// Reads an identifier (variable name or function name) from the input.
+    ///
+    /// Identifiers must start with a letter or underscore, followed by
+    /// alphanumeric characters or underscores.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Token::Identifier(String))` - The parsed identifier
     fn read_identifier(&mut self) -> Result<Token, ParseError> {
         let mut s = String::new();
 
@@ -235,20 +276,37 @@ impl<'a> Lexer<'a> {
     }
 }
 
-/// Recursive descent parser.
+/// Recursive descent parser for mathematical expressions.
 ///
-/// Precedence (Low to High):
-/// 1. Additive: +, -
-/// 2. Multiplicative: *, /, %
-/// 3. Power: ^
-/// 4. Unary: -, +
-/// 5. Primary: Number, Identifier, Function(), (...)
+/// Implements a top-down parser using recursive descent with operator
+/// precedence climbing. The parser converts tokens into a `Parameter`
+/// expression tree.
+///
+/// # Operator Precedence (Low to High)
+///
+/// 1. Additive: `+`, `-`
+/// 2. Multiplicative: `*`, `/`, `%`
+/// 3. Power: `^` (right-associative)
+/// 4. Unary: `-`, `+`
+/// 5. Primary: Number, Identifier, Function(), `(...)`
 struct Parser<'a> {
+    /// The lexer providing the token stream
     lexer: Lexer<'a>,
+    /// The current lookahead token
     current_token: Token,
 }
 
 impl<'a> Parser<'a> {
+    /// Creates a new parser for the given input string.
+    ///
+    /// # Arguments
+    ///
+    /// * `input` - The mathematical expression to parse
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Parser)` - A ready-to-use parser
+    /// * `Err(ParseError)` - If the first token cannot be read
     fn new(input: &'a str) -> Result<Self, ParseError> {
         let mut lexer = Lexer::new(input);
         let current_token = lexer.next_token()?;
@@ -258,6 +316,16 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// Consumes the current token if it matches the expected type.
+    ///
+    /// # Arguments
+    ///
+    /// * `token_discriminant` - The expected token type
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` - Token was consumed successfully
+    /// * `Err(ParseError::UnexpectedToken)` - If token doesn't match
     fn eat(&mut self, token_discriminant: &Token) -> Result<(), ParseError> {
         if std::mem::discriminant(&self.current_token) == std::mem::discriminant(token_discriminant)
         {
@@ -271,6 +339,15 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Parses the complete expression and returns a Parameter.
+    ///
+    /// This is the main entry point for parsing. It ensures the entire
+    /// input is consumed (no trailing tokens).
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Parameter)` - The parsed expression tree
+    /// * `Err(ParseError)` - If parsing fails or there are trailing tokens
     fn parse(&mut self) -> Result<Parameter, ParseError> {
         if self.current_token == Token::Eof {
             return Err(ParseError::EmptyExpression);
@@ -285,7 +362,9 @@ impl<'a> Parser<'a> {
         Ok(result)
     }
 
-    /// expr ::= term (('+' | '-') term)*
+    /// Parses an additive expression.
+    ///
+    /// Grammar: `expr ::= term (('+' | '-') term)*`
     fn expr(&mut self) -> Result<Parameter, ParseError> {
         let mut left = self.term()?;
 
@@ -307,7 +386,9 @@ impl<'a> Parser<'a> {
         Ok(left)
     }
 
-    /// term ::= power (('*' | '/' | '%') power)*
+    /// Parses a multiplicative expression.
+    ///
+    /// Grammar: `term ::= power (('*' | '/' | '%') power)*`
     fn term(&mut self) -> Result<Parameter, ParseError> {
         let mut left = self.power()?;
 
@@ -334,8 +415,11 @@ impl<'a> Parser<'a> {
         Ok(left)
     }
 
-    /// power ::= unary ('^' power)?
-    /// Right-associative: 2^3^2 -> 2^(3^2)
+    /// Parses a power expression (right-associative).
+    ///
+    /// Grammar: `power ::= unary ('^' power)?`
+    ///
+    /// Note: Right-associative means `2^3^2` parses as `2^(3^2)`
     fn power(&mut self) -> Result<Parameter, ParseError> {
         let left = self.unary()?;
 
@@ -348,7 +432,9 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// unary ::= ('+' | '-') unary | primary
+    /// Parses a unary expression.
+    ///
+    /// Grammar: `unary ::= ('+' | '-') unary | primary`
     fn unary(&mut self) -> Result<Parameter, ParseError> {
         match self.current_token {
             Token::Plus => {
@@ -364,7 +450,9 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// primary ::= Number | Identifier | Function | '(' expr ')'
+    /// Parses a primary expression (atom).
+    ///
+    /// Grammar: `primary ::= Number | Identifier | Function | '(' expr ')'`
     fn primary(&mut self) -> Result<Parameter, ParseError> {
         match self.current_token.clone() {
             Token::Number(n) => {
@@ -404,6 +492,16 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Parses a function call expression.
+    ///
+    /// # Arguments
+    ///
+    /// * `func_name` - The name of the function being called
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Parameter)` - The parsed function call as a parameter
+    /// * `Err(ParseError)` - If function name is unknown or argument count is wrong
     fn parse_function_call(&mut self, func_name: &str) -> Result<Parameter, ParseError> {
         self.eat(&Token::LParen)?;
 
@@ -445,6 +543,18 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Helper to validate and apply a unary function.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - The function name (for error messages)
+    /// * `args` - The parsed arguments
+    /// * `op` - The operation to apply
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Parameter)` - The result of applying the operation
+    /// * `Err(ParseError::InvalidArgumentCount)` - If argument count is not 1
     fn check_unary<F>(name: &str, args: Vec<Parameter>, op: F) -> Result<Parameter, ParseError>
     where
         F: FnOnce(Parameter) -> Parameter,

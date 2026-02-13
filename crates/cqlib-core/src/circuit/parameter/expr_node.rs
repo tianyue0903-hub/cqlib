@@ -715,11 +715,62 @@ impl ExprNode {
         }
     }
 
+    /// Replaces all occurrences of a symbol with the given expression node.
+    ///
+    /// This is the public entry point for symbolic substitution. It traverses the
+    /// expression tree and replaces every `Symbol` node matching the given name
+    /// with a clone of the provided node.
+    ///
+    /// # Arguments
+    ///
+    /// * `symbol` - The symbol name to search for
+    /// * `node` - The expression node to substitute
+    ///
+    /// # Returns
+    ///
+    /// A new `ExprNode` with all matching symbols replaced. If no replacements
+    /// were made, returns a clone of the original node.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    /// use cqlib_core::circuit::parameter::expr_node::ExprNode;
+    ///
+    /// // Create expression: x + 1
+    /// let x = Arc::new(ExprNode::Symbol("x".to_string()));
+    /// let one = Arc::new(ExprNode::Integer(1));
+    /// let expr = ExprNode::Add(x, one);
+    ///
+    /// // Replace x with y * 2
+    /// let y = Arc::new(ExprNode::Symbol("y".to_string()));
+    /// let two = Arc::new(ExprNode::Integer(2));
+    /// let replacement = ExprNode::Mul(y, two);
+    ///
+    /// let result = expr.replace("x", &replacement);
+    /// // Result: (y * 2) + 1
+    /// assert_eq!(result.to_string(), "y * 2 + 1");
+    /// ```
     pub fn replace(&self, symbol: &str, node: &ExprNode) -> Self {
         self.replace_internal(symbol, node)
             .unwrap_or_else(|| self.clone())
     }
 
+    /// Internal recursive implementation of symbol replacement.
+    ///
+    /// Returns `Some(new_node)` if a replacement was made somewhere in the tree,
+    /// or `None` if the subtree is unchanged. This allows for efficient tree
+    /// reconstruction only along paths where changes occur.
+    ///
+    /// # Arguments
+    ///
+    /// * `symbol` - The symbol name to search for
+    /// * `node` - The expression node to substitute
+    ///
+    /// # Returns
+    ///
+    /// * `Some(ExprNode)` - A new node with replacements applied
+    /// * `None` - No replacements were needed in this subtree
     fn replace_internal(&self, symbol: &str, node: &ExprNode) -> Option<Self> {
         match self {
             ExprNode::Float(_) | ExprNode::Integer(_) | ExprNode::E | ExprNode::Pi => None,
@@ -994,7 +1045,7 @@ impl ExprNode {
                         inner.format_with_parent(f, u8::MAX, false)?;
                         write!(f, ")")
                     } else {
-                        inner.format_with_parent(f, u8::MAX, false) // 使用高优先级确保正确
+                        inner.format_with_parent(f, u8::MAX, false) // Use high precedence to ensure correctness
                     }
                 }
             }
