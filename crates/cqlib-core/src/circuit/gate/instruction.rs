@@ -222,9 +222,13 @@ impl Instruction {
                     format!("ctl_{}_{}", num_new_ctrls, uni.label()).as_str(),
                     uni.num_qubits() + num_new_ctrls as u16,
                 );
-                if let Some(m) = g.matrix() {
+                if let Some(m) = uni.matrix() {
                     let controlled = gate_matrix::control_matrix(m, num_new_ctrls);
                     g = g.with_matrix(controlled).unwrap();
+                }
+                // Copy circuit field if present
+                if let Some(c) = uni.circuit() {
+                    g = g.with_circuit(c.clone());
                 }
 
                 Some(Instruction::UnitaryGate(Box::from(g)))
