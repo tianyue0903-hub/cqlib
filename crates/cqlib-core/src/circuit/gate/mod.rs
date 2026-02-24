@@ -19,14 +19,56 @@
 //! # Core Components
 //!
 //! - **[`StandardGate`]**: The set of natively optimized quantum gates (e.g., `H`, `CX`, `RX`).
-//! - **[`ExtendedGate`]**: Extensions to standard gates, supporting arbitrary controls and custom unitary matrices.
+//! - **[`UnitaryGate`]**: User-defined custom gates via matrix representation.
+//! - **[`MCGate`]**: Multi-controlled gates extending standard gates with arbitrary controls.
 //! - **[`Directive`]**: Non-unitary circuit operations like `Measure`, `Reset`, and `Barrier`.
 //! - **[`Instruction`]**: The unified sum type that wraps all the above, representing a single step in a circuit.
+//! - **[`CircuitGate`]**: Composite gates defined by entire sub-circuits.
 //!
 //! # Gate Matrix Generation
 //!
 //! The [`gate_matrix`] module provides low-level functions to generate the unitary matrices
 //! for all supported gates.
+//!
+//! # Examples
+//!
+//! ## Using Standard Gates
+//!
+//! ```
+//! use cqlib_core::circuit::gate::StandardGate;
+//!
+//! // Get the Hadamard gate matrix
+//! let h_matrix = StandardGate::H.matrix(&[]);
+//! assert_eq!(h_matrix.shape(), &[2, 2]);
+//!
+//! // Get the parametric RX gate matrix
+//! let rx_matrix = StandardGate::RX.matrix(&[std::f64::consts::PI / 2.0]);
+//! assert_eq!(rx_matrix.shape(), &[2, 2]);
+//!
+//! // Check gate properties
+//! assert_eq!(StandardGate::CX.num_qubits(), 2);
+//! assert_eq!(StandardGate::RX.num_params(), 1);
+//! ```
+//!
+//! ## Creating Multi-Controlled Gates
+//!
+//! ```
+//! use cqlib_core::circuit::gate::{MCGate, StandardGate};
+//!
+//! // Create a Toffoli gate (CCX)
+//! let toffoli = MCGate::new(2, StandardGate::X);
+//! assert_eq!(toffoli.num_qubits(), 3);
+//! ```
+//!
+//! ## Working with Instructions
+//!
+//! ```
+//! use cqlib_core::circuit::gate::{Instruction, StandardGate, Directive};
+//!
+//! // Create instructions from gates
+//! let h_inst: Instruction = StandardGate::H.into();
+//! let barrier_inst: Instruction = Directive::Barrier.into();
+//! ```
 
 pub mod circuit_gate;
 pub mod delay;
@@ -38,6 +80,8 @@ pub mod standard_gate;
 pub mod unitary_gate;
 
 // Re-export key types for easier access
+pub use circuit_gate::{CircuitGate, FrozenCircuit};
+pub use delay::DelayOp;
 pub use directive::Directive;
 pub use instruction::Instruction;
 pub use mc_gate::MCGate;

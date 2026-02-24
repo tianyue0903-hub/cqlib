@@ -10,21 +10,58 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
+//! Quantum Gate Matrix Definitions
+//!
+//! This module provides the unitary matrix representations for all supported quantum gates.
+//! Matrices are provided as lazily-initialized static constants for fixed gates, and
+//! as functions for parametric gates.
+//!
+//! # Gate Categories
+//!
+//! - **Single-Qubit Gates**: H, X, Y, Z, S, T, and their variants
+//! - **Rotation Gates**: RX, RY, RZ, RXX, RYY, RZZ, RZX, RXY
+//! - **Two-Qubit Gates**: CX, CY, CZ, SWAP, iSWAP, fSim
+//! - **Multi-Qubit Gates**: CCX (Toffoli)
+//! - **Controlled Gates**: CRX, CRY, CRZ
+//!
+//! # Usage
+//!
+//! Static gates can be accessed directly:
+//! ```
+//! use cqlib_core::circuit::gate::gate_matrix::H_GATE;
+//!
+//! let h_matrix = &*H_GATE;
+//! ```
+//!
+//! Parametric gates are constructed via functions:
+//! ```
+//! use cqlib_core::circuit::gate::gate_matrix::rx_gate;
+//!
+//! let rx_pi_2 = rx_gate(std::f64::consts::PI / 2.0);
+//! ```
+
 use ndarray::prelude::*;
 use num_complex::Complex;
 use std::f64::consts::FRAC_1_SQRT_2;
 use std::sync::LazyLock;
 
-/// Common Constants
-/// 0 + 0i
+// =============================================================================
+// Complex Constants
+// =============================================================================
+
+/// The complex number $0 + 0i$.
 const ZERO: Complex<f64> = Complex::new(0., 0.);
-///  1 + 0i
+
+/// The complex number $1 + 0i$.
 const ONE: Complex<f64> = Complex::new(1., 0.);
-/// 0 + 1i
+
+/// The imaginary unit $0 + 1i$.
 const I: Complex<f64> = Complex::new(0., 1.);
-/// 1/sqrt(2) * (1+i)
+
+/// $e^{i\pi/4} = \frac{1 + i}{\sqrt{2}}$.
 const EXP_I_PI_4: Complex<f64> = Complex::new(FRAC_1_SQRT_2, FRAC_1_SQRT_2);
-/// 1/sqrt(2) * (1-i)
+
+/// $e^{-i\pi/4} = \frac{1 - i}{\sqrt{2}}$.
 const EXP_NEG_I_PI_4: Complex<f64> = Complex::new(FRAC_1_SQRT_2, -FRAC_1_SQRT_2);
 
 /// The Hadamard Gate.

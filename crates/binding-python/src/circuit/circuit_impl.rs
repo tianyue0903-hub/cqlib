@@ -390,8 +390,16 @@ impl PyCircuit {
                 }
             }
         }
+        let control_qubits: Vec<Qubit> = controls
+            .iter()
+            .map(|q| Qubit::try_from(*q).unwrap())
+            .collect();
+        let target_qubits: Vec<Qubit> = targets
+            .iter()
+            .map(|q| Qubit::try_from(*q).unwrap())
+            .collect();
         self.inner
-            .multi_control(instruction.inner, controls, targets, ps)
+            .multi_control(instruction.inner, control_qubits, target_qubits, ps)
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
@@ -402,7 +410,10 @@ impl PyCircuit {
         qubits: Vec<usize>,
         params: Option<Vec<PyParamLike>>,
     ) -> PyResult<()> {
-        let qubits_core: Vec<Qubit> = qubits.into_iter().map(Qubit::from).collect();
+        let qubits_core: Vec<Qubit> = qubits
+            .into_iter()
+            .map(|q| Qubit::try_from(q).unwrap())
+            .collect();
         let inst = Instruction::McGate(Box::new(instruction.inner));
         let params_core: Vec<ParameterValue> = params
             .unwrap_or_default()
@@ -473,7 +484,7 @@ impl PyCircuit {
 
     fn delay(&mut self, qubit: usize, param: PyParamLike) -> PyResult<()> {
         self.inner
-            .delay(Qubit::from(qubit), param.into())
+            .delay(Qubit::try_from(qubit).unwrap(), param.into())
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
         Ok(())
     }

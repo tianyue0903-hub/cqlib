@@ -900,25 +900,6 @@ impl Circuit {
     /// // Equivalent to CCX(q0, q1, q2)
     /// circuit.multi_control(StandardGate::X, [q0, q1], vec![q2], []).unwrap();
     /// ```
-    /// Appends a controlled operation to the circuit.
-    ///
-    /// This method generalizes `multi_control` to accept any instruction that can be controlled
-    /// (e.g., `StandardGate`, `ExtendedGate`, or `Unitary`). It delegates the logic of
-    /// creating the controlled gate to [`Instruction::control`], ensuring consistent behavior.
-    ///
-    /// # Example
-    /// ```rust
-    /// # use cqlib_core::circuit::circuit_impl::Circuit;
-    /// # use cqlib_core::circuit::Qubit;
-    /// # use cqlib_core::circuit::gate::{StandardGate, Instruction};
-    /// let mut circuit = Circuit::new(3);
-    /// let q0 = Qubit::new(0);
-    /// let q1 = Qubit::new(1);
-    /// let q2 = Qubit::new(2);
-    ///
-    /// // Standard Gate (X -> CCX)
-    /// circuit.multi_control(StandardGate::X, [q0, q1], vec![q2], []).unwrap();
-    /// ```
     pub fn multi_control<I, C, T, P>(
         &mut self,
         instruction: I,
@@ -980,7 +961,7 @@ impl Circuit {
     pub fn unitary(&mut self, gate: UnitaryGate, qubits: Vec<Qubit>) -> Result<(), CircuitError> {
         let qubits_sv: SmallVec<[Qubit; 3]> = qubits.into();
 
-        // 检查 qubits 数量是否匹配 definition.num_qubits
+        // Check if qubit count matches definition.num_qubits
         if qubits_sv.len() != gate.num_qubits() as usize {
             return Err(CircuitError::QubitCountMismatch {
                 expected: gate.num_qubits() as usize,
@@ -996,6 +977,15 @@ impl Circuit {
         )
     }
 
+    /// Appends a Delay instruction to the circuit.
+    ///
+    /// This instruction represents an idle period on a specific qubit, often used for
+    /// dynamical decoupling or timing control in pulse-level scheduling.
+    ///
+    /// # Arguments
+    ///
+    /// * `qubit` - The qubit to apply the delay to.
+    /// * `delay` - The duration of the delay. The unit depends on the target backend (e.g., seconds, samples, or dt).
     pub fn delay(
         &mut self,
         qubit: impl Into<Qubit>,
@@ -1004,7 +994,28 @@ impl Circuit {
         self.append(Instruction::Delay, vec![qubit], vec![delay], None)
     }
 
-    // pub fn circuit_gate(&mut self, gate: CircuitGate, qubits: Vec<Qubit>, params: ) -> Result<(), CircuitError> {}
+    /// Appends a pre-compiled `CircuitGate` to this circuit.
+    ///
+    /// This allows nesting circuits within circuits.
+    ///
+    /// # Arguments
+    ///
+    /// * `gate` - The `CircuitGate` instance to append.
+    /// * `qubits` - The qubits in this circuit that the sub-circuit acts upon.
+    /// * `params` - The parameter values to bind to the sub-circuit's parameters.
+    pub fn circuit_gate(
+        &mut self,
+        gate: CircuitGate,
+        qubits: Vec<Qubit>,
+        params: impl IntoIterator<Item = ParameterValue>,
+    ) -> Result<(), CircuitError> {
+        self.append(
+            Instruction::CircuitGate(Box::new(gate)),
+            qubits,
+            params,
+            None,
+        )
+    }
 
     /// Creates the inverse (adjoint) of the circuit.
     ///
@@ -1109,10 +1120,21 @@ impl Circuit {
         true
     }
 
-    /// decompose 本质上，是自线路的参数需要使用父线路的参数替换，以及量子比特的替换。
-    /// 比如自线路是  Rx(theta+1) Q0，名称是 SubGate(theta)，
-    /// 复线路是 SubGate(beta+theta) Q1,
-    /// 那么decompose 里面的结果就是 Rx(beta+theta+1) Q1
+    /// Decomposes the circuit by resolving sub-circuit gates into their fundamental operations.
+    ///
+    /// This method recursively unpacks any [`Instruction::CircuitGate`] (hierarchical instructions)
+    /// found in the circuit. It handles:
+    ///
+    /// 1. **Parameter Substitution**: Parameters in the sub-circuit are replaced by the arguments
+    ///    passed from the parent circuit.
+    ///    - Example: If sub-circuit has `Rx(theta+1)` and is called with `theta = beta`,
+    ///      the result is `Rx(beta+1)`.
+    /// 2. **Qubit Mapping**: Virtual qubits in the sub-circuit definition are mapped to the
+    ///    physical qubits in the parent circuit.
+    ///
+    /// # Returns
+    ///
+    /// A new flattened `Circuit` containing only base instructions (Standard, Unitary, Directives).
     pub fn decompose(&self) -> Self {
         let mut new_circuit = Circuit::from_qubits(self.qubits()).unwrap();
         // Preserve the order of symbols from the original circuit.
@@ -1255,7 +1277,7 @@ impl Circuit {
             // Use a specific internal prefix to avoid collisions during the two-step replacement.
             // This acts as a simultaneous substitution.
             let temp_key = format!("__INTERNAL_SUB_{}", key);
-            param = param.replace(key, &Parameter::from(temp_key.as_str()));
+            param = param.replace(key, &Parameter::try_from(temp_key.as_str()).unwrap());
             temp_map.insert(temp_key, val);
         }
 

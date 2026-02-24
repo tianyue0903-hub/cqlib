@@ -39,8 +39,8 @@ fn test_derivative_constant() {
 
 #[test]
 fn test_derivative_symbol() {
-    let x = Parameter::from("x");
-    let y = Parameter::from("y");
+    let x = Parameter::try_from("x").unwrap();
+    let y = Parameter::try_from("y").unwrap();
 
     // d(x)/dx = 1
     let dx_dx = x.derivative("x");
@@ -53,7 +53,7 @@ fn test_derivative_symbol() {
 
 #[test]
 fn test_derivative_negation() {
-    let x = Parameter::from("x");
+    let x = Parameter::try_from("x").unwrap();
     // d(-x)/dx = -1
     // Workaround: Parameter doesn't implement Neg, so use 0 - x or -1 * x
     let neg_x = Parameter::from(0) - x.clone();
@@ -63,8 +63,8 @@ fn test_derivative_negation() {
 
 #[test]
 fn test_derivative_add_sub() {
-    let x = Parameter::from("x");
-    let y = Parameter::from("y");
+    let x = Parameter::try_from("x").unwrap();
+    let y = Parameter::try_from("y").unwrap();
 
     // d(x + y)/dx = 1 + 0 = 1
     let add = x.clone() + y.clone();
@@ -79,7 +79,7 @@ fn test_derivative_add_sub() {
 
 #[test]
 fn test_derivative_multiplication() {
-    let x = Parameter::from("x");
+    let x = Parameter::try_from("x").unwrap();
 
     // d(3x)/dx = 3
     let mul_const = Parameter::from(3.0) * x.clone();
@@ -96,7 +96,7 @@ fn test_derivative_multiplication() {
 
 #[test]
 fn test_derivative_division() {
-    let x = Parameter::from("x");
+    let x = Parameter::try_from("x").unwrap();
 
     // d(x / 2)/dx = 1/2 = 0.5
     let div_const: Parameter = x.clone() / 2.0;
@@ -111,7 +111,7 @@ fn test_derivative_division() {
 
 #[test]
 fn test_derivative_power_constructed() {
-    let x = Parameter::from("x");
+    let x = Parameter::try_from("x").unwrap();
     let three = Parameter::from(3.0);
 
     // x^3
@@ -133,7 +133,7 @@ fn test_derivative_power_constructed() {
 
 #[test]
 fn test_derivative_trig() {
-    let x = Parameter::from("x");
+    let x = Parameter::try_from("x").unwrap();
 
     // d(sin(x))/dx = cos(x)
     let sin_x = x.sin();
@@ -153,7 +153,7 @@ fn test_derivative_trig() {
 
 #[test]
 fn test_derivative_inverse_trig() {
-    let x = Parameter::from("x");
+    let x = Parameter::try_from("x").unwrap();
 
     // d(asin(x))/dx = 1 / sqrt(1 - x^2)
     let asin_x = x.asin();
@@ -174,7 +174,7 @@ fn test_derivative_inverse_trig() {
 
 #[test]
 fn test_derivative_exp_ln() {
-    let x = Parameter::from("x");
+    let x = Parameter::try_from("x").unwrap();
 
     // d(e^x)/dx = e^x
     let exp_x = x.exp();
@@ -189,7 +189,7 @@ fn test_derivative_exp_ln() {
 
 #[test]
 fn test_derivative_chain_rule() {
-    let x = Parameter::from("x");
+    let x = Parameter::try_from("x").unwrap();
     let two = Parameter::from(2.0);
     // sin(x^2)
     // d(sin(x^2))/dx = cos(x^2) * 2x
@@ -204,7 +204,7 @@ fn test_derivative_chain_rule() {
 
 #[test]
 fn test_derivative_abs_sqrt() {
-    let x = Parameter::from("x");
+    let x = Parameter::try_from("x").unwrap();
 
     // d(|x|)/dx = sign(x)
     let abs_x = x.abs();
@@ -221,7 +221,7 @@ fn test_derivative_abs_sqrt() {
 fn test_derivative_product_rule_complex() {
     // x * sin(x)
     // d/dx = 1*sin(x) + x*cos(x) = sin(x) + x*cos(x)
-    let x = Parameter::from("x");
+    let x = Parameter::try_from("x").unwrap();
     let expr = x.clone() * x.sin();
     let deriv = expr.derivative("x").simplify(None);
 
@@ -233,7 +233,7 @@ fn test_derivative_product_rule_complex() {
 fn test_derivative_quotient_rule_complex() {
     // sin(x) / x
     // d/dx = (cos(x)*x - sin(x)) / x^2
-    let x = Parameter::from("x");
+    let x = Parameter::try_from("x").unwrap();
     let expr = x.sin() / x.clone();
     let deriv = expr.derivative("x").simplify(None);
 
@@ -243,7 +243,7 @@ fn test_derivative_quotient_rule_complex() {
 
 #[test]
 fn test_log_arbitrary_base() {
-    let x = Parameter::from("x");
+    let x = Parameter::try_from("x").unwrap();
     let ten = Parameter::from(10.0);
 
     // log(x, 10)
@@ -258,7 +258,7 @@ fn test_log_arbitrary_base() {
 
 #[test]
 fn test_variable_base_log() {
-    let x = Parameter::from("x");
+    let x = Parameter::try_from("x").unwrap();
 
     // log(x, x)
     let log_x_x = x.log(Some(x.clone()));

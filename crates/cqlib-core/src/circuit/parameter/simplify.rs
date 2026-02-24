@@ -10,6 +10,35 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
+//! Expression simplification engine for symbolic parameters.
+//!
+//! This module provides algebraic and trigonometric simplification rules to optimize
+//! mathematical expression trees. Simplification reduces computational complexity
+//! and produces more readable expressions.
+//!
+//! # Simplification Strategies
+//!
+//! - **Constant Folding**: Evaluates operations on constants (e.g., `2 + 3 → 5`)
+//! - **Identity Elimination**: Removes identity operations (e.g., `x + 0 → x`, `x * 1 → x`)
+//! - **Zero Property**: Applies zero multiplication rules (e.g., `x * 0 → 0`)
+//! - **Term Combination**: Merges like terms (e.g., `2x + 3x → 5x`)
+//! - **Trigonometric Identities**: Simplifies inverse function compositions (e.g., `tan(atan(x)) → x`)
+//!
+//! # Examples
+//!
+//! ```rust
+//! use cqlib_core::circuit::parameter::expr_node::ExprNode;
+//! use std::sync::Arc;
+//!
+//! // Simplify: x + 0 → x
+//! let x = Arc::new(ExprNode::Symbol("x".to_string()));
+//! let zero = Arc::new(ExprNode::Integer(0));
+//! let expr = ExprNode::Add(x.clone(), zero);
+//!
+//! let simplified = expr.simplify(10);
+//! assert_eq!(simplified, ExprNode::Symbol("x".to_string()));
+//! ```
+
 use crate::circuit::parameter::expr_node::ExprNode;
 use std::sync::Arc;
 
@@ -325,7 +354,7 @@ impl ExprNode {
                 ExprNode::ATan(Arc::new(simplified))
             }
 
-            // 其他节点保持不变
+            // Other nodes remain unchanged
             _ => self.clone(),
         }
     }
@@ -468,14 +497,14 @@ impl ExprNode {
         for _ in 0..max_iterations {
             let previous = current.clone();
 
-            // 应用各种简化策略
+            // Apply various simplification strategies
             current = current.simplify_basic();
             current = current.simplify_trig();
 
-            // 再次应用基础简化（清理中间结果）
+            // Apply basic simplification again to clean up intermediate results
             current = current.simplify_basic();
 
-            // 如果不再变化，提前退出
+            // If no changes, exit early
             if current == previous {
                 break;
             }
@@ -499,8 +528,17 @@ impl ExprNode {
 
 /// Attempts to extract a constant numerical value from an expression node.
 ///
-/// Returns `Some(f64)` if the node is a literal constant (Integer, Float, Pi, E).
-/// Returns `None` if the node involves symbols or operations.
+/// This helper function is used during simplification to identify nodes that
+/// can be evaluated to a concrete number, enabling constant folding optimizations.
+///
+/// # Arguments
+///
+/// * `node` - The expression node to examine
+///
+/// # Returns
+///
+/// * `Some(f64)` - If the node is a literal constant (Integer, Float, Pi, E)
+/// * `None` - If the node involves symbols or operations
 fn as_constant(node: &ExprNode) -> Option<f64> {
     match node {
         ExprNode::Integer(i) => Some(*i as f64),

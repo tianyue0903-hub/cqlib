@@ -10,6 +10,13 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
+//! Custom Unitary Gate Definitions
+//!
+//! This module provides [`UnitaryGate`], a type for defining custom quantum gates
+//! via their unitary matrix representation. Unlike [`StandardGate`](crate::circuit::gate::StandardGate),
+//! which represents predefined gates, `UnitaryGate` allows users to specify arbitrary
+//! unitary operations.
+
 use crate::circuit::gate::circuit_gate::FrozenCircuit;
 use ndarray::Array2;
 use num_complex::Complex;
@@ -18,30 +25,82 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use uuid::Uuid;
 
+/// A user-defined unitary quantum gate.
+///
+/// `UnitaryGate` represents a custom quantum gate defined by its unitary matrix
+/// or by an internal circuit representation. Each gate has a unique identifier
+/// for equality comparisons and hashing.
+///
+/// # Examples
+///
+/// ```
+/// use cqlib_core::circuit::gate::UnitaryGate;
+/// use ndarray::array;
+/// use num_complex::Complex;
+///
+/// // Create a custom 1-qubit gate
+/// let mut gate = UnitaryGate::new("MyGate", 1);
+///
+/// // Define the unitary matrix (Pauli-X as example)
+/// let matrix = array![
+///     [Complex::new(0.0, 0.0), Complex::new(1.0, 0.0)],
+///     [Complex::new(1.0, 0.0), Complex::new(0.0, 0.0)],
+/// ];
+///
+/// // Attach the matrix
+/// let gate = gate.with_matrix(matrix).unwrap();
+///
+/// assert_eq!(gate.label(), "MyGate");
+/// assert_eq!(gate.num_qubits(), 1);
+/// ```
 #[derive(Debug, Clone)]
 pub struct UnitaryGate
 where
     Self: Send + Sync,
 {
     /// Unique identifier for this gate definition.
+    ///
+    /// Used for equality comparisons and hashing. Each `UnitaryGate::new`
+    /// call generates a fresh UUID.
     id: Uuid,
     /// A human-readable label for the gate (e.g., "QFT", "Oracle").
     label: Arc<String>,
-    /// The matrix representation of the gate. wrapped in `Arc` for cheap cloning.
-    /// Can be `None` if the gate is purely symbolic.
+    /// The matrix representation of the gate, wrapped in `Arc` for cheap cloning.
+    ///
+    /// Can be `None` if the gate is purely symbolic (defined by circuit only).
     matrix: Option<Arc<Array2<Complex<f64>>>>,
     /// The number of qubits this gate acts on.
     num_qubits: u16,
+    /// Optional internal circuit representation.
     circuit: Option<Arc<FrozenCircuit>>,
 }
 
 impl UnitaryGate {
     /// Creates a new unitary gate definition without a matrix.
     ///
+    /// The gate is assigned a unique ID and can later be configured with
+    /// a matrix using [`with_matrix`](Self::with_matrix) or with a circuit
+    /// using [`with_circuit`](Self::with_circuit).
+    ///
     /// # Arguments
     ///
-    /// * `label` - A name for the gate.
+    /// * `label` - A descriptive name for the gate.
     /// * `num_qubits` - The number of qubits the gate operates on.
+    ///
+    /// # Returns
+    ///
+    /// A new `UnitaryGate` with no matrix attached.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use cqlib_core::circuit::gate::UnitaryGate;
+    ///
+    /// let gate = UnitaryGate::new("QFT_3", 3);
+    /// assert_eq!(gate.label(), "QFT_3");
+    /// assert_eq!(gate.num_qubits(), 3);
+    /// assert!(gate.matrix().is_none());
+    /// ```
     pub fn new(label: &str, num_qubits: u16) -> Self {
         Self {
             id: Uuid::new_v4(),
@@ -53,26 +112,65 @@ impl UnitaryGate {
     }
 
     /// Returns the label of the gate.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use cqlib_core::circuit::gate::UnitaryGate;
+    ///
+    /// let gate = UnitaryGate::new("Oracle", 2);
+    /// assert_eq!(gate.label(), "Oracle");
+    /// ```
     pub fn label(&self) -> &str {
         &self.label
     }
 
-    /// Returns the number of qubits.
+    /// Returns the number of qubits this gate acts on.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use cqlib_core::circuit::gate::UnitaryGate;
+    ///
+    /// let gate = UnitaryGate::new("TwoQubitGate", 2);
+    /// assert_eq!(gate.num_qubits(), 2);
+    /// ```
     pub fn num_qubits(&self) -> u16 {
         self.num_qubits
     }
 
     /// Returns the matrix representation if available.
+    ///
+    /// # Returns
+    ///
+    /// - `Some(&Array2)`: The unitary matrix if it has been attached.
+    /// - `None`: If no matrix was provided.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use cqlib_core::circuit::gate::UnitaryGate;
+    ///
+    /// let gate = UnitaryGate::new("SymbolicGate", 1);
+    /// assert!(gate.matrix().is_none());
+    /// ```
     pub fn matrix(&self) -> Option<&Array2<Complex<f64>>> {
         self.matrix.as_deref()
     }
 
-    /// Returns the matrix representation if available.
+    /// Returns the internal circuit representation if available.
+    ///
+    /// Some unitary gates are defined by their circuit decomposition
+    /// rather than an explicit matrix.
     pub fn circuit(&self) -> &Option<Arc<FrozenCircuit>> {
         &self.circuit
     }
 
     /// Attaches a matrix to the unitary definition.
+    ///
+    /// Consumes the gate and returns a new one with the matrix attached.
+    /// The matrix dimensions must match the expected size for the gate's
+    /// qubit count: $2^n \times 2^n$ where $n$ is `num_qubits`.
     ///
     /// # Arguments
     ///
@@ -80,8 +178,28 @@ impl UnitaryGate {
     ///
     /// # Returns
     ///
-    /// Returns `Ok(Self)` if the matrix dimensions match `num_qubits`.
-    /// Returns `Err(String)` if the dimensions are incorrect.
+    /// - `Ok(Self)`: The gate with matrix attached.
+    /// - `Err(String)`: Error message if dimensions are incorrect.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use cqlib_core::circuit::gate::UnitaryGate;
+    /// use ndarray::array;
+    /// use num_complex::Complex;
+    ///
+    /// let gate = UnitaryGate::new("Hadamard", 1);
+    ///
+    /// // Correct 2x2 matrix for 1 qubit
+    /// let h = Complex::new(1.0 / f64::sqrt(2.0), 0.0);
+    /// let matrix = array![
+    ///     [h, h],
+    ///     [h, -h],
+    /// ];
+    ///
+    /// let gate = gate.with_matrix(matrix).unwrap();
+    /// assert!(gate.matrix().is_some());
+    /// ```
     pub fn with_matrix(mut self, mat: Array2<Complex<f64>>) -> Result<Self, String> {
         let expected_dim = 1 << self.num_qubits;
         if mat.shape() != [expected_dim, expected_dim] {
@@ -98,6 +216,14 @@ impl UnitaryGate {
         Ok(self)
     }
 
+    /// Attaches a circuit representation to the unitary definition.
+    ///
+    /// This allows the gate to be defined by its circuit decomposition,
+    /// which is useful for inverse operations and optimization.
+    ///
+    /// # Arguments
+    ///
+    /// * `circuit` - The frozen circuit representing this gate.
     pub fn with_circuit(mut self, circuit: Arc<FrozenCircuit>) -> Self {
         self.circuit = Some(circuit);
         self
@@ -105,7 +231,12 @@ impl UnitaryGate {
 }
 
 impl Eq for UnitaryGate {}
+
 impl PartialEq for UnitaryGate {
+    /// Equality is based solely on the unique ID.
+    ///
+    /// Two `UnitaryGate` instances are considered equal only if they
+    /// were created by the same constructor call (share the same UUID).
     fn eq(&self, other: &Self) -> bool {
         self.id == other.id
     }

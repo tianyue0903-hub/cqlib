@@ -17,7 +17,7 @@ use std::f64::consts::{E, PI};
 #[test]
 fn test_parameter_construction() {
     // From string
-    let p1 = Parameter::from("theta");
+    let p1 = Parameter::try_from("theta").unwrap();
     assert_eq!(p1.to_string(), "theta");
 
     // From f64
@@ -50,8 +50,8 @@ fn test_parameter_constants() {
 
 #[test]
 fn test_parameter_arithmetic_ops() {
-    let theta = Parameter::from("theta");
-    let phi = Parameter::from("phi");
+    let theta = Parameter::try_from("theta").unwrap();
+    let phi = Parameter::try_from("phi").unwrap();
     let val = Parameter::from(2.0);
 
     // Add
@@ -77,7 +77,7 @@ fn test_parameter_arithmetic_ops() {
 
 #[test]
 fn test_parameter_arithmetic_primitive_ops() {
-    let theta = Parameter::from("theta");
+    let theta = Parameter::try_from("theta").unwrap();
 
     // Parameter + f64
     let res: Parameter = theta.clone() + 1.5;
@@ -110,8 +110,8 @@ fn test_parameter_arithmetic_primitive_ops() {
 
 #[test]
 fn test_parameter_reference_ops() {
-    let p1 = Parameter::from("p1");
-    let p2 = Parameter::from("p2");
+    let p1 = Parameter::try_from("p1").unwrap();
+    let p2 = Parameter::try_from("p2").unwrap();
 
     // &Parameter + &Parameter
     let res = &p1 + &p2;
@@ -128,7 +128,7 @@ fn test_parameter_reference_ops() {
 
 #[test]
 fn test_parameter_functions() {
-    let x = Parameter::from("x");
+    let x = Parameter::try_from("x").unwrap();
 
     assert_eq!(x.sin().to_string(), "sin(x)");
     assert_eq!(x.cos().to_string(), "cos(x)");
@@ -141,7 +141,7 @@ fn test_parameter_functions() {
     assert_eq!(x.abs().to_string(), "abs(x)");
     assert_eq!(x.sqrt().to_string(), "sqrt(x)");
 
-    let y = Parameter::from("y");
+    let y = Parameter::try_from("y").unwrap();
     assert_eq!(x.pow(&y).to_string(), "x^y");
 
     // Log with base
@@ -153,7 +153,7 @@ fn test_parameter_functions() {
 
 #[test]
 fn test_parameter_evaluation() {
-    let x = Parameter::from("x");
+    let x = Parameter::try_from("x").unwrap();
     let expr: Parameter = x.clone() * 2.0 + 1.0; // x * 2 + 1
 
     let mut bindings = HashMap::new();
@@ -170,9 +170,9 @@ fn test_parameter_evaluation() {
 
 #[test]
 fn test_parameter_get_symbols() {
-    let x = Parameter::from("x");
-    let y = Parameter::from("y");
-    let z = Parameter::from("z");
+    let x = Parameter::try_from("x").unwrap();
+    let y = Parameter::try_from("y").unwrap();
+    let z = Parameter::try_from("z").unwrap();
 
     let expr = (x + y) * z;
     let symbols = expr.get_symbols();
@@ -187,7 +187,7 @@ fn test_parameter_get_symbols() {
 
 #[test]
 fn test_parameter_simplify() {
-    let x = Parameter::from("x");
+    let x = Parameter::try_from("x").unwrap();
 
     // 0 + x -> x
     let expr = Parameter::from(0) + x.clone();
@@ -202,7 +202,7 @@ fn test_parameter_simplify() {
 
 #[test]
 fn test_parameter_derivative() {
-    let x = Parameter::from("x");
+    let x = Parameter::try_from("x").unwrap();
     // d(x^2)/dx = 2*x
     let expr = x.pow(&Parameter::from(2.0));
     let deriv = expr.derivative("x").simplify(None);
@@ -217,8 +217,8 @@ fn test_parameter_derivative() {
 
 #[test]
 fn test_parameter_replace() {
-    let mut p = Parameter::from("x") + Parameter::from("y");
-    let z = Parameter::from("z");
+    let mut p = Parameter::try_from("x").unwrap() + Parameter::try_from("y").unwrap();
+    let z = Parameter::try_from("z").unwrap();
 
     let new_p = p.replace("x", &z);
     assert_eq!(new_p.to_string(), "z + y");
@@ -226,9 +226,9 @@ fn test_parameter_replace() {
 
 #[test]
 fn test_parameter_equality() {
-    let p1: Parameter = Parameter::from("x") + 1.0;
-    let p2: Parameter = Parameter::from("x") + 1.0;
-    let p3: Parameter = Parameter::from("x") + 2.0;
+    let p1: Parameter = Parameter::try_from("x").unwrap() + 1.0;
+    let p2: Parameter = Parameter::try_from("x").unwrap() + 1.0;
+    let p3: Parameter = Parameter::try_from("x").unwrap() + 2.0;
 
     assert_eq!(p1, p2);
     assert_ne!(p1, p3);

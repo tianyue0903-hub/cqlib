@@ -135,8 +135,33 @@ pub enum StandardGate {
     FSIM,
 }
 
-// (num_controls, num_targets, num_params)
-// NOTE: The order MUST strictly match the StandardGate definition order.
+/// Gate metadata lookup table.
+///
+/// Maps each [`StandardGate`] variant to its properties:
+/// `(num_controls, num_targets, num_params)`
+///
+/// # Ordering Constraint
+///
+/// The table index must exactly match the `StandardGate` discriminant values.
+/// Do not reorder entries without updating the enum definition.
+///
+/// # Examples
+///
+/// ```
+/// use cqlib_core::circuit::gate::StandardGate;
+///
+/// // H gate: 0 controls, 1 target, 0 params
+/// assert_eq!(StandardGate::H.num_ctrl_qubits(), 0);
+/// assert_eq!(StandardGate::H.num_qubits(), 1);
+/// assert_eq!(StandardGate::H.num_params(), 0);
+///
+/// // CX gate: 1 control, 1 target, 0 params
+/// assert_eq!(StandardGate::CX.num_ctrl_qubits(), 1);
+/// assert_eq!(StandardGate::CX.num_qubits(), 2);
+///
+/// // U gate: 0 controls, 1 target, 3 params
+/// assert_eq!(StandardGate::U.num_params(), 3);
+/// ```
 const GATE_INFO_TABLE: [(u8, u8, u8); 36] = [
     (0, 1, 0), // I
     (0, 1, 0), // H

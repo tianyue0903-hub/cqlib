@@ -49,7 +49,7 @@ pub enum Instruction {
     /// A non-unitary operation, such as `Measure`, `Barrier`, or `Reset`.
     Directive(Directive),
 
-    // QCIS 中的I门，这里使用 Delay 表示，单位是 0.5ns
+    /// I gate in QCIS, represented here as Delay, unit is 0.5ns
     Delay,
 }
 

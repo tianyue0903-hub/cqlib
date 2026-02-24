@@ -379,3 +379,40 @@ fn test_complex_precedence() {
     let p = parse_parameter("(1+2)*3").unwrap();
     assert!((p.evaluate(&None).unwrap() - 9.0).abs() < 1e-10);
 }
+
+#[test]
+fn test_try_from_parameter() {
+    use crate::circuit::parameter::impls::Parameter;
+
+    // Valid expressions should work
+    let p1 = Parameter::try_from("theta");
+    assert!(p1.is_ok());
+    assert_eq!(p1.unwrap().to_string(), "theta");
+
+    let p2 = Parameter::try_from("pi/2 + 1");
+    assert!(p2.is_ok());
+
+    let p3 = Parameter::try_from("sin(x)");
+    assert!(p3.is_ok());
+
+    // Invalid expressions should return Err
+    let err1 = Parameter::try_from("");
+    assert!(err1.is_err());
+
+    let err2 = Parameter::try_from("1&2");
+    assert!(err2.is_err());
+
+    let err3 = Parameter::try_from("(1+2");
+    assert!(err3.is_err());
+
+    let err4 = Parameter::try_from("foo(1)");
+    assert!(err4.is_err());
+
+    // String version
+    let p5 = Parameter::try_from("lambda".to_string());
+    assert!(p5.is_ok());
+    assert_eq!(p5.unwrap().to_string(), "lambda");
+
+    let err5 = Parameter::try_from("invalid@expr".to_string());
+    assert!(err5.is_err());
+}

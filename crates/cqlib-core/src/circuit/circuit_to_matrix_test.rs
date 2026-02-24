@@ -387,8 +387,8 @@ fn test_mcgate_three_control_x() {
     let matrix = circuit_to_matrix(&circuit, None).unwrap();
     assert_is_unitary(&matrix, 1e-10);
 
-    // 小端序 (q3 q2 q1 q0):
-    // 当 q0=1, q1=1, q2=1 时触发。
+    // Little-endian (q3 q2 q1 q0):
+    // Triggered when q0=1, q1=1, q2=1.
     // |0111> (index 7) <-> |1111> (index 15)
     let mut expected = eye(16);
     expected[[7, 7]] = c(0.0, 0.0);
@@ -409,14 +409,14 @@ fn test_mcgate_control_higher_than_target() {
     let matrix = circuit_to_matrix(&circuit, None).unwrap();
     assert_is_unitary(&matrix, 1e-10);
 
-    // 小端序 (q2 q1 q0):
+    // Little-endian (q2 q1 q0):
     // |101> (index 5) -> q2=1, q1=0, q0=1
-    // 控制位 q2=1, 目标位 q0 翻转: 1 -> 0
-    // 结果 |100> (index 4)
+    // Control bit q2=1, Target bit q0 flips: 1 -> 0
+    // Result |100> (index 4)
     assert!((matrix[[4, 5]] - c(1.0, 0.0)).norm() < 1e-10);
 
-    // 当控制位 q2=0 时，状态不变
-    // |001> (index 1) -> q2=0, q1=0, q0=1. 保持 |001> (index 1)
+    // When control bit q2=0, state remains unchanged
+    // |001> (index 1) -> q2=0, q1=0, q0=1. Remains |001> (index 1)
     assert!((matrix[[1, 1]] - c(1.0, 0.0)).norm() < 1e-10);
 }
 

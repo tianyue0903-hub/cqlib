@@ -1,14 +1,31 @@
 // This code is part of Cqlib.
-
+//
 // (C) Copyright China Telecom Quantum Group 2026
-
+//
 // This code is licensed under the Apache License, Version 2.0. You may
 // obtain a copy of this license in the LICENSE.txt file in the root directory
 // of this source tree or at http://www.apache.org/licenses/LICENSE-2.0.
-
+//
 // Any modifications or derivative works of this code must retain this
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
+
+//! # Circuit to Matrix Conversion
+//!
+//! This module provides functionality to simulate a quantum circuit and compute its final unitary matrix representation.
+//!
+//! ## Core Logic
+//!
+//! The simulation assumes a state vector simulation model where the full unitary matrix $U$ of the circuit is computed
+//! by sequentially applying gate matrices to an initial Identity matrix.
+//!
+//! $$ U = U_n \cdot U_{n-1} \cdots U_1 \cdot I $$
+//!
+//! ## Memory Layout & Convention
+//!
+//! - **State Vector Ordering**: Little-Endian (similar to Qiskit). Qubit 0 corresponds to the Least Significant Bit (LSB).
+//!   State $|q_{n-1} \dots q_1 q_0\rangle$.
+//! - **Parallelization**: Large matrix multiplications (large state spaces) are automatically parallelized using `rayon`.
 
 use crate::circuit::Circuit;
 use crate::circuit::error::CompileError;
@@ -25,6 +42,42 @@ use std::marker::PhantomData;
 // For small circuits (e.g. 4 qubits), we want purely sequential.
 const PARALLEL_THRESHOLD_OPS: usize = 10000;
 
+/// Computes the unitary matrix representation of a quantum circuit.
+///
+/// This function simulates the circuit by applying each gate's unitary matrix to the full system state.
+/// The result is a $2^N \times 2^N$ matrix, where $N$ is the number of qubits.
+///
+/// # Arguments
+///
+/// * `circuit` - The quantum circuit to simulate.
+/// * `qubits_order` - Optional custom ordering of qubits for the output matrix.
+///   If `None`, defaults to sorting qubit indices ascendingly (Little-Endian: q0=LSB).
+///
+/// # Returns
+///
+/// * `Ok(Array2<Complex64>)` - The resulting unitary matrix.
+/// * `Err(CompileError)` - If the circuit contains unresolved symbolic parameters or non-unitary operations (not yet fully enforced).
+///
+/// # Panics
+///
+/// Panics if:
+/// - `qubits_order` contains duplicates or does not match the circuit's qubits.
+/// - The circuit contains symbolic parameters (currently unsupported).
+///
+/// # Example
+///
+/// ```rust
+/// use cqlib_core::circuit::circuit_impl::Circuit;
+/// use cqlib_core::circuit::Qubit;
+/// use cqlib_core::circuit::circuit_to_matrix;
+///
+/// let mut circuit = Circuit::new(2);
+/// circuit.h(Qubit::new(0));
+/// circuit.cx(Qubit::new(0), Qubit::new(1));
+///
+/// let matrix = circuit_to_matrix(&circuit, None).unwrap();
+/// // matrix is now the 4x4 unitary of the Bell state preparation.
+/// ```
 pub fn circuit_to_matrix(
     circuit: &Circuit,
     qubits_order: Option<&Vec<usize>>,

@@ -362,3 +362,74 @@ fn test_dumps() {
     // let qasm = dumps(&c);
     // println!("{:?}", qasm);
 }
+
+#[test]
+fn test_parameter_count_mismatch() {
+    // Test U2 gate with only 1 parameter (should fail, needs 2)
+    let qasm_u2_wrong = r#"
+        OPENQASM 2.0;
+        qreg q[1];
+        u2(0.5) q[0];
+    "#;
+
+    let result = loads(qasm_u2_wrong);
+    assert!(result.is_err());
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("Mismatched parameter count"),
+        "Expected parameter count error, got: {}",
+        err
+    );
+
+    // Test U3 gate with only 2 parameters (should fail, needs 3)
+    let qasm_u3_wrong = r#"
+        OPENQASM 2.0;
+        qreg q[1];
+        u3(0.5, 0.3) q[0];
+    "#;
+
+    let result = loads(qasm_u3_wrong);
+    assert!(result.is_err());
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("Mismatched parameter count"),
+        "Expected parameter count error, got: {}",
+        err
+    );
+
+    // Test RX gate with no parameters (should fail, needs 1)
+    let qasm_rx_wrong = r#"
+        OPENQASM 2.0;
+        qreg q[1];
+        rx q[0];
+    "#;
+
+    let result = loads(qasm_rx_wrong);
+    assert!(result.is_err());
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("Mismatched parameter count"),
+        "Expected parameter count error, got: {}",
+        err
+    );
+
+    // Test U2 gate with correct 2 parameters (should succeed)
+    let qasm_u2_correct = r#"
+        OPENQASM 2.0;
+        qreg q[1];
+        u2(0.5, 0.3) q[0];
+    "#;
+
+    let result = loads(qasm_u2_correct);
+    assert!(result.is_ok(), "U2 with 2 params should succeed");
+
+    // Test U3 gate with correct 3 parameters (should succeed)
+    let qasm_u3_correct = r#"
+        OPENQASM 2.0;
+        qreg q[1];
+        u3(0.5, 0.3, 0.2) q[0];
+    "#;
+
+    let result = loads(qasm_u3_correct);
+    assert!(result.is_ok(), "U3 with 3 params should succeed");
+}

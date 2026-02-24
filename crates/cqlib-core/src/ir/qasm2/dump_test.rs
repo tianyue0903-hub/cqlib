@@ -66,7 +66,7 @@ fn test_dump_parametric_gates() {
     // Fixed parameter
     circuit.rx(q0, 1.57).unwrap(); // ~pi/2
     // Symbolic parameter
-    let theta = Parameter::from("theta");
+    let theta = Parameter::try_from("theta").unwrap();
     circuit.ry(q0, theta.clone()).unwrap();
     // Expression
     let phi = theta + 0.5;
@@ -135,7 +135,7 @@ fn test_dump_parameterized_custom_gate() {
     // Sub-circuit with parameter
     let mut sub_circ = Circuit::new(1);
     let sq0 = Qubit::new(0);
-    let lambda = Parameter::from("lambda");
+    let lambda = Parameter::try_from("lambda").unwrap();
     sub_circ.rx(sq0, lambda).unwrap();
 
     let gate = sub_circ.to_gate("my_rot").unwrap();
@@ -149,7 +149,7 @@ fn test_dump_parameterized_custom_gate() {
         .unwrap();
 
     // Use with symbolic value
-    let gamma = Parameter::from("gamma");
+    let gamma = Parameter::try_from("gamma").unwrap();
     main_circ
         .append(gate, vec![q0], vec![gamma.into()], None)
         .unwrap();
@@ -220,13 +220,13 @@ fn test_gate_collision_behavior() {
 fn test_dump_nested_custom_gates() {
     // 1. Define Leaf Gate: rz(p) q
     let mut leaf = Circuit::new(1);
-    let p = Parameter::from("p");
+    let p = Parameter::try_from("p").unwrap();
     leaf.rz(Qubit::new(0), p).unwrap();
     let gate_leaf = leaf.to_gate("gate_leaf").unwrap();
 
     // 2. Define Middle Gate: calls gate_leaf(m * 2.0)
     let mut mid = Circuit::new(1);
-    let m = Parameter::from("m");
+    let m = Parameter::try_from("m").unwrap();
     let param_expr: Parameter = m.clone() * 2.0;
     mid.append(
         gate_leaf,
@@ -239,7 +239,7 @@ fn test_dump_nested_custom_gates() {
 
     // 3. Main Circuit: calls gate_mid(theta)
     let mut main = Circuit::new(1);
-    let theta = Parameter::from("theta");
+    let theta = Parameter::try_from("theta").unwrap();
     main.append(gate_mid, vec![Qubit::new(0)], vec![theta.into()], None)
         .unwrap();
 
@@ -392,7 +392,7 @@ fn test_dump_extended_gates() {
     assert_qasm_contains(
         &qasm,
         &[
-            "gate crx(theta) a,b { rx(theta/2) b; cx a,b; rx(-theta/2) b; cx a,b; }",
+            "gate crx(theta) a,b { h b;rz(theta/2) b; cx a,b; rz(-theta/2) b; cx a,b; h b;}",
             "gate cry(theta) a,b { ry(theta/2) b; cx a,b; ry(-theta/2) b; cx a,b; }",
             "gate rzz(theta) a,b { cx a,b; rz(theta) b; cx a,b; }",
             "gate rxx(theta) a,b { h a; h b; cx a,b; rz(theta) b; cx a,b; h a; h b; }",

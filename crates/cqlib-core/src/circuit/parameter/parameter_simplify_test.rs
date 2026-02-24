@@ -29,7 +29,7 @@ fn test_add_num() {
 
 #[test]
 fn test_add_zero() {
-    let x = Parameter::from("x");
+    let x = Parameter::try_from("x").unwrap();
     let z = Parameter::from(0_f64);
 
     // x + 0 = x
@@ -56,7 +56,7 @@ fn test_add_zero() {
 
 #[test]
 fn test_add_self() {
-    let x = Parameter::from("x");
+    let x = Parameter::try_from("x").unwrap();
 
     // x + x = 2x
     let s = x.clone() + x.clone();
@@ -116,7 +116,7 @@ fn test_add_self() {
 
 #[test]
 fn test_sub_zero() {
-    let x = Parameter::from("x");
+    let x = Parameter::try_from("x").unwrap();
     let z = Parameter::from(0_f64);
 
     // x - 0
@@ -138,7 +138,7 @@ fn test_sub_zero() {
 
 #[test]
 fn test_sub_num() {
-    let x = Parameter::from("x");
+    let x = Parameter::try_from("x").unwrap();
 
     // x - 2x = -1x
     let s = x.clone() - x.clone() * 2_i64;
@@ -204,7 +204,7 @@ fn test_tan() {
     let exp = s.simplify(None);
     assert!(exp.evaluate(&None).unwrap().abs() < f64::EPSILON);
 
-    let x = Parameter::from("x");
+    let x = Parameter::try_from("x").unwrap();
     let s = x.tan().atan();
     assert_eq!(s.to_string(), "atan(tan(x))");
     let exp = s.simplify(None);

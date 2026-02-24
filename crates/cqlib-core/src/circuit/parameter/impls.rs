@@ -20,7 +20,7 @@
 //! ## Core Architecture
 //!
 //! The central type is [`Parameter`]. It acts as a thread-safe wrapper around an Abstract Syntax Tree (AST)
-//! represented by [`ExprNode`](super::expr_node::ExprNode). This design allows for:
+//! represented by [`ExprNode`](crate::circuit::parameter::expr_node::ExprNode). This design allows for:
 //!
 //! - **Lazy Evaluation**: Expressions are built symbolically and evaluated only when variable bindings are provided.
 //! - **Automatic Differentiation**: Compute gradients symbolically using `.derivative()`, essential for gradient-descent optimization.
@@ -39,8 +39,8 @@
 //! use std::collections::HashMap;
 //!
 //! // 1. Define symbols
-//! let theta = Parameter::from("theta");
-//! let phi = Parameter::from("phi");
+//! let theta = Parameter::try_from("theta").unwrap();
+//! let phi = Parameter::try_from("phi").unwrap();
 //!
 //! // 2. Construct an expression: sin(theta) + 2 * phi
 //! let expr = theta.sin() + Parameter::from(2.0) * phi.clone();
@@ -89,8 +89,8 @@ use std::sync::{Arc, RwLock};
 /// ```rust
 /// use cqlib_core::circuit::parameter::impls::Parameter;
 ///
-/// let theta = Parameter::from("theta");
-/// let phi = Parameter::from("phi");
+/// let theta = Parameter::try_from("theta").unwrap();
+/// let phi = Parameter::try_from("phi").unwrap();
 ///
 /// // Create a new expression: θ + 2 * φ
 /// let expr = theta + 2.0 * phi;
@@ -146,17 +146,14 @@ impl From<ExprNode> for Parameter {
     }
 }
 
-impl From<String> for Parameter {
-    /// Parse a mathematical expression string into a [`Parameter`].
+impl TryFrom<String> for Parameter {
+    type Error = crate::circuit::parameter::parse::ParseError;
+
+    /// Parse a mathematical expression string into a [`Parameter`], returning an error if parsing fails.
     ///
     /// # Arguments
     ///
     /// * `expr` - The expression string to parse
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(Parameter)` - The parsed parameter
-    /// * `Err(ParseError)` - If the expression is invalid
     ///
     /// # Supported Syntax
     ///
@@ -171,36 +168,42 @@ impl From<String> for Parameter {
     /// use cqlib_core::circuit::parameter::impls::Parameter;
     ///
     /// // Simple number
-    /// let p = Parameter::parse("1.0").unwrap();
+    /// let p = Parameter::try_from("1.0".to_string()).unwrap();
+    /// assert_eq!(p, Parameter::from(1.0));
     ///
     /// // Expression with pi
-    /// let p = Parameter::parse("pi/2").unwrap();
+    /// let p = Parameter::try_from("pi/2".to_string()).unwrap();
     ///
     /// // Complex expression: pi/2+1
-    /// let p = Parameter::parse("pi/2+1").unwrap();
+    /// let p = Parameter::try_from("pi/2+1".to_string()).unwrap();
     ///
     /// // Using variables
-    /// let p = Parameter::parse("theta + pi/2").unwrap();
+    /// let p = Parameter::try_from("theta + pi/2".to_string()).unwrap();
+    ///
+    /// // Invalid expression returns an error
+    /// assert!(Parameter::try_from("invalid&expr".to_string()).is_err());
     /// ```
-    fn from(val: String) -> Self {
-        parse_parameter(val.as_str()).expect("invalid parameter")
+    fn try_from(val: String) -> Result<Self, Self::Error> {
+        parse_parameter(val.as_str())
     }
 }
 
-impl From<&str> for Parameter {
-    /// Creates a symbolic parameter from a string slice.
-    fn from(val: &str) -> Self {
-        Parameter::new(ExprNode::Symbol(val.to_string()))
+impl TryFrom<&str> for Parameter {
+    type Error = crate::circuit::parameter::parse::ParseError;
+
+    /// Creates a symbolic parameter from a string slice, returning an error if parsing fails.
+    fn try_from(val: &str) -> Result<Self, Self::Error> {
+        parse_parameter(val)
     }
 }
 
 macro_rules! impl_numeric_from {
-    // 匹配模式：源类型 => Enum变体(强转的目标类型)
+    // Matches pattern: Source Type => Enum Variant(Target Type for casting)
     ($($src_type:ty => $variant:ident($target_type:ty)),* $(,)?) => {
         $(
             impl From<$src_type> for Parameter {
                 fn from(val: $src_type) -> Self {
-                    // val as $target_type 处理了类型转换 (如 u32 -> i64, u64 -> f64)
+                    // val as $target_type handles type conversion (e.g., u32 -> i64, u64 -> f64)
                     Parameter::new(ExprNode::$variant(val as $target_type))
                 }
             }
@@ -285,7 +288,7 @@ impl Parameter {
     /// use std::sync::Arc;
     /// use cqlib_core::circuit::parameter::impls::Parameter;
     ///
-    /// let x = Parameter::from("x");
+    /// let x = Parameter::try_from("x").unwrap();
     ///
     /// // Example 1: Basic algebraic simplification
     /// let expr1 = x.clone() + Parameter::from(0); // x + 0
@@ -301,7 +304,7 @@ impl Parameter {
     /// assert_eq!(simplified2, expected2);
     ///
     /// // Example 3: Trigonometric identity (e.g., tan(arctan(y)))
-    /// let y = Parameter::from("y");
+    /// let y = Parameter::try_from("y").unwrap();
     /// let expr3 = y.atan().tan(); // tan(arctan(y))
     /// let simplified3 = expr3.simplify(None);
     /// assert_eq!(simplified3, y);
@@ -312,7 +315,7 @@ impl Parameter {
         Self::new(self.node.simplify(max_iterations))
     }
 
-    ///  Calculate the derivative of the expression with respect to the specified variable (symbolic differentiation)
+    /// Calculates the symbolic derivative of the expression with respect to the specified variable.
     ///
     /// # Arguments
     /// * `var` - Which variable to differentiate with respect to
@@ -456,6 +459,37 @@ impl Parameter {
         Self::new(ExprNode::Pow(self.node.clone(), val.node.clone()))
     }
 
+    /// Replaces all occurrences of a symbol with another parameter expression.
+    ///
+    /// This method performs symbolic substitution, replacing every instance of the
+    /// specified symbol with the given parameter's expression tree.
+    ///
+    /// # Arguments
+    ///
+    /// * `symbol` - The name of the symbol to replace
+    /// * `param` - The parameter expression to substitute
+    ///
+    /// # Returns
+    ///
+    /// A new `Parameter` with the substitution applied. The original parameter is unchanged.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use cqlib_core::circuit::parameter::impls::Parameter;
+    ///
+    /// // Create expression: x + 2
+    /// let x = Parameter::symbol("x");
+    /// let mut expr = x.clone() + Parameter::from(2.0);
+    ///
+    /// // Replace x with y * 3
+    /// let y = Parameter::symbol("y");
+    /// let replacement = y * Parameter::from(3.0);
+    /// let new_expr = expr.replace("x", &replacement);
+    ///
+    /// // Result: (y * 3) + 2
+    /// assert_eq!(new_expr.to_string(), "y * 3 + 2");
+    /// ```
     pub fn replace(&mut self, symbol: &str, param: &Parameter) -> Self {
         Self {
             node: Arc::new(self.node.replace(symbol, &param.node)),
@@ -473,7 +507,9 @@ trait IntoArcExprNode {
     fn into_arc_expr(self) -> Arc<ExprNode>;
 }
 
-// 定义宏
+/// Macro to implement `IntoArcExprNode` for numeric types.
+///
+/// Maps source types to the appropriate `ExprNode` variant with proper casting.
 macro_rules! impl_into_arc_expr {
     // Matches a comma-separated list of type mappings.
     // Pattern: `SourceType => VariantName(CastTargetType)`
@@ -580,7 +616,7 @@ impl_ops_for_type!(u32);
 macro_rules! impl_binary_op_ref {
     ($($trait:ident, $method:ident, $variant:ident),* $(,)?) => {
         $(
-            // 1. Parameter + Parameter (消耗所有权)
+            // 1. Parameter + Parameter (consumes ownership)
             impl $trait<Parameter> for Parameter {
                 type Output = Parameter;
                 fn $method(self, rhs: Parameter) -> Self::Output {
@@ -588,7 +624,7 @@ macro_rules! impl_binary_op_ref {
                 }
             }
 
-            // 2. &Parameter + &Parameter (不消耗所有权，最常用)
+            // 2. &Parameter + &Parameter (does not consume ownership, most commonly used)
             impl<'a, 'b> $trait<&'b Parameter> for &'a Parameter {
                 type Output = Parameter;
                 fn $method(self, rhs: &'b Parameter) -> Self::Output {
