@@ -180,9 +180,17 @@ fn test_roundtrip_load_dump() {
     let circuit = loads(original_qcis).unwrap();
     let dumped_qcis = dumps(&circuit).unwrap();
 
+    // Verify the dumped QCIS content
+    let expected = "RX Q0 1\nRY Q1 pi/2\nCZ Q0 Q1\nM Q0\nM Q1\n";
+    assert_eq!(dumped_qcis, expected);
+
     // Load the dumped QCIS and verify it works
     let circuit2 = loads(&dumped_qcis).unwrap();
     assert_eq!(circuit2.num_qubits(), 2);
+
+    // Verify the reloaded circuit has the same operations
+    let dumped_again = dumps(&circuit2).unwrap();
+    assert_eq!(dumped_again, expected);
 }
 
 #[test]

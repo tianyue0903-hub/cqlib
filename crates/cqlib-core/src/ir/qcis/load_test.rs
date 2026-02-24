@@ -1,4 +1,5 @@
 use super::*;
+use crate::ir::qcis_dumps;
 use std::f64::consts::PI;
 
 #[test]
@@ -79,6 +80,10 @@ fn test_loads_qcis() {
 
     let circuit = loads(qcis).unwrap();
     assert_eq!(circuit.num_qubits(), 4);
+    assert_eq!(
+        "RX Q0 1\nRY Q1 pi/2\nRZ Q2 1.2853981634\nRXY Q3 pi/2 3.14\nX Q0\nCZ Q0 Q1\n",
+        qcis_dumps(&circuit).unwrap()
+    );
 }
 
 #[test]
@@ -93,9 +98,11 @@ fn test_loads_with_comments() {
 
     let circuit = loads(qcis).unwrap();
     assert_eq!(circuit.num_qubits(), 2);
+    assert_eq!(
+        "RX Q0 1\nRY Q1 pi/2\nM Q0\nM Q1\n",
+        qcis_dumps(&circuit).unwrap()
+    );
 }
-
-// ===== New tests for error handling =====
 
 #[test]
 fn test_invalid_qubit_format() {
@@ -200,6 +207,7 @@ fn test_barrier_single_qubit() {
     let qcis = "B Q0";
     let circuit = loads(qcis).unwrap();
     assert_eq!(circuit.num_qubits(), 1);
+    assert_eq!("B Q0\n", qcis_dumps(&circuit).unwrap());
 }
 
 #[test]
@@ -207,6 +215,7 @@ fn test_barrier_multiple_qubits() {
     let qcis = "B Q0 Q1 Q2 Q3";
     let circuit = loads(qcis).unwrap();
     assert_eq!(circuit.num_qubits(), 4);
+    assert_eq!("B Q0 Q1 Q2 Q3\n", qcis_dumps(&circuit).unwrap());
 }
 
 #[test]
@@ -214,6 +223,7 @@ fn test_measurement_single_qubit() {
     let qcis = "M Q0";
     let circuit = loads(qcis).unwrap();
     assert_eq!(circuit.num_qubits(), 1);
+    assert_eq!("M Q0\n", qcis_dumps(&circuit).unwrap());
 }
 
 #[test]
@@ -221,6 +231,7 @@ fn test_measurement_multiple_qubits() {
     let qcis = "M Q0 Q1 Q2";
     let circuit = loads(qcis).unwrap();
     assert_eq!(circuit.num_qubits(), 3);
+    assert_eq!("M Q0\nM Q1\nM Q2\n", qcis_dumps(&circuit).unwrap());
 }
 
 #[test]
@@ -268,6 +279,10 @@ fn test_valid_native_gates() {
     "#;
     let circuit = loads(qcis).unwrap();
     assert_eq!(circuit.num_qubits(), 6);
+    assert_eq!(
+        "X2P Q0\nX2M Q1\nY2P Q2\nY2M Q3\nXY2P Q4 1\nXY2M Q5 pi/2\nCZ Q0 Q1\nRZ Q2 0.5\nI Q3 1\n",
+        qcis_dumps(&circuit).unwrap()
+    );
 }
 
 #[test]
@@ -287,6 +302,10 @@ fn test_valid_standard_gates() {
     "#;
     let circuit = loads(qcis).unwrap();
     assert_eq!(circuit.num_qubits(), 11);
+    assert_eq!(
+        "X Q0\nY Q1\nZ Q2\nH Q3\nS Q4\nSD Q5\nT Q6\nTD Q7\nRX Q8 1\nRY Q9 pi/2\nRXY Q10 1 0.5\n",
+        qcis_dumps(&circuit).unwrap()
+    );
 }
 
 #[test]
@@ -308,4 +327,8 @@ fn test_mixed_qcis_circuit() {
     "#;
     let circuit = loads(qcis).unwrap();
     assert_eq!(circuit.num_qubits(), 2);
+    assert_eq!(
+        "X2P Q0\nX2M Q1\nCZ Q0 Q1\nRZ Q0 pi/4\nRZ Q1 pi/4\nM Q0\nM Q1\n",
+        qcis_dumps(&circuit).unwrap()
+    );
 }
