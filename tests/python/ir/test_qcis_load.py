@@ -28,8 +28,6 @@ Test Coverage:
 import pytest
 import tempfile
 import os
-import math
-from cqlib.circuit import Circuit
 from cqlib.ir.qcis import loads, load
 
 

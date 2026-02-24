@@ -2,7 +2,7 @@
 members = [
     "crates/cqlib-core",
     "crates/binding-python",
-    "crates/binding-cpp",
+    "crates/binding-c",
     "crates/cqlib",
 ]
 resolver = "2"
@@ -21,6 +21,7 @@ strip = true
 
 [workspace.dependencies]
 approx = "0.5"
+cbindgen = "0.29.2"
 lalrpop = "0.22"
 lalrpop-util = "0.22"
 indexmap = "2.12"
