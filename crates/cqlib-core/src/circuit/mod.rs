@@ -12,6 +12,7 @@
 pub mod bit;
 pub mod circuit_impl;
 mod circuit_to_matrix;
+pub mod dag;
 mod error;
 pub mod gate;
 pub mod operation;
@@ -21,4 +22,5 @@ pub mod parameter;
 pub use bit::Qubit;
 pub use circuit_impl::Circuit;
 pub use circuit_to_matrix::circuit_to_matrix;
+pub use dag::CircuitDag;
 pub use parameter::impls::Parameter;
