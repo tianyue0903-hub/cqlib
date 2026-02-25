@@ -223,6 +223,22 @@ impl Circuit {
         }
     }
 
+    /// Sets the global phase of the circuit.
+    pub fn set_global_phase(&mut self, phase: Parameter) {
+        // Try to simplify/evaluate to keep it clean
+        if let Ok(val) = phase.evaluate(&None) {
+            self.global_phase = CircuitParam::Fixed(val);
+        } else {
+            let (index, is_new) = self.parameters.insert_full(phase.clone());
+            if is_new {
+                for sym in phase.get_symbols() {
+                    self.symbols.insert(sym);
+                }
+            }
+            self.global_phase = CircuitParam::Index(index as u32);
+        }
+    }
+
     pub fn operations(&self) -> &[Operation] {
         &self.data
     }
