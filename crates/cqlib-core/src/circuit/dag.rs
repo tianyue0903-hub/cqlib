@@ -99,6 +99,7 @@ pub struct CircuitDag {
     pub(crate) qubits: IndexSet<Qubit>,
 
     /// The set of symbolic variables (e.g., "theta", "phi") used in parameters.
+    #[allow(dead_code)]
     pub(crate) symbols: IndexSet<String>,
 
     /// The parameter pool for deduplicated parameter storage.

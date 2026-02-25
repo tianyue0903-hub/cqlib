@@ -44,6 +44,7 @@ impl PyInstruction {
             Instruction::UnitaryGate(g) => g.label().to_string(),
             Instruction::CircuitGate(g) => g.name.to_string(),
             Instruction::Directive(d) => format!("{}", d),
+            Instruction::ControlFlowGate(g) => format!("{}", g),
             Instruction::Delay => "Delay".to_string(),
         }
     }
@@ -58,6 +59,7 @@ impl PyInstruction {
             Instruction::CircuitGate(_) => "circuit".to_string(),
             Instruction::Directive(_) => "directive".to_string(),
             Instruction::Delay => "delay".to_string(),
+            Instruction::ControlFlowGate(_) => "control_flow".to_string(),
         }
     }
 

@@ -175,11 +175,11 @@ pub fn circuit_to_matrix(
                     .circuit
                     .circuit
                     .assign_parameters(&Some(bindings))
-                    .map_err(|_| CompileError::Error)
-                    .unwrap();
+                    .map_err(|_| CompileError::Error)?;
                 let sub_matrix = circuit_to_matrix(&sub_circuit, None).unwrap();
                 apply_gate_to_matrix(&mut matrix, &sub_matrix, &bits);
             }
+            Instruction::ControlFlowGate(_) => continue,
             Instruction::Directive(_) => continue,
             Instruction::Delay => continue,
         }
