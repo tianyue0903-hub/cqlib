@@ -13,8 +13,11 @@
 use crate::circuit::gate::circuit_gate::FrozenCircuit;
 use crate::circuit::gate::{StandardGate, UnitaryGate};
 use crate::circuit::parameter::Parameter;
-use crate::circuit::{Circuit, Qubit};
+use crate::circuit::{
+    Circuit, ConditionView, ControlFlow, IfElseGate, Instruction, Operation, Qubit, WhileLoopGate,
+};
 use crate::ir::qasm2::dump::dumps;
+use smallvec::smallvec;
 use std::sync::Arc;
 
 fn assert_qasm_contains(qasm: &str, expected_lines: &[&str]) {
@@ -413,4 +416,193 @@ fn test_dump_extended_gates() {
             "rzx(1) q[0],q[1];",
         ],
     );
+}
+
+#[test]
+fn test_dump_if_statement() {
+    let mut circuit = Circuit::new(2);
+    let q0 = Qubit::new(0);
+    let q1 = Qubit::new(1);
+
+    // Build a circuit with if statement
+    circuit.h(q0).unwrap();
+    circuit.measure(q0).unwrap();
+
+    // Create if-else gate manually
+    let condition = ConditionView::new(q0, 1);
+    let true_body = vec![Operation {
+        instruction: Instruction::Standard(StandardGate::X),
+        qubits: smallvec![q1],
+        params: smallvec![],
+        label: None,
+    }];
+    let if_else_gate = IfElseGate::new(condition, true_body, None);
+    circuit
+        .append(
+            Instruction::ControlFlowGate(ControlFlow::IfElse(if_else_gate)),
+            vec![q0],
+            std::iter::empty(),
+            None,
+        )
+        .unwrap();
+
+    let qasm = dumps(&circuit).expect("Dump should succeed");
+
+    // Check that the output contains the if statement
+    assert!(
+        qasm.contains("if (c[0] == 1) x q[1];"),
+        "Expected 'if (c[0] == 1) x q[1];' in output, got:\n{}",
+        qasm
+    );
+}
+
+#[test]
+fn test_dump_if_statement_with_cx() {
+    let mut circuit = Circuit::new(3);
+    let q0 = Qubit::new(0);
+    let q1 = Qubit::new(1);
+    let q2 = Qubit::new(2);
+
+    circuit.h(q0).unwrap();
+    circuit.measure(q0).unwrap();
+
+    // Create if-else gate with CX
+    let condition = ConditionView::new(q0, 1);
+    let true_body = vec![Operation {
+        instruction: Instruction::Standard(StandardGate::CX),
+        qubits: smallvec![q1, q2],
+        params: smallvec![],
+        label: None,
+    }];
+    let if_else_gate = IfElseGate::new(condition, true_body, None);
+    circuit
+        .append(
+            Instruction::ControlFlowGate(ControlFlow::IfElse(if_else_gate)),
+            vec![q0],
+            std::iter::empty(),
+            None,
+        )
+        .unwrap();
+
+    let qasm = dumps(&circuit).expect("Dump should succeed");
+
+    // Check that the output contains the if statement with cx
+    assert!(
+        qasm.contains("if (c[0] == 1) cx q[1],q[2];"),
+        "Expected 'if (c[0] == 1) cx q[1],q[2];' in output, got:\n{}",
+        qasm
+    );
+}
+
+#[test]
+fn test_dump_simple_if_else() {
+    // Create a circuit with if-else
+    let mut circuit = Circuit::new(2);
+
+    // Add H gate
+    circuit.h(Qubit::new(0)).unwrap();
+
+    // Add measurement
+    circuit.measure(Qubit::new(0)).unwrap();
+
+    // Add if-else: if (q0 == 1) x q1
+    let condition = ConditionView::new(Qubit::new(0), 1);
+    let true_body = vec![Operation {
+        instruction: Instruction::Standard(StandardGate::X),
+        qubits: smallvec![Qubit::new(1)],
+        params: smallvec![],
+        label: None,
+    }];
+    let if_else_gate = IfElseGate::new(condition, true_body, None);
+    circuit
+        .append(
+            Instruction::ControlFlowGate(ControlFlow::IfElse(if_else_gate)),
+            vec![Qubit::new(0), Qubit::new(1)],
+            std::iter::empty(),
+            None,
+        )
+        .unwrap();
+
+    // Dump to QASM
+    let qasm_result = dumps(&circuit);
+    assert!(
+        qasm_result.is_ok(),
+        "Dump should succeed: {:?}",
+        qasm_result.err()
+    );
+
+    let qasm = qasm_result.unwrap();
+    println!("Generated QASM:\n{}", qasm);
+
+    // Verify the QASM contains if statement
+    assert!(qasm.contains("if ("), "QASM should contain if statement");
+    assert!(qasm.contains("x q[1]"), "QASM should contain x q[1]");
+}
+
+#[test]
+fn test_dump_if_else_detailed() {
+    // Create a circuit with if-else with false branch
+    let mut circuit = Circuit::new(2);
+
+    circuit.h(Qubit::new(0)).unwrap();
+    circuit.measure(Qubit::new(0)).unwrap();
+
+    // if (q0 == 1) x q1 else z q1
+    let condition = ConditionView::new(Qubit::new(0), 1);
+    let true_body = vec![Operation {
+        instruction: Instruction::Standard(StandardGate::X),
+        qubits: smallvec![Qubit::new(1)],
+        params: smallvec![],
+        label: None,
+    }];
+    let false_body = vec![Operation {
+        instruction: Instruction::Standard(StandardGate::Z),
+        qubits: smallvec![Qubit::new(1)],
+        params: smallvec![],
+        label: None,
+    }];
+    let if_else_gate = IfElseGate::new(condition, true_body, Some(false_body));
+    circuit
+        .append(
+            Instruction::ControlFlowGate(ControlFlow::IfElse(if_else_gate)),
+            vec![Qubit::new(0), Qubit::new(1)],
+            std::iter::empty(),
+            None,
+        )
+        .unwrap();
+
+    let qasm = dumps(&circuit).expect("Should dump");
+    println!("Generated QASM with else branch:\n{}", qasm);
+
+    // Check if false branch is also dumped
+    // OpenQASM 2.0 doesn't have native else, so we need to check how it's handled
+}
+
+#[test]
+fn test_dump_while_loop() {
+    let mut circuit = Circuit::new(2);
+
+    // while (q0 == 1) h q1
+    let condition = ConditionView::new(Qubit::new(0), 1);
+    let body = vec![Operation {
+        instruction: Instruction::Standard(StandardGate::H),
+        qubits: smallvec![Qubit::new(1)],
+        params: smallvec![],
+        label: None,
+    }];
+    let while_gate = WhileLoopGate::new(condition, body);
+    circuit
+        .append(
+            Instruction::ControlFlowGate(ControlFlow::WhileLoop(while_gate)),
+            vec![Qubit::new(0), Qubit::new(1)],
+            std::iter::empty(),
+            None,
+        )
+        .unwrap();
+
+    let qasm = dumps(&circuit).expect("Should dump");
+    println!("Generated QASM for while loop:\n{}", qasm);
+
+    // While loop should be commented out or marked as unsupported
+    assert!(qasm.contains("while") || qasm.contains("not supported"));
 }

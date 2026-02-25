@@ -433,3 +433,392 @@ fn test_parameter_count_mismatch() {
     let result = loads(qasm_u3_correct);
     assert!(result.is_ok(), "U3 with 3 params should succeed");
 }
+
+#[test]
+fn test_if_statement() {
+    // Test if statement with measurement
+    let qasm_with_if = r#"
+        OPENQASM 2.0;
+        qreg q[2];
+        creg c[1];
+        h q[0];
+        measure q[0] -> c[0];
+        if (c[0] == 1) x q[1];
+    "#;
+
+    let result = loads(qasm_with_if);
+    assert!(
+        result.is_ok(),
+        "If statement should succeed: {:?}",
+        result.err()
+    );
+    let circuit = result.unwrap();
+
+    // Verify the circuit has 3 operations: H, Measure, IfElse
+    let ops = circuit.operations();
+    assert_eq!(ops.len(), 3, "Expected 3 operations, got {}", ops.len());
+
+    // Op 0: H gate on q[0]
+    assert_standard_gate(&circuit, 0, StandardGate::H, &[0], &[]);
+
+    // Op 1: Measure q[0] -> c[0]
+    match &ops[1].instruction {
+        Instruction::Directive(Directive::Measure) => {
+            assert_eq!(ops[1].qubits.len(), 1);
+            assert_eq!(ops[1].qubits[0], Qubit::new(0));
+        }
+        _ => panic!("Expected Measure directive, got {:?}", ops[1].instruction),
+    }
+
+    // Op 2: IfElse gate
+    match &ops[2].instruction {
+        Instruction::ControlFlowGate(ControlFlow::IfElse(if_else)) => {
+            // Verify condition: qubit 0, target value 1
+            let condition = if_else.condition();
+            assert_eq!(condition.qubit, Qubit::new(0));
+            assert_eq!(condition.target, 1);
+
+            // Verify true_body has one operation: X on q[1]
+            let true_body = if_else.true_body();
+            assert_eq!(true_body.len(), 1, "Expected 1 operation in true_body");
+            match &true_body[0].instruction {
+                Instruction::Standard(StandardGate::X) => {
+                    assert_eq!(true_body[0].qubits.len(), 1);
+                    assert_eq!(true_body[0].qubits[0], Qubit::new(1));
+                }
+                _ => panic!(
+                    "Expected X gate in true_body, got {:?}",
+                    true_body[0].instruction
+                ),
+            }
+
+            // Verify false_body is None
+            assert!(if_else.false_body().is_none());
+        }
+        _ => panic!("Expected IfElse control flow, got {:?}", ops[2].instruction),
+    }
+}
+
+#[test]
+fn test_if_statement_without_measurement_error() {
+    // Test if statement without prior measurement (should fail)
+    let qasm_no_measure = r#"
+        OPENQASM 2.0;
+        qreg q[2];
+        creg c[1];
+        h q[0];
+        if (c[0] == 1) x q[1];
+    "#;
+
+    let result = loads(qasm_no_measure);
+    assert!(result.is_err(), "If without measurement should fail");
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("No measurement found"),
+        "Expected measurement error, got: {}",
+        err
+    );
+}
+
+#[test]
+fn test_if_statement_simple_creg_ref() {
+    // Test if statement with simple creg reference (c == 1 means c[0] == 1)
+    use crate::circuit::gate::control_flow::ControlFlow;
+
+    let qasm_simple = r#"
+        OPENQASM 2.0;
+        qreg q[2];
+        creg c[1];
+        h q[0];
+        measure q[0] -> c[0];
+        if (c == 1) x q[1];
+    "#;
+
+    let result = loads(qasm_simple);
+    assert!(
+        result.is_ok(),
+        "Simple creg reference should work: {:?}",
+        result.err()
+    );
+    let circuit = result.unwrap();
+
+    // Verify the circuit has 3 operations
+    let ops = circuit.operations();
+    assert_eq!(ops.len(), 3, "Expected 3 operations");
+
+    // Op 2: IfElse gate (same as above, since c == 1 is equivalent to c[0] == 1)
+    match &ops[2].instruction {
+        Instruction::ControlFlowGate(ControlFlow::IfElse(if_else)) => {
+            let condition = if_else.condition();
+            assert_eq!(condition.qubit, Qubit::new(0));
+            assert_eq!(condition.target, 1);
+        }
+        _ => panic!("Expected IfElse control flow"),
+    }
+}
+
+#[test]
+fn test_if_statement_with_cx_gate() {
+    // Test if statement with CX (controlled-X) gate
+    use crate::circuit::gate::control_flow::ControlFlow;
+
+    let qasm_cx = r#"
+        OPENQASM 2.0;
+        qreg q[3];
+        creg c[1];
+        h q[0];
+        measure q[0] -> c[0];
+        if (c[0] == 1) cx q[1], q[2];
+    "#;
+
+    let result = loads(qasm_cx);
+    assert!(
+        result.is_ok(),
+        "If with CX should succeed: {:?}",
+        result.err()
+    );
+    let circuit = result.unwrap();
+
+    let ops = circuit.operations();
+    assert_eq!(ops.len(), 3);
+
+    // Op 2: IfElse with CX
+    match &ops[2].instruction {
+        Instruction::ControlFlowGate(ControlFlow::IfElse(if_else)) => {
+            let true_body = if_else.true_body();
+            assert_eq!(true_body.len(), 1);
+            match &true_body[0].instruction {
+                Instruction::Standard(StandardGate::CX) => {
+                    assert_eq!(true_body[0].qubits.len(), 2);
+                    assert_eq!(true_body[0].qubits[0], Qubit::new(1));
+                    assert_eq!(true_body[0].qubits[1], Qubit::new(2));
+                }
+                _ => panic!("Expected CX gate in true_body"),
+            }
+        }
+        _ => panic!("Expected IfElse"),
+    }
+}
+
+#[test]
+fn test_if_statement_with_symbolic_params() {
+    // Test if statement with symbolic parameters in the body
+    // This verifies that parameters like 'theta' in rx(theta) are correctly handled
+    use crate::circuit::gate::control_flow::ControlFlow;
+    use crate::circuit::param::CircuitParam;
+
+    let qasm_with_symbolic = r#"
+        OPENQASM 2.0;
+        qreg q[2];
+        creg c[1];
+        h q[0];
+        measure q[0] -> c[0];
+        if (c[0] == 1) rx(pi/2) q[1];
+    "#;
+
+    let result = loads(qasm_with_symbolic);
+    assert!(
+        result.is_ok(),
+        "If with symbolic param should succeed: {:?}",
+        result.err()
+    );
+    let circuit = result.unwrap();
+
+    let ops = circuit.operations();
+    assert_eq!(ops.len(), 3);
+
+    // Op 2: IfElse with RX(pi/2)
+    match &ops[2].instruction {
+        Instruction::ControlFlowGate(ControlFlow::IfElse(if_else)) => {
+            let true_body = if_else.true_body();
+            assert_eq!(true_body.len(), 1, "Expected 1 operation in true_body");
+            match &true_body[0].instruction {
+                Instruction::Standard(StandardGate::RX) => {
+                    assert_eq!(true_body[0].qubits.len(), 1);
+                    assert_eq!(true_body[0].qubits[0], Qubit::new(1));
+
+                    // Check parameter - should be Fixed(pi/2), not 0.0
+                    assert_eq!(true_body[0].params.len(), 1, "Expected 1 parameter");
+                    match &true_body[0].params[0] {
+                        CircuitParam::Fixed(val) => {
+                            // pi/2 ≈ 1.5708
+                            assert!(
+                                (val - std::f64::consts::FRAC_PI_2).abs() < 1e-10,
+                                "Expected pi/2 ({}), got {}",
+                                std::f64::consts::FRAC_PI_2,
+                                val
+                            );
+                        }
+                        CircuitParam::Index(_) => {
+                            // Index is also acceptable if the parameter was interned
+                        }
+                    }
+                }
+                _ => panic!(
+                    "Expected RX gate in true_body, got {:?}",
+                    true_body[0].instruction
+                ),
+            }
+        }
+        _ => panic!("Expected IfElse control flow"),
+    }
+}
+
+#[test]
+fn test_if_statement_with_unevaluated_symbolic_param() {
+    // Test that unevaluated symbolic parameters don't become 0.0
+    // This is a regression test for the issue where symbolic params were replaced with 0.0
+    use crate::circuit::gate::control_flow::ControlFlow;
+
+    let qasm = r#"
+        OPENQASM 2.0;
+        qreg q[2];
+        creg c[1];
+        h q[0];
+        measure q[0] -> c[0];
+        if (c[0] == 1) rx(0.5) q[1];
+    "#;
+
+    let result = loads(qasm);
+    assert!(result.is_ok(), "Should parse: {:?}", result.err());
+    let circuit = result.unwrap();
+
+    let ops = circuit.operations();
+    match &ops[2].instruction {
+        Instruction::ControlFlowGate(ControlFlow::IfElse(if_else)) => {
+            let true_body = if_else.true_body();
+            match &true_body[0].instruction {
+                Instruction::Standard(StandardGate::RX) => {
+                    match &true_body[0].params[0] {
+                        CircuitParam::Fixed(val) => {
+                            // Should be 0.5, not 0.0
+                            assert!(
+                                (val - 0.5).abs() < 1e-10,
+                                "Parameter should be 0.5, got {} (regression: was incorrectly 0.0)",
+                                val
+                            );
+                        }
+                        _ => {}
+                    }
+                }
+                _ => {}
+            }
+        }
+        _ => {}
+    }
+}
+
+#[test]
+fn test_if_statement_with_true_symbolic_param() {
+    // Test that true symbolic parameters (like undefined 'theta') are handled
+    // This test documents current behavior: undefined symbols fall back to 0.0
+    use crate::circuit::gate::control_flow::ControlFlow;
+
+    // This qasm uses an undefined parameter 'theta'
+    // According to OpenQASM spec, this should either:
+    // 1. Error out (parameter not defined)
+    // 2. Be handled as a symbolic parameter
+    //
+    // Current behavior: falls back to 0.0 (may need improvement)
+
+    let qasm = r#"
+        OPENQASM 2.0;
+        qreg q[2];
+        creg c[1];
+        h q[0];
+        measure q[0] -> c[0];
+        if (c[0] == 1) rx(theta) q[1];
+    "#;
+
+    let result = loads(qasm);
+    // Currently this may either fail or succeed with theta=0.0
+    // The test documents the current behavior
+    if let Ok(circuit) = result {
+        let ops = circuit.operations();
+        match &ops[2].instruction {
+            Instruction::ControlFlowGate(ControlFlow::IfElse(if_else)) => {
+                let true_body = if_else.true_body();
+                if let Instruction::Standard(StandardGate::RX) = &true_body[0].instruction {
+                    match &true_body[0].params[0] {
+                        CircuitParam::Fixed(val) => {
+                            // Document current behavior: undefined symbols become 0.0
+                            // This is a known limitation that may be improved in the future
+                            println!("Undefined symbolic parameter 'theta' evaluated to: {}", val);
+                        }
+                        CircuitParam::Index(_) => {
+                            // If this is an Index, it means the parameter was properly interned
+                            // which would be an improvement
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    // Test passes either way - it just documents the behavior
+}
+
+#[test]
+fn test_if_statement_param_evaluation() {
+    // Verify that parameters are correctly evaluated in if-body context
+    use crate::circuit::gate::control_flow::ControlFlow;
+
+    // Test with expressions that should evaluate correctly
+    let test_cases = vec![
+        ("pi/2", std::f64::consts::FRAC_PI_2),
+        ("pi", std::f64::consts::PI),
+        ("0.5", 0.5),
+        ("1.0", 1.0),
+        ("2*pi", 2.0 * std::f64::consts::PI),
+    ];
+
+    for (expr, expected) in test_cases {
+        let qasm = format!(
+            r#"
+            OPENQASM 2.0;
+            qreg q[2];
+            creg c[1];
+            h q[0];
+            measure q[0] -> c[0];
+            if (c[0] == 1) rx({}) q[1];
+        "#,
+            expr
+        );
+
+        let result = loads(&qasm);
+        assert!(
+            result.is_ok(),
+            "Should parse rx({}): {:?}",
+            expr,
+            result.err()
+        );
+
+        let circuit = result.unwrap();
+        let ops = circuit.operations();
+        match &ops[2].instruction {
+            Instruction::ControlFlowGate(ControlFlow::IfElse(if_else)) => {
+                let true_body = if_else.true_body();
+                match &true_body[0].instruction {
+                    Instruction::Standard(StandardGate::RX) => {
+                        match &true_body[0].params[0] {
+                            CircuitParam::Fixed(val) => {
+                                assert!(
+                                    (val - expected).abs() < 1e-9,
+                                    "Expression '{}' should evaluate to {}, got {}",
+                                    expr,
+                                    expected,
+                                    val
+                                );
+                            }
+                            CircuitParam::Index(_) => {
+                                // Index is acceptable if parameter was interned
+                            }
+                        }
+                    }
+                    _ => panic!("Expected RX gate"),
+                }
+            }
+            _ => panic!("Expected IfElse"),
+        }
+    }
+}

@@ -11,6 +11,7 @@
 // that they have been altered from the originals.
 
 use crate::circuit::gate::circuit_gate::{CircuitGate, FrozenCircuit};
+use crate::circuit::gate::control_flow::ControlFlow;
 use crate::circuit::gate::{Directive, Instruction, StandardGate};
 use crate::circuit::operation::Operation;
 use crate::circuit::param::CircuitParam;
@@ -299,6 +300,9 @@ fn process_circuit_operations(
                 let mapped_qs = map_qubits(op, qubit_map);
                 writeln!(output, "{} {};", unitary_gate.label(), mapped_qs.join(","))?;
             }
+            Instruction::ControlFlowGate(gate) => {
+                dump_control_flow(gate, op, circuit, output, qubit_map, param_map)?;
+            }
             Instruction::Delay => {
                 // Output delay gate call: delay(value) q[i];
                 let params_str = format_params(op, circuit, param_map);
@@ -550,6 +554,149 @@ fn collect_used_standard_gates(circuit: &Circuit, used_gates: &mut HashSet<Stand
                 }
             }
             _ => {}
+        }
+    }
+}
+
+/// Dump a control flow gate (IfElse or WhileLoop) to QASM format
+fn dump_control_flow(
+    gate: &ControlFlow,
+    _op: &Operation,
+    circuit: &Circuit,
+    output: &mut String,
+    qubit_map: &HashMap<Qubit, String>,
+    param_map: &HashMap<String, Parameter>,
+) -> std::fmt::Result {
+    match gate {
+        ControlFlow::IfElse(if_else) => {
+            // Get the condition qubit index - in OpenQASM 2.0, this maps to creg
+            // We use the qubit index as the classical register index
+            let cond_qubit_idx = if_else.condition().qubit.index();
+            let target_value = if_else.condition().target;
+
+            // Dump true body operations
+            let true_body = if_else.true_body();
+            for body_op in true_body {
+                let body_qasm = operation_to_qasm(body_op, circuit, qubit_map, param_map);
+                writeln!(
+                    output,
+                    "if (c[{}] == {}) {};",
+                    cond_qubit_idx, target_value, body_qasm
+                )?;
+            }
+
+            // Dump false body operations (else branch)
+            // OpenQASM 2.0 doesn't have native else, so we use inverted condition
+            if let Some(false_body) = if_else.false_body() {
+                for body_op in false_body {
+                    let body_qasm = operation_to_qasm(body_op, circuit, qubit_map, param_map);
+                    // Invert condition: if (c[idx] != value) or if (c[idx] == 1-value)
+                    let inverted_value = if target_value == 0 { 1 } else { 0 };
+                    writeln!(
+                        output,
+                        "if (c[{}] == {}) {};",
+                        cond_qubit_idx, inverted_value, body_qasm
+                    )?;
+                }
+            }
+        }
+        ControlFlow::WhileLoop(_while_loop) => {
+            // OpenQASM 2.0 does not support while loops - write error message then return error
+            write!(
+                output,
+                "ERROR: while loops are not supported in OpenQASM 2.0"
+            )?;
+            return Err(std::fmt::Error);
+        }
+    }
+    Ok(())
+}
+
+/// Convert a single operation to QASM string (without semicolon)
+fn operation_to_qasm(
+    op: &Operation,
+    circuit: &Circuit,
+    qubit_map: &HashMap<Qubit, String>,
+    param_map: &HashMap<String, Parameter>,
+) -> String {
+    match &op.instruction {
+        Instruction::Standard(gate) => {
+            // Use the same pattern as dump_standard_gate
+            let name = match gate {
+                StandardGate::I => "id",
+                StandardGate::X => "x",
+                StandardGate::Y => "y",
+                StandardGate::Z => "z",
+                StandardGate::H => "h",
+                StandardGate::S => "s",
+                StandardGate::SDG => "sdg",
+                StandardGate::T => "t",
+                StandardGate::TDG => "tdg",
+                StandardGate::RX => "rx",
+                StandardGate::RY => "ry",
+                StandardGate::RZ => "rz",
+                StandardGate::Phase => "u1",
+                StandardGate::CX => "cx",
+                StandardGate::CY => "cy",
+                StandardGate::CZ => "cz",
+                StandardGate::SWAP => "swap",
+                StandardGate::CCX => "ccx",
+                StandardGate::U => "u3",
+                StandardGate::CRZ => "crz",
+                StandardGate::XY => "xy",
+                StandardGate::FSIM => "fsim",
+                StandardGate::RXY => "rxy",
+                StandardGate::CRX => "crx",
+                StandardGate::CRY => "cry",
+                StandardGate::RXX => "rxx",
+                StandardGate::RYY => "ryy",
+                StandardGate::RZZ => "rzz",
+                StandardGate::RZX => "rzx",
+                _ => "unknown",
+            };
+            let params_str = format_params(op, circuit, param_map);
+            let mapped_qs = map_qubits(op, qubit_map);
+            format!("{}{} {}", name, params_str, mapped_qs.join(","))
+        }
+        Instruction::McGate(mc_gate) => {
+            let num_ctrl = mc_gate.num_ctrl_qubits();
+            let base = mc_gate.base_gate();
+            let name = match (num_ctrl, base) {
+                (1, StandardGate::X) => "cx",
+                (1, StandardGate::Z) => "cz",
+                (1, StandardGate::Y) => "cy",
+                (1, StandardGate::H) => "ch",
+                (1, StandardGate::CX) => "ccx",
+                _ => "mcgate",
+            };
+            let mapped_qs = map_qubits(op, qubit_map);
+            format!("{} {}", name, mapped_qs.join(","))
+        }
+        Instruction::Directive(directive) => match directive {
+            Directive::Barrier => {
+                let mapped_qs = map_qubits(op, qubit_map);
+                format!("barrier {}", mapped_qs.join(","))
+            }
+            Directive::Reset => {
+                let mapped_qs = map_qubits(op, qubit_map);
+                format!("reset {}", mapped_qs[0])
+            }
+            Directive::Measure => "// measure not supported in if-body".to_string(),
+        },
+        Instruction::CircuitGate(cg) => {
+            let params_str = format_params(op, circuit, param_map);
+            let mapped_qs = map_qubits(op, qubit_map);
+            format!("{}{} {}", cg.name, params_str, mapped_qs.join(","))
+        }
+        Instruction::UnitaryGate(unitary_gate) => {
+            let mapped_qs = map_qubits(op, qubit_map);
+            format!("{} {}", unitary_gate.label(), mapped_qs.join(","))
+        }
+        Instruction::ControlFlowGate(_) => "// nested control flow not supported".to_string(),
+        Instruction::Delay => {
+            let params_str = format_params(op, circuit, param_map);
+            let mapped_qs = map_qubits(op, qubit_map);
+            format!("delay({}) {}", params_str, mapped_qs[0])
         }
     }
 }

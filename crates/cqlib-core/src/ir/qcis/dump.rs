@@ -126,6 +126,9 @@ fn operation_to_qcis(op: &Operation, circuit: &Circuit) -> Result<String, QcisDu
         Instruction::CircuitGate(_) => Err(QcisDumpError::UnsupportedGate(
             "CircuitGate (custom gate)".to_string(),
         )),
+        Instruction::ControlFlowGate(_) => Err(QcisDumpError::UnsupportedGate(
+            "ControlFlowGate".to_string(),
+        )),
         Instruction::Directive(dir) => directive_to_qcis(*dir, &op.qubits),
         Instruction::Delay => delay_to_qcis(&op.qubits, &op.params, circuit),
     }
