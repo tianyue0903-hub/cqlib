@@ -1719,6 +1719,22 @@ impl Circuit {
 
         Ok(new_circuit)
     }
+
+    pub(crate) fn from_parts(
+        qubits: IndexSet<Qubit>,
+        symbols: IndexSet<String>,
+        parameters: IndexSet<Parameter>,
+        data: Vec<Operation>,
+        global_phase: CircuitParam,
+    ) -> Self {
+        Self {
+            qubits,
+            symbols,
+            parameters,
+            data,
+            global_phase,
+        }
+    }
 }
 
 #[cfg(test)]

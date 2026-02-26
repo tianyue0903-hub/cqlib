@@ -151,10 +151,13 @@
 use crate::circuit::gate::control_flow::ControlFlow;
 use crate::circuit::gate::instruction::Instruction;
 use crate::circuit::param::CircuitParam;
-use crate::circuit::{Circuit, CircuitError};
+use crate::circuit::{Circuit, CircuitError, IfElseGate, WhileLoopGate};
 use crate::circuit::{ConditionView, Operation, Parameter, Qubit};
 use indexmap::IndexSet;
 use rustworkx_core::petgraph::prelude::{EdgeIndex, NodeIndex, StableDiGraph};
+use rustworkx_core::petgraph::visit::EdgeRef;
+use smallvec::smallvec;
+use std::collections::{HashSet, VecDeque};
 
 /// Edge weights in the control flow graph representing different types of transitions.
 ///
@@ -344,7 +347,7 @@ impl BasicBlock {
     ///
     /// let mut block = BasicBlock::new();
     /// // block.push_operation(operation);
-    /// assert_eq!(block.len(), 1);
+    /// assert_eq!(block.len(), 0);
     /// ```
     pub fn push_operation(&mut self, op: Operation) {
         self.operations.push(op);
@@ -728,6 +731,186 @@ impl CircuitDag {
 
         Ok(dag)
     }
+
+    /// Converts a `CircuitDag` back to a nested `Circuit` representation.
+    ///
+    /// This function performs the inverse of `from_circuit()`: it traverses
+    /// the CFG and reconstructs the nested AST structure by matching
+    /// control flow patterns (If-Else convergence and While Loop back-edges).
+    pub fn to_circuit(&self) -> Result<Circuit, CircuitError> {
+        let mut ops = Vec::new();
+
+        if let Some(entry) = self.entry_block {
+            ops = self.parse_subgraph(entry, None)?;
+        }
+
+        Ok(Circuit::from_parts(
+            self.qubits.clone(),
+            self.symbols.clone(),
+            self.parameters.clone(),
+            ops,
+            self.global_phase.clone(),
+        ))
+    }
+
+    fn parse_subgraph(
+        &self,
+        start_node: NodeIndex,
+        stop_node: Option<NodeIndex>,
+    ) -> Result<Vec<Operation>, CircuitError> {
+        let mut ops = Vec::new();
+        let mut current = Some(start_node);
+
+        while let Some(node) = current {
+            if Some(node) == stop_node {
+                break;
+            }
+
+            // Append regular quantum operations from the basic block
+            let block = &self.data[node];
+            ops.extend(block.operations.clone());
+
+            match &block.terminator {
+                Some(Terminator::Return) | None => {
+                    current = None;
+                }
+                Some(Terminator::Jump(target)) => {
+                    current = Some(*target);
+                }
+                Some(Terminator::Branch(condition)) => {
+                    let mut true_target = None;
+                    let mut false_target = None;
+
+                    for edge in self.data.edges(node) {
+                        match edge.weight() {
+                            FlowEdge::TrueBranch => true_target = Some(edge.target()),
+                            FlowEdge::FalseBranch => false_target = Some(edge.target()),
+                            _ => {}
+                        }
+                    }
+
+                    let true_target = true_target.expect("Missing TrueBranch edge");
+                    let false_target = false_target.expect("Missing FalseBranch edge");
+
+                    // Determine structure type by checking block label
+                    // While loop: cond block label starts with "while_cond_"
+                    // If-Else: cond block label starts with "if_" or other
+                    let is_while = block.label().is_some_and(|l| l.starts_with("while_cond_"));
+
+                    if is_while {
+                        // While Loop: true branch is the loop body with back edge
+                        let body_ops = self.parse_subgraph(true_target, Some(node))?;
+
+                        ops.push(Operation {
+                            instruction: Instruction::ControlFlowGate(ControlFlow::WhileLoop(
+                                WhileLoopGate::new(*condition, body_ops),
+                            )),
+                            qubits: smallvec![],
+                            params: smallvec![],
+                            label: None,
+                        });
+
+                        // Continue with false branch (exit path)
+                        current = Some(false_target);
+                    } else {
+                        // If-Else: find merge point where both branches converge
+                        let merge_node = self.find_merge_node(true_target, false_target);
+
+                        let true_ops = if let Some(merge) = merge_node {
+                            self.parse_subgraph(true_target, Some(merge))?
+                        } else {
+                            self.parse_subgraph(true_target, None)?
+                        };
+
+                        let false_ops = if let Some(merge) = merge_node {
+                            self.parse_subgraph(false_target, Some(merge))?
+                        } else {
+                            self.parse_subgraph(false_target, None)?
+                        };
+
+                        let false_body = if false_ops.is_empty() {
+                            None
+                        } else {
+                            Some(false_ops)
+                        };
+
+                        ops.push(Operation {
+                            instruction: Instruction::ControlFlowGate(ControlFlow::IfElse(
+                                IfElseGate::new(*condition, true_ops, false_body),
+                            )),
+                            qubits: smallvec![],
+                            params: smallvec![],
+                            label: None,
+                        });
+
+                        current = merge_node;
+                    }
+                }
+            }
+        }
+
+        Ok(ops)
+    }
+
+    /// Finds the merge node of an if-else structure by label pattern.
+    ///
+    /// If-Else blocks are labeled with patterns like "if_true_0", "if_false_0", "if_merge_0".
+    /// This method finds the merge node by looking for the "if_merge_" label
+    /// that corresponds to the true/false branch labels.
+    fn find_merge_node(
+        &self,
+        true_branch: NodeIndex,
+        false_branch: NodeIndex,
+    ) -> Option<NodeIndex> {
+        // Extract the index from the true branch label
+        let merge_label_prefix = self.data[true_branch].label().and_then(|label| {
+            // Extract index from "if_true_X" pattern
+            label
+                .strip_prefix("if_true_")
+                .map(|idx| format!("if_merge_{}", idx))
+        });
+
+        if let Some(expected_label) = merge_label_prefix {
+            // Search for the merge block with matching label
+            for node_idx in self.data.node_indices() {
+                if let Some(label) = self.data[node_idx].label() {
+                    if label == expected_label {
+                        return Some(node_idx);
+                    }
+                }
+            }
+        }
+
+        // Fallback: use graph traversal to find common descendant
+        let mut descendants1 = HashSet::new();
+        let mut stack = vec![true_branch];
+
+        while let Some(n) = stack.pop() {
+            if descendants1.insert(n) {
+                for edge in self.data.edges(n) {
+                    let target = edge.target();
+                    stack.push(target);
+                }
+            }
+        }
+
+        let mut queue = VecDeque::new();
+        let mut visited2 = HashSet::new();
+        queue.push_back(false_branch);
+
+        while let Some(n) = queue.pop_front() {
+            if descendants1.contains(&n) {
+                return Some(n);
+            }
+            if visited2.insert(n) {
+                for edge in self.data.edges(n) {
+                    queue.push_back(edge.target());
+                }
+            }
+        }
+
+        None
+    }
 }
 
 /// Recursively processes a sequence of operations, building the CFG.
@@ -816,6 +999,7 @@ fn process_operations(
     for (idx, op) in operations.iter().enumerate() {
         match &op.instruction {
             Instruction::ControlFlowGate(ControlFlow::IfElse(if_else)) => {
+                // If-Else structure: cond_block -> [true_body, false_body] -> merge_block
                 // 1. Terminate current block with a conditional branch
                 dag.data[current_block].set_terminator(Terminator::Branch(if_else.condition()));
 
@@ -851,8 +1035,8 @@ fn process_operations(
             }
 
             Instruction::ControlFlowGate(ControlFlow::WhileLoop(while_gate)) => {
-                // 1. Create a dedicated Condition block (critical: prevents including
-                // preceding operations in the loop)
+                // While structure: cond_block -> [body_block -> Jump to cond_block, exit_block]
+                // 1. Create a dedicated Condition block (prevents including preceding operations in the loop)
                 let cond_block =
                     dag.add_block(BasicBlock::new().with_label(format!("while_cond_{}", idx)));
                 dag.data[current_block].set_terminator(Terminator::Jump(cond_block));

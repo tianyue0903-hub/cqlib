@@ -84,15 +84,14 @@ fn test_circuit_dag_add_block() {
 
 #[test]
 fn test_empty_circuit_conversion() {
+    // Empty circuit should have single entry block with Return
     let circuit = Circuit::new(2);
     let dag = CircuitDag::from_circuit(&circuit).unwrap();
 
-    // 空线路应该只有一个 entry 块
     assert_eq!(dag.num_blocks(), 1);
     assert!(dag.entry_block().is_some());
 
     let entry = dag.entry_block().unwrap();
-    // entry 块没有操作但有 Return 终结符
     assert_eq!(dag.data[entry].len(), 0);
     assert!(matches!(
         dag.data[entry].terminator,
@@ -102,16 +101,15 @@ fn test_empty_circuit_conversion() {
 
 #[test]
 fn test_circuit_to_dag_simple() {
-    // 创建一个简单线路: H(0) -> CX(0, 1) -> Measure(0)
+    // Linear circuit: H(0) -> CX(0, 1) -> Measure(0)
     let mut circuit = Circuit::new(2);
     circuit.h(Qubit::new(0)).unwrap();
     circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
     circuit.measure(Qubit::new(0)).unwrap();
 
-    // 转换为 DAG
     let dag = CircuitDag::from_circuit(&circuit).unwrap();
 
-    // 无控制流时应该只有一个 entry 块
+    // No control flow = single entry block
     assert_eq!(
         dag.num_blocks(),
         1,
@@ -119,7 +117,6 @@ fn test_circuit_to_dag_simple() {
     );
     assert_eq!(dag.num_qubits(), 2);
 
-    // 验证 entry 块包含所有操作
     let entry = dag.entry_block().unwrap();
     assert_eq!(
         dag.data[entry].len(),
@@ -134,17 +131,13 @@ fn test_circuit_to_dag_simple() {
 
 #[test]
 fn test_circuit_to_dag_if_else() {
-    // 创建一个带 if-else 的线路
-    // if (q[0] == 1): X(q[1])
-    // else: Z(q[1])
+    // if (q[0] == 1): X(q[1]) else: Z(q[1])
     let mut circuit = Circuit::new(2);
     let q0 = Qubit::new(0);
     let q1 = Qubit::new(1);
 
-    // 先测量 q0 得到条件
     circuit.measure(q0).unwrap();
 
-    // 构建 if-else
     let condition = ConditionView::new(q0, 1);
     let true_body = vec![Operation {
         instruction: Instruction::Standard(StandardGate::X),
@@ -163,38 +156,16 @@ fn test_circuit_to_dag_if_else() {
         .if_else(condition, true_body, Some(false_body))
         .unwrap();
 
-    // 转换为 DAG
     let dag = CircuitDag::from_circuit(&circuit).unwrap();
 
-    // 验证: 应该有 entry, if_true, if_false, merge 等块
-    assert!(
-        dag.num_blocks() >= 4,
-        "Expected at least 4 blocks, got {}",
-        dag.num_blocks()
-    );
+    // entry, true, false, merge = 4 blocks
+    assert!(dag.num_blocks() >= 4, "Expected at least 4 blocks");
 
-    // 验证入口块
-    let entry = dag.entry_block().unwrap();
-
-    // 打印调试信息
-    println!("Number of blocks: {}", dag.num_blocks());
-    for (idx, block) in dag.blocks() {
-        println!(
-            "Block {:?}: label={:?}, ops={}, terminator={:?}",
-            idx,
-            block.label(),
-            block.len(),
-            block.terminator
-        );
-    }
-
-    // 验证控制流边
+    // Verify branch edges exist
     let mut true_branch_count = 0;
     let mut false_branch_count = 0;
     for edge_idx in dag.data.edge_indices() {
-        let (source, target) = dag.data.edge_endpoints(edge_idx).unwrap();
         let flow = &dag.data[edge_idx];
-        println!("Edge {:?} -> {:?}: {:?}", source, target, flow);
         match flow {
             FlowEdge::TrueBranch => true_branch_count += 1,
             FlowEdge::FalseBranch => false_branch_count += 1,
@@ -202,20 +173,13 @@ fn test_circuit_to_dag_if_else() {
         }
     }
 
-    assert!(
-        true_branch_count >= 1,
-        "Should have at least one true branch"
-    );
-    assert!(
-        false_branch_count >= 1,
-        "Should have at least one false branch"
-    );
+    assert!(true_branch_count >= 1, "Should have true branch");
+    assert!(false_branch_count >= 1, "Should have false branch");
 }
 
 #[test]
 fn test_if_without_else() {
-    // if (q[0] == 1): X(q[1])
-    // 没有 else 分支 - 应该创建一个空的 false 块
+    // if (q[0] == 1): X(q[1]) - no else branch
     let mut circuit = Circuit::new(2);
     let q0 = Qubit::new(0);
     let q1 = Qubit::new(1);
@@ -230,17 +194,16 @@ fn test_if_without_else() {
         label: None,
     }];
 
-    // 没有 false_body
     circuit.if_else(condition, true_body, None).unwrap();
 
     let dag = CircuitDag::from_circuit(&circuit).unwrap();
 
-    // 块结构：entry, true, false_empty, merge = 4 个块
+    // entry, true, false_empty, merge = 4 blocks
     assert_eq!(dag.num_blocks(), 4, "If without else should have 4 blocks");
 
     let entry = dag.entry_block().unwrap();
 
-    // 找到 true 和 false 块
+    // Find true and false blocks
     let mut true_block = None;
     let mut false_block = None;
 
@@ -260,20 +223,17 @@ fn test_if_without_else() {
     assert!(true_block.is_some(), "Should have true branch");
     assert!(false_block.is_some(), "Should have false branch (empty)");
 
-    // 验证 true 块包含 X 门
+    // True block contains X gate
     assert_eq!(dag.data[true_block.unwrap()].len(), 1);
 
-    // 验证 false 块是空的（没有操作）但有 Jump 终结符
+    // False block is empty with Jump terminator
     assert_eq!(dag.data[false_block.unwrap()].len(), 0);
-    assert!(
-        matches!(
-            dag.data[false_block.unwrap()].terminator,
-            Some(Terminator::Jump(_))
-        ),
-        "Empty false block should have Jump terminator"
-    );
+    assert!(matches!(
+        dag.data[false_block.unwrap()].terminator,
+        Some(Terminator::Jump(_))
+    ));
 
-    // 验证 true 和 false 都跳到同一个 merge 块
+    // Both branches merge to same block
     let mut true_to_merge = None;
     let mut false_to_merge = None;
 
@@ -289,24 +249,18 @@ fn test_if_without_else() {
         }
     }
 
-    assert_eq!(
-        true_to_merge, false_to_merge,
-        "True and false should merge to same block"
-    );
+    assert_eq!(true_to_merge, false_to_merge, "True and false should merge");
 }
 
 #[test]
 fn test_circuit_to_dag_while_loop() {
-    // 创建一个带 while 循环的线路
     // while (q[0] == 1): H(q[1])
     let mut circuit = Circuit::new(2);
     let q0 = Qubit::new(0);
     let q1 = Qubit::new(1);
 
-    // 先测量 q0
     circuit.measure(q0).unwrap();
 
-    // 构建 while 循环
     let condition = ConditionView::new(q0, 1);
     let body = vec![Operation {
         instruction: Instruction::Standard(StandardGate::H),
@@ -317,26 +271,20 @@ fn test_circuit_to_dag_while_loop() {
 
     circuit.while_loop(condition, body).unwrap();
 
-    // 转换为 DAG
     let dag = CircuitDag::from_circuit(&circuit).unwrap();
 
-    // 块结构：entry(measure), cond, body, exit = 4 个块
-    assert_eq!(
-        dag.num_blocks(),
-        4,
-        "Expected 4 blocks: entry, cond, body, exit"
-    );
+    // entry, cond, body, exit = 4 blocks
+    assert_eq!(dag.num_blocks(), 4, "Expected 4 blocks");
 
-    // 找到各个块
     let entry = dag.entry_block().unwrap();
 
-    // entry 应该 Jump 到 cond
+    // Entry should jump to cond
     assert!(matches!(
         dag.data[entry].terminator,
         Some(Terminator::Jump(_))
     ));
 
-    // 找到 cond 块（entry 的跳转目标）
+    // Find cond block
     let mut cond_block = None;
     for edge_idx in dag.data.edge_indices() {
         let (source, target) = dag.data.edge_endpoints(edge_idx).unwrap();
@@ -347,13 +295,13 @@ fn test_circuit_to_dag_while_loop() {
     }
     let cond_block = cond_block.expect("Should have cond block");
 
-    // cond 块应该有 Branch 终结符
-    assert!(
-        matches!(dag.data[cond_block].terminator, Some(Terminator::Branch(_))),
-        "Cond block should have Branch terminator"
-    );
+    // Cond block should have Branch terminator
+    assert!(matches!(
+        dag.data[cond_block].terminator,
+        Some(Terminator::Branch(_))
+    ));
 
-    // 找到 body 和 exit 块
+    // Find body and exit blocks
     let mut body_block = None;
     let mut exit_block = None;
     for edge_idx in dag.data.edge_indices() {
@@ -372,14 +320,10 @@ fn test_circuit_to_dag_while_loop() {
     let body_block = body_block.expect("Should have body block");
     let exit_block = exit_block.expect("Should have exit block");
 
-    // 验证 body 块包含 H 门
+    // Body contains H gate
     assert_eq!(dag.data[body_block].len(), 1);
-    assert!(matches!(
-        dag.data[body_block].operations[0].instruction,
-        Instruction::Standard(StandardGate::H)
-    ));
 
-    // 验证 body 块有回边到 cond 块
+    // Body has back edge to cond
     let mut has_back_edge = false;
     for edge_idx in dag.data.edge_indices() {
         let (source, target) = dag.data.edge_endpoints(edge_idx).unwrap();
@@ -390,38 +334,30 @@ fn test_circuit_to_dag_while_loop() {
             break;
         }
     }
-    assert!(
-        has_back_edge,
-        "Body block should have back edge to condition"
-    );
+    assert!(has_back_edge, "Body should have back edge to condition");
 
-    // 验证 exit 块有 Return 终结符
-    assert!(
-        matches!(dag.data[exit_block].terminator, Some(Terminator::Return)),
-        "Exit block should have Return terminator"
-    );
+    // Exit has Return terminator
+    assert!(matches!(
+        dag.data[exit_block].terminator,
+        Some(Terminator::Return)
+    ));
 }
 
 #[test]
 fn test_circuit_to_dag_nested_control_flow() {
-    // 创建嵌套控制流
-    // if (q[0] == 1):
-    //     while (q[1] == 1): X(q[2])
-    // else:
-    //     Z(q[2])
+    // if (q[0] == 1): while (q[1] == 1): X(q[2]) else: Z(q[2])
     let mut circuit = Circuit::new(3);
     let q0 = Qubit::new(0);
     let q1 = Qubit::new(1);
     let q2 = Qubit::new(2);
 
-    // 测量
     circuit.measure(q0).unwrap();
     circuit.measure(q1).unwrap();
 
-    // 外层 if-else
+    // Outer if-else
     let outer_condition = ConditionView::new(q0, 1);
 
-    // 内层 while 循环体
+    // Inner while
     let while_condition = ConditionView::new(q1, 1);
     let while_body = vec![Operation {
         instruction: Instruction::Standard(StandardGate::X),
@@ -451,26 +387,203 @@ fn test_circuit_to_dag_nested_control_flow() {
         .if_else(outer_condition, true_body, Some(false_body))
         .unwrap();
 
-    // 转换为 DAG
     let dag = CircuitDag::from_circuit(&circuit).unwrap();
 
-    // 验证: 嵌套控制流应该有更多块
-    assert!(
-        dag.num_blocks() >= 5,
-        "Expected at least 5 blocks, got {}",
-        dag.num_blocks()
-    );
+    // Nested control flow should have multiple blocks
+    assert!(dag.num_blocks() >= 5, "Expected at least 5 blocks");
+}
 
-    println!(
-        "Nested control flow - Number of blocks: {}",
-        dag.num_blocks()
-    );
-    for (idx, block) in dag.blocks() {
-        println!(
-            "Block {:?}: label={:?}, ops={}",
-            idx,
-            block.label(),
-            block.len()
+#[test]
+fn test_to_circuit_simple_linear() {
+    // Round-trip: Circuit -> DAG -> Circuit
+    let mut original = Circuit::new(2);
+    original.h(Qubit::new(0)).unwrap();
+    original.cx(Qubit::new(0), Qubit::new(1)).unwrap();
+    original.measure(Qubit::new(0)).unwrap();
+
+    let dag = CircuitDag::from_circuit(&original).unwrap();
+    let recovered = dag.to_circuit().unwrap();
+
+    // Verify properties
+    assert_eq!(recovered.num_qubits(), original.num_qubits());
+    assert_eq!(recovered.operations().len(), original.operations().len());
+
+    // Verify operation types match
+    for (orig_op, recv_op) in original
+        .operations()
+        .iter()
+        .zip(recovered.operations().iter())
+    {
+        assert_eq!(
+            orig_op.instruction.to_string(),
+            recv_op.instruction.to_string()
         );
+        assert_eq!(orig_op.qubits.len(), recv_op.qubits.len());
+        for (oq, rq) in orig_op.qubits.iter().zip(recv_op.qubits.iter()) {
+            assert_eq!(oq.id(), rq.id());
+        }
+    }
+}
+
+#[test]
+fn test_to_circuit_if_else() {
+    // Round-trip: if-else Circuit -> DAG -> Circuit
+    let mut original = Circuit::new(2);
+    let q0 = Qubit::new(0);
+    let q1 = Qubit::new(1);
+
+    original.measure(q0).unwrap();
+
+    let condition = ConditionView::new(q0, 1);
+    let true_body = vec![Operation {
+        instruction: Instruction::Standard(StandardGate::X),
+        qubits: smallvec![q1],
+        params: smallvec![],
+        label: None,
+    }];
+    let false_body = vec![Operation {
+        instruction: Instruction::Standard(StandardGate::Z),
+        qubits: smallvec![q1],
+        params: smallvec![],
+        label: None,
+    }];
+    original
+        .if_else(condition, true_body, Some(false_body))
+        .unwrap();
+
+    let dag = CircuitDag::from_circuit(&original).unwrap();
+    let recovered = dag.to_circuit().unwrap();
+
+    // Verify structure: Measure + IfElse
+    assert_eq!(recovered.operations().len(), 2);
+
+    let if_else_op = &recovered.operations()[1];
+    match &if_else_op.instruction {
+        Instruction::ControlFlowGate(ControlFlow::IfElse(gate)) => {
+            assert_eq!(gate.condition().qubit.id(), q0.id());
+            assert_eq!(gate.condition().target, 1);
+
+            // Check true body
+            let true_ops = gate.true_body();
+            assert_eq!(true_ops.len(), 1);
+            assert!(matches!(
+                true_ops[0].instruction,
+                Instruction::Standard(StandardGate::X)
+            ));
+
+            // Check false body
+            let false_ops = gate.false_body();
+            assert!(false_ops.is_some());
+            assert_eq!(false_ops.unwrap().len(), 1);
+        }
+        _ => panic!("Expected IfElse control flow"),
+    }
+}
+
+#[test]
+fn test_to_circuit_while_loop() {
+    // Round-trip: while loop Circuit -> DAG -> Circuit
+    let mut original = Circuit::new(2);
+    let q0 = Qubit::new(0);
+    let q1 = Qubit::new(1);
+
+    original.measure(q0).unwrap();
+
+    let condition = ConditionView::new(q0, 1);
+    let body = vec![Operation {
+        instruction: Instruction::Standard(StandardGate::H),
+        qubits: smallvec![q1],
+        params: smallvec![],
+        label: None,
+    }];
+    original.while_loop(condition, body).unwrap();
+
+    let dag = CircuitDag::from_circuit(&original).unwrap();
+    let recovered = dag.to_circuit().unwrap();
+
+    // Verify structure: Measure + WhileLoop
+    assert_eq!(recovered.operations().len(), 2);
+
+    let while_op = &recovered.operations()[1];
+    match &while_op.instruction {
+        Instruction::ControlFlowGate(ControlFlow::WhileLoop(gate)) => {
+            assert_eq!(gate.condition().qubit.id(), q0.id());
+            assert_eq!(gate.condition().target, 1);
+
+            // Check loop body
+            let body_ops = gate.body();
+            assert_eq!(body_ops.len(), 1);
+            assert!(matches!(
+                body_ops[0].instruction,
+                Instruction::Standard(StandardGate::H)
+            ));
+        }
+        _ => panic!("Expected WhileLoop control flow"),
+    }
+}
+
+#[test]
+fn test_to_circuit_nested_if_in_while() {
+    // Round-trip: nested control flow Circuit -> DAG -> Circuit
+    let mut original = Circuit::new(3);
+    let q0 = Qubit::new(0);
+    let q1 = Qubit::new(1);
+    let q2 = Qubit::new(2);
+
+    original.measure(q0).unwrap();
+    original.measure(q1).unwrap();
+
+    // Build inner if-else
+    let if_condition = ConditionView::new(q1, 1);
+    let if_true = vec![Operation {
+        instruction: Instruction::Standard(StandardGate::X),
+        qubits: smallvec![q2],
+        params: smallvec![],
+        label: None,
+    }];
+    let if_false = vec![Operation {
+        instruction: Instruction::Standard(StandardGate::Y),
+        qubits: smallvec![q2],
+        params: smallvec![],
+        label: None,
+    }];
+
+    let if_op = Operation {
+        instruction: Instruction::ControlFlowGate(ControlFlow::IfElse(IfElseGate::new(
+            if_condition,
+            if_true,
+            Some(if_false),
+        ))),
+        qubits: smallvec![q1, q2],
+        params: smallvec![],
+        label: None,
+    };
+
+    // Build outer while
+    let while_condition = ConditionView::new(q0, 1);
+    let while_body = vec![if_op];
+    original.while_loop(while_condition, while_body).unwrap();
+
+    let dag = CircuitDag::from_circuit(&original).unwrap();
+    let recovered = dag.to_circuit().unwrap();
+
+    // Verify: Measure, Measure, While(IfElse)
+    assert_eq!(recovered.operations().len(), 3);
+
+    let while_op = &recovered.operations()[2];
+    match &while_op.instruction {
+        Instruction::ControlFlowGate(ControlFlow::WhileLoop(while_gate)) => {
+            assert_eq!(while_gate.body().len(), 1);
+
+            // Check inner IfElse
+            match &while_gate.body()[0].instruction {
+                Instruction::ControlFlowGate(ControlFlow::IfElse(if_gate)) => {
+                    assert_eq!(if_gate.true_body().len(), 1);
+                    assert_eq!(if_gate.false_body().unwrap().len(), 1);
+                }
+                _ => panic!("Expected nested IfElse in While body"),
+            }
+        }
+        _ => panic!("Expected WhileLoop control flow"),
     }
 }

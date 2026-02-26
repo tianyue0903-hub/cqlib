@@ -600,9 +600,10 @@ fn test_dump_while_loop() {
         )
         .unwrap();
 
-    let qasm = dumps(&circuit).expect("Should dump");
-    println!("Generated QASM for while loop:\n{}", qasm);
-
-    // While loop should be commented out or marked as unsupported
-    assert!(qasm.contains("while") || qasm.contains("not supported"));
+    // While loop is not supported in OpenQASM 2.0 - should return error
+    let result = dumps(&circuit);
+    assert!(
+        result.is_err(),
+        "While loop dump should fail because OpenQASM 2.0 doesn't support it"
+    );
 }
