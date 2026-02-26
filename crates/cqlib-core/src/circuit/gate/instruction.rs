@@ -17,10 +17,12 @@
 //! - **Standard Gates**: Highly optimized, commonly used gates (e.g., H, CX).
 //! - **Extended Gates**: Complex gates like multi-controlled operations or custom unitaries.
 //! - **Non-Unitary Operations**: Measurement, Barrier, Reset.
+//! - **Control Flow**: Conditional and iterative operations (If-Else, While-Loop).
 //!
 //! By using `Instruction`, the circuit can store a heterogeneous list of operations in a single vector.
 
 use crate::circuit::gate::circuit_gate::{CircuitGate, FrozenCircuit};
+use crate::circuit::gate::control_flow::ControlFlow;
 use crate::circuit::gate::directive::Directive;
 use crate::circuit::gate::standard_gate::StandardGate;
 use crate::circuit::gate::{MCGate, UnitaryGate, gate_matrix};
@@ -49,6 +51,17 @@ pub enum Instruction {
     /// A non-unitary operation, such as `Measure`, `Barrier`, or `Reset`.
     Directive(Directive),
 
+    /// Control flow operation for conditional or iterative quantum execution.
+    ///
+    /// This variant supports:
+    /// - [`IfElseGate`]: Conditional execution based on classical measurement outcomes
+    /// - [`WhileLoopGate`]: Iterative execution based on classical conditions
+    ///
+    /// # Important
+    ///
+    /// Control flow operations are **not unitary** and cannot be represented as a matrix.
+    /// They require runtime interpretation and may not be supported by all backends.
+    ControlFlowGate(ControlFlow),
     /// I gate in QCIS, represented here as Delay, unit is 0.5ns
     Delay,
 }
@@ -74,6 +87,7 @@ impl Instruction {
                 .map(Cow::Owned),
             Instruction::Directive(_) => None,
             Instruction::Delay => None,
+            Instruction::ControlFlowGate(_) => None,
         }
     }
 
@@ -135,6 +149,7 @@ impl Instruction {
                 _ => None,
             },
             Instruction::Delay => Some((Self::Delay, SmallVec::new())),
+            Instruction::ControlFlowGate(_) => None,
         }
     }
 
@@ -222,9 +237,13 @@ impl Instruction {
                     format!("ctl_{}_{}", num_new_ctrls, uni.label()).as_str(),
                     uni.num_qubits() + num_new_ctrls as u16,
                 );
-                if let Some(m) = g.matrix() {
+                if let Some(m) = uni.matrix() {
                     let controlled = gate_matrix::control_matrix(m, num_new_ctrls);
                     g = g.with_matrix(controlled).unwrap();
+                }
+                // Copy circuit field if present
+                if let Some(c) = uni.circuit() {
+                    g = g.with_circuit(c.clone());
                 }
 
                 Some(Instruction::UnitaryGate(Box::from(g)))
@@ -234,6 +253,7 @@ impl Instruction {
             }
             Instruction::Directive(_) => None,
             Instruction::Delay => None,
+            Instruction::ControlFlowGate(_) => None,
         }
     }
 }
@@ -247,6 +267,7 @@ impl fmt::Display for Instruction {
             Instruction::CircuitGate(g) => write!(f, "{}", g.name),
             Instruction::Directive(i) => write!(f, "{}", i),
             Instruction::Delay => write!(f, "delay"),
+            Instruction::ControlFlowGate(g) => write!(f, "{}", g),
         }
     }
 }
@@ -260,5 +281,11 @@ impl From<StandardGate> for Instruction {
 impl From<Directive> for Instruction {
     fn from(d: Directive) -> Self {
         Self::Directive(d)
+    }
+}
+
+impl From<ControlFlow> for Instruction {
+    fn from(cf: ControlFlow) -> Self {
+        Self::ControlFlowGate(cf)
     }
 }

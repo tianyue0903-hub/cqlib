@@ -14,6 +14,9 @@
 //!
 //! Provides C-compatible APIs for quantum circuit operations.
 
+// Allow clippy warnings for FFI functions that dereference raw pointers
+#![allow(clippy::not_unsafe_ptr_arg_deref, clippy::manual_unwrap_or)]
+
 use cqlib_core::circuit::param::ParameterValue;
 use cqlib_core::circuit::parameter::{Parameter, parse_parameter};
 use cqlib_core::circuit::{Circuit, Qubit};

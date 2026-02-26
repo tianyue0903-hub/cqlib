@@ -22,6 +22,7 @@
 //! - **[`UnitaryGate`]**: User-defined custom gates via matrix representation.
 //! - **[`MCGate`]**: Multi-controlled gates extending standard gates with arbitrary controls.
 //! - **[`Directive`]**: Non-unitary circuit operations like `Measure`, `Reset`, and `Barrier`.
+//! - **[`ControlFlow`]**: Control flow operations for conditional and iterative quantum execution.
 //! - **[`Instruction`]**: The unified sum type that wraps all the above, representing a single step in a circuit.
 //! - **[`CircuitGate`]**: Composite gates defined by entire sub-circuits.
 //!
@@ -71,6 +72,7 @@
 //! ```
 
 pub mod circuit_gate;
+pub mod control_flow;
 pub mod delay;
 pub mod directive;
 pub mod gate_matrix;
@@ -81,6 +83,7 @@ pub mod unitary_gate;
 
 // Re-export key types for easier access
 pub use circuit_gate::{CircuitGate, FrozenCircuit};
+pub use control_flow::{ConditionView, ControlFlow, IfElseGate, WhileLoopGate};
 pub use delay::DelayOp;
 pub use directive::Directive;
 pub use instruction::Instruction;

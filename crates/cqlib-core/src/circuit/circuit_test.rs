@@ -13,7 +13,9 @@
 use crate::circuit::Qubit;
 use crate::circuit::circuit_impl::Circuit;
 use crate::circuit::error::CircuitError;
+use crate::circuit::gate::control_flow::ConditionView;
 use crate::circuit::gate::{Instruction, StandardGate};
+use crate::circuit::operation::Operation;
 use crate::circuit::param::{CircuitParam, ParameterValue};
 use crate::circuit::parameter::impls::Parameter;
 use smallvec::smallvec;
@@ -250,29 +252,6 @@ fn test_to_gate_and_circuit_gate() {
     } else {
         panic!("Expected Circuit instruction");
     }
-
-    // 4. Test Inversion of CircuitGate
-    // main.inverse() should call bell_gate.inverse()
-    // let inv_main = main.inverse().unwrap();
-    // let op = &inv_main.data[0];
-
-    //     if let Instruction::Circuit(gate) = &op.instruction {
-    //         assert_eq!(gate.name.as_ref(), "bell_dg"); // Name should have suffix
-    //         // Inner circuit should be inverted: CX(q0, q1) -> H(q0) (Order reversed and inverted)
-    //         // CX inv is CX, H inv is H. So: CX then H.
-    //         let inner_ops = &gate.circuit().circuit.data;
-    //         assert_eq!(inner_ops.len(), 2);
-    //         assert!(matches!(
-    //             inner_ops[0].instruction,
-    //             Instruction::Standard(StandardGate::CX)
-    //         ));
-    //         assert!(matches!(
-    //             inner_ops[1].instruction,
-    //             Instruction::Standard(StandardGate::H)
-    //         ));
-    //     } else {
-    //         panic!("Expected Circuit instruction after inverse");
-    //     }
 }
 
 #[test]
@@ -464,4 +443,233 @@ fn test_decompose_nested() {
         flat.data[1].instruction,
         Instruction::Standard(StandardGate::H)
     ));
+}
+
+#[test]
+fn test_if_else_basic() {
+    // Test basic if-else construction
+    let mut circuit = Circuit::new(2);
+
+    let condition = ConditionView::new(Qubit::new(0), 1);
+    let true_body = vec![Operation {
+        instruction: Instruction::Standard(StandardGate::X),
+        qubits: smallvec![Qubit::new(1)],
+        params: smallvec![],
+        label: None,
+    }];
+
+    circuit.if_else(condition, true_body, None).unwrap();
+
+    // Verify the circuit has 1 operation
+    assert_eq!(circuit.data.len(), 1);
+
+    // Verify the operation is a ControlFlowGate
+    let op = &circuit.data[0];
+    assert!(matches!(op.instruction, Instruction::ControlFlowGate(_)));
+}
+
+#[test]
+fn test_if_else_with_false_branch() {
+    // Test if-else with both true and false branches
+    let mut circuit = Circuit::new(2);
+
+    let condition = ConditionView::new(Qubit::new(0), 1);
+    let true_body = vec![Operation {
+        instruction: Instruction::Standard(StandardGate::X),
+        qubits: smallvec![Qubit::new(1)],
+        params: smallvec![],
+        label: None,
+    }];
+    let false_body = vec![Operation {
+        instruction: Instruction::Standard(StandardGate::Z),
+        qubits: smallvec![Qubit::new(1)],
+        params: smallvec![],
+        label: None,
+    }];
+
+    circuit
+        .if_else(condition, true_body, Some(false_body))
+        .unwrap();
+
+    assert_eq!(circuit.data.len(), 1);
+
+    let op = &circuit.data[0];
+    if let Instruction::ControlFlowGate(cf) = &op.instruction {
+        use crate::circuit::gate::control_flow::ControlFlow;
+        if let ControlFlow::IfElse(gate) = cf {
+            assert_eq!(gate.true_body().len(), 1);
+            assert_eq!(gate.false_body().unwrap().len(), 1);
+        }
+    }
+}
+
+#[test]
+fn test_while_loop_basic() {
+    // Test basic while loop construction
+    let mut circuit = Circuit::new(2);
+
+    let condition = ConditionView::new(Qubit::new(0), 1);
+    let body = vec![Operation {
+        instruction: Instruction::Standard(StandardGate::H),
+        qubits: smallvec![Qubit::new(1)],
+        params: smallvec![],
+        label: None,
+    }];
+
+    circuit.while_loop(condition, body).unwrap();
+
+    assert_eq!(circuit.data.len(), 1);
+
+    let op = &circuit.data[0];
+    assert!(matches!(op.instruction, Instruction::ControlFlowGate(_)));
+}
+
+#[test]
+fn test_control_flow_multiple_operations() {
+    // Test control flow with multiple operations in body
+    let mut circuit = Circuit::new(3);
+
+    let condition = ConditionView::new(Qubit::new(0), 1);
+    let true_body = vec![
+        Operation {
+            instruction: Instruction::Standard(StandardGate::H),
+            qubits: smallvec![Qubit::new(1)],
+            params: smallvec![],
+            label: None,
+        },
+        Operation {
+            instruction: Instruction::Standard(StandardGate::CX),
+            qubits: smallvec![Qubit::new(1), Qubit::new(2)],
+            params: smallvec![],
+            label: None,
+        },
+    ];
+
+    circuit.if_else(condition, true_body, None).unwrap();
+
+    assert_eq!(circuit.data.len(), 1);
+
+    let op = &circuit.data[0];
+    if let Instruction::ControlFlowGate(cf) = &op.instruction {
+        use crate::circuit::gate::control_flow::ControlFlow;
+        if let ControlFlow::IfElse(gate) = cf {
+            assert_eq!(gate.true_body().len(), 2);
+        }
+    }
+}
+
+#[test]
+fn test_control_flow_inverse_error() {
+    // Test that inverse() returns error for circuits with control flow
+    let mut circuit = Circuit::new(2);
+
+    let condition = ConditionView::new(Qubit::new(0), 1);
+    let true_body = vec![Operation {
+        instruction: Instruction::Standard(StandardGate::H),
+        qubits: smallvec![Qubit::new(1)],
+        params: smallvec![],
+        label: None,
+    }];
+
+    circuit.if_else(condition, true_body, None).unwrap();
+
+    // inverse() should return error for circuits with control flow
+    let result = circuit.inverse();
+    assert!(result.is_err());
+    assert!(matches!(
+        result.unwrap_err(),
+        CircuitError::IrreversibleOperation
+    ));
+}
+
+#[test]
+fn test_control_flow_matrix_returns_none() {
+    // Test that ControlFlowGate matrix() returns None
+    use crate::circuit::gate::control_flow::{ControlFlow, IfElseGate};
+
+    let condition = ConditionView::new(Qubit::new(0), 1);
+    let true_body = vec![Operation {
+        instruction: Instruction::Standard(StandardGate::H),
+        qubits: smallvec![Qubit::new(1)],
+        params: smallvec![],
+        label: None,
+    }];
+
+    let gate = IfElseGate::new(condition, true_body, None);
+    let cf = ControlFlow::IfElse(gate);
+
+    // matrix() should return None for control flow
+    let matrix = cf.matrix();
+    assert!(matrix.is_none());
+}
+
+#[test]
+fn test_decompose_preserves_control_flow() {
+    // Test that decompose() preserves control flow structure
+    let mut circuit = Circuit::new(2);
+
+    // Add control flow with same qubit as condition
+    let condition = ConditionView::new(Qubit::new(0), 1);
+    let true_body = vec![Operation {
+        instruction: Instruction::Standard(StandardGate::X),
+        qubits: smallvec![Qubit::new(0)], // Use same qubit as condition
+        params: smallvec![],
+        label: None,
+    }];
+
+    circuit.if_else(condition, true_body, None).unwrap();
+
+    // Decompose the circuit
+    let decomposed = circuit.decompose();
+
+    // Should have the control flow preserved
+    assert_eq!(decomposed.data.len(), 1);
+
+    // Control flow should still be present
+    let has_control_flow = decomposed
+        .data
+        .iter()
+        .any(|op| matches!(op.instruction, Instruction::ControlFlowGate(_)));
+    assert!(
+        has_control_flow,
+        "ControlFlowGate should be preserved after decompose"
+    );
+}
+
+#[test]
+fn test_decompose_control_flow_multiple_qubits() {
+    // Test decompose with control flow body using multiple qubits
+    let mut circuit = Circuit::new(3);
+
+    // Add control flow with body using multiple qubits (0, 1, 2)
+    let condition = ConditionView::new(Qubit::new(0), 1);
+    let true_body = vec![
+        Operation {
+            instruction: Instruction::Standard(StandardGate::H),
+            qubits: smallvec![Qubit::new(1)],
+            params: smallvec![],
+            label: None,
+        },
+        Operation {
+            instruction: Instruction::Standard(StandardGate::CX),
+            qubits: smallvec![Qubit::new(1), Qubit::new(2)],
+            params: smallvec![],
+            label: None,
+        },
+    ];
+
+    circuit.if_else(condition, true_body, None).unwrap();
+
+    // Decompose should work without error
+    let decomposed = circuit.decompose();
+
+    // Control flow should be preserved
+    let has_control_flow = decomposed
+        .data
+        .iter()
+        .any(|op| matches!(op.instruction, Instruction::ControlFlowGate(_)));
+    assert!(
+        has_control_flow,
+        "ControlFlowGate should be preserved after decompose"
+    );
 }

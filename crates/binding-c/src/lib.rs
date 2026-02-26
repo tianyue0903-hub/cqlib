@@ -20,5 +20,8 @@
 //! - [`circuit`]: Quantum circuit operations and gates
 //! - [`ir`]: IR format parsing (QCIS, OpenQASM2)
 
+// Allow clippy warnings for FFI functions that dereference raw pointers
+#![allow(clippy::not_unsafe_ptr_arg_deref)]
+
 pub mod circuit;
 pub mod ir;

@@ -14,12 +14,13 @@
 //!
 //! Provides C-compatible APIs for parsing QCIS and OpenQASM 2.0 formats.
 
+// Allow clippy warnings for FFI functions that dereference raw pointers
+#![allow(clippy::not_unsafe_ptr_arg_deref)]
+
 use crate::circuit::CircuitWrapper;
-use cqlib_core::circuit::Circuit;
 use cqlib_core::ir::qasm2_dumps as core_qasm2_dumps;
 use cqlib_core::ir::qcis_dumps as core_qcis_dumps;
 use cqlib_core::ir::{qasm2_loads, qcis_loads};
-use std::collections::HashMap;
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 
