@@ -10,345 +10,467 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
-use crate::circuit::dag::CircuitDag;
-use crate::circuit::gate::Instruction;
+use crate::circuit::dag::{BasicBlock, CircuitDag, FlowEdge, Terminator};
+use crate::circuit::gate::control_flow::{ConditionView, ControlFlow, IfElseGate, WhileLoopGate};
+use crate::circuit::gate::{Instruction, StandardGate};
+use crate::circuit::operation::Operation;
 use crate::circuit::{Circuit, Qubit};
+use smallvec::smallvec;
 
-/// Helper function to create a simple circuit for testing
-fn create_test_circuit() -> Circuit {
-    let mut circuit = Circuit::new(3);
+#[test]
+fn test_basic_block_creation() {
+    let block = BasicBlock::new();
+    assert!(block.is_empty());
+    assert!(!block.has_terminator());
+    assert_eq!(block.len(), 0);
+    assert!(block.label().is_none());
+}
+
+#[test]
+fn test_basic_block_with_label() {
+    let block = BasicBlock::new().with_label("test_block");
+    assert_eq!(block.label(), Some("test_block"));
+}
+
+#[test]
+fn test_basic_block_operations() {
+    let mut block = BasicBlock::new();
+    let q0 = Qubit::new(0);
+
+    let op = Operation {
+        instruction: Instruction::Standard(StandardGate::H),
+        qubits: smallvec![q0],
+        params: smallvec![],
+        label: None,
+    };
+
+    block.push_operation(op.clone());
+    assert_eq!(block.len(), 1);
+    assert!(!block.is_empty());
+
+    block.extend_operations(vec![op.clone(), op.clone()]);
+    assert_eq!(block.len(), 3);
+}
+
+#[test]
+fn test_basic_block_terminator() {
+    let mut block = BasicBlock::new();
+    let q0 = Qubit::new(0);
+    let condition = ConditionView::new(q0, 1);
+
+    block.set_terminator(Terminator::Branch(condition));
+    assert!(block.has_terminator());
+    assert!(matches!(block.terminator, Some(Terminator::Branch(_))));
+}
+
+#[test]
+fn test_circuit_dag_empty() {
+    let dag = CircuitDag::new(2);
+    assert_eq!(dag.num_qubits(), 2);
+    assert_eq!(dag.num_blocks(), 0);
+    assert!(dag.entry_block().is_none());
+    assert_eq!(dag.qubits().len(), 2);
+}
+
+#[test]
+fn test_circuit_dag_add_block() {
+    let mut dag = CircuitDag::new(1);
+    let block = BasicBlock::new().with_label("test");
+    let idx = dag.add_block(block);
+
+    assert_eq!(dag.num_blocks(), 1);
+    assert_eq!(dag.data[idx].label(), Some("test"));
+}
+
+#[test]
+fn test_empty_circuit_conversion() {
+    let circuit = Circuit::new(2);
+    let dag = CircuitDag::from_circuit(&circuit).unwrap();
+
+    // 空线路应该只有一个 entry 块
+    assert_eq!(dag.num_blocks(), 1);
+    assert!(dag.entry_block().is_some());
+
+    let entry = dag.entry_block().unwrap();
+    // entry 块没有操作但有 Return 终结符
+    assert_eq!(dag.data[entry].len(), 0);
+    assert!(matches!(
+        dag.data[entry].terminator,
+        Some(Terminator::Return)
+    ));
+}
+
+#[test]
+fn test_circuit_to_dag_simple() {
+    // 创建一个简单线路: H(0) -> CX(0, 1) -> Measure(0)
+    let mut circuit = Circuit::new(2);
     circuit.h(Qubit::new(0)).unwrap();
     circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
-    circuit.cx(Qubit::new(1), Qubit::new(2)).unwrap();
-    circuit
-}
+    circuit.measure(Qubit::new(0)).unwrap();
 
-/// Test basic conversion from Circuit to CircuitDag
-#[test]
-fn test_from_circuit_basic() {
-    let circuit = create_test_circuit();
-    let dag = CircuitDag::from_circuit(&circuit);
+    // 转换为 DAG
+    let dag = CircuitDag::from_circuit(&circuit).unwrap();
 
-    // Verify qubits are preserved
-    assert_eq!(dag.qubits.len(), 3);
-    assert!(dag.qubits.contains(&Qubit::new(0)));
-    assert!(dag.qubits.contains(&Qubit::new(1)));
-    assert!(dag.qubits.contains(&Qubit::new(2)));
-
-    // Verify operations count (3 nodes)
-    assert_eq!(dag.data.node_count(), 3);
-}
-
-/// Test conversion from CircuitDag back to Circuit
-#[test]
-fn test_to_circuit_basic() {
-    let circuit = create_test_circuit();
-    let dag = CircuitDag::from_circuit(&circuit);
-    let recovered = dag.to_circuit();
-
-    // Verify qubit count
-    assert_eq!(circuit.num_qubits(), recovered.num_qubits());
-
-    // Verify operation count
-    assert_eq!(circuit.operations().len(), recovered.operations().len());
-}
-
-/// Test roundtrip: Circuit -> CircuitDag -> Circuit
-#[test]
-fn test_roundtrip() {
-    let original = create_test_circuit();
-    let dag = CircuitDag::from_circuit(&original);
-    let recovered = dag.to_circuit();
-
-    // Operations should match
-    assert_eq!(original.operations().len(), recovered.operations().len());
-}
-
-/// Test CircuitDag with parameterized gates
-#[test]
-fn test_parametric_circuit() {
-    use crate::circuit::parameter::impls::Parameter;
-
-    let mut circuit = Circuit::new(2);
-    let theta = Parameter::symbol("theta");
-    circuit.rx(Qubit::new(0), theta.clone()).unwrap();
-    circuit.h(Qubit::new(1)).unwrap();
-
-    let dag = CircuitDag::from_circuit(&circuit);
-    assert_eq!(dag.parameters.len(), 1);
-
-    let recovered = dag.to_circuit();
-    assert_eq!(recovered.parameters().len(), 1);
-}
-
-/// Test CircuitDag with symbols
-#[test]
-fn test_symbols() {
-    use crate::circuit::parameter::impls::Parameter;
-
-    let mut circuit = Circuit::new(2);
-    let theta = Parameter::symbol("theta");
-    let phi = Parameter::symbol("phi");
-
-    // Use different parameters with different symbols
-    circuit.rx(Qubit::new(0), theta.clone()).unwrap();
-    circuit.ry(Qubit::new(1), phi.clone()).unwrap();
-
-    let dag = CircuitDag::from_circuit(&circuit);
-
-    // Verify symbols are preserved
-    assert!(dag.symbols.contains(&"theta".to_string()));
-    assert!(dag.symbols.contains(&"phi".to_string()));
-    assert_eq!(dag.symbols.len(), 2);
-
-    // Test roundtrip preserves symbols
-    let recovered = dag.to_circuit();
-    let recovered_symbols: Vec<_> = recovered.symbols().iter().cloned().collect();
-    assert!(recovered_symbols.contains(&"theta".to_string()));
-    assert!(recovered_symbols.contains(&"phi".to_string()));
-}
-
-/// Test CircuitDag with same symbol used multiple times
-#[test]
-fn test_duplicate_symbols() {
-    use crate::circuit::parameter::impls::Parameter;
-
-    let mut circuit = Circuit::new(2);
-    let theta = Parameter::symbol("theta");
-
-    // Use same parameter on multiple gates
-    circuit.rx(Qubit::new(0), theta.clone()).unwrap();
-    circuit.ry(Qubit::new(1), theta.clone()).unwrap();
-
-    let dag = CircuitDag::from_circuit(&circuit);
-
-    // Symbol should only appear once due to deduplication
-    assert!(dag.symbols.contains(&"theta".to_string()));
-    assert_eq!(dag.symbols.len(), 1);
-}
-
-/// Test CircuitDag with complex parameter expressions
-#[test]
-fn test_complex_parameters() {
-    use crate::circuit::parameter::impls::Parameter;
-
-    let mut circuit = Circuit::new(2);
-    let theta = Parameter::symbol("theta");
-    let phi = Parameter::symbol("phi");
-
-    // Use expression with multiple symbols
-    let expr = theta.clone() + phi.clone();
-    circuit.rx(Qubit::new(0), expr).unwrap();
-
-    let dag = CircuitDag::from_circuit(&circuit);
-
-    // Both symbols should be present
-    assert!(dag.symbols.contains(&"theta".to_string()));
-    assert!(dag.symbols.contains(&"phi".to_string()));
-
-    let recovered = dag.to_circuit();
-    let recovered_symbols: Vec<_> = recovered.symbols().iter().cloned().collect();
-    assert!(recovered_symbols.contains(&"theta".to_string()));
-    assert!(recovered_symbols.contains(&"phi".to_string()));
-}
-
-/// Test CircuitDag with global phase
-#[test]
-fn test_global_phase() {
-    use crate::circuit::parameter::impls::Parameter;
-
-    let mut circuit = Circuit::new(2);
-    circuit.h(Qubit::new(0)).unwrap();
-
-    // Set a fixed global phase
-    let phase = Parameter::from(std::f64::consts::PI);
-    circuit.set_global_phase(phase);
-
-    let dag = CircuitDag::from_circuit(&circuit);
-    let recovered = dag.to_circuit();
-
-    // Check global phase is preserved
-    let original_phase = circuit.global_phase();
-    let recovered_phase = recovered.global_phase();
+    // 无控制流时应该只有一个 entry 块
     assert_eq!(
-        original_phase.evaluate(&None).unwrap(),
-        recovered_phase.evaluate(&None).unwrap()
+        dag.num_blocks(),
+        1,
+        "Simple circuit should have exactly 1 block"
+    );
+    assert_eq!(dag.num_qubits(), 2);
+
+    // 验证 entry 块包含所有操作
+    let entry = dag.entry_block().unwrap();
+    assert_eq!(
+        dag.data[entry].len(),
+        3,
+        "Entry block should have 3 operations"
+    );
+    assert!(matches!(
+        dag.data[entry].terminator,
+        Some(Terminator::Return)
+    ));
+}
+
+#[test]
+fn test_circuit_to_dag_if_else() {
+    // 创建一个带 if-else 的线路
+    // if (q[0] == 1): X(q[1])
+    // else: Z(q[1])
+    let mut circuit = Circuit::new(2);
+    let q0 = Qubit::new(0);
+    let q1 = Qubit::new(1);
+
+    // 先测量 q0 得到条件
+    circuit.measure(q0).unwrap();
+
+    // 构建 if-else
+    let condition = ConditionView::new(q0, 1);
+    let true_body = vec![Operation {
+        instruction: Instruction::Standard(StandardGate::X),
+        qubits: smallvec![q1],
+        params: smallvec![],
+        label: None,
+    }];
+    let false_body = vec![Operation {
+        instruction: Instruction::Standard(StandardGate::Z),
+        qubits: smallvec![q1],
+        params: smallvec![],
+        label: None,
+    }];
+
+    circuit
+        .if_else(condition, true_body, Some(false_body))
+        .unwrap();
+
+    // 转换为 DAG
+    let dag = CircuitDag::from_circuit(&circuit).unwrap();
+
+    // 验证: 应该有 entry, if_true, if_false, merge 等块
+    assert!(
+        dag.num_blocks() >= 4,
+        "Expected at least 4 blocks, got {}",
+        dag.num_blocks()
+    );
+
+    // 验证入口块
+    let entry = dag.entry_block().unwrap();
+
+    // 打印调试信息
+    println!("Number of blocks: {}", dag.num_blocks());
+    for (idx, block) in dag.blocks() {
+        println!(
+            "Block {:?}: label={:?}, ops={}, terminator={:?}",
+            idx,
+            block.label(),
+            block.len(),
+            block.terminator
+        );
+    }
+
+    // 验证控制流边
+    let mut true_branch_count = 0;
+    let mut false_branch_count = 0;
+    for edge_idx in dag.data.edge_indices() {
+        let (source, target) = dag.data.edge_endpoints(edge_idx).unwrap();
+        let flow = &dag.data[edge_idx];
+        println!("Edge {:?} -> {:?}: {:?}", source, target, flow);
+        match flow {
+            FlowEdge::TrueBranch => true_branch_count += 1,
+            FlowEdge::FalseBranch => false_branch_count += 1,
+            FlowEdge::Unconditional => {}
+        }
+    }
+
+    assert!(
+        true_branch_count >= 1,
+        "Should have at least one true branch"
+    );
+    assert!(
+        false_branch_count >= 1,
+        "Should have at least one false branch"
     );
 }
 
-/// Test CircuitDag with symbolic global phase
 #[test]
-fn test_symbolic_global_phase() {
-    use crate::circuit::parameter::impls::Parameter;
-
+fn test_if_without_else() {
+    // if (q[0] == 1): X(q[1])
+    // 没有 else 分支 - 应该创建一个空的 false 块
     let mut circuit = Circuit::new(2);
-    circuit.h(Qubit::new(0)).unwrap();
+    let q0 = Qubit::new(0);
+    let q1 = Qubit::new(1);
 
-    // Set a symbolic global phase
-    let phase = Parameter::symbol("phi");
-    circuit.set_global_phase(phase);
+    circuit.measure(q0).unwrap();
 
-    let dag = CircuitDag::from_circuit(&circuit);
-    let recovered = dag.to_circuit();
+    let condition = ConditionView::new(q0, 1);
+    let true_body = vec![Operation {
+        instruction: Instruction::Standard(StandardGate::X),
+        qubits: smallvec![q1],
+        params: smallvec![],
+        label: None,
+    }];
 
-    // Global phase should be preserved (as parameter)
-    let recovered_phase = recovered.global_phase();
-    assert!(recovered_phase.get_symbols().contains(&"phi".to_string()));
+    // 没有 false_body
+    circuit.if_else(condition, true_body, None).unwrap();
+
+    let dag = CircuitDag::from_circuit(&circuit).unwrap();
+
+    // 块结构：entry, true, false_empty, merge = 4 个块
+    assert_eq!(dag.num_blocks(), 4, "If without else should have 4 blocks");
+
+    let entry = dag.entry_block().unwrap();
+
+    // 找到 true 和 false 块
+    let mut true_block = None;
+    let mut false_block = None;
+
+    for edge_idx in dag.data.edge_indices() {
+        let (source, target) = dag.data.edge_endpoints(edge_idx).unwrap();
+        let flow = &dag.data[edge_idx];
+
+        if source == entry {
+            match flow {
+                FlowEdge::TrueBranch => true_block = Some(target),
+                FlowEdge::FalseBranch => false_block = Some(target),
+                _ => {}
+            }
+        }
+    }
+
+    assert!(true_block.is_some(), "Should have true branch");
+    assert!(false_block.is_some(), "Should have false branch (empty)");
+
+    // 验证 true 块包含 X 门
+    assert_eq!(dag.data[true_block.unwrap()].len(), 1);
+
+    // 验证 false 块是空的（没有操作）但有 Jump 终结符
+    assert_eq!(dag.data[false_block.unwrap()].len(), 0);
+    assert!(
+        matches!(
+            dag.data[false_block.unwrap()].terminator,
+            Some(Terminator::Jump(_))
+        ),
+        "Empty false block should have Jump terminator"
+    );
+
+    // 验证 true 和 false 都跳到同一个 merge 块
+    let mut true_to_merge = None;
+    let mut false_to_merge = None;
+
+    for edge_idx in dag.data.edge_indices() {
+        let (source, target) = dag.data.edge_endpoints(edge_idx).unwrap();
+        let flow = &dag.data[edge_idx];
+
+        if source == true_block.unwrap() && matches!(flow, FlowEdge::Unconditional) {
+            true_to_merge = Some(target);
+        }
+        if source == false_block.unwrap() && matches!(flow, FlowEdge::Unconditional) {
+            false_to_merge = Some(target);
+        }
+    }
+
+    assert_eq!(
+        true_to_merge, false_to_merge,
+        "True and false should merge to same block"
+    );
 }
 
-/// Test CircuitDag edge construction (dependency tracking)
 #[test]
-fn test_dag_edges() {
-    let circuit = create_test_circuit();
-    let dag = CircuitDag::from_circuit(&circuit);
+fn test_circuit_to_dag_while_loop() {
+    // 创建一个带 while 循环的线路
+    // while (q[0] == 1): H(q[1])
+    let mut circuit = Circuit::new(2);
+    let q0 = Qubit::new(0);
+    let q1 = Qubit::new(1);
 
-    // The circuit has 3 operations:
-    // 1. H(0)
-    // 2. CX(0, 1)
-    // 3. CX(1, 2)
-    //
-    // Edges should exist for:
-    // - H(0) -> CX(0,1) (qubit 0 dependency)
-    // - CX(0,1) -> CX(1,2) (qubit 1 dependency)
-    //
-    // Total edges: 2
-    assert_eq!(dag.data.edge_count(), 2);
+    // 先测量 q0
+    circuit.measure(q0).unwrap();
+
+    // 构建 while 循环
+    let condition = ConditionView::new(q0, 1);
+    let body = vec![Operation {
+        instruction: Instruction::Standard(StandardGate::H),
+        qubits: smallvec![q1],
+        params: smallvec![],
+        label: None,
+    }];
+
+    circuit.while_loop(condition, body).unwrap();
+
+    // 转换为 DAG
+    let dag = CircuitDag::from_circuit(&circuit).unwrap();
+
+    // 块结构：entry(measure), cond, body, exit = 4 个块
+    assert_eq!(
+        dag.num_blocks(),
+        4,
+        "Expected 4 blocks: entry, cond, body, exit"
+    );
+
+    // 找到各个块
+    let entry = dag.entry_block().unwrap();
+
+    // entry 应该 Jump 到 cond
+    assert!(matches!(
+        dag.data[entry].terminator,
+        Some(Terminator::Jump(_))
+    ));
+
+    // 找到 cond 块（entry 的跳转目标）
+    let mut cond_block = None;
+    for edge_idx in dag.data.edge_indices() {
+        let (source, target) = dag.data.edge_endpoints(edge_idx).unwrap();
+        if source == entry {
+            cond_block = Some(target);
+            break;
+        }
+    }
+    let cond_block = cond_block.expect("Should have cond block");
+
+    // cond 块应该有 Branch 终结符
+    assert!(
+        matches!(dag.data[cond_block].terminator, Some(Terminator::Branch(_))),
+        "Cond block should have Branch terminator"
+    );
+
+    // 找到 body 和 exit 块
+    let mut body_block = None;
+    let mut exit_block = None;
+    for edge_idx in dag.data.edge_indices() {
+        let (source, target) = dag.data.edge_endpoints(edge_idx).unwrap();
+        let flow = &dag.data[edge_idx];
+
+        if source == cond_block {
+            match flow {
+                FlowEdge::TrueBranch => body_block = Some(target),
+                FlowEdge::FalseBranch => exit_block = Some(target),
+                _ => {}
+            }
+        }
+    }
+
+    let body_block = body_block.expect("Should have body block");
+    let exit_block = exit_block.expect("Should have exit block");
+
+    // 验证 body 块包含 H 门
+    assert_eq!(dag.data[body_block].len(), 1);
+    assert!(matches!(
+        dag.data[body_block].operations[0].instruction,
+        Instruction::Standard(StandardGate::H)
+    ));
+
+    // 验证 body 块有回边到 cond 块
+    let mut has_back_edge = false;
+    for edge_idx in dag.data.edge_indices() {
+        let (source, target) = dag.data.edge_endpoints(edge_idx).unwrap();
+        let flow = &dag.data[edge_idx];
+
+        if source == body_block && target == cond_block && matches!(flow, FlowEdge::Unconditional) {
+            has_back_edge = true;
+            break;
+        }
+    }
+    assert!(
+        has_back_edge,
+        "Body block should have back edge to condition"
+    );
+
+    // 验证 exit 块有 Return 终结符
+    assert!(
+        matches!(dag.data[exit_block].terminator, Some(Terminator::Return)),
+        "Exit block should have Return terminator"
+    );
 }
 
-/// Test CircuitDag preserves operation order via topological sort
 #[test]
-fn test_topological_order() {
-    let circuit = create_test_circuit();
-    let dag = CircuitDag::from_circuit(&circuit);
-    let recovered = dag.to_circuit();
+fn test_circuit_to_dag_nested_control_flow() {
+    // 创建嵌套控制流
+    // if (q[0] == 1):
+    //     while (q[1] == 1): X(q[2])
+    // else:
+    //     Z(q[2])
+    let mut circuit = Circuit::new(3);
+    let q0 = Qubit::new(0);
+    let q1 = Qubit::new(1);
+    let q2 = Qubit::new(2);
 
-    // Verify all operations are the same type
-    for (orig, recov) in circuit
-        .operations()
-        .iter()
-        .zip(recovered.operations().iter())
-    {
-        // Instructions should match
-        assert_eq!(
-            format!("{:?}", orig.instruction),
-            format!("{:?}", recov.instruction)
+    // 测量
+    circuit.measure(q0).unwrap();
+    circuit.measure(q1).unwrap();
+
+    // 外层 if-else
+    let outer_condition = ConditionView::new(q0, 1);
+
+    // 内层 while 循环体
+    let while_condition = ConditionView::new(q1, 1);
+    let while_body = vec![Operation {
+        instruction: Instruction::Standard(StandardGate::X),
+        qubits: smallvec![q2],
+        params: smallvec![],
+        label: None,
+    }];
+
+    let true_body = vec![Operation {
+        instruction: Instruction::ControlFlowGate(ControlFlow::WhileLoop(WhileLoopGate::new(
+            while_condition,
+            while_body,
+        ))),
+        qubits: smallvec![q1, q2],
+        params: smallvec![],
+        label: None,
+    }];
+
+    let false_body = vec![Operation {
+        instruction: Instruction::Standard(StandardGate::Z),
+        qubits: smallvec![q2],
+        params: smallvec![],
+        label: None,
+    }];
+
+    circuit
+        .if_else(outer_condition, true_body, Some(false_body))
+        .unwrap();
+
+    // 转换为 DAG
+    let dag = CircuitDag::from_circuit(&circuit).unwrap();
+
+    // 验证: 嵌套控制流应该有更多块
+    assert!(
+        dag.num_blocks() >= 5,
+        "Expected at least 5 blocks, got {}",
+        dag.num_blocks()
+    );
+
+    println!(
+        "Nested control flow - Number of blocks: {}",
+        dag.num_blocks()
+    );
+    for (idx, block) in dag.blocks() {
+        println!(
+            "Block {:?}: label={:?}, ops={}",
+            idx,
+            block.label(),
+            block.len()
         );
     }
-}
-
-/// Test empty circuit conversion
-#[test]
-fn test_empty_circuit() {
-    let circuit = Circuit::new(2);
-    let dag = CircuitDag::from_circuit(&circuit);
-
-    assert_eq!(dag.qubits.len(), 2);
-    assert_eq!(dag.data.node_count(), 0);
-    assert_eq!(dag.data.edge_count(), 0);
-
-    let recovered = dag.to_circuit();
-    assert_eq!(recovered.num_qubits(), 2);
-    assert_eq!(recovered.operations().len(), 0);
-}
-
-/// Test single qubit circuit
-#[test]
-fn test_single_qubit_circuit() {
-    let mut circuit = Circuit::new(1);
-    circuit.h(Qubit::new(0)).unwrap();
-    circuit.x(Qubit::new(0)).unwrap();
-    circuit.y(Qubit::new(0)).unwrap();
-
-    let dag = CircuitDag::from_circuit(&circuit);
-
-    // 3 nodes, 2 edges (H->X, X->Y)
-    assert_eq!(dag.data.node_count(), 3);
-    assert_eq!(dag.data.edge_count(), 2);
-
-    let recovered = dag.to_circuit();
-    assert_eq!(recovered.operations().len(), 3);
-}
-
-/// Test circuit with measurements
-#[test]
-fn test_measurements() {
-    use crate::circuit::gate::Directive;
-
-    let mut circuit = Circuit::new(2);
-    circuit.h(Qubit::new(0)).unwrap();
-    circuit.measure(Qubit::new(0)).unwrap();
-    circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
-    circuit.measure(Qubit::new(1)).unwrap();
-
-    let dag = CircuitDag::from_circuit(&circuit);
-
-    // Verify operations include measurements
-    let ops: Vec<_> = dag.data.node_indices().map(|i| &dag.data[i]).collect();
-    let measure_count = ops
-        .iter()
-        .filter(|op| matches!(op.instruction, Instruction::Directive(Directive::Measure)))
-        .count();
-    assert_eq!(measure_count, 2);
-
-    let recovered = dag.to_circuit();
-    assert_eq!(recovered.operations().len(), 4);
-}
-
-/// Test parallel operations on different qubits
-#[test]
-fn test_parallel_operations() {
-    let mut circuit = Circuit::new(2);
-    // These operations are independent (act on different qubits)
-    circuit.h(Qubit::new(0)).unwrap();
-    circuit.h(Qubit::new(1)).unwrap();
-
-    let dag = CircuitDag::from_circuit(&circuit);
-
-    // 2 nodes, 0 edges (no dependencies)
-    assert_eq!(dag.data.node_count(), 2);
-    assert_eq!(dag.data.edge_count(), 0);
-
-    let recovered = dag.to_circuit();
-    assert_eq!(recovered.operations().len(), 2);
-}
-
-/// Test circuit with barriers
-#[test]
-fn test_barriers() {
-    use crate::circuit::gate::Directive;
-
-    let mut circuit = Circuit::new(2);
-    circuit.h(Qubit::new(0)).unwrap();
-    circuit.barrier(vec![Qubit::new(0), Qubit::new(1)]).unwrap();
-    circuit.h(Qubit::new(1)).unwrap();
-
-    let dag = CircuitDag::from_circuit(&circuit);
-
-    // Verify barrier is preserved
-    let ops: Vec<_> = dag.data.node_indices().map(|i| &dag.data[i]).collect();
-    let barrier_count = ops
-        .iter()
-        .filter(|op| matches!(op.instruction, Instruction::Directive(Directive::Barrier)))
-        .count();
-    assert_eq!(barrier_count, 1);
-
-    let recovered = dag.to_circuit();
-    assert_eq!(recovered.operations().len(), 3);
-}
-
-/// Test circuit with no symbols (fixed parameters only)
-#[test]
-fn test_no_symbols() {
-    let mut circuit = Circuit::new(2);
-    // Use fixed parameter values (no symbols)
-    circuit.rx(Qubit::new(0), 0.5).unwrap();
-    circuit.ry(Qubit::new(1), 1.57).unwrap();
-
-    let dag = CircuitDag::from_circuit(&circuit);
-
-    // No symbols should be present
-    assert!(dag.symbols.is_empty());
-
-    let recovered = dag.to_circuit();
-    assert!(recovered.symbols().is_empty());
 }
