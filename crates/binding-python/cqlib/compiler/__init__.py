@@ -10,7 +10,20 @@
 # copyright notice, and modified files need to carry a notice indicating
 # that they have been altered from the originals.
 
-from .circuit import Parameter, Circuit, Qubit
-from .compiler import Topology, SabreConfig
+from .._native import (
+    Topology,
+    SabreConfig,
+    vf2_is_subgraph_isomorphic,
+    vf2_find_initial_layout,
+    vf2_map,
+    map_with_vf2_sabre,
+)
 
-__all__ = ["Parameter", "Circuit", "Qubit", "Topology", "SabreConfig"]
+__all__ = [
+    "Topology",
+    "SabreConfig",
+    "vf2_is_subgraph_isomorphic",
+    "vf2_find_initial_layout",
+    "vf2_map",
+    "map_with_vf2_sabre",
+]

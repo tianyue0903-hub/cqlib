@@ -11,6 +11,7 @@
 // that they have been altered from the originals.
 
 pub mod circuit;
+pub mod compile;
 pub mod ir;
 
 use pyo3::prelude::*;
@@ -18,6 +19,7 @@ use pyo3::prelude::*;
 use crate::circuit::gates::{PyCircuitGate, PyMcGate, PyStandardGate, PyUnitaryGate};
 use circuit::circuit_to_matrix;
 use circuit::{PyCircuit, PyInstruction, PyOperation, PyParameter, PyQubit};
+use compile::{PySabreConfig, PyTopology};
 
 /// A Python module implemented in Rust.
 #[pymodule]
@@ -32,6 +34,8 @@ fn binding_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyCircuitGate>()?;
     m.add_class::<PyOperation>()?;
     m.add_class::<PyInstruction>()?;
+    m.add_class::<PyTopology>()?;
+    m.add_class::<PySabreConfig>()?;
 
     m.add_function(wrap_pyfunction!(ir::py_qasm2_load, m)?)?;
     m.add_function(wrap_pyfunction!(ir::py_qasm2_loads, m)?)?;
@@ -45,6 +49,10 @@ fn binding_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
         circuit_to_matrix::py_circuit_to_matrix,
         m
     )?)?;
+    m.add_function(wrap_pyfunction!(compile::py_vf2_is_subgraph_isomorphic, m)?)?;
+    m.add_function(wrap_pyfunction!(compile::py_vf2_find_initial_layout, m)?)?;
+    m.add_function(wrap_pyfunction!(compile::py_vf2_map, m)?)?;
+    m.add_function(wrap_pyfunction!(compile::py_map_with_vf2_sabre, m)?)?;
 
     // Register static gate instances (H, X, etc.) to StandardGate class
     circuit::gates::standard::register_gates(m)?;
