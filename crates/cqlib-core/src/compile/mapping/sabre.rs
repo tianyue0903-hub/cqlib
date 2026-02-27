@@ -1,0 +1,1081 @@
+// This code is part of Cqlib.
+//
+// (C) Copyright China Telecom Quantum Group 2026
+//
+// This code is licensed under the Apache License, Version 2.0. You may
+// obtain a copy of this license in the LICENSE.txt file in the root directory
+// of this source tree or at http://www.apache.org/licenses/LICENSE-2.0.
+//
+// Any modifications or derivative works of this code must retain this
+// copyright notice, and modified files need to carry a notice indicating
+// that they have been altered from the originals.
+
+//! Fidelity-aware SABRE mapper.
+
+use super::{
+    FidelityMap, PreparedCircuit, TopologyAdapter, build_output_circuit, is_cx, map_operation_qubits,
+    normalize_index_pair, preprocess_circuit,
+};
+use super::vf2::Vf2Mapping;
+use crate::circuit::gate::{Instruction, StandardGate};
+use crate::circuit::{Circuit, Operation, Qubit};
+use crate::compile::error::CompileError;
+use crate::device::Topology;
+use rand::rngs::StdRng;
+use rand::seq::SliceRandom;
+use rand::{Rng, SeedableRng};
+use smallvec::SmallVec;
+use std::collections::{HashMap, HashSet, VecDeque};
+
+#[derive(Debug, Clone)]
+struct GateNode {
+    op_index: usize,
+    attach_ids: Vec<usize>,
+    next_ids: Vec<usize>,
+    logical_qubits: SmallVec<[usize; 2]>,
+}
+
+#[derive(Debug, Clone)]
+struct GateDependencyDag {
+    nodes: Vec<GateNode>,
+    indegree: Vec<usize>,
+    initial_single_qubit_ops: Vec<(usize, usize)>,
+    front_layer: HashSet<usize>,
+}
+
+impl GateDependencyDag {
+    fn node(&self, gate_id: usize) -> Option<&GateNode> {
+        self.nodes.get(gate_id.saturating_sub(1))
+    }
+}
+
+#[derive(Debug, Clone)]
+enum AnsStep {
+    Op(Operation),
+    Swap { u: usize, v: usize },
+    Bridge { u: usize, v: usize, bridge: usize },
+}
+
+impl AnsStep {
+    fn cost(&self) -> usize {
+        match self {
+            Self::Op(_) => 1,
+            Self::Swap { .. } => 3,
+            Self::Bridge { .. } => 4,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct AnsGroup {
+    initial_l2p: Vec<usize>,
+    final_l2p: Vec<usize>,
+    steps: Vec<AnsStep>,
+    cost: usize,
+}
+
+#[derive(Debug, Clone)]
+struct RatedSwap {
+    u: usize,
+    v: usize,
+    score: f64,
+    field: f64,
+}
+
+#[derive(Debug, Clone)]
+struct RoutingState {
+    logic2phy: Vec<usize>,
+    phy2logic: Vec<Option<usize>>,
+    pre_number: Vec<usize>,
+    front_layer: HashSet<usize>,
+    ans_steps: Vec<AnsStep>,
+    decay: Vec<f64>,
+    decay_time: usize,
+    weight_gates: Vec<Vec<(usize, f64)>>,
+    preprocessing_h: f64,
+}
+
+/// Configuration for SABRE mapping.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Vf2Policy {
+    /// Try direct VF2 mapping first; if it fails, run SABRE.
+    DirectThenSabre,
+    /// Skip direct mapping and only use VF2 as an optional SABRE initial layout seed.
+    InitialOnly,
+    /// Disable VF2 completely.
+    Disabled,
+}
+
+impl Default for Vf2Policy {
+    fn default() -> Self {
+        Self::DirectThenSabre
+    }
+}
+
+/// Configuration for SABRE mapping.
+#[derive(Debug, Clone)]
+pub struct SabreConfig {
+    pub vf2_policy: Vf2Policy,
+    pub field_mode: bool,
+    pub size_e: usize,
+    pub w: f64,
+    pub decay_coff: f64,
+    pub decay_reset_time: usize,
+    pub greedy_strategy: usize,
+    pub initial_iterations: usize,
+    pub repeat_iterations: usize,
+    pub swap_iterations: usize,
+    pub seed: i64,
+}
+
+impl Default for SabreConfig {
+    fn default() -> Self {
+        Self {
+            vf2_policy: Vf2Policy::DirectThenSabre,
+            field_mode: true,
+            size_e: 20,
+            w: 0.5,
+            decay_coff: 0.001,
+            decay_reset_time: 5,
+            greedy_strategy: 3,
+            initial_iterations: 1,
+            repeat_iterations: 1,
+            swap_iterations: 1,
+            seed: -1,
+        }
+    }
+}
+
+/// SABRE mapping implementation.
+#[derive(Debug, Clone)]
+pub struct SabreMapping {
+    /// Logical -> physical mapping after latest execution.
+    pub logic2phy: Vec<Qubit>,
+    /// Physical -> logical mapping after latest execution.
+    pub phy2logic: HashMap<Qubit, usize>,
+
+    topology: TopologyAdapter,
+    config: SabreConfig,
+    sample_eps: f64,
+    field_eps: f64,
+    rng: StdRng,
+}
+
+impl SabreMapping {
+    /// Creates a SABRE mapper with optional fidelity map and explicit config.
+    pub fn new(
+        topology: Topology,
+        fidelity_map: Option<FidelityMap>,
+        config: SabreConfig,
+    ) -> Result<Self, CompileError> {
+        let topology = TopologyAdapter::new(&topology, fidelity_map.as_ref())?;
+
+        let seed = if config.seed >= 0 {
+            config.seed as u64
+        } else {
+            let mut trng = rand::rng();
+            trng.random::<u64>()
+        };
+
+        Ok(Self {
+            logic2phy: Vec::new(),
+            phy2logic: HashMap::new(),
+            topology,
+            config,
+            sample_eps: 1e-10,
+            field_eps: 1e-3,
+            rng: StdRng::seed_from_u64(seed),
+        })
+    }
+
+    /// Executes SABRE routing on a validated 1q/2q, control-flow-free circuit.
+    pub fn execute(&mut self, circuit: &Circuit) -> Result<Circuit, CompileError> {
+        let prepared = preprocess_circuit(circuit)?;
+        let reverse_circuit = circuit.inverse()?;
+        let reverse_prepared = preprocess_circuit(&reverse_circuit)?;
+
+        let logical_width = prepared.logical_qubits.len();
+        let available_nodes = self.usable_nodes();
+
+        if logical_width > available_nodes.len() {
+            return Err(CompileError::TopologyTooSmall {
+                required: logical_width,
+                available: available_nodes.len(),
+            });
+        }
+
+        let original_info = self.build_circuit_info(&prepared, logical_width);
+        let reverse_info = self.build_circuit_info(&reverse_prepared, logical_width);
+
+        let initial_iters = self.config.initial_iterations.max(1);
+        let repeat_iters = self.config.repeat_iterations;
+        let swap_iters = self.config.swap_iterations.max(1);
+        let mut initial_layouts =
+            self.initial_layout_candidates(&prepared, &available_nodes, logical_width, initial_iters)?;
+
+        let mut best_group: Option<AnsGroup> = None;
+
+        for mut initial_mapping in initial_layouts.drain(..) {
+
+            for iter in 0..=repeat_iters {
+                let forward_group =
+                    self.execute_routing(&original_info, &prepared, &initial_mapping, swap_iters)?;
+
+                if best_group
+                    .as_ref()
+                    .map(|g| forward_group.cost < g.cost)
+                    .unwrap_or(true)
+                {
+                    best_group = Some(forward_group.clone());
+                }
+
+                if iter == repeat_iters {
+                    break;
+                }
+
+                let best_ref = best_group
+                    .as_ref()
+                    .ok_or_else(|| CompileError::Internal("missing best SABRE group".into()))?;
+
+                let reverse_group = self.execute_routing(
+                    &reverse_info,
+                    &reverse_prepared,
+                    &best_ref.final_l2p,
+                    swap_iters,
+                )?;
+                initial_mapping = reverse_group.final_l2p;
+            }
+        }
+
+        let best_group = best_group.ok_or(CompileError::SabreRoutingStuck)?;
+
+        self.logic2phy = best_group
+            .final_l2p
+            .iter()
+            .map(|&p| self.topology.physical_qubits[p])
+            .collect();
+        self.phy2logic.clear();
+        for (logical, &physical) in self.logic2phy.iter().enumerate() {
+            self.phy2logic.insert(physical, logical);
+        }
+
+        let mapped_ops = self.replay_ops(&prepared, &original_info, &best_group);
+        build_output_circuit(&mapped_ops, &prepared.parameters)
+    }
+
+    fn replay_ops(
+        &self,
+        prepared: &PreparedCircuit,
+        info: &GateDependencyDag,
+        ans_group: &AnsGroup,
+    ) -> Vec<Operation> {
+        let mut mapped = Vec::new();
+
+        for &(op_idx, logical) in &info.initial_single_qubit_ops {
+            let physical = self.topology.physical_qubits[ans_group.initial_l2p[logical]];
+            let op = &prepared.operations[op_idx].op;
+            mapped.push(map_operation_qubits(op, &[physical]));
+        }
+
+        for step in &ans_group.steps {
+            match step {
+                AnsStep::Op(op) => mapped.push(op.clone()),
+                AnsStep::Swap { u, v } => {
+                    let qubits = [self.topology.physical_qubits[*u], self.topology.physical_qubits[*v]];
+                    mapped.push(self.standard_op(StandardGate::SWAP, &qubits));
+                }
+                AnsStep::Bridge { u, v, bridge } => {
+                    let u = self.topology.physical_qubits[*u];
+                    let v = self.topology.physical_qubits[*v];
+                    let b = self.topology.physical_qubits[*bridge];
+                    mapped.push(self.standard_op(StandardGate::CX, &[b, v]));
+                    mapped.push(self.standard_op(StandardGate::CX, &[u, b]));
+                    mapped.push(self.standard_op(StandardGate::CX, &[b, v]));
+                    mapped.push(self.standard_op(StandardGate::CX, &[u, b]));
+                }
+            }
+        }
+
+        mapped
+    }
+
+    fn standard_op(&self, gate: StandardGate, qubits: &[Qubit]) -> Operation {
+        Operation {
+            instruction: Instruction::Standard(gate),
+            qubits: qubits.iter().copied().collect(),
+            params: SmallVec::new(),
+            label: None,
+        }
+    }
+
+    fn usable_nodes(&self) -> Vec<usize> {
+        let mut nodes = self.topology.largest_component.clone();
+        nodes.sort_by_key(|idx| self.topology.physical_qubits[*idx].id());
+        nodes
+    }
+
+    fn random_initial_mapping(&mut self, available_nodes: &[usize], logical_width: usize) -> Vec<usize> {
+        let mut nodes = available_nodes.to_vec();
+        nodes.shuffle(&mut self.rng);
+        nodes.truncate(logical_width);
+        nodes
+    }
+
+    fn build_circuit_info(&self, prepared: &PreparedCircuit, logical_width: usize) -> GateDependencyDag {
+        let mut gateid = 0usize;
+        let mut nodes: Vec<GateNode> = Vec::with_capacity(prepared.operations.len());
+        let mut indegree = vec![0usize];
+        let mut initial_single_qubit_ops = Vec::new();
+        let mut front_layer = HashSet::new();
+        let mut pre_gate: Vec<Option<usize>> = vec![None; logical_width];
+
+        for (op_index, prep_op) in prepared.operations.iter().enumerate() {
+            gateid += 1;
+
+            let node = GateNode {
+                op_index,
+                attach_ids: Vec::new(),
+                next_ids: Vec::new(),
+                logical_qubits: prep_op.logical_qubits.clone(),
+            };
+
+            if prep_op.logical_qubits.len() == 1 {
+                let u = prep_op.logical_qubits[0];
+                if let Some(prev) = pre_gate[u] {
+                    nodes[prev - 1].attach_ids.push(gateid);
+                } else {
+                    initial_single_qubit_ops.push((op_index, u));
+                }
+                indegree.push(0);
+                nodes.push(node);
+                continue;
+            }
+
+            let mut pre_number = 0usize;
+            for &u in &prep_op.logical_qubits {
+                if let Some(prev) = pre_gate[u]
+                    && !nodes[prev - 1].next_ids.contains(&gateid)
+                {
+                    nodes[prev - 1].next_ids.push(gateid);
+                    pre_number += 1;
+                }
+            }
+
+            for &u in &prep_op.logical_qubits {
+                pre_gate[u] = Some(gateid);
+            }
+
+            if pre_number == 0 {
+                front_layer.insert(gateid);
+            }
+
+            indegree.push(pre_number);
+            nodes.push(node);
+        }
+
+        GateDependencyDag {
+            nodes,
+            indegree,
+            initial_single_qubit_ops,
+            front_layer,
+        }
+    }
+
+    fn execute_routing(
+        &mut self,
+        info: &GateDependencyDag,
+        prepared: &PreparedCircuit,
+        initial_mapping: &[usize],
+        swap_iterations: usize,
+    ) -> Result<AnsGroup, CompileError> {
+        let logical_width = prepared.logical_qubits.len();
+        if initial_mapping.len() != logical_width {
+            return Err(CompileError::Internal(format!(
+                "initial mapping size mismatch: expected {}, got {}",
+                logical_width,
+                initial_mapping.len()
+            )));
+        }
+
+        let mut best_group: Option<AnsGroup> = None;
+
+        for _ in 0..swap_iterations {
+            let mut phy2logic = vec![None; self.topology.num_qubits()];
+            for (logical, &physical) in initial_mapping.iter().enumerate() {
+                phy2logic[physical] = Some(logical);
+            }
+
+            let mut state = RoutingState {
+                logic2phy: initial_mapping.to_vec(),
+                phy2logic,
+                pre_number: info.indegree.clone(),
+                front_layer: info.front_layer.clone(),
+                ans_steps: Vec::new(),
+                decay: vec![1.0; self.topology.num_qubits()],
+                decay_time: 0,
+                weight_gates: vec![Vec::new(); self.topology.num_qubits()],
+                preprocessing_h: 0.0,
+            };
+
+            if !self.execute_once(info, prepared, &mut state)? {
+                continue;
+            }
+
+            let cost = self.calculate_cost(&state.ans_steps);
+            let candidate = AnsGroup {
+                initial_l2p: initial_mapping.to_vec(),
+                final_l2p: state.logic2phy.clone(),
+                steps: state.ans_steps.clone(),
+                cost,
+            };
+
+            if best_group
+                .as_ref()
+                .map(|g| candidate.cost < g.cost)
+                .unwrap_or(true)
+            {
+                best_group = Some(candidate);
+            }
+        }
+
+        best_group.ok_or(CompileError::SabreRoutingStuck)
+    }
+
+    fn calculate_cost(&self, steps: &[AnsStep]) -> usize {
+        steps.iter().map(AnsStep::cost).sum()
+    }
+
+    fn execute_once(
+        &mut self,
+        info: &GateDependencyDag,
+        prepared: &PreparedCircuit,
+        state: &mut RoutingState,
+    ) -> Result<bool, CompileError> {
+        self.execute_2q_gates(info, prepared, state)?;
+        if state.front_layer.is_empty() {
+            return Ok(true);
+        }
+
+        let mut history_selection: Vec<(usize, usize)> = Vec::new();
+
+        loop {
+            let mut rated_swaps = self.obtain_swaps(info, state);
+            if rated_swaps.is_empty() {
+                return Ok(false);
+            }
+
+            rated_swaps.sort_by(|a, b| a.score.total_cmp(&b.score));
+            let best_score = rated_swaps[0].score;
+
+            let top_score_count = rated_swaps
+                .iter()
+                .take_while(|s| (s.score - best_score).abs() <= self.sample_eps)
+                .count();
+
+            let mut selected = if top_score_count > 1 {
+                if self.config.field_mode {
+                    let mut top = rated_swaps[..top_score_count].to_vec();
+                    top.sort_by(|a, b| b.field.total_cmp(&a.field));
+                    let best_field = top[0].field;
+                    let top_field_count = top
+                        .iter()
+                        .take_while(|s| (s.field - best_field).abs() <= self.field_eps)
+                        .count();
+                    let pick = self.rng.random_range(0..top_field_count);
+                    top[pick].clone()
+                } else {
+                    let pick = self.rng.random_range(0..top_score_count);
+                    rated_swaps[pick].clone()
+                }
+            } else {
+                rated_swaps[0].clone()
+            };
+
+            for candidate in &rated_swaps {
+                let pair = normalize_index_pair(candidate.u, candidate.v);
+                if !history_selection.contains(&pair) {
+                    selected = candidate.clone();
+                    break;
+                }
+            }
+
+            self.execute_rated_swap(&selected, info, prepared, state)?;
+            self.execute_2q_gates(info, prepared, state)?;
+
+            if state.front_layer.is_empty() {
+                return Ok(true);
+            }
+
+            if let Some(AnsStep::Swap { u, v }) = state.ans_steps.last() {
+                history_selection.push(normalize_index_pair(*u, *v));
+            } else {
+                history_selection.clear();
+            }
+        }
+    }
+
+    fn execute_2q_gates(
+        &mut self,
+        info: &GateDependencyDag,
+        prepared: &PreparedCircuit,
+        state: &mut RoutingState,
+    ) -> Result<(), CompileError> {
+        loop {
+            let mut executable = Vec::new();
+            let mut front_layer: Vec<usize> = state.front_layer.iter().copied().collect();
+            front_layer.sort_unstable();
+
+            for gateid in front_layer {
+                let Some(gate) = info.node(gateid) else {
+                    continue;
+                };
+                if gate.logical_qubits.len() != 2 {
+                    continue;
+                }
+
+                let can_exec = self.can_execute(gate, state);
+                let can_bridge = !can_exec && self.can_bridge(gate, info, prepared, state);
+
+                if can_exec {
+                    executable.push(gateid);
+                    self.add_ans_2qgate(gate, prepared, state);
+                    for &attachid in &gate.attach_ids {
+                        if let Some(attach_gate) = info.node(attachid) {
+                            self.add_ans_1qgate(attach_gate, prepared, state);
+                        }
+                    }
+                } else if can_bridge {
+                    executable.push(gateid);
+                    self.add_bridge_gate(gate, state)?;
+                    for &attachid in &gate.attach_ids {
+                        if let Some(attach_gate) = info.node(attachid) {
+                            self.add_ans_1qgate(attach_gate, prepared, state);
+                        }
+                    }
+                }
+            }
+
+            if executable.is_empty() {
+                break;
+            }
+
+            for gateid in executable {
+                state.front_layer.remove(&gateid);
+                if let Some(gate) = info.node(gateid) {
+                    for &succ in &gate.next_ids {
+                        if succ < state.pre_number.len() {
+                            state.pre_number[succ] = state.pre_number[succ].saturating_sub(1);
+                            if state.pre_number[succ] == 0 {
+                                state.front_layer.insert(succ);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn can_execute(&self, gate: &GateNode, state: &RoutingState) -> bool {
+        let u = state.logic2phy[gate.logical_qubits[0]];
+        let v = state.logic2phy[gate.logical_qubits[1]];
+        self.topology.is_adjacent(u, v)
+    }
+
+    fn can_bridge(
+        &self,
+        gate: &GateNode,
+        info: &GateDependencyDag,
+        prepared: &PreparedCircuit,
+        state: &RoutingState,
+    ) -> bool {
+        let op = &prepared.operations[gate.op_index].op;
+        if !is_cx(op) {
+            return false;
+        }
+
+        let fixed_u = state.logic2phy[gate.logical_qubits[0]];
+        let fixed_v = state.logic2phy[gate.logical_qubits[1]];
+
+        if self.topology.dist[fixed_u][fixed_v] != 2 {
+            return false;
+        }
+
+        self.calculate_bridge_value(fixed_u, fixed_v, &gate.next_ids, info, state)
+    }
+
+    fn calculate_bridge_value(
+        &self,
+        endpoint_u: usize,
+        endpoint_v: usize,
+        next_gids: &[usize],
+        info: &GateDependencyDag,
+        state: &RoutingState,
+    ) -> bool {
+        let bridge_point = self.topology.neighbors[endpoint_u]
+            .iter()
+            .find(|&&temp_bp| self.topology.neighbors[temp_bp].contains(&endpoint_v))
+            .copied();
+
+        let Some(bridge_point) = bridge_point else {
+            return false;
+        };
+
+        let endpoints = [endpoint_u, endpoint_v];
+        let mut connected_gids = next_gids.to_vec();
+
+        for _ in 0..5 {
+            let mut next_next_gids = Vec::new();
+            for &gid in &connected_gids {
+                let Some(next_gate) = info.node(gid) else {
+                    continue;
+                };
+                if next_gate.logical_qubits.len() != 2 {
+                    continue;
+                }
+
+                let next_u = state.logic2phy[next_gate.logical_qubits[0]];
+                let next_v = state.logic2phy[next_gate.logical_qubits[1]];
+
+                let origin_connected = self.topology.is_adjacent(next_u, next_v);
+                let bridge_connected = if endpoints.contains(&next_u) && endpoints.contains(&next_v)
+                {
+                    self.topology.is_adjacent(next_u, bridge_point)
+                        || self.topology.is_adjacent(next_v, bridge_point)
+                } else if endpoints.contains(&next_u) {
+                    if next_v == bridge_point {
+                        return true;
+                    }
+                    self.topology.is_adjacent(next_u, bridge_point)
+                } else if endpoints.contains(&next_v) {
+                    if next_u == bridge_point {
+                        return true;
+                    }
+                    self.topology.is_adjacent(next_v, bridge_point)
+                } else {
+                    continue;
+                };
+
+                if origin_connected && !bridge_connected {
+                    return true;
+                } else if !origin_connected && bridge_connected {
+                    return false;
+                }
+
+                next_next_gids.extend(next_gate.next_ids.iter().copied());
+            }
+            connected_gids = next_next_gids;
+        }
+
+        false
+    }
+
+    fn add_ans_2qgate(&self, gate: &GateNode, prepared: &PreparedCircuit, state: &mut RoutingState) {
+        let u = self.topology.physical_qubits[state.logic2phy[gate.logical_qubits[0]]];
+        let v = self.topology.physical_qubits[state.logic2phy[gate.logical_qubits[1]]];
+        let op = &prepared.operations[gate.op_index].op;
+        let mapped_op = map_operation_qubits(op, &[u, v]);
+        state.ans_steps.push(AnsStep::Op(mapped_op));
+    }
+
+    fn add_ans_1qgate(&self, gate: &GateNode, prepared: &PreparedCircuit, state: &mut RoutingState) {
+        let u = self.topology.physical_qubits[state.logic2phy[gate.logical_qubits[0]]];
+        let op = &prepared.operations[gate.op_index].op;
+        let mapped_op = map_operation_qubits(op, &[u]);
+        state.ans_steps.push(AnsStep::Op(mapped_op));
+    }
+
+    fn add_bridge_gate(&self, gate: &GateNode, state: &mut RoutingState) -> Result<(), CompileError> {
+        let fixed_u = state.logic2phy[gate.logical_qubits[0]];
+        let fixed_v = state.logic2phy[gate.logical_qubits[1]];
+        let bridge = self.topology.neighbors[fixed_u]
+            .iter()
+            .find(|&&x| self.topology.neighbors[fixed_v].contains(&x))
+            .copied()
+            .ok_or_else(|| {
+                CompileError::Internal(format!(
+                    "failed to find bridge point between {} and {}",
+                    fixed_u, fixed_v
+                ))
+            })?;
+
+        state.ans_steps.push(AnsStep::Bridge {
+            u: fixed_u,
+            v: fixed_v,
+            bridge,
+        });
+        Ok(())
+    }
+
+    fn preprocessing_h(&self, info: &GateDependencyDag, state: &mut RoutingState) {
+        let mut preprocessing_h = 0.0;
+        let mut weight_gates = vec![Vec::new(); self.topology.num_qubits()];
+        let mut e_queue = Vec::new();
+
+        let f_count = state.front_layer.len() as f64;
+        if f_count > 0.0 {
+            let mut front_sorted: Vec<usize> = state.front_layer.iter().copied().collect();
+            front_sorted.sort_unstable();
+            for &gateid in &front_sorted {
+                if let Some(gate) = info.node(gateid) {
+                    if gate.logical_qubits.len() != 2 {
+                        continue;
+                    }
+                    let u = state.logic2phy[gate.logical_qubits[0]];
+                    let v = state.logic2phy[gate.logical_qubits[1]];
+                    preprocessing_h += self.topology.dist[u][v] as f64 / f_count;
+                    weight_gates[u].push((gateid, 1.0 / f_count));
+                    weight_gates[v].push((gateid, 1.0 / f_count));
+                    e_queue.push(gateid);
+                }
+            }
+        }
+
+        let mut e_set = Vec::new();
+        let mut dec_queue = Vec::new();
+
+        while e_set.len() < self.config.size_e && !e_queue.is_empty() {
+            let gateid = e_queue.pop().unwrap();
+            let Some(gate) = info.node(gateid) else {
+                continue;
+            };
+
+            dec_queue.push(gateid);
+            for &succid in &gate.next_ids {
+                if succid < state.pre_number.len() {
+                    state.pre_number[succid] = state.pre_number[succid].saturating_sub(1);
+                    if state.pre_number[succid] == 0 {
+                        e_set.push(succid);
+                        e_queue.push(succid);
+                    }
+                }
+            }
+        }
+
+        if e_set.len() > self.config.size_e {
+            e_set.truncate(self.config.size_e);
+        }
+
+        let e_count = e_set.len() as f64;
+        if e_count > 0.0 {
+            for &gateid in &e_set {
+                let Some(gate) = info.node(gateid) else {
+                    continue;
+                };
+                if gate.logical_qubits.len() != 2 {
+                    continue;
+                }
+                let u = state.logic2phy[gate.logical_qubits[0]];
+                let v = state.logic2phy[gate.logical_qubits[1]];
+                preprocessing_h +=
+                    self.topology.dist[u][v] as f64 / e_count * self.config.w;
+                weight_gates[u].push((gateid, self.config.w / e_count));
+                weight_gates[v].push((gateid, self.config.w / e_count));
+            }
+        }
+
+        for &gateid in &dec_queue {
+            if let Some(gate) = info.node(gateid) {
+                for &succid in &gate.next_ids {
+                    if succid < state.pre_number.len() {
+                        state.pre_number[succid] = state.pre_number[succid].saturating_add(1);
+                    }
+                }
+            }
+        }
+
+        state.weight_gates = weight_gates;
+        state.preprocessing_h = preprocessing_h;
+    }
+
+    fn rated_swap(&self, u: usize, v: usize, info: &GateDependencyDag, state: &RoutingState) -> RatedSwap {
+        let mut preprocessing_h = state.preprocessing_h;
+
+        for &(gateid, coff) in &state.weight_gates[u] {
+            if let Some(gate) = info.node(gateid) {
+                let mut vv = state.logic2phy[gate.logical_qubits[0]];
+                if vv == u {
+                    vv = state.logic2phy[gate.logical_qubits[1]];
+                }
+                if vv == v {
+                    continue;
+                }
+                preprocessing_h +=
+                    coff * (self.topology.dist[v][vv] as f64 - self.topology.dist[u][vv] as f64);
+            }
+        }
+
+        for &(gateid, coff) in &state.weight_gates[v] {
+            if let Some(gate) = info.node(gateid) {
+                let mut uu = state.logic2phy[gate.logical_qubits[0]];
+                if uu == v {
+                    uu = state.logic2phy[gate.logical_qubits[1]];
+                }
+                if uu == u {
+                    continue;
+                }
+                preprocessing_h +=
+                    coff * (self.topology.dist[u][uu] as f64 - self.topology.dist[v][uu] as f64);
+            }
+        }
+
+        preprocessing_h *= state.decay[u].max(state.decay[v]);
+
+        RatedSwap {
+            u,
+            v,
+            score: preprocessing_h,
+            field: self.topology.edge_fidelity(u, v),
+        }
+    }
+
+    fn obtain_swaps(&self, info: &GateDependencyDag, state: &mut RoutingState) -> Vec<RatedSwap> {
+        self.preprocessing_h(info, state);
+
+        let mut front_bits = HashSet::new();
+        for &gateid in &state.front_layer {
+            if let Some(gate) = info.node(gateid) {
+                if gate.logical_qubits.len() != 2 {
+                    continue;
+                }
+                front_bits.insert(state.logic2phy[gate.logical_qubits[0]]);
+                front_bits.insert(state.logic2phy[gate.logical_qubits[1]]);
+            }
+        }
+
+        let mut visited_pairs = HashSet::new();
+        let mut swaps = Vec::new();
+
+        let mut front_bits_sorted: Vec<usize> = front_bits.into_iter().collect();
+        front_bits_sorted.sort_unstable();
+        for &u in &front_bits_sorted {
+            for &v in &self.topology.neighbors[u] {
+                let key = normalize_index_pair(u, v);
+                if visited_pairs.insert(key) {
+                    swaps.push(self.rated_swap(u, v, info, state));
+                }
+            }
+        }
+
+        swaps
+    }
+
+    fn execute_swap(&self, u: usize, v: usize, state: &mut RoutingState) {
+        let logic_u = state.phy2logic[u];
+        let logic_v = state.phy2logic[v];
+
+        state.phy2logic[u] = logic_v;
+        state.phy2logic[v] = logic_u;
+
+        if let Some(logic_u) = logic_u {
+            state.logic2phy[logic_u] = v;
+        }
+        if let Some(logic_v) = logic_v {
+            state.logic2phy[logic_v] = u;
+        }
+
+        state.ans_steps.push(AnsStep::Swap { u, v });
+    }
+
+    fn find_shortest_path(
+        &mut self,
+        info: &GateDependencyDag,
+        prepared: &PreparedCircuit,
+        state: &mut RoutingState,
+    ) -> Result<(), CompileError> {
+        let mut shortest = u32::MAX;
+        let mut src = None;
+        let mut dst = None;
+
+        let mut front_sorted: Vec<usize> = state.front_layer.iter().copied().collect();
+        front_sorted.sort_unstable();
+        for &front_id in &front_sorted {
+            let Some(gate) = info.node(front_id) else {
+                continue;
+            };
+            if gate.logical_qubits.len() != 2 {
+                continue;
+            }
+
+            let u = state.logic2phy[gate.logical_qubits[0]];
+            let v = state.logic2phy[gate.logical_qubits[1]];
+            let d = self.topology.dist[u][v];
+            if d < shortest {
+                shortest = d;
+                src = Some(u);
+                dst = Some(v);
+            }
+        }
+
+        let (src, dst) = match (src, dst) {
+            (Some(s), Some(t)) if s != t => (s, t),
+            _ => return Ok(()),
+        };
+
+        let n = self.topology.num_qubits();
+        let mut prev = vec![usize::MAX; n];
+        let mut visited = vec![false; n];
+        let mut queue = VecDeque::new();
+
+        visited[src] = true;
+        queue.push_back(src);
+
+        while let Some(node) = queue.pop_front() {
+            if node == dst {
+                break;
+            }
+            for &next in &self.topology.neighbors[node] {
+                if !visited[next] {
+                    visited[next] = true;
+                    prev[next] = node;
+                    queue.push_back(next);
+                }
+            }
+        }
+
+        if !visited[dst] {
+            return Ok(());
+        }
+
+        let mut path = vec![dst];
+        let mut now = dst;
+        while now != src {
+            now = prev[now];
+            if now == usize::MAX {
+                return Ok(());
+            }
+            path.push(now);
+        }
+        path.reverse();
+
+        if path.len() < 2 {
+            return Ok(());
+        }
+
+        let mut i = 0usize;
+        let mut j = path.len() - 1;
+
+        while i + 1 < j {
+            self.execute_swap(path[i], path[i + 1], state);
+            i += 1;
+
+            if i + 1 >= j {
+                break;
+            }
+
+            self.execute_swap(path[j], path[j - 1], state);
+            j -= 1;
+        }
+
+        self.execute_2q_gates(info, prepared, state)
+    }
+
+    fn check_greedy_strategy(
+        &mut self,
+        info: &GateDependencyDag,
+        prepared: &PreparedCircuit,
+        state: &mut RoutingState,
+    ) -> Result<(), CompileError> {
+        let Some(AnsStep::Swap { u, v }) = state.ans_steps.last().cloned() else {
+            return Ok(());
+        };
+
+        let mut remaining = self.config.greedy_strategy.saturating_sub(1);
+        if remaining == 0 {
+            return Ok(());
+        }
+
+        if state.ans_steps.len() < 2 {
+            return Ok(());
+        }
+
+        let mut idx = state.ans_steps.len() - 2;
+        loop {
+            match &state.ans_steps[idx] {
+                AnsStep::Op(_) => return Ok(()),
+                AnsStep::Swap { u: pu, v: pv } => {
+                    let p1 = normalize_index_pair(*pu, *pv);
+                    let p2 = normalize_index_pair(u, v);
+                    if p1 == p2 {
+                        self.find_shortest_path(info, prepared, state)?;
+                        return Ok(());
+                    }
+                }
+                AnsStep::Bridge { .. } => {}
+            }
+
+            remaining -= 1;
+            if remaining == 0 || idx == 0 {
+                break;
+            }
+            idx -= 1;
+        }
+
+        Ok(())
+    }
+
+    fn execute_rated_swap(
+        &mut self,
+        rated_swap: &RatedSwap,
+        info: &GateDependencyDag,
+        prepared: &PreparedCircuit,
+        state: &mut RoutingState,
+    ) -> Result<(), CompileError> {
+        self.execute_swap(rated_swap.u, rated_swap.v, state);
+
+        state.decay[rated_swap.u] += self.config.decay_coff;
+        state.decay[rated_swap.v] += self.config.decay_coff;
+        state.decay_time += 1;
+
+        if state.decay_time % self.config.decay_reset_time.max(1) == 0 {
+            state.decay.fill(1.0);
+        }
+
+        if self.config.greedy_strategy > 0 {
+            self.check_greedy_strategy(info, prepared, state)?;
+        }
+
+        Ok(())
+    }
+
+    fn initial_layout_candidates(
+        &mut self,
+        prepared: &PreparedCircuit,
+        available_nodes: &[usize],
+        logical_width: usize,
+        iterations: usize,
+    ) -> Result<Vec<Vec<usize>>, CompileError> {
+        let mut candidates = Vec::with_capacity(iterations);
+
+        if self.config.vf2_policy != Vf2Policy::Disabled {
+            let available_set: HashSet<usize> = available_nodes.iter().copied().collect();
+            if let Some(seed) = self.vf2_seed_layout(prepared, &available_set)? {
+                candidates.push(seed);
+            }
+        }
+
+        while candidates.len() < iterations {
+            candidates.push(self.random_initial_mapping(available_nodes, logical_width));
+        }
+
+        Ok(candidates)
+    }
+
+    fn vf2_seed_layout(
+        &self,
+        prepared: &PreparedCircuit,
+        available_nodes: &HashSet<usize>,
+    ) -> Result<Option<Vec<usize>>, CompileError> {
+        let vf2 = Vf2Mapping::from_adapter(self.topology.clone());
+        let Some(layout) = vf2.solve_prepared_initial_layout(prepared)? else {
+            return Ok(None);
+        };
+
+        if layout.iter().all(|phy| available_nodes.contains(phy)) {
+            Ok(Some(layout))
+        } else {
+            Ok(None)
+        }
+    }
+}
