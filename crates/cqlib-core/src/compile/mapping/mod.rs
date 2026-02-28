@@ -254,10 +254,7 @@ pub(crate) fn preprocess_circuit(circuit: &Circuit) -> Result<PreparedCircuit, C
         .node_weight(entry)
         .ok_or(CompileError::MissingEntryBlock)?;
 
-    if !matches!(
-        block.terminator,
-        None | Some(Terminator::Return)
-    ) {
+    if !matches!(block.terminator, None | Some(Terminator::Return)) {
         return Err(CompileError::UnsupportedControlFlow);
     }
 
@@ -568,7 +565,8 @@ mod tests {
     #[test]
     fn test_vf2_fast_path_no_overhead() {
         let topology = line_topology(&[0, 1, 2]);
-        let mut circuit = Circuit::from_qubits(vec![Qubit::new(10), Qubit::new(20), Qubit::new(30)]).unwrap();
+        let mut circuit =
+            Circuit::from_qubits(vec![Qubit::new(10), Qubit::new(20), Qubit::new(30)]).unwrap();
         circuit.cx(Qubit::new(10), Qubit::new(20)).unwrap();
         circuit.cx(Qubit::new(20), Qubit::new(30)).unwrap();
 
@@ -582,7 +580,8 @@ mod tests {
     #[test]
     fn test_vf2_standalone_initial_layout_api() {
         let topology = line_topology(&[0, 1, 2]);
-        let mut circuit = Circuit::from_qubits(vec![Qubit::new(10), Qubit::new(20), Qubit::new(30)]).unwrap();
+        let mut circuit =
+            Circuit::from_qubits(vec![Qubit::new(10), Qubit::new(20), Qubit::new(30)]).unwrap();
         circuit.cx(Qubit::new(10), Qubit::new(20)).unwrap();
         circuit.cx(Qubit::new(20), Qubit::new(30)).unwrap();
 
@@ -882,7 +881,8 @@ mod tests {
     #[test]
     fn test_non_contiguous_qubit_ids_supported() {
         let topology = line_topology(&[100, 200, 300, 400]);
-        let mut circuit = Circuit::from_qubits(vec![Qubit::new(10), Qubit::new(30), Qubit::new(70)]).unwrap();
+        let mut circuit =
+            Circuit::from_qubits(vec![Qubit::new(10), Qubit::new(30), Qubit::new(70)]).unwrap();
         circuit.cx(Qubit::new(10), Qubit::new(30)).unwrap();
         circuit.cx(Qubit::new(30), Qubit::new(70)).unwrap();
 

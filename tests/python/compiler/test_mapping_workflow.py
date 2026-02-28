@@ -17,7 +17,9 @@ try:
     from . import assert_all_2q_on_topology
     from . import count_gate
     from . import random_circuit
-except ImportError:  # Direct script execution: python tests/python/compiler/test_mapping_workflow.py
+except (
+    ImportError
+):  # Direct script execution: python tests/python/compiler/test_mapping_workflow.py
     from __init__ import assert_all_2q_on_topology
     from __init__ import count_gate
     from __init__ import random_circuit

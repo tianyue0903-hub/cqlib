@@ -36,7 +36,10 @@ pub enum CompileError {
 
     /// Unsupported instruction kind encountered.
     #[error("Unsupported instruction at op #{op_index}: {instruction}")]
-    UnsupportedInstruction { op_index: usize, instruction: String },
+    UnsupportedInstruction {
+        op_index: usize,
+        instruction: String,
+    },
 
     /// Unsupported gate arity encountered.
     #[error("Unsupported gate arity {arity} at op #{op_index}; only 1q/2q are supported")]

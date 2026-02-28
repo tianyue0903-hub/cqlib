@@ -80,7 +80,9 @@ impl PyTopology {
     }
 
     fn is_connected(&self, u: usize, v: usize) -> PyResult<bool> {
-        Ok(self.inner.is_connected(py_id_to_qubit(u)?, py_id_to_qubit(v)?))
+        Ok(self
+            .inner
+            .is_connected(py_id_to_qubit(u)?, py_id_to_qubit(v)?))
     }
 
     fn __repr__(&self) -> String {
@@ -255,7 +257,11 @@ pub fn py_vf2_find_initial_layout_candidates(
     let mut out = Vec::with_capacity(candidates.len());
     for candidate in candidates {
         let region: Vec<usize> = candidate.region.iter().map(|q| q.id() as usize).collect();
-        let layout: Vec<usize> = candidate.logic2phy.iter().map(|q| q.id() as usize).collect();
+        let layout: Vec<usize> = candidate
+            .logic2phy
+            .iter()
+            .map(|q| q.id() as usize)
+            .collect();
 
         let score_dict = PyDict::new(py);
         score_dict.set_item("total", candidate.score.total)?;

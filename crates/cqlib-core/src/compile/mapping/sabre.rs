@@ -12,11 +12,11 @@
 
 //! Fidelity-aware SABRE mapper.
 
-use super::{
-    FidelityMap, PreparedCircuit, TopologyAdapter, build_output_circuit, is_cx, map_operation_qubits,
-    normalize_index_pair, preprocess_circuit,
-};
 use super::vf2::Vf2Mapping;
+use super::{
+    FidelityMap, PreparedCircuit, TopologyAdapter, build_output_circuit, is_cx,
+    map_operation_qubits, normalize_index_pair, preprocess_circuit,
+};
 use crate::circuit::gate::{Instruction, StandardGate};
 use crate::circuit::{Circuit, Operation, Qubit};
 use crate::compile::error::CompileError;
@@ -210,13 +210,16 @@ impl SabreMapping {
         let initial_iters = self.config.initial_iterations.max(1);
         let repeat_iters = self.config.repeat_iterations;
         let swap_iters = self.config.swap_iterations.max(1);
-        let mut initial_layouts =
-            self.initial_layout_candidates(&prepared, &available_nodes, logical_width, initial_iters)?;
+        let mut initial_layouts = self.initial_layout_candidates(
+            &prepared,
+            &available_nodes,
+            logical_width,
+            initial_iters,
+        )?;
 
         let mut best_group: Option<AnsGroup> = None;
 
         for mut initial_mapping in initial_layouts.drain(..) {
-
             for iter in 0..=repeat_iters {
                 let forward_group =
                     self.execute_routing(&original_info, &prepared, &initial_mapping, swap_iters)?;
@@ -281,7 +284,10 @@ impl SabreMapping {
             match step {
                 AnsStep::Op(op) => mapped.push(op.clone()),
                 AnsStep::Swap { u, v } => {
-                    let qubits = [self.topology.physical_qubits[*u], self.topology.physical_qubits[*v]];
+                    let qubits = [
+                        self.topology.physical_qubits[*u],
+                        self.topology.physical_qubits[*v],
+                    ];
                     mapped.push(self.standard_op(StandardGate::SWAP, &qubits));
                 }
                 AnsStep::Bridge { u, v, bridge } => {
@@ -314,14 +320,22 @@ impl SabreMapping {
         nodes
     }
 
-    fn random_initial_mapping(&mut self, available_nodes: &[usize], logical_width: usize) -> Vec<usize> {
+    fn random_initial_mapping(
+        &mut self,
+        available_nodes: &[usize],
+        logical_width: usize,
+    ) -> Vec<usize> {
         let mut nodes = available_nodes.to_vec();
         nodes.shuffle(&mut self.rng);
         nodes.truncate(logical_width);
         nodes
     }
 
-    fn build_circuit_info(&self, prepared: &PreparedCircuit, logical_width: usize) -> GateDependencyDag {
+    fn build_circuit_info(
+        &self,
+        prepared: &PreparedCircuit,
+        logical_width: usize,
+    ) -> GateDependencyDag {
         let mut gateid = 0usize;
         let mut nodes: Vec<GateNode> = Vec::with_capacity(prepared.operations.len());
         let mut indegree = vec![0usize];
@@ -671,7 +685,12 @@ impl SabreMapping {
         false
     }
 
-    fn add_ans_2qgate(&self, gate: &GateNode, prepared: &PreparedCircuit, state: &mut RoutingState) {
+    fn add_ans_2qgate(
+        &self,
+        gate: &GateNode,
+        prepared: &PreparedCircuit,
+        state: &mut RoutingState,
+    ) {
         let u = self.topology.physical_qubits[state.logic2phy[gate.logical_qubits[0]]];
         let v = self.topology.physical_qubits[state.logic2phy[gate.logical_qubits[1]]];
         let op = &prepared.operations[gate.op_index].op;
@@ -679,14 +698,23 @@ impl SabreMapping {
         state.ans_steps.push(AnsStep::Op(mapped_op));
     }
 
-    fn add_ans_1qgate(&self, gate: &GateNode, prepared: &PreparedCircuit, state: &mut RoutingState) {
+    fn add_ans_1qgate(
+        &self,
+        gate: &GateNode,
+        prepared: &PreparedCircuit,
+        state: &mut RoutingState,
+    ) {
         let u = self.topology.physical_qubits[state.logic2phy[gate.logical_qubits[0]]];
         let op = &prepared.operations[gate.op_index].op;
         let mapped_op = map_operation_qubits(op, &[u]);
         state.ans_steps.push(AnsStep::Op(mapped_op));
     }
 
-    fn add_bridge_gate(&self, gate: &GateNode, state: &mut RoutingState) -> Result<(), CompileError> {
+    fn add_bridge_gate(
+        &self,
+        gate: &GateNode,
+        state: &mut RoutingState,
+    ) -> Result<(), CompileError> {
         let fixed_u = state.logic2phy[gate.logical_qubits[0]];
         let fixed_v = state.logic2phy[gate.logical_qubits[1]];
         let bridge = self.topology.neighbors[fixed_u]
@@ -768,8 +796,7 @@ impl SabreMapping {
                 }
                 let u = state.logic2phy[gate.logical_qubits[0]];
                 let v = state.logic2phy[gate.logical_qubits[1]];
-                preprocessing_h +=
-                    self.topology.dist[u][v] as f64 / e_count * self.config.w;
+                preprocessing_h += self.topology.dist[u][v] as f64 / e_count * self.config.w;
                 weight_gates[u].push((gateid, self.config.w / e_count));
                 weight_gates[v].push((gateid, self.config.w / e_count));
             }
@@ -789,7 +816,13 @@ impl SabreMapping {
         state.preprocessing_h = preprocessing_h;
     }
 
-    fn rated_swap(&self, u: usize, v: usize, info: &GateDependencyDag, state: &RoutingState) -> RatedSwap {
+    fn rated_swap(
+        &self,
+        u: usize,
+        v: usize,
+        info: &GateDependencyDag,
+        state: &RoutingState,
+    ) -> RatedSwap {
         let mut preprocessing_h = state.preprocessing_h;
 
         for &(gateid, coff) in &state.weight_gates[u] {

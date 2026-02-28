@@ -15,6 +15,7 @@ from cqlib.circuit import Circuit
 from cqlib.compiler import Topology
 import time
 
+
 def count_gate(circuit: Circuit, gate_name: str) -> int:
     return sum(1 for op in circuit.operations if op.name.upper() == gate_name.upper())
 
@@ -27,6 +28,7 @@ def assert_all_2q_on_topology(circuit: Circuit, topology: Topology) -> None:
         c0 = topology.is_connected(q0.index, q1.index)
         c1 = topology.is_connected(q1.index, q0.index)
         assert c0 or c1, f"2q op {op.name} on non-edge ({q0.index}, {q1.index})"
+
 
 def random_circuit(
     num_qubits: int,
@@ -49,11 +51,12 @@ def random_circuit(
             circuit.cx(q0, q1)
 
     if not any(op.num_qubits == 2 for op in circuit.operations):
-        for _ in range(2*num_qubits):
+        for _ in range(2 * num_qubits):
             q0, q1 = rng.sample(range(num_qubits), 2)
             circuit.cx(q0, q1)
 
     return circuit
+
 
 def show_circuit(circuit: Circuit):
     edges = []
@@ -61,5 +64,5 @@ def show_circuit(circuit: Circuit):
         if op.num_qubits != 2:
             continue
         q0, q1 = op.qubits
-        edges.append((q0,q1))
+        edges.append((q0, q1))
     return edges

@@ -24,11 +24,11 @@ from cqlib.compiler import (
 
 try:
     from . import assert_all_2q_on_topology
-    from . import count_gate
-    from . import random_circuit, show_circuit
-except ImportError:  # Direct script execution: python tests/python/compiler/test_mapping_workflow.py
+    from . import random_circuit
+except (
+    ImportError
+):  # Direct script execution: python tests/python/compiler/test_mapping_workflow.py
     from __init__ import assert_all_2q_on_topology
-    from __init__ import count_gate, show_circuit
     from __init__ import random_circuit
 
 
@@ -77,7 +77,9 @@ def test_vf2_find_initial_layout_candidates_topk_and_schema():
         assert len(candidate["layout"]) == 3
 
         score = candidate["score"]
-        assert {"total", "fidelity", "topology_fit", "gate_distribution"} <= set(score.keys())
+        assert {"total", "fidelity", "topology_fit", "gate_distribution"} <= set(
+            score.keys()
+        )
         for key in ("total", "fidelity", "topology_fit", "gate_distribution"):
             assert 0.0 <= score[key] <= 1.0
 
@@ -137,10 +139,12 @@ def test_vf2_candidates_respect_max_matches_per_subgraph():
 
 def test_random_circuit():
     repeats = 1000
-    num_qubits = random.randint(5,10)
+    num_qubits = random.randint(5, 10)
     line_topology = Topology.line(list(range(num_qubits)))
-    full_topology = Topology(list(range(num_qubits)),[(i,j) for i in range(num_qubits) for j in range(i+1,num_qubits)])
-
+    full_topology = Topology(
+        list(range(num_qubits)),
+        [(i, j) for i in range(num_qubits) for j in range(i + 1, num_qubits)],
+    )
 
     for _ in range(repeats):
         circuit = random_circuit(num_qubits)

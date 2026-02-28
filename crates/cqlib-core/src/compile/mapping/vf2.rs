@@ -181,7 +181,10 @@ impl Vf2Mapping {
     ///
     /// Note: fidelity values are only validated here for interface consistency.
     /// The strict VF2 path is structural; fidelity is used by candidate scoring.
-    pub fn new(topology: Topology, fidelity_map: Option<FidelityMap>) -> Result<Self, CompileError> {
+    pub fn new(
+        topology: Topology,
+        fidelity_map: Option<FidelityMap>,
+    ) -> Result<Self, CompileError> {
         let topology = TopologyAdapter::new(&topology, fidelity_map.as_ref())?;
         Ok(Self::from_adapter(topology))
     }
@@ -205,7 +208,10 @@ impl Vf2Mapping {
     ///
     /// The method first tries strict full-graph monomorphism matching. If that fails,
     /// it falls back to candidate generation and returns the top-1 layout.
-    pub fn find_initial_layout(&self, circuit: &Circuit) -> Result<Option<Vec<Qubit>>, CompileError> {
+    pub fn find_initial_layout(
+        &self,
+        circuit: &Circuit,
+    ) -> Result<Option<Vec<Qubit>>, CompileError> {
         let prepared = preprocess_circuit(circuit)?;
         if let Some(mapping) = self.solve_prepared_initial_layout(&prepared)? {
             let strict_layout = mapping
@@ -326,8 +332,11 @@ impl Vf2Mapping {
         }
 
         if seed_mappings.is_empty() {
-            let mut found =
-                self.find_seed_mappings_from_max_subgraph(&interaction, options, target_seed_count)?;
+            let mut found = self.find_seed_mappings_from_max_subgraph(
+                &interaction,
+                options,
+                target_seed_count,
+            )?;
             seed_mappings.append(&mut found);
         }
 
@@ -382,7 +391,11 @@ impl Vf2Mapping {
                 .total_cmp(&a.score.total)
                 .then_with(|| b.score.fidelity.total_cmp(&a.score.fidelity))
                 .then_with(|| b.score.topology_fit.total_cmp(&a.score.topology_fit))
-                .then_with(|| b.score.gate_distribution.total_cmp(&a.score.gate_distribution))
+                .then_with(|| {
+                    b.score
+                        .gate_distribution
+                        .total_cmp(&a.score.gate_distribution)
+                })
                 .then_with(|| vec_lex_cmp(&a.logic2phy, &b.logic2phy))
         });
         raw_candidates.truncate(options.top_k);
@@ -522,11 +535,7 @@ impl Vf2Mapping {
             for &(u, v) in &interaction.edges {
                 if marked[u] && marked[v] {
                     edge_count += 1;
-                    covered_weight += interaction
-                        .edge_weights
-                        .get(&(u, v))
-                        .copied()
-                        .unwrap_or(0);
+                    covered_weight += interaction.edge_weights.get(&(u, v)).copied().unwrap_or(0);
                 }
             }
             out.push(SubgraphCandidate {
@@ -946,7 +955,8 @@ impl Vf2Mapping {
         let mut layout = vec![usize::MAX; logical_width];
         let mut used = HashSet::new();
         for (&logical, &physical) in seed_mapping {
-            if logical >= logical_width || !region_set.contains(&physical) || !used.insert(physical) {
+            if logical >= logical_width || !region_set.contains(&physical) || !used.insert(physical)
+            {
                 return None;
             }
             layout[logical] = physical;
@@ -1111,8 +1121,13 @@ impl Vf2Mapping {
         let mut demand_weights_sum = 0.0;
         let mut gate_distribution_sum = 0.0;
         for logical in 0..layout.len() {
-            let demand_weight = (interaction.single_count[logical] + interaction.twoq_count[logical]) as f64;
-            let weight = if demand_weight > 0.0 { demand_weight } else { 1.0 };
+            let demand_weight =
+                (interaction.single_count[logical] + interaction.twoq_count[logical]) as f64;
+            let weight = if demand_weight > 0.0 {
+                demand_weight
+            } else {
+                1.0
+            };
             demand_weights_sum += weight;
 
             let total = interaction.single_count[logical] + interaction.twoq_count[logical];
