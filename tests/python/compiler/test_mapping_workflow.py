@@ -11,8 +11,16 @@
 # that they have been altered from the originals.
 
 import random
-
 import pytest
+
+try:
+    from . import assert_all_2q_on_topology
+    from . import count_gate
+    from . import random_circuit
+except ImportError:  # Direct script execution: python tests/python/compiler/test_mapping_workflow.py
+    from __init__ import assert_all_2q_on_topology
+    from __init__ import count_gate
+    from __init__ import random_circuit
 
 from cqlib.circuit import Circuit
 from cqlib.compiler import (
@@ -23,44 +31,6 @@ from cqlib.compiler import (
     vf2_is_subgraph_isomorphic,
     vf2_map,
 )
-
-
-def _count_gate(circuit: Circuit, gate_name: str) -> int:
-    return sum(1 for op in circuit.operations if op.name.upper() == gate_name.upper())
-
-
-def _assert_all_2q_on_topology(circuit: Circuit, topology: Topology) -> None:
-    for op in circuit.operations:
-        if op.num_qubits != 2:
-            continue
-        q0, q1 = op.qubits
-        c0 = topology.is_connected(q0.index, q1.index)
-        c1 = topology.is_connected(q1.index, q0.index)
-        assert c0 or c1, f"2q op {op.name} on non-edge ({q0.index}, {q1.index})"
-
-
-def random_circuit(
-    num_qubits: int,
-    rng: random.Random,
-    min_ops: int = 8,
-    max_ops: int = 16,
-) -> Circuit:
-    circuit = Circuit(num_qubits)
-    num_ops = rng.randint(min_ops, max_ops)
-
-    for _ in range(num_ops):
-        if rng.random() < 0.4:
-            q = rng.randrange(num_qubits)
-            rng.choice([circuit.h, circuit.x, circuit.z])(q)
-        else:
-            q0, q1 = rng.sample(range(num_qubits), 2)
-            circuit.cx(q0, q1)
-
-    if not any(op.num_qubits == 2 for op in circuit.operations):
-        q0, q1 = rng.sample(range(num_qubits), 2)
-        circuit.cx(q0, q1)
-
-    return circuit
 
 
 def test_vf2_standalone_and_direct_pipeline():
@@ -86,12 +56,12 @@ def test_vf2_standalone_and_direct_pipeline():
     config = SabreConfig(vf2_policy="direct_then_sabre", seed=7)
     mapped = map_with_vf2_sabre(circuit, topology, config=config)
     print(
-        f"[workflow] pipeline op_count={len(mapped.operations)}, swap_count={_count_gate(mapped, 'SWAP')}"
+        f"[workflow] pipeline op_count={len(mapped.operations)}, swap_count={count_gate(mapped, 'SWAP')}"
     )
 
     assert len(mapped.operations) == len(circuit.operations)
-    assert _count_gate(mapped, "SWAP") == 0
-    _assert_all_2q_on_topology(mapped, topology)
+    assert count_gate(mapped, "SWAP") == 0
+    assert_all_2q_on_topology(mapped, topology)
 
 
 def test_sabre_fallback_initial_only_with_prints():
@@ -120,12 +90,12 @@ def test_sabre_fallback_initial_only_with_prints():
         {
             "input_ops": len(circuit.operations),
             "output_ops": len(mapped.operations),
-            "swap_count": _count_gate(mapped, "SWAP"),
+            "swap_count": count_gate(mapped, "SWAP"),
         },
     )
 
     assert len(mapped.operations) >= len(circuit.operations)
-    _assert_all_2q_on_topology(mapped, topology)
+    assert_all_2q_on_topology(mapped, topology)
 
 
 def test_fidelity_validation_and_defaults_with_prints():
@@ -139,7 +109,7 @@ def test_fidelity_validation_and_defaults_with_prints():
     cfg = SabreConfig(vf2_policy="disabled", seed=10)
     mapped = map_with_vf2_sabre(circuit, topology, fidelity_map=valid_map, config=cfg)
     print(f"[workflow] valid fidelity map route op_count={len(mapped.operations)}")
-    _assert_all_2q_on_topology(mapped, topology)
+    assert_all_2q_on_topology(mapped, topology)
 
     invalid_map = {(0, 1): 1.2}
     with pytest.raises(ValueError):
@@ -179,7 +149,7 @@ def test_random_circuit():
             cases_with_increase += 1
 
         assert increase >= 0
-        _assert_all_2q_on_topology(mapped, topology)
+        assert_all_2q_on_topology(mapped, topology)
 
     print(
         "[workflow] random summary:",
