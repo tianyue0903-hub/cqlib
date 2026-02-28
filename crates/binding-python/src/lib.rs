@@ -51,6 +51,10 @@ fn binding_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     m.add_function(wrap_pyfunction!(compile::py_vf2_is_subgraph_isomorphic, m)?)?;
     m.add_function(wrap_pyfunction!(compile::py_vf2_find_initial_layout, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        compile::py_vf2_find_initial_layout_candidates,
+        m
+    )?)?;
     m.add_function(wrap_pyfunction!(compile::py_vf2_map, m)?)?;
     m.add_function(wrap_pyfunction!(compile::py_map_with_vf2_sabre, m)?)?;
 

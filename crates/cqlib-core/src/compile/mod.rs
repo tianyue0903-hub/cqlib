@@ -16,4 +16,7 @@ pub mod error;
 pub mod mapping;
 
 pub use error::CompileError;
-pub use mapping::{FidelityMap, SabreConfig, SabreMapping, Vf2Mapping, Vf2Policy, map_with_vf2_sabre};
+pub use mapping::{
+    FidelityMap, SabreConfig, SabreMapping, Vf2CandidateOptions, Vf2CandidateScore,
+    Vf2LayoutCandidate, Vf2Mapping, Vf2Policy, Vf2ScoreWeights, map_with_vf2_sabre,
+};

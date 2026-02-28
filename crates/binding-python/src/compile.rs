@@ -13,11 +13,13 @@
 use crate::circuit::PyCircuit;
 use cqlib_core::circuit::Qubit;
 use cqlib_core::compile::{
-    FidelityMap, SabreConfig, Vf2Mapping, Vf2Policy, map_with_vf2_sabre,
+    FidelityMap, SabreConfig, Vf2CandidateOptions, Vf2Mapping, Vf2Policy, Vf2ScoreWeights,
+    map_with_vf2_sabre,
 };
 use cqlib_core::device::Topology;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
+use pyo3::types::PyDict;
 use std::collections::HashMap;
 
 #[derive(FromPyObject)]
@@ -195,6 +197,80 @@ pub fn py_vf2_find_initial_layout(
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
 
     Ok(layout.map(|qubits| qubits.into_iter().map(|q| q.id() as usize).collect()))
+}
+
+#[pyfunction(name = "vf2_find_initial_layout_candidates")]
+/// Returns scored VF2 initial-layout candidates.
+///
+/// Keyword arguments control candidate search:
+/// `top_k`, `w_fidelity`, `w_topology`, `w_gate_distribution`,
+/// `max_seed_subgraphs`, `max_matches_per_subgraph`,
+/// `region_beam_width`, `region_oversample_factor`.
+#[pyo3(signature = (
+    circuit,
+    topology,
+    fidelity_map = None,
+    top_k = 10,
+    w_fidelity = 0.5,
+    w_topology = 0.3,
+    w_gate_distribution = 0.2,
+    max_seed_subgraphs = 2000,
+    max_matches_per_subgraph = 128,
+    region_beam_width = 32,
+    region_oversample_factor = 3,
+))]
+pub fn py_vf2_find_initial_layout_candidates(
+    py: Python<'_>,
+    circuit: &PyCircuit,
+    topology: &PyTopology,
+    fidelity_map: Option<HashMap<(usize, usize), f64>>,
+    top_k: usize,
+    w_fidelity: f64,
+    w_topology: f64,
+    w_gate_distribution: f64,
+    max_seed_subgraphs: usize,
+    max_matches_per_subgraph: usize,
+    region_beam_width: usize,
+    region_oversample_factor: usize,
+) -> PyResult<Vec<Py<PyAny>>> {
+    let fidelity = py_fidelity_to_core(fidelity_map)?;
+    let vf2 = Vf2Mapping::new(topology.inner.clone(), fidelity)
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let options = Vf2CandidateOptions {
+        top_k,
+        weights: Vf2ScoreWeights {
+            fidelity: w_fidelity,
+            topology: w_topology,
+            gate_distribution: w_gate_distribution,
+        },
+        max_seed_subgraphs,
+        max_matches_per_subgraph,
+        region_beam_width,
+        region_oversample_factor,
+    };
+    let candidates = vf2
+        .find_initial_layout_candidates(&circuit.inner, Some(options))
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+
+    let mut out = Vec::with_capacity(candidates.len());
+    for candidate in candidates {
+        let region: Vec<usize> = candidate.region.iter().map(|q| q.id() as usize).collect();
+        let layout: Vec<usize> = candidate.logic2phy.iter().map(|q| q.id() as usize).collect();
+
+        let score_dict = PyDict::new(py);
+        score_dict.set_item("total", candidate.score.total)?;
+        score_dict.set_item("fidelity", candidate.score.fidelity)?;
+        score_dict.set_item("topology_fit", candidate.score.topology_fit)?;
+        score_dict.set_item("gate_distribution", candidate.score.gate_distribution)?;
+
+        let item = PyDict::new(py);
+        item.set_item("region", region)?;
+        item.set_item("layout", layout)?;
+        item.set_item("score", score_dict)?;
+        out.push(item.into_any().unbind());
+    }
+
+    Ok(out)
 }
 
 #[pyfunction(name = "vf2_map")]

@@ -16,7 +16,9 @@ pub mod sabre;
 pub mod vf2;
 
 pub use sabre::{SabreConfig, SabreMapping, Vf2Policy};
-pub use vf2::Vf2Mapping;
+pub use vf2::{
+    Vf2CandidateOptions, Vf2CandidateScore, Vf2LayoutCandidate, Vf2Mapping, Vf2ScoreWeights,
+};
 
 use crate::circuit::dag::Terminator;
 use crate::circuit::gate::{Instruction, StandardGate};
@@ -587,6 +589,218 @@ mod tests {
         let vf2 = Vf2Mapping::new(topology, None).unwrap();
         let layout = vf2.find_initial_layout(&circuit).unwrap().unwrap();
         assert_eq!(layout.len(), 3);
+    }
+
+    #[test]
+    fn test_vf2_find_initial_layout_fallback_top1() {
+        let topology = line_topology(&[0, 1, 2]);
+        let mut circuit = Circuit::new(3);
+        circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
+        circuit.cx(Qubit::new(1), Qubit::new(2)).unwrap();
+        circuit.cx(Qubit::new(0), Qubit::new(2)).unwrap();
+
+        let vf2 = Vf2Mapping::new(topology, None).unwrap();
+        assert!(!vf2.is_subgraph_isomorphic(&circuit).unwrap());
+
+        let layout = vf2.find_initial_layout(&circuit).unwrap();
+        assert!(layout.is_some());
+        assert_eq!(layout.unwrap().len(), 3);
+    }
+
+    #[test]
+    fn test_vf2_map_remains_strict_no_fallback() {
+        let topology = line_topology(&[0, 1, 2]);
+        let mut circuit = Circuit::new(3);
+        circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
+        circuit.cx(Qubit::new(1), Qubit::new(2)).unwrap();
+        circuit.cx(Qubit::new(0), Qubit::new(2)).unwrap();
+
+        let mut vf2 = Vf2Mapping::new(topology, None).unwrap();
+        let err = vf2.execute(&circuit).unwrap_err();
+        assert!(matches!(err, CompileError::Vf2NoMapping));
+    }
+
+    #[test]
+    fn test_vf2_candidates_topk_and_score_range() {
+        let topology = line_topology(&[0, 1, 2, 3]);
+        let mut circuit = Circuit::new(3);
+        circuit.h(Qubit::new(0)).unwrap();
+        circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
+        circuit.cx(Qubit::new(1), Qubit::new(2)).unwrap();
+        circuit.cx(Qubit::new(0), Qubit::new(2)).unwrap();
+        circuit.x(Qubit::new(2)).unwrap();
+
+        let vf2 = Vf2Mapping::new(topology, None).unwrap();
+        let options = Vf2CandidateOptions {
+            top_k: 3,
+            ..Vf2CandidateOptions::default()
+        };
+        let candidates = vf2
+            .find_initial_layout_candidates(&circuit, Some(options))
+            .unwrap();
+        assert!(!candidates.is_empty());
+        assert!(candidates.len() <= 3);
+        for c in candidates {
+            assert_eq!(c.logic2phy.len(), 3);
+            assert_eq!(c.region.len(), 3);
+            assert!((0.0..=1.0).contains(&c.score.total));
+            assert!((0.0..=1.0).contains(&c.score.fidelity));
+            assert!((0.0..=1.0).contains(&c.score.topology_fit));
+            assert!((0.0..=1.0).contains(&c.score.gate_distribution));
+        }
+    }
+
+    #[test]
+    fn test_vf2_candidates_deterministic_order() {
+        let topology = line_topology(&[0, 1, 2, 3]);
+        let mut circuit = Circuit::new(3);
+        circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
+        circuit.cx(Qubit::new(1), Qubit::new(2)).unwrap();
+        circuit.cx(Qubit::new(0), Qubit::new(2)).unwrap();
+
+        let vf2 = Vf2Mapping::new(topology, None).unwrap();
+        let options = Vf2CandidateOptions {
+            top_k: 5,
+            ..Vf2CandidateOptions::default()
+        };
+        let c1 = vf2
+            .find_initial_layout_candidates(&circuit, Some(options.clone()))
+            .unwrap();
+        let c2 = vf2
+            .find_initial_layout_candidates(&circuit, Some(options))
+            .unwrap();
+
+        let l1: Vec<Vec<u32>> = c1
+            .iter()
+            .map(|c| c.logic2phy.iter().map(Qubit::id).collect())
+            .collect();
+        let l2: Vec<Vec<u32>> = c2
+            .iter()
+            .map(|c| c.logic2phy.iter().map(Qubit::id).collect())
+            .collect();
+        assert_eq!(l1, l2);
+    }
+
+    #[test]
+    fn test_vf2_candidates_topk_zero() {
+        let topology = line_topology(&[0, 1, 2, 3]);
+        let mut circuit = Circuit::new(3);
+        circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
+        circuit.cx(Qubit::new(1), Qubit::new(2)).unwrap();
+        circuit.cx(Qubit::new(0), Qubit::new(2)).unwrap();
+
+        let vf2 = Vf2Mapping::new(topology, None).unwrap();
+        let options = Vf2CandidateOptions {
+            top_k: 0,
+            ..Vf2CandidateOptions::default()
+        };
+        let candidates = vf2
+            .find_initial_layout_candidates(&circuit, Some(options))
+            .unwrap();
+        assert!(candidates.is_empty());
+    }
+
+    #[test]
+    fn test_vf2_candidates_topk_effective_when_strict_isomorphic() {
+        let topology = Topology::new(
+            vec![Qubit::new(0), Qubit::new(1), Qubit::new(2), Qubit::new(3)],
+            vec![
+                (Qubit::new(0), Qubit::new(1), "CX".to_string()),
+                (Qubit::new(1), Qubit::new(2), "CX".to_string()),
+                (Qubit::new(2), Qubit::new(3), "CX".to_string()),
+                (Qubit::new(3), Qubit::new(0), "CX".to_string()),
+            ],
+        );
+        let mut circuit = Circuit::new(2);
+        circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
+
+        let vf2 = Vf2Mapping::new(topology, None).unwrap();
+        let options = Vf2CandidateOptions {
+            top_k: 4,
+            max_matches_per_subgraph: 16,
+            ..Vf2CandidateOptions::default()
+        };
+        let candidates = vf2
+            .find_initial_layout_candidates(&circuit, Some(options))
+            .unwrap();
+        assert!(candidates.len() > 1);
+        assert!(candidates.len() <= 4);
+    }
+
+    #[test]
+    fn test_vf2_candidates_respect_max_matches_per_subgraph() {
+        let topology = Topology::new(
+            vec![Qubit::new(0), Qubit::new(1), Qubit::new(2), Qubit::new(3)],
+            vec![
+                (Qubit::new(0), Qubit::new(1), "CX".to_string()),
+                (Qubit::new(1), Qubit::new(2), "CX".to_string()),
+                (Qubit::new(2), Qubit::new(3), "CX".to_string()),
+                (Qubit::new(3), Qubit::new(0), "CX".to_string()),
+            ],
+        );
+        let mut circuit = Circuit::new(2);
+        circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
+
+        let vf2 = Vf2Mapping::new(topology, None).unwrap();
+        let options = Vf2CandidateOptions {
+            top_k: 8,
+            max_matches_per_subgraph: 1,
+            ..Vf2CandidateOptions::default()
+        };
+        let candidates = vf2
+            .find_initial_layout_candidates(&circuit, Some(options))
+            .unwrap();
+        assert!(candidates.len() <= 1);
+    }
+
+    #[test]
+    fn test_vf2_find_initial_layout_fallback_none_when_no_candidate() {
+        let topology = Topology::new(vec![Qubit::new(0), Qubit::new(1)], vec![]);
+        let mut circuit = Circuit::new(2);
+        circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
+
+        let vf2 = Vf2Mapping::new(topology, None).unwrap();
+        assert!(!vf2.is_subgraph_isomorphic(&circuit).unwrap());
+        let layout = vf2.find_initial_layout(&circuit).unwrap();
+        assert!(layout.is_none());
+    }
+
+    #[test]
+    fn test_vf2_isomorphic_on_dense_topology_non_induced_case() {
+        let topology = Topology::new(
+            vec![
+                Qubit::new(0),
+                Qubit::new(1),
+                Qubit::new(2),
+                Qubit::new(3),
+                Qubit::new(4),
+            ],
+            vec![
+                (Qubit::new(0), Qubit::new(1), "CX".to_string()),
+                (Qubit::new(0), Qubit::new(2), "CX".to_string()),
+                (Qubit::new(0), Qubit::new(3), "CX".to_string()),
+                (Qubit::new(0), Qubit::new(4), "CX".to_string()),
+                (Qubit::new(1), Qubit::new(2), "CX".to_string()),
+                (Qubit::new(1), Qubit::new(3), "CX".to_string()),
+                (Qubit::new(1), Qubit::new(4), "CX".to_string()),
+                (Qubit::new(2), Qubit::new(3), "CX".to_string()),
+                (Qubit::new(2), Qubit::new(4), "CX".to_string()),
+                (Qubit::new(3), Qubit::new(4), "CX".to_string()),
+            ],
+        );
+        let mut circuit = Circuit::new(5);
+        circuit.cx(Qubit::new(2), Qubit::new(4)).unwrap();
+        circuit.cx(Qubit::new(1), Qubit::new(4)).unwrap();
+        circuit.cx(Qubit::new(3), Qubit::new(0)).unwrap();
+        circuit.cx(Qubit::new(4), Qubit::new(3)).unwrap();
+        circuit.cx(Qubit::new(3), Qubit::new(1)).unwrap();
+        circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
+        circuit.cx(Qubit::new(0), Qubit::new(3)).unwrap();
+
+        let mut vf2 = Vf2Mapping::new(topology.clone(), None).unwrap();
+        assert!(vf2.is_subgraph_isomorphic(&circuit).unwrap());
+        let mapped = vf2.execute(&circuit).unwrap();
+        assert_mapped_2q_edges(&mapped, &topology);
     }
 
     #[test]

@@ -1,5 +1,19 @@
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, TypedDict
 from cqlib.circuit import Circuit
+
+class Vf2CandidateScoreDict(TypedDict):
+    total: float
+    fidelity: float
+    topology_fit: float
+    gate_distribution: float
+
+class Vf2LayoutCandidateDict(TypedDict):
+    # Selected physical region (qubit ids).
+    region: List[int]
+    # Logical-index -> physical-id layout.
+    layout: List[int]
+    # Scoring breakdown.
+    score: Vf2CandidateScoreDict
 
 class Topology:
     def __init__(self, qubits: List[int], couplings: List[Tuple[int, int] | Tuple[int, int, str]]) -> None: ...
@@ -38,6 +52,26 @@ def vf2_find_initial_layout(
     topology: Topology,
     fidelity_map: Optional[Dict[Tuple[int, int], float]] = None,
 ) -> Optional[List[int]]: ...
+
+def vf2_find_initial_layout_candidates(
+    circuit: Circuit,
+    topology: Topology,
+    fidelity_map: Optional[Dict[Tuple[int, int], float]] = None,
+    # Maximum number of returned candidates.
+    top_k: int = 10,
+    # Candidate scoring weights (normalized internally).
+    w_fidelity: float = 0.5,
+    w_topology: float = 0.3,
+    w_gate_distribution: float = 0.2,
+    # Max connected logical subgraphs explored for seed generation.
+    max_seed_subgraphs: int = 2000,
+    # Max VF2 matches collected per explored subgraph.
+    max_matches_per_subgraph: int = 128,
+    # Beam width used by physical-region expansion.
+    region_beam_width: int = 32,
+    # Oversampling multiplier before final top-k filtering.
+    region_oversample_factor: int = 3,
+) -> List[Vf2LayoutCandidateDict]: ...
 
 def vf2_map(
     circuit: Circuit,
