@@ -10,6 +10,17 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
+//! Python bindings for compile-time mapping and routing APIs.
+//!
+//! This module exposes hardware topology modeling and mapper entry points to the
+//! `cqlib.compiler` Python namespace. It provides:
+//! - `Topology` construction and connectivity queries.
+//! - `SabreConfig` configuration for hybrid VF2/SABRE flow.
+//! - Standalone VF2 helpers and the full `map_with_vf2_sabre` API.
+//!
+//! The implementation intentionally keeps data conversion explicit so errors can
+//! be mapped to Python `ValueError` with actionable messages.
+
 use crate::circuit::PyCircuit;
 use cqlib_core::circuit::Qubit;
 use cqlib_core::compile::{
@@ -22,20 +33,34 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use std::collections::HashMap;
 
+/// Python-side coupling tuple accepted by `Topology(...)`.
+///
+/// - `Bare((u, v))` means an unnamed 2q coupling and defaults to `"CX"`.
+/// - `Named((u, v, name))` carries an explicit gate name.
 #[derive(FromPyObject)]
 enum PyCouplingSpec {
     Bare((usize, usize)),
     Named((usize, usize, String)),
 }
 
+/// Python wrapper for core hardware topology.
 #[pyclass(name = "Topology", module = "cqlib.compiler")]
 #[derive(Clone, Debug)]
 pub struct PyTopology {
+    /// Internal core topology object.
     pub(crate) inner: Topology,
 }
 
 #[pymethods]
 impl PyTopology {
+    /// Creates a topology from physical qubit ids and coupling tuples.
+    ///
+    /// Args:
+    ///     qubits (List[int]): Physical qubit ids.
+    ///     couplings (List[Tuple[int, int] | Tuple[int, int, str]]): Coupling edges.
+    ///
+    /// Raises:
+    ///     ValueError: If qubit ids overflow core limits.
     #[new]
     #[pyo3(signature = (qubits, couplings))]
     fn new(qubits: Vec<usize>, couplings: Vec<PyCouplingSpec>) -> PyResult<Self> {
@@ -49,6 +74,16 @@ impl PyTopology {
         })
     }
 
+    /// Builds a line topology whose adjacent qubits are CX-coupled.
+    ///
+    /// Args:
+    ///     qubits (List[int]): Physical qubit ids in line order.
+    ///
+    /// Returns:
+    ///     Topology: A new line topology.
+    ///
+    /// Raises:
+    ///     ValueError: If qubit ids overflow core limits.
     #[staticmethod]
     fn line(qubits: Vec<usize>) -> PyResult<Self> {
         let core_qubits = qubits
@@ -69,22 +104,36 @@ impl PyTopology {
         })
     }
 
+    /// Returns the number of physical qubits.
     #[getter]
     fn num_qubits(&self) -> usize {
         self.inner.num_qubits()
     }
 
+    /// Returns the number of coupling edges.
     #[getter]
     fn num_couplings(&self) -> usize {
         self.inner.num_couplings()
     }
 
+    /// Checks whether two physical qubits are directly connected.
+    ///
+    /// Args:
+    ///     u (int): First qubit id.
+    ///     v (int): Second qubit id.
+    ///
+    /// Returns:
+    ///     bool: `True` when a direct coupling exists.
+    ///
+    /// Raises:
+    ///     ValueError: If qubit ids overflow core limits.
     fn is_connected(&self, u: usize, v: usize) -> PyResult<bool> {
         Ok(self
             .inner
             .is_connected(py_id_to_qubit(u)?, py_id_to_qubit(v)?))
     }
 
+    /// Returns a compact debug representation.
     fn __repr__(&self) -> String {
         format!(
             "Topology(num_qubits={}, num_couplings={})",
@@ -94,14 +143,33 @@ impl PyTopology {
     }
 }
 
+/// Python wrapper for SABRE configuration.
 #[pyclass(name = "SabreConfig", module = "cqlib.compiler")]
 #[derive(Clone, Debug)]
 pub struct PySabreConfig {
+    /// Internal core configuration object.
     pub(crate) inner: SabreConfig,
 }
 
 #[pymethods]
 impl PySabreConfig {
+    /// Creates a SABRE configuration object.
+    ///
+    /// Args:
+    ///     vf2_policy (str): `direct_then_sabre`, `initial_only`, or `disabled`.
+    ///     field_mode (bool): Enables field-aware swap ranking.
+    ///     size_e (int): SABRE look-ahead window size.
+    ///     w (float): Look-ahead weight.
+    ///     decay_coff (float): Repeated-swap decay coefficient.
+    ///     decay_reset_time (int): Steps before decay reset.
+    ///     greedy_strategy (int): Internal greedy strategy id.
+    ///     initial_iterations (int): Initial layout sampling iterations.
+    ///     repeat_iterations (int): Alternating refinement iterations.
+    ///     swap_iterations (int): Swap-sampling iterations per stage.
+    ///     seed (int): RNG seed; `-1` means random seed.
+    ///
+    /// Raises:
+    ///     ValueError: If `vf2_policy` is not recognized.
     #[new]
     #[pyo3(signature = (
         vf2_policy = "direct_then_sabre".to_string(),
@@ -147,6 +215,7 @@ impl PySabreConfig {
         })
     }
 
+    /// Returns a compact debug representation.
     fn __repr__(&self) -> String {
         let policy = match self.inner.vf2_policy {
             Vf2Policy::DirectThenSabre => "direct_then_sabre",
@@ -170,6 +239,18 @@ impl PySabreConfig {
     }
 }
 
+/// Returns whether strict VF2 subgraph mapping exists for the circuit.
+///
+/// Args:
+///     circuit (Circuit): Logical circuit to check.
+///     topology (Topology): Target hardware topology.
+///     fidelity_map (Optional[Dict[Tuple[int, int], float]]): Optional edge fidelity map.
+///
+/// Returns:
+///     bool: `True` if strict VF2 embedding exists.
+///
+/// Raises:
+///     ValueError: If validation fails in VF2 or topology conversion.
 #[pyfunction(name = "vf2_is_subgraph_isomorphic")]
 #[pyo3(signature = (circuit, topology, fidelity_map = None))]
 pub fn py_vf2_is_subgraph_isomorphic(
@@ -184,6 +265,18 @@ pub fn py_vf2_is_subgraph_isomorphic(
         .map_err(|e| PyValueError::new_err(e.to_string()))
 }
 
+/// Finds one logical-to-physical initial layout candidate.
+///
+/// Args:
+///     circuit (Circuit): Logical circuit to map.
+///     topology (Topology): Target hardware topology.
+///     fidelity_map (Optional[Dict[Tuple[int, int], float]]): Optional edge fidelity map.
+///
+/// Returns:
+///     Optional[List[int]]: Logical-index -> physical-id mapping, or `None`.
+///
+/// Raises:
+///     ValueError: If validation fails in VF2 or topology conversion.
 #[pyfunction(name = "vf2_find_initial_layout")]
 #[pyo3(signature = (circuit, topology, fidelity_map = None))]
 pub fn py_vf2_find_initial_layout(
@@ -201,13 +294,16 @@ pub fn py_vf2_find_initial_layout(
     Ok(layout.map(|qubits| qubits.into_iter().map(|q| q.id() as usize).collect()))
 }
 
-#[pyfunction(name = "vf2_find_initial_layout_candidates")]
 /// Returns scored VF2 initial-layout candidates.
 ///
 /// Keyword arguments control candidate search:
 /// `top_k`, `w_fidelity`, `w_topology`, `w_gate_distribution`,
 /// `max_seed_subgraphs`, `max_matches_per_subgraph`,
 /// `region_beam_width`, `region_oversample_factor`.
+///
+/// Raises:
+///     ValueError: If validation fails in VF2 or topology conversion.
+#[pyfunction(name = "vf2_find_initial_layout_candidates")]
 #[pyo3(signature = (
     circuit,
     topology,
@@ -279,6 +375,10 @@ pub fn py_vf2_find_initial_layout_candidates(
     Ok(out)
 }
 
+/// Runs strict VF2 mapping and returns a mapped circuit.
+///
+/// Raises:
+///     ValueError: If strict mapping fails or validation fails.
 #[pyfunction(name = "vf2_map")]
 #[pyo3(signature = (circuit, topology, fidelity_map = None))]
 pub fn py_vf2_map(
@@ -295,6 +395,10 @@ pub fn py_vf2_map(
         .map_err(|e| PyValueError::new_err(e.to_string()))
 }
 
+/// Runs the hybrid VF2 + SABRE mapping flow.
+///
+/// Raises:
+///     ValueError: If mapping/routing fails.
 #[pyfunction(name = "map_with_vf2_sabre")]
 #[pyo3(signature = (circuit, topology, fidelity_map = None, config = None))]
 pub fn py_map_with_vf2_sabre(
@@ -311,6 +415,10 @@ pub fn py_map_with_vf2_sabre(
         .map_err(|e| PyValueError::new_err(e.to_string()))
 }
 
+/// Converts Python coupling tuples into core coupling triples.
+///
+/// Bare tuples default to `"CX"` to keep ergonomics aligned with
+/// `Topology.line(...)`.
 fn py_couplings_to_core(couplings: Vec<PyCouplingSpec>) -> PyResult<Vec<(Qubit, Qubit, String)>> {
     let mut core = Vec::with_capacity(couplings.len());
     for coupling in couplings {
@@ -326,6 +434,9 @@ fn py_couplings_to_core(couplings: Vec<PyCouplingSpec>) -> PyResult<Vec<(Qubit, 
     Ok(core)
 }
 
+/// Converts Python fidelity map keys to core `Qubit` keys.
+///
+/// The conversion performs index-range validation through `py_id_to_qubit`.
 fn py_fidelity_to_core(
     fidelity_map: Option<HashMap<(usize, usize), f64>>,
 ) -> PyResult<Option<FidelityMap>> {
@@ -340,12 +451,14 @@ fn py_fidelity_to_core(
     Ok(Some(core))
 }
 
+/// Converts Python integer qubit ids into core `Qubit`.
 fn py_id_to_qubit(idx: usize) -> PyResult<Qubit> {
     let id = u32::try_from(idx)
         .map_err(|_| PyValueError::new_err(format!("qubit id {} overflows u32", idx)))?;
     Ok(Qubit::new(id))
 }
 
+/// Parses user-provided `vf2_policy` strings into enum policy values.
 fn parse_vf2_policy(policy: &str) -> PyResult<Vf2Policy> {
     match policy.to_ascii_lowercase().as_str() {
         "direct_then_sabre" | "direct" | "vf2_then_sabre" => Ok(Vf2Policy::DirectThenSabre),

@@ -11,6 +11,16 @@
 // that they have been altered from the originals.
 
 //! Fidelity-aware SABRE mapper.
+//!
+//! This implementation routes 2q interactions onto sparse hardware topologies
+//! using an adaptive SWAP-search heuristic inspired by SABRE, plus optional VF2
+//! assistance for initial layout quality.
+//!
+//! High-level flow:
+//! 1. Preprocess and validate source circuit (1q/2q only, no control flow).
+//! 2. Build gate dependency DAG and maintain front-layer execution state.
+//! 3. Score SWAP candidates using distance, fidelity, and decay terms.
+//! 4. Emit mapped operations and reconstruct a topology-compliant circuit.
 
 use super::vf2::Vf2Mapping;
 use super::{
@@ -28,6 +38,7 @@ use smallvec::SmallVec;
 use std::collections::{HashMap, HashSet, VecDeque};
 
 #[derive(Debug, Clone)]
+/// Internal struct `GateNode` used by compile mapping workflows.
 struct GateNode {
     op_index: usize,
     attach_ids: Vec<usize>,
@@ -36,6 +47,7 @@ struct GateNode {
 }
 
 #[derive(Debug, Clone)]
+/// Internal struct `GateDependencyDag` used by compile mapping workflows.
 struct GateDependencyDag {
     nodes: Vec<GateNode>,
     indegree: Vec<usize>,
@@ -44,12 +56,14 @@ struct GateDependencyDag {
 }
 
 impl GateDependencyDag {
+    /// Internal helper for node.
     fn node(&self, gate_id: usize) -> Option<&GateNode> {
         self.nodes.get(gate_id.saturating_sub(1))
     }
 }
 
 #[derive(Debug, Clone)]
+/// Internal enum `AnsStep` used by compile mapping workflows.
 enum AnsStep {
     Op(Operation),
     Swap { u: usize, v: usize },
@@ -57,6 +71,7 @@ enum AnsStep {
 }
 
 impl AnsStep {
+    /// Internal helper for cost.
     fn cost(&self) -> usize {
         match self {
             Self::Op(_) => 1,
@@ -67,6 +82,7 @@ impl AnsStep {
 }
 
 #[derive(Debug, Clone)]
+/// Internal struct `AnsGroup` used by compile mapping workflows.
 struct AnsGroup {
     initial_l2p: Vec<usize>,
     final_l2p: Vec<usize>,
@@ -75,6 +91,7 @@ struct AnsGroup {
 }
 
 #[derive(Debug, Clone)]
+/// Internal struct `RatedSwap` used by compile mapping workflows.
 struct RatedSwap {
     u: usize,
     v: usize,
@@ -83,6 +100,7 @@ struct RatedSwap {
 }
 
 #[derive(Debug, Clone)]
+/// Internal struct `RoutingState` used by compile mapping workflows.
 struct RoutingState {
     logic2phy: Vec<usize>,
     phy2logic: Vec<Option<usize>>,
@@ -95,7 +113,7 @@ struct RoutingState {
     preprocessing_h: f64,
 }
 
-/// Configuration for SABRE mapping.
+/// Policy controlling how VF2 is used around SABRE routing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Vf2Policy {
     /// Try direct VF2 mapping first; if it fails, run SABRE.
@@ -107,28 +125,44 @@ pub enum Vf2Policy {
 }
 
 impl Default for Vf2Policy {
+    /// Returns the default policy (`DirectThenSabre`).
     fn default() -> Self {
         Self::DirectThenSabre
     }
 }
 
 /// Configuration for SABRE mapping.
+///
+/// Defaults are chosen to match the current baseline behavior used by Python
+/// bindings and compile tests.
 #[derive(Debug, Clone)]
 pub struct SabreConfig {
+    /// VF2 usage policy for direct mapping and seeding.
     pub vf2_policy: Vf2Policy,
+    /// Enables field-aware ranking term in swap scoring.
     pub field_mode: bool,
+    /// Look-ahead gate window size.
     pub size_e: usize,
+    /// Weight coefficient for look-ahead term.
     pub w: f64,
+    /// Decay coefficient for repeated SWAP penalties.
     pub decay_coff: f64,
+    /// Number of steps before decay values are reset.
     pub decay_reset_time: usize,
+    /// Internal strategy selector for greedy SWAP selection.
     pub greedy_strategy: usize,
+    /// Number of random initial-layout trials.
     pub initial_iterations: usize,
+    /// Number of forward/reverse refinement rounds.
     pub repeat_iterations: usize,
+    /// Number of SWAP-sampling iterations in each routing pass.
     pub swap_iterations: usize,
+    /// Random seed (`-1` means auto-seeded).
     pub seed: i64,
 }
 
 impl Default for SabreConfig {
+    /// Returns baseline SABRE defaults used across compile APIs.
     fn default() -> Self {
         Self {
             vf2_policy: Vf2Policy::DirectThenSabre,
@@ -266,6 +300,7 @@ impl SabreMapping {
         build_output_circuit(&mapped_ops, &prepared.parameters)
     }
 
+    /// Internal helper for replay ops.
     fn replay_ops(
         &self,
         prepared: &PreparedCircuit,
@@ -305,6 +340,7 @@ impl SabreMapping {
         mapped
     }
 
+    /// Internal helper for standard op.
     fn standard_op(&self, gate: StandardGate, qubits: &[Qubit]) -> Operation {
         Operation {
             instruction: Instruction::Standard(gate),
@@ -314,12 +350,14 @@ impl SabreMapping {
         }
     }
 
+    /// Internal helper for usable nodes.
     fn usable_nodes(&self) -> Vec<usize> {
         let mut nodes = self.topology.largest_component.clone();
         nodes.sort_by_key(|idx| self.topology.physical_qubits[*idx].id());
         nodes
     }
 
+    /// Internal helper for random initial mapping.
     fn random_initial_mapping(
         &mut self,
         available_nodes: &[usize],
@@ -331,6 +369,7 @@ impl SabreMapping {
         nodes
     }
 
+    /// Internal helper for build circuit info.
     fn build_circuit_info(
         &self,
         prepared: &PreparedCircuit,
@@ -395,6 +434,7 @@ impl SabreMapping {
         }
     }
 
+    /// Internal helper for execute routing.
     fn execute_routing(
         &mut self,
         info: &GateDependencyDag,
@@ -455,10 +495,12 @@ impl SabreMapping {
         best_group.ok_or(CompileError::SabreRoutingStuck)
     }
 
+    /// Internal helper for calculate cost.
     fn calculate_cost(&self, steps: &[AnsStep]) -> usize {
         steps.iter().map(AnsStep::cost).sum()
     }
 
+    /// Internal helper for execute once.
     fn execute_once(
         &mut self,
         info: &GateDependencyDag,
@@ -528,6 +570,7 @@ impl SabreMapping {
         }
     }
 
+    /// Internal helper for execute 2q gates.
     fn execute_2q_gates(
         &mut self,
         info: &GateDependencyDag,
@@ -591,12 +634,14 @@ impl SabreMapping {
         Ok(())
     }
 
+    /// Internal helper for can execute.
     fn can_execute(&self, gate: &GateNode, state: &RoutingState) -> bool {
         let u = state.logic2phy[gate.logical_qubits[0]];
         let v = state.logic2phy[gate.logical_qubits[1]];
         self.topology.is_adjacent(u, v)
     }
 
+    /// Internal helper for can bridge.
     fn can_bridge(
         &self,
         gate: &GateNode,
@@ -619,6 +664,7 @@ impl SabreMapping {
         self.calculate_bridge_value(fixed_u, fixed_v, &gate.next_ids, info, state)
     }
 
+    /// Internal helper for calculate bridge value.
     fn calculate_bridge_value(
         &self,
         endpoint_u: usize,
@@ -685,6 +731,7 @@ impl SabreMapping {
         false
     }
 
+    /// Internal helper for add ans 2qgate.
     fn add_ans_2qgate(
         &self,
         gate: &GateNode,
@@ -698,6 +745,7 @@ impl SabreMapping {
         state.ans_steps.push(AnsStep::Op(mapped_op));
     }
 
+    /// Internal helper for add ans 1qgate.
     fn add_ans_1qgate(
         &self,
         gate: &GateNode,
@@ -710,6 +758,7 @@ impl SabreMapping {
         state.ans_steps.push(AnsStep::Op(mapped_op));
     }
 
+    /// Internal helper for add bridge gate.
     fn add_bridge_gate(
         &self,
         gate: &GateNode,
@@ -736,6 +785,7 @@ impl SabreMapping {
         Ok(())
     }
 
+    /// Internal helper for preprocessing h.
     fn preprocessing_h(&self, info: &GateDependencyDag, state: &mut RoutingState) {
         let mut preprocessing_h = 0.0;
         let mut weight_gates = vec![Vec::new(); self.topology.num_qubits()];
@@ -816,6 +866,7 @@ impl SabreMapping {
         state.preprocessing_h = preprocessing_h;
     }
 
+    /// Internal helper for rated swap.
     fn rated_swap(
         &self,
         u: usize,
@@ -863,6 +914,7 @@ impl SabreMapping {
         }
     }
 
+    /// Internal helper for obtain swaps.
     fn obtain_swaps(&self, info: &GateDependencyDag, state: &mut RoutingState) -> Vec<RatedSwap> {
         self.preprocessing_h(info, state);
 
@@ -894,6 +946,7 @@ impl SabreMapping {
         swaps
     }
 
+    /// Internal helper for execute swap.
     fn execute_swap(&self, u: usize, v: usize, state: &mut RoutingState) {
         let logic_u = state.phy2logic[u];
         let logic_v = state.phy2logic[v];
@@ -911,6 +964,7 @@ impl SabreMapping {
         state.ans_steps.push(AnsStep::Swap { u, v });
     }
 
+    /// Internal helper for find shortest path.
     fn find_shortest_path(
         &mut self,
         info: &GateDependencyDag,
@@ -1004,6 +1058,7 @@ impl SabreMapping {
         self.execute_2q_gates(info, prepared, state)
     }
 
+    /// Internal helper for check greedy strategy.
     fn check_greedy_strategy(
         &mut self,
         info: &GateDependencyDag,
@@ -1048,6 +1103,7 @@ impl SabreMapping {
         Ok(())
     }
 
+    /// Internal helper for execute rated swap.
     fn execute_rated_swap(
         &mut self,
         rated_swap: &RatedSwap,
@@ -1072,6 +1128,7 @@ impl SabreMapping {
         Ok(())
     }
 
+    /// Internal helper for initial layout candidates.
     fn initial_layout_candidates(
         &mut self,
         prepared: &PreparedCircuit,
@@ -1095,6 +1152,7 @@ impl SabreMapping {
         Ok(candidates)
     }
 
+    /// Internal helper for vf2 seed layout.
     fn vf2_seed_layout(
         &self,
         prepared: &PreparedCircuit,

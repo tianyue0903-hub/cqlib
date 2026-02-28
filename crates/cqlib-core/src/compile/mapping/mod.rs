@@ -11,8 +11,22 @@
 // that they have been altered from the originals.
 
 //! Routing/mapping algorithms and shared utilities.
+//!
+//! This module hosts core shared data structures used by both VF2 and SABRE,
+//! plus the hybrid `map_with_vf2_sabre` orchestration function.
+//!
+//! Design highlights:
+//! - a normalized `TopologyAdapter` for dense adjacency/fidelity lookups
+//! - a preprocessing pass that enforces 1q/2q, control-flow-free constraints
+//! - lightweight helpers for rebuilding mapped output circuits
+//! - deterministic canonicalization of undirected edge keys
+//!
+//! These helpers are intentionally kept in one place to avoid duplicated
+//! validation and conversion logic between algorithms.
 
+/// SABRE mapper implementation and its configuration model.
 pub mod sabre;
+/// VF2-based structural mapper and candidate-layout search.
 pub mod vf2;
 
 pub use sabre::{SabreConfig, SabreMapping, Vf2Policy};
@@ -38,29 +52,46 @@ use std::collections::{HashMap, HashSet};
 pub type FidelityMap = HashMap<(Qubit, Qubit), f64>;
 
 #[derive(Debug, Clone)]
+/// Internal struct `PreparedOperation` used by compile mapping workflows.
 pub(crate) struct PreparedOperation {
+    /// Original operation from the source circuit.
     pub(crate) op: Operation,
+    /// Logical-qubit indices corresponding to `op.qubits`.
     pub(crate) logical_qubits: SmallVec<[usize; 2]>,
 }
 
 #[derive(Debug, Clone)]
+/// Internal struct `PreparedCircuit` used by compile mapping workflows.
 pub(crate) struct PreparedCircuit {
+    /// Logical qubits in circuit ordering.
     pub(crate) logical_qubits: Vec<Qubit>,
+    /// Parameter pool copied from source circuit.
     pub(crate) parameters: Vec<Parameter>,
+    /// Validated operations with cached logical indices.
     pub(crate) operations: Vec<PreparedOperation>,
 }
 
 #[derive(Debug, Clone)]
+/// Internal struct `TopologyAdapter` used by compile mapping workflows.
 pub(crate) struct TopologyAdapter {
+    /// Physical qubits sorted by `Qubit::id`.
     pub(crate) physical_qubits: Vec<Qubit>,
+    /// Adjacency list over physical-qubit indices.
     pub(crate) neighbors: Vec<Vec<usize>>,
+    /// Symmetric adjacency matrix.
     pub(crate) adj_matrix: Vec<Vec<bool>>,
+    /// All-pairs shortest path lengths.
     pub(crate) dist: Vec<Vec<u32>>,
+    /// Symmetric edge-fidelity matrix.
     pub(crate) fidelity: Vec<Vec<f64>>,
+    /// Indices in the largest connected component.
     pub(crate) largest_component: Vec<usize>,
 }
 
 impl TopologyAdapter {
+    /// Builds a dense topology adapter from sparse topology/fidelity inputs.
+    ///
+    /// Validates fidelity range, known qubits, and existence of referenced edges.
     pub(crate) fn new(
         topology: &Topology,
         fidelity_map: Option<&FidelityMap>,
@@ -160,33 +191,40 @@ impl TopologyAdapter {
         })
     }
 
+    /// Returns number of physical qubits in this adapter.
     pub(crate) fn num_qubits(&self) -> usize {
         self.physical_qubits.len()
     }
 
+    /// Returns whether two physical indices are adjacent.
     pub(crate) fn is_adjacent(&self, u_idx: usize, v_idx: usize) -> bool {
         self.adj_matrix[u_idx][v_idx]
     }
 
+    /// Returns stored edge fidelity for two physical indices.
     pub(crate) fn edge_fidelity(&self, u_idx: usize, v_idx: usize) -> f64 {
         self.fidelity[u_idx][v_idx]
     }
 }
 
+/// Normalizes an undirected index pair so `(a, b)` and `(b, a)` share one key.
 pub(crate) fn normalize_index_pair(a: usize, b: usize) -> (usize, usize) {
     if a <= b { (a, b) } else { (b, a) }
 }
 
+/// Returns whether an operation is a standard `CX` gate.
 pub(crate) fn is_cx(op: &Operation) -> bool {
     matches!(op.instruction, Instruction::Standard(StandardGate::CX))
 }
 
+/// Clones an operation while replacing its qubit list with mapped qubits.
 pub(crate) fn map_operation_qubits(op: &Operation, mapped_qubits: &[Qubit]) -> Operation {
     let mut mapped = op.clone();
     mapped.qubits = mapped_qubits.iter().copied().collect();
     mapped
 }
 
+/// Appends one mapped operation to output while resolving parameter references.
 pub(crate) fn append_operation(
     output: &mut Circuit,
     op: &Operation,
@@ -218,6 +256,7 @@ pub(crate) fn append_operation(
     Ok(())
 }
 
+/// Builds output circuit from mapped operations and preserved parameters.
 pub(crate) fn build_output_circuit(
     mapped_ops: &[Operation],
     parameter_pool: &[Parameter],
@@ -240,6 +279,10 @@ pub(crate) fn build_output_circuit(
     Ok(output)
 }
 
+/// Validates and flattens a circuit into compile-friendly internal form.
+///
+/// The pass currently accepts only single-block, return-terminated DAGs and
+/// only 1q/2q operations with no control-flow nodes.
 pub(crate) fn preprocess_circuit(circuit: &Circuit) -> Result<PreparedCircuit, CompileError> {
     let dag = CircuitDag::from_circuit(circuit)
         .map_err(|err| CompileError::DagBuildFailed(err.to_string()))?;
@@ -315,6 +358,23 @@ pub(crate) fn preprocess_circuit(circuit: &Circuit) -> Result<PreparedCircuit, C
     })
 }
 
+/// Maps a logical circuit onto topology using VF2-first + SABRE fallback policy.
+///
+/// # Arguments
+///
+/// * `circuit` - Logical input circuit.
+/// * `topology` - Target device topology.
+/// * `fidelity_map` - Optional undirected edge-fidelity overrides.
+/// * `config` - SABRE configuration, including VF2 policy mode.
+///
+/// # Returns
+///
+/// * `Ok(Circuit)` - A mapped circuit with operations constrained to topology edges.
+///
+/// # Errors
+///
+/// Returns [`CompileError`] when validation fails, when VF2 strict mapping
+/// fails under required policy, or when SABRE cannot progress.
 pub fn map_with_vf2_sabre(
     circuit: &Circuit,
     topology: &Topology,
@@ -334,6 +394,7 @@ pub fn map_with_vf2_sabre(
     sabre.execute(circuit)
 }
 
+/// Computes all-pairs shortest path on an unweighted adjacency matrix.
 fn compute_all_pairs_shortest_path(adj_matrix: &[Vec<bool>]) -> Vec<Vec<u32>> {
     let n = adj_matrix.len();
     if n == 0 {
@@ -374,6 +435,7 @@ fn compute_all_pairs_shortest_path(adj_matrix: &[Vec<bool>]) -> Vec<Vec<u32>> {
     dist
 }
 
+/// Returns index set of the largest connected component in the topology graph.
 fn compute_largest_component(neighbors: &[Vec<usize>]) -> Vec<usize> {
     let n = neighbors.len();
     let mut visited = vec![false; n];

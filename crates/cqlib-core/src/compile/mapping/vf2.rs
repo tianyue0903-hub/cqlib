@@ -11,6 +11,15 @@
 // that they have been altered from the originals.
 
 //! Structural VF2 mapping pass.
+//!
+//! This mapper focuses on strict structural embedding first, and then offers a
+//! candidate-search fallback for initial-layout selection when strict full
+//! matching is not available.
+//!
+//! The candidate path combines:
+//! - partial VF2-style monomorphism seeds
+//! - region expansion on the physical topology
+//! - weighted ranking by fidelity, topology distance, and gate distribution
 
 use super::{
     FidelityMap, PreparedCircuit, TopologyAdapter, build_output_circuit, map_operation_qubits,
@@ -37,6 +46,7 @@ pub struct Vf2ScoreWeights {
 }
 
 impl Default for Vf2ScoreWeights {
+    /// Returns baseline scoring weights used by candidate search.
     fn default() -> Self {
         Self {
             fidelity: 0.5,
@@ -47,6 +57,10 @@ impl Default for Vf2ScoreWeights {
 }
 
 impl Vf2ScoreWeights {
+    /// Normalizes positive finite weights so their sum is 1.0.
+    ///
+    /// Invalid entries (non-finite or non-positive) are treated as zero; if all
+    /// values become zero, defaults are restored.
     fn normalized(self) -> Self {
         let mut fidelity = if self.fidelity.is_finite() && self.fidelity > 0.0 {
             self.fidelity
@@ -100,6 +114,7 @@ pub struct Vf2CandidateOptions {
 }
 
 impl Default for Vf2CandidateOptions {
+    /// Returns baseline candidate search options.
     fn default() -> Self {
         Self {
             top_k: 10,
@@ -137,6 +152,7 @@ pub struct Vf2LayoutCandidate {
 }
 
 #[derive(Debug, Clone)]
+/// Internal struct `InteractionGraph` used by compile mapping workflows.
 struct InteractionGraph {
     active_nodes: Vec<usize>,
     adjacency: Vec<HashSet<usize>>,
@@ -147,6 +163,7 @@ struct InteractionGraph {
 }
 
 #[derive(Debug, Clone)]
+/// Internal struct `SubgraphCandidate` used by compile mapping workflows.
 struct SubgraphCandidate {
     nodes: Vec<usize>,
     covered_weight: usize,
@@ -154,12 +171,14 @@ struct SubgraphCandidate {
 }
 
 #[derive(Debug, Clone)]
+/// Internal struct `PartialSeed` used by compile mapping workflows.
 struct PartialSeed {
     mapping: HashMap<usize, usize>,
     score: i64,
 }
 
 #[derive(Debug, Clone)]
+/// Internal struct `IndexedCandidate` used by compile mapping workflows.
 struct IndexedCandidate {
     region: Vec<usize>,
     logic2phy: Vec<usize>,
@@ -189,6 +208,7 @@ impl Vf2Mapping {
         Ok(Self::from_adapter(topology))
     }
 
+    /// Creates mapper from a precomputed topology adapter.
     pub(crate) fn from_adapter(topology: TopologyAdapter) -> Self {
         Self {
             logic2phy: Vec::new(),
@@ -247,6 +267,7 @@ impl Vf2Mapping {
         self.find_prepared_layout_candidates(&prepared, &options, true)
     }
 
+    /// Solves strict prepared-layout mapping without mutating mapper state.
     pub(crate) fn solve_prepared_initial_layout(
         &self,
         prepared: &PreparedCircuit,
@@ -287,6 +308,7 @@ impl Vf2Mapping {
         build_output_circuit(&mapped_ops, &prepared.parameters)
     }
 
+    /// Internal helper for find prepared layout candidates.
     fn find_prepared_layout_candidates(
         &self,
         prepared: &PreparedCircuit,
@@ -419,6 +441,7 @@ impl Vf2Mapping {
         Ok(output)
     }
 
+    /// Internal helper for find best mapping.
     fn find_best_mapping(
         &self,
         prepared: &PreparedCircuit,
@@ -450,6 +473,7 @@ impl Vf2Mapping {
         Ok(Some(full_mapping))
     }
 
+    /// Internal helper for find seed mappings from max subgraph.
     fn find_seed_mappings_from_max_subgraph(
         &self,
         interaction: &InteractionGraph,
@@ -505,6 +529,7 @@ impl Vf2Mapping {
         Ok(seeds)
     }
 
+    /// Internal helper for enumerate connected subgraphs.
     fn enumerate_connected_subgraphs(
         &self,
         interaction: &InteractionGraph,
@@ -580,6 +605,7 @@ impl Vf2Mapping {
         out
     }
 
+    /// Internal helper for collect partial mappings for nodes.
     fn collect_partial_mappings_for_nodes(
         &self,
         interaction: &InteractionGraph,
@@ -594,6 +620,7 @@ impl Vf2Mapping {
         Ok(partials)
     }
 
+    /// Internal helper for collect partial monomorphisms.
     fn collect_partial_monomorphisms(
         &self,
         interaction: &InteractionGraph,
@@ -676,6 +703,7 @@ impl Vf2Mapping {
         out
     }
 
+    /// Internal helper for collect partial monomorphisms dfs.
     fn collect_partial_monomorphisms_dfs(
         &self,
         depth: usize,
@@ -747,6 +775,7 @@ impl Vf2Mapping {
         }
     }
 
+    /// Internal helper for score partial mapping.
     fn score_partial_mapping(
         &self,
         interaction: &InteractionGraph,
@@ -761,6 +790,7 @@ impl Vf2Mapping {
         score
     }
 
+    /// Internal helper for generate candidate regions.
     fn generate_candidate_regions(
         &self,
         seed_mapping: &HashMap<usize, usize>,
@@ -852,6 +882,7 @@ impl Vf2Mapping {
         current
     }
 
+    /// Internal helper for boundary nodes.
     fn boundary_nodes(&self, region: &[usize]) -> Vec<usize> {
         let mut in_region = vec![false; self.topology.num_qubits()];
         for &p in region {
@@ -873,6 +904,7 @@ impl Vf2Mapping {
         boundary
     }
 
+    /// Internal helper for compare expansion nodes.
     fn compare_expansion_nodes(&self, region: &[usize], a: usize, b: usize) -> Ordering {
         let score_a = self.expansion_node_score(region, a);
         let score_b = self.expansion_node_score(region, b);
@@ -885,6 +917,7 @@ impl Vf2Mapping {
             .then_with(|| score_a.3.cmp(&score_b.3))
     }
 
+    /// Internal helper for expansion node score.
     fn expansion_node_score(&self, region: &[usize], node: usize) -> (usize, f64, usize, u32) {
         let mut connections = 0usize;
         let mut fidelity_sum = 0.0;
@@ -910,6 +943,7 @@ impl Vf2Mapping {
         )
     }
 
+    /// Internal helper for compare regions.
     fn compare_regions(&self, a: &[usize], b: &[usize]) -> Ordering {
         let score_a = self.region_score(a);
         let score_b = self.region_score(b);
@@ -920,6 +954,7 @@ impl Vf2Mapping {
             .then_with(|| vec_lex_cmp(a, b))
     }
 
+    /// Internal helper for region score.
     fn region_score(&self, region: &[usize]) -> (usize, usize) {
         let region_set: HashSet<usize> = region.iter().copied().collect();
         let mut internal_edges = 0usize;
@@ -940,6 +975,7 @@ impl Vf2Mapping {
         (internal_edges, degree_sum)
     }
 
+    /// Internal helper for complete layout in region.
     fn complete_layout_in_region(
         &self,
         logical_width: usize,
@@ -1022,6 +1058,7 @@ impl Vf2Mapping {
         Some(layout)
     }
 
+    /// Internal helper for candidate score for assignment.
     fn candidate_score_for_assignment(
         &self,
         logical: usize,
@@ -1066,6 +1103,7 @@ impl Vf2Mapping {
         0.6 * neighbor_compat + 0.4 * capacity_fit
     }
 
+    /// Internal helper for score layout.
     fn score_layout(
         &self,
         interaction: &InteractionGraph,
@@ -1163,6 +1201,7 @@ impl Vf2Mapping {
         }
     }
 
+    /// Internal helper for degree in region.
     fn degree_in_region(&self, physical: usize, region_set: &HashSet<usize>) -> usize {
         self.topology.neighbors[physical]
             .iter()
@@ -1170,6 +1209,7 @@ impl Vf2Mapping {
             .count()
     }
 
+    /// Internal helper for assign isolates.
     fn assign_isolates(
         &self,
         logical_width: usize,
@@ -1217,6 +1257,7 @@ impl Vf2Mapping {
         Ok(result)
     }
 
+    /// Internal helper for partial mapping lex cmp.
     fn partial_mapping_lex_cmp(
         &self,
         left: &HashMap<usize, usize>,
@@ -1243,6 +1284,7 @@ impl Vf2Mapping {
         left_pairs.len().cmp(&right_pairs.len())
     }
 
+    /// Internal helper for build interaction graph.
     fn build_interaction_graph(&self, prepared: &PreparedCircuit) -> InteractionGraph {
         let logical_width = prepared.logical_qubits.len();
         let mut adjacency = vec![HashSet::new(); logical_width];
@@ -1296,6 +1338,7 @@ impl Vf2Mapping {
     }
 }
 
+/// Internal helper for vec lex cmp.
 fn vec_lex_cmp(a: &[usize], b: &[usize]) -> Ordering {
     for (x, y) in a.iter().zip(b.iter()) {
         match x.cmp(y) {
@@ -1306,6 +1349,7 @@ fn vec_lex_cmp(a: &[usize], b: &[usize]) -> Ordering {
     a.len().cmp(&b.len())
 }
 
+/// Internal helper for clamp01.
 fn clamp01(v: f64) -> f64 {
     if !v.is_finite() {
         return 0.0;

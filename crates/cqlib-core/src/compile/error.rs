@@ -11,11 +11,25 @@
 // that they have been altered from the originals.
 
 //! Compile-layer errors for mapping and routing passes.
+//!
+//! The compile stack uses a single error enum to preserve actionable context
+//! while passing failures across VF2, SABRE, topology adaptation, and circuit
+//! preprocessing.
+//!
+//! Typical categories:
+//! - input/circuit validation issues (`Unsupported*`, `TopologyTooSmall`)
+//! - topology/fidelity consistency issues (`InvalidFidelity`, `FidelityEdgeNotFound`)
+//! - algorithmic no-solution conditions (`Vf2NoMapping`, `SabreRoutingStuck`)
+//! - unexpected invariant breaks (`Internal`)
 
 use crate::circuit::{CircuitError, Qubit};
 use thiserror::Error;
 
 /// Error type for compile/mapping workflows.
+///
+/// This enum is designed for two audiences:
+/// - API users, who need clear messages for invalid inputs or unsupported cases.
+/// - maintainers, who need precise failure location for debugging and regression triage.
 #[derive(Debug, Error)]
 pub enum CompileError {
     /// Wrapper around circuit-level errors.
