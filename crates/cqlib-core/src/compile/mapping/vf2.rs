@@ -275,6 +275,43 @@ impl Vf2Mapping {
         self.find_best_mapping(prepared)
     }
 
+    /// Finds top-K prepared-circuit layout candidates as index layouts.
+    ///
+    /// Returned layouts are sorted by descending candidate score (best first),
+    /// following the same ranking pipeline as `find_initial_layout_candidates`.
+    pub(crate) fn find_prepared_layout_candidate_indices(
+        &self,
+        prepared: &PreparedCircuit,
+        options: Option<Vf2CandidateOptions>,
+    ) -> Result<Vec<Vec<usize>>, CompileError> {
+        let options = options.unwrap_or_default();
+        let candidates = self.find_prepared_layout_candidates(prepared, &options, true)?;
+
+        let qubit_to_index: HashMap<Qubit, usize> = self
+            .topology
+            .physical_qubits
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(idx, q)| (q, idx))
+            .collect();
+
+        let mut out = Vec::with_capacity(candidates.len());
+        for candidate in candidates {
+            let mut layout = Vec::with_capacity(candidate.logic2phy.len());
+            for q in candidate.logic2phy {
+                let Some(&idx) = qubit_to_index.get(&q) else {
+                    return Err(CompileError::Internal(format!(
+                        "candidate references unknown physical qubit {q}"
+                    )));
+                };
+                layout.push(idx);
+            }
+            out.push(layout);
+        }
+        Ok(out)
+    }
+
     /// Executes strict monomorphism-based mapping and returns mapped circuit.
     pub fn execute(&mut self, circuit: &Circuit) -> Result<Circuit, CompileError> {
         let prepared = preprocess_circuit(circuit)?;

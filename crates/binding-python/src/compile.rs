@@ -167,6 +167,13 @@ impl PySabreConfig {
     ///     repeat_iterations (int): Alternating refinement iterations.
     ///     swap_iterations (int): Swap-sampling iterations per stage.
     ///     seed (int): RNG seed; `-1` means random seed.
+    ///     vf2_seed_top_k (int): Number of ranked VF2 seed layouts to use before random fill.
+    ///     vf2_seed_weight_fidelity (float): VF2 seed scoring weight for fidelity fit.
+    ///     vf2_seed_weight_topology (float): VF2 seed scoring weight for topology fit.
+    ///     vf2_seed_weight_gate_distribution (float): VF2 seed scoring weight for gate distribution fit.
+    ///     swap_fidelity_weight (float): Weight of SWAP-edge fidelity penalty in local scoring.
+    ///     gate_cost_weight (float): Weight of gate-count cost in global objective.
+    ///     predicted_fidelity_weight (float): Weight of predicted fidelity loss in global objective.
     ///
     /// Raises:
     ///     ValueError: If `vf2_policy` is not recognized.
@@ -183,6 +190,13 @@ impl PySabreConfig {
         repeat_iterations = 1,
         swap_iterations = 1,
         seed = -1,
+        vf2_seed_top_k = 8,
+        vf2_seed_weight_fidelity = 0.5,
+        vf2_seed_weight_topology = 0.3,
+        vf2_seed_weight_gate_distribution = 0.2,
+        swap_fidelity_weight = 0.25,
+        gate_cost_weight = 1.0,
+        predicted_fidelity_weight = 0.1,
     ))]
     fn new(
         vf2_policy: String,
@@ -196,11 +210,24 @@ impl PySabreConfig {
         repeat_iterations: usize,
         swap_iterations: usize,
         seed: i64,
+        vf2_seed_top_k: usize,
+        vf2_seed_weight_fidelity: f64,
+        vf2_seed_weight_topology: f64,
+        vf2_seed_weight_gate_distribution: f64,
+        swap_fidelity_weight: f64,
+        gate_cost_weight: f64,
+        predicted_fidelity_weight: f64,
     ) -> PyResult<Self> {
         let policy = parse_vf2_policy(&vf2_policy)?;
         Ok(Self {
             inner: SabreConfig {
                 vf2_policy: policy,
+                vf2_seed_top_k,
+                vf2_seed_weights: Vf2ScoreWeights {
+                    fidelity: vf2_seed_weight_fidelity,
+                    topology: vf2_seed_weight_topology,
+                    gate_distribution: vf2_seed_weight_gate_distribution,
+                },
                 field_mode,
                 size_e,
                 w,
@@ -210,6 +237,9 @@ impl PySabreConfig {
                 initial_iterations,
                 repeat_iterations,
                 swap_iterations,
+                swap_fidelity_weight,
+                gate_cost_weight,
+                predicted_fidelity_weight,
                 seed,
             },
         })
@@ -223,8 +253,12 @@ impl PySabreConfig {
             Vf2Policy::Disabled => "disabled",
         };
         format!(
-            "SabreConfig(vf2_policy='{}', field_mode={}, size_e={}, w={}, decay_coff={}, decay_reset_time={}, greedy_strategy={}, initial_iterations={}, repeat_iterations={}, swap_iterations={}, seed={})",
+            "SabreConfig(vf2_policy='{}', vf2_seed_top_k={}, vf2_seed_weight_fidelity={}, vf2_seed_weight_topology={}, vf2_seed_weight_gate_distribution={}, field_mode={}, size_e={}, w={}, decay_coff={}, decay_reset_time={}, greedy_strategy={}, initial_iterations={}, repeat_iterations={}, swap_iterations={}, swap_fidelity_weight={}, gate_cost_weight={}, predicted_fidelity_weight={}, seed={})",
             policy,
+            self.inner.vf2_seed_top_k,
+            self.inner.vf2_seed_weights.fidelity,
+            self.inner.vf2_seed_weights.topology,
+            self.inner.vf2_seed_weights.gate_distribution,
             self.inner.field_mode,
             self.inner.size_e,
             self.inner.w,
@@ -234,6 +268,9 @@ impl PySabreConfig {
             self.inner.initial_iterations,
             self.inner.repeat_iterations,
             self.inner.swap_iterations,
+            self.inner.swap_fidelity_weight,
+            self.inner.gate_cost_weight,
+            self.inner.predicted_fidelity_weight,
             self.inner.seed,
         )
     }

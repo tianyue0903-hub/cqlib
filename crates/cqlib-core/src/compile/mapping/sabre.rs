@@ -22,7 +22,7 @@
 //! 3. Score SWAP candidates using distance, fidelity, and decay terms.
 //! 4. Emit mapped operations and reconstruct a topology-compliant circuit.
 
-use super::vf2::Vf2Mapping;
+use super::vf2::{Vf2CandidateOptions, Vf2Mapping, Vf2ScoreWeights};
 use super::{
     FidelityMap, PreparedCircuit, TopologyAdapter, build_output_circuit, is_cx,
     map_operation_qubits, normalize_index_pair, preprocess_circuit,
@@ -35,6 +35,7 @@ use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
 use smallvec::SmallVec;
+use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet, VecDeque};
 
 #[derive(Debug, Clone)]
@@ -88,6 +89,8 @@ struct AnsGroup {
     final_l2p: Vec<usize>,
     steps: Vec<AnsStep>,
     cost: usize,
+    log_fidelity: f64,
+    objective: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -96,7 +99,8 @@ struct RatedSwap {
     u: usize,
     v: usize,
     score: f64,
-    field: f64,
+    distance_term: f64,
+    fidelity_penalty: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -139,6 +143,10 @@ impl Default for Vf2Policy {
 pub struct SabreConfig {
     /// VF2 usage policy for direct mapping and seeding.
     pub vf2_policy: Vf2Policy,
+    /// Number of ranked VF2 seed layouts considered before random fill.
+    pub vf2_seed_top_k: usize,
+    /// Scoring weights for VF2 seed-candidate ranking.
+    pub vf2_seed_weights: Vf2ScoreWeights,
     /// Enables field-aware ranking term in swap scoring.
     pub field_mode: bool,
     /// Look-ahead gate window size.
@@ -157,6 +165,12 @@ pub struct SabreConfig {
     pub repeat_iterations: usize,
     /// Number of SWAP-sampling iterations in each routing pass.
     pub swap_iterations: usize,
+    /// Weight applied to SWAP-edge fidelity penalty in local swap scoring.
+    pub swap_fidelity_weight: f64,
+    /// Weight applied to gate cost in global candidate objective.
+    pub gate_cost_weight: f64,
+    /// Weight applied to predicted fidelity loss in global objective.
+    pub predicted_fidelity_weight: f64,
     /// Random seed (`-1` means auto-seeded).
     pub seed: i64,
 }
@@ -166,6 +180,8 @@ impl Default for SabreConfig {
     fn default() -> Self {
         Self {
             vf2_policy: Vf2Policy::DirectThenSabre,
+            vf2_seed_top_k: 8,
+            vf2_seed_weights: Vf2ScoreWeights::default(),
             field_mode: true,
             size_e: 20,
             w: 0.5,
@@ -175,6 +191,9 @@ impl Default for SabreConfig {
             initial_iterations: 1,
             repeat_iterations: 1,
             swap_iterations: 1,
+            swap_fidelity_weight: 0.25,
+            gate_cost_weight: 1.0,
+            predicted_fidelity_weight: 0.1,
             seed: -1,
         }
     }
@@ -191,7 +210,8 @@ pub struct SabreMapping {
     topology: TopologyAdapter,
     config: SabreConfig,
     sample_eps: f64,
-    field_eps: f64,
+    fidelity_eps: f64,
+    objective_eps: f64,
     rng: StdRng,
 }
 
@@ -217,7 +237,8 @@ impl SabreMapping {
             topology,
             config,
             sample_eps: 1e-10,
-            field_eps: 1e-3,
+            fidelity_eps: 1e-12,
+            objective_eps: 1e-12,
             rng: StdRng::seed_from_u64(seed),
         })
     }
@@ -260,7 +281,7 @@ impl SabreMapping {
 
                 if best_group
                     .as_ref()
-                    .map(|g| forward_group.cost < g.cost)
+                    .map(|g| self.group_better(&forward_group, g))
                     .unwrap_or(true)
                 {
                     best_group = Some(forward_group.clone());
@@ -476,16 +497,20 @@ impl SabreMapping {
             }
 
             let cost = self.calculate_cost(&state.ans_steps);
+            let log_fidelity = self.predict_log_fidelity(&state.ans_steps);
+            let objective = self.routing_objective(cost, log_fidelity);
             let candidate = AnsGroup {
                 initial_l2p: initial_mapping.to_vec(),
                 final_l2p: state.logic2phy.clone(),
                 steps: state.ans_steps.clone(),
                 cost,
+                log_fidelity,
+                objective,
             };
 
             if best_group
                 .as_ref()
-                .map(|g| candidate.cost < g.cost)
+                .map(|g| self.group_better(&candidate, g))
                 .unwrap_or(true)
             {
                 best_group = Some(candidate);
@@ -498,6 +523,185 @@ impl SabreMapping {
     /// Internal helper for calculate cost.
     fn calculate_cost(&self, steps: &[AnsStep]) -> usize {
         steps.iter().map(AnsStep::cost).sum()
+    }
+
+    /// Internal helper for numeric weight sanitization.
+    fn sanitize_weight(&self, value: f64, default: f64) -> f64 {
+        if value.is_finite() && value >= 0.0 {
+            value
+        } else {
+            default
+        }
+    }
+
+    /// Internal helper for local swap-fidelity weight.
+    fn swap_fidelity_weight(&self) -> f64 {
+        if self.config.field_mode {
+            self.sanitize_weight(self.config.swap_fidelity_weight, 0.25)
+        } else {
+            0.0
+        }
+    }
+
+    /// Internal helper for global gate-cost weight.
+    fn gate_cost_weight(&self) -> f64 {
+        self.sanitize_weight(self.config.gate_cost_weight, 1.0)
+    }
+
+    /// Internal helper for global predicted-fidelity weight.
+    fn predicted_fidelity_weight(&self) -> f64 {
+        self.sanitize_weight(self.config.predicted_fidelity_weight, 0.1)
+    }
+
+    /// Internal helper for computing routing objective.
+    fn routing_objective(&self, cost: usize, log_fidelity: f64) -> f64 {
+        self.gate_cost_weight() * cost as f64 + self.predicted_fidelity_weight() * (-log_fidelity)
+    }
+
+    /// Internal helper for operation-edge index lookup.
+    fn operation_edge_indices(&self, op: &Operation) -> Option<(usize, usize)> {
+        if op.qubits.len() != 2 {
+            return None;
+        }
+
+        let u = self.physical_index(op.qubits[0])?;
+        let v = self.physical_index(op.qubits[1])?;
+        Some((u, v))
+    }
+
+    /// Internal helper for physical index lookup.
+    fn physical_index(&self, q: Qubit) -> Option<usize> {
+        self.topology
+            .physical_qubits
+            .binary_search_by_key(&q.id(), Qubit::id)
+            .ok()
+    }
+
+    /// Internal helper for edge log-fidelity.
+    fn edge_log_fidelity(&self, u: usize, v: usize) -> f64 {
+        self.topology
+            .edge_fidelity(u, v)
+            .max(self.fidelity_eps)
+            .ln()
+    }
+
+    /// Internal helper for routed-step log-fidelity prediction.
+    fn predict_log_fidelity(&self, steps: &[AnsStep]) -> f64 {
+        let mut log_fidelity = 0.0;
+
+        for step in steps {
+            match step {
+                AnsStep::Op(op) => {
+                    if let Some((u, v)) = self.operation_edge_indices(op) {
+                        log_fidelity += self.edge_log_fidelity(u, v);
+                    }
+                }
+                AnsStep::Swap { u, v } => {
+                    log_fidelity += 3.0 * self.edge_log_fidelity(*u, *v);
+                }
+                AnsStep::Bridge { u, v, bridge } => {
+                    log_fidelity += 2.0 * self.edge_log_fidelity(*u, *bridge);
+                    log_fidelity += 2.0 * self.edge_log_fidelity(*bridge, *v);
+                }
+            }
+        }
+
+        log_fidelity
+    }
+
+    /// Internal helper for epsilon-aware float comparison.
+    fn cmp_f64_with_eps(&self, lhs: f64, rhs: f64) -> Ordering {
+        if (lhs - rhs).abs() <= self.objective_eps {
+            Ordering::Equal
+        } else {
+            lhs.total_cmp(&rhs)
+        }
+    }
+
+    /// Internal helper for deterministic ans-step comparison.
+    fn compare_steps(&self, lhs: &[AnsStep], rhs: &[AnsStep]) -> Ordering {
+        let common = lhs.len().min(rhs.len());
+        for i in 0..common {
+            let ord = self.compare_step(&lhs[i], &rhs[i]);
+            if ord != Ordering::Equal {
+                return ord;
+            }
+        }
+        lhs.len().cmp(&rhs.len())
+    }
+
+    /// Internal helper for deterministic step comparison.
+    fn compare_step(&self, lhs: &AnsStep, rhs: &AnsStep) -> Ordering {
+        let rank = |step: &AnsStep| match step {
+            AnsStep::Op(_) => 0u8,
+            AnsStep::Swap { .. } => 1u8,
+            AnsStep::Bridge { .. } => 2u8,
+        };
+
+        let rank_ord = rank(lhs).cmp(&rank(rhs));
+        if rank_ord != Ordering::Equal {
+            return rank_ord;
+        }
+
+        match (lhs, rhs) {
+            (AnsStep::Op(a), AnsStep::Op(b)) => {
+                let inst_ord = format!("{:?}", a.instruction).cmp(&format!("{:?}", b.instruction));
+                if inst_ord != Ordering::Equal {
+                    return inst_ord;
+                }
+
+                let a_qids: Vec<u32> = a.qubits.iter().map(Qubit::id).collect();
+                let b_qids: Vec<u32> = b.qubits.iter().map(Qubit::id).collect();
+                let q_ord = a_qids.cmp(&b_qids);
+                if q_ord != Ordering::Equal {
+                    return q_ord;
+                }
+
+                format!("{:?}", a.params).cmp(&format!("{:?}", b.params))
+            }
+            (AnsStep::Swap { u: au, v: av }, AnsStep::Swap { u: bu, v: bv }) => {
+                normalize_index_pair(*au, *av).cmp(&normalize_index_pair(*bu, *bv))
+            }
+            (
+                AnsStep::Bridge {
+                    u: au,
+                    v: av,
+                    bridge: ab,
+                },
+                AnsStep::Bridge {
+                    u: bu,
+                    v: bv,
+                    bridge: bb,
+                },
+            ) => (*au, *av, *ab).cmp(&(*bu, *bv, *bb)),
+            _ => Ordering::Equal,
+        }
+    }
+
+    /// Internal helper for rated-swap comparison.
+    fn compare_rated_swaps(&self, lhs: &RatedSwap, rhs: &RatedSwap) -> Ordering {
+        lhs.score
+            .total_cmp(&rhs.score)
+            .then_with(|| lhs.fidelity_penalty.total_cmp(&rhs.fidelity_penalty))
+            .then_with(|| lhs.distance_term.total_cmp(&rhs.distance_term))
+            .then_with(|| {
+                normalize_index_pair(lhs.u, lhs.v).cmp(&normalize_index_pair(rhs.u, rhs.v))
+            })
+    }
+
+    /// Internal helper for ans-group comparison.
+    fn compare_groups(&self, lhs: &AnsGroup, rhs: &AnsGroup) -> Ordering {
+        self.cmp_f64_with_eps(lhs.objective, rhs.objective)
+            .then_with(|| lhs.cost.cmp(&rhs.cost))
+            .then_with(|| self.cmp_f64_with_eps(rhs.log_fidelity, lhs.log_fidelity))
+            .then_with(|| lhs.initial_l2p.cmp(&rhs.initial_l2p))
+            .then_with(|| lhs.final_l2p.cmp(&rhs.final_l2p))
+            .then_with(|| self.compare_steps(&lhs.steps, &rhs.steps))
+    }
+
+    /// Internal helper for ans-group preference.
+    fn group_better(&self, candidate: &AnsGroup, best: &AnsGroup) -> bool {
+        self.compare_groups(candidate, best) == Ordering::Less
     }
 
     /// Internal helper for execute once.
@@ -520,7 +724,7 @@ impl SabreMapping {
                 return Ok(false);
             }
 
-            rated_swaps.sort_by(|a, b| a.score.total_cmp(&b.score));
+            rated_swaps.sort_by(|a, b| self.compare_rated_swaps(a, b));
             let best_score = rated_swaps[0].score;
 
             let top_score_count = rated_swaps
@@ -529,20 +733,8 @@ impl SabreMapping {
                 .count();
 
             let mut selected = if top_score_count > 1 {
-                if self.config.field_mode {
-                    let mut top = rated_swaps[..top_score_count].to_vec();
-                    top.sort_by(|a, b| b.field.total_cmp(&a.field));
-                    let best_field = top[0].field;
-                    let top_field_count = top
-                        .iter()
-                        .take_while(|s| (s.field - best_field).abs() <= self.field_eps)
-                        .count();
-                    let pick = self.rng.random_range(0..top_field_count);
-                    top[pick].clone()
-                } else {
-                    let pick = self.rng.random_range(0..top_score_count);
-                    rated_swaps[pick].clone()
-                }
+                let pick = self.rng.random_range(0..top_score_count);
+                rated_swaps[pick].clone()
             } else {
                 rated_swaps[0].clone()
             };
@@ -874,7 +1066,7 @@ impl SabreMapping {
         info: &GateDependencyDag,
         state: &RoutingState,
     ) -> RatedSwap {
-        let mut preprocessing_h = state.preprocessing_h;
+        let mut distance_term = state.preprocessing_h;
 
         for &(gateid, coff) in &state.weight_gates[u] {
             if let Some(gate) = info.node(gateid) {
@@ -885,7 +1077,7 @@ impl SabreMapping {
                 if vv == v {
                     continue;
                 }
-                preprocessing_h +=
+                distance_term +=
                     coff * (self.topology.dist[v][vv] as f64 - self.topology.dist[u][vv] as f64);
             }
         }
@@ -899,18 +1091,22 @@ impl SabreMapping {
                 if uu == u {
                     continue;
                 }
-                preprocessing_h +=
+                distance_term +=
                     coff * (self.topology.dist[u][uu] as f64 - self.topology.dist[v][uu] as f64);
             }
         }
 
-        preprocessing_h *= state.decay[u].max(state.decay[v]);
+        distance_term *= state.decay[u].max(state.decay[v]);
+        let edge_fidelity = self.topology.edge_fidelity(u, v).max(0.0);
+        let fidelity_penalty = -(edge_fidelity + self.fidelity_eps).ln();
+        let score = distance_term + self.swap_fidelity_weight() * fidelity_penalty;
 
         RatedSwap {
             u,
             v,
-            score: preprocessing_h,
-            field: self.topology.edge_fidelity(u, v),
+            score,
+            distance_term,
+            fidelity_penalty,
         }
     }
 
@@ -1137,36 +1333,285 @@ impl SabreMapping {
         iterations: usize,
     ) -> Result<Vec<Vec<usize>>, CompileError> {
         let mut candidates = Vec::with_capacity(iterations);
+        let mut seen = HashSet::new();
+        let available_set: HashSet<usize> = available_nodes.iter().copied().collect();
 
-        if self.config.vf2_policy != Vf2Policy::Disabled {
-            let available_set: HashSet<usize> = available_nodes.iter().copied().collect();
-            if let Some(seed) = self.vf2_seed_layout(prepared, &available_set)? {
-                candidates.push(seed);
+        if self.config.vf2_policy != Vf2Policy::Disabled && self.config.vf2_seed_top_k > 0 {
+            for seed in self.vf2_seed_layouts(prepared, &available_set)? {
+                if seen.insert(seed.clone()) {
+                    candidates.push(seed);
+                }
+                if candidates.len() >= iterations {
+                    break;
+                }
             }
         }
 
+        let mut duplicate_retries = 0usize;
         while candidates.len() < iterations {
-            candidates.push(self.random_initial_mapping(available_nodes, logical_width));
+            let random_layout = self.random_initial_mapping(available_nodes, logical_width);
+            if seen.insert(random_layout.clone()) {
+                candidates.push(random_layout);
+                duplicate_retries = 0;
+            } else {
+                duplicate_retries += 1;
+                if duplicate_retries > iterations.saturating_mul(4) {
+                    candidates.push(random_layout);
+                    duplicate_retries = 0;
+                }
+            }
         }
 
         Ok(candidates)
     }
 
-    /// Internal helper for vf2 seed layout.
-    fn vf2_seed_layout(
+    /// Internal helper for vf2 seed layouts.
+    fn vf2_seed_layouts(
         &self,
         prepared: &PreparedCircuit,
         available_nodes: &HashSet<usize>,
-    ) -> Result<Option<Vec<usize>>, CompileError> {
+    ) -> Result<Vec<Vec<usize>>, CompileError> {
         let vf2 = Vf2Mapping::from_adapter(self.topology.clone());
-        let Some(layout) = vf2.solve_prepared_initial_layout(prepared)? else {
-            return Ok(None);
+        let options = Vf2CandidateOptions {
+            top_k: self.config.vf2_seed_top_k,
+            weights: self.config.vf2_seed_weights,
+            ..Vf2CandidateOptions::default()
+        };
+        let layouts = vf2.find_prepared_layout_candidate_indices(prepared, Some(options))?;
+
+        Ok(layouts
+            .into_iter()
+            .filter(|layout| layout.iter().all(|phy| available_nodes.contains(phy)))
+            .collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    fn line_topology(ids: &[u32]) -> Topology {
+        let qubits: Vec<Qubit> = ids.iter().copied().map(Qubit::new).collect();
+        let couplings = ids
+            .windows(2)
+            .map(|w| (Qubit::new(w[0]), Qubit::new(w[1]), "CX".to_string()))
+            .collect();
+        Topology::new(qubits, couplings)
+    }
+
+    fn star_topology() -> Topology {
+        Topology::new(
+            vec![Qubit::new(0), Qubit::new(1), Qubit::new(2)],
+            vec![
+                (Qubit::new(0), Qubit::new(1), "CX".to_string()),
+                (Qubit::new(0), Qubit::new(2), "CX".to_string()),
+            ],
+        )
+    }
+
+    fn triangle_circuit() -> Circuit {
+        let mut circuit = Circuit::new(3);
+        circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
+        circuit.cx(Qubit::new(1), Qubit::new(2)).unwrap();
+        circuit.cx(Qubit::new(0), Qubit::new(2)).unwrap();
+        circuit
+    }
+
+    fn single_cx_circuit() -> Circuit {
+        let mut circuit = Circuit::new(2);
+        circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
+        circuit
+    }
+
+    fn star_fidelity_map() -> FidelityMap {
+        let mut fidelity = FidelityMap::new();
+        fidelity.insert((Qubit::new(0), Qubit::new(1)), 0.2);
+        fidelity.insert((Qubit::new(0), Qubit::new(2)), 0.9);
+        fidelity
+    }
+
+    fn build_star_state(
+        mapper: &SabreMapping,
+        info: &GateDependencyDag,
+        initial_mapping: &[usize],
+    ) -> RoutingState {
+        let mut phy2logic = vec![None; mapper.topology.num_qubits()];
+        for (logical, &physical) in initial_mapping.iter().enumerate() {
+            phy2logic[physical] = Some(logical);
+        }
+
+        RoutingState {
+            logic2phy: initial_mapping.to_vec(),
+            phy2logic,
+            pre_number: info.indegree.clone(),
+            front_layer: info.front_layer.clone(),
+            ans_steps: Vec::new(),
+            decay: vec![1.0; mapper.topology.num_qubits()],
+            decay_time: 0,
+            weight_gates: vec![Vec::new(); mapper.topology.num_qubits()],
+            preprocessing_h: 0.0,
+        }
+    }
+
+    #[test]
+    fn test_initial_layout_candidates_use_ranked_vf2_seed_first() {
+        let topology = line_topology(&[0, 1, 2]);
+        let circuit = triangle_circuit();
+        let cfg = SabreConfig {
+            vf2_policy: Vf2Policy::InitialOnly,
+            vf2_seed_top_k: 3,
+            initial_iterations: 3,
+            seed: 7,
+            ..SabreConfig::default()
         };
 
-        if layout.iter().all(|phy| available_nodes.contains(phy)) {
-            Ok(Some(layout))
-        } else {
-            Ok(None)
+        let mut sabre = SabreMapping::new(topology, None, cfg.clone()).unwrap();
+        let prepared = preprocess_circuit(&circuit).unwrap();
+        let available_nodes = sabre.usable_nodes();
+        let layouts = sabre
+            .initial_layout_candidates(
+                &prepared,
+                &available_nodes,
+                prepared.logical_qubits.len(),
+                cfg.initial_iterations,
+            )
+            .unwrap();
+
+        let vf2 = Vf2Mapping::from_adapter(sabre.topology.clone());
+        let options = Vf2CandidateOptions {
+            top_k: cfg.vf2_seed_top_k,
+            weights: cfg.vf2_seed_weights,
+            ..Vf2CandidateOptions::default()
+        };
+        let available_set: HashSet<usize> = available_nodes.iter().copied().collect();
+        let mut expected = Vec::new();
+        let mut seen = HashSet::new();
+        for layout in vf2
+            .find_prepared_layout_candidate_indices(&prepared, Some(options))
+            .unwrap()
+        {
+            if layout.iter().all(|phy| available_set.contains(phy)) && seen.insert(layout.clone()) {
+                expected.push(layout);
+            }
         }
+
+        assert!(!expected.is_empty());
+        assert_eq!(layouts[0], expected[0]);
+    }
+
+    #[test]
+    fn test_local_swap_scoring_prefers_higher_fidelity_when_weighted() {
+        let topology = star_topology();
+        let fidelity = star_fidelity_map();
+        let circuit = single_cx_circuit();
+        let cfg = SabreConfig {
+            vf2_policy: Vf2Policy::Disabled,
+            swap_fidelity_weight: 1.0,
+            predicted_fidelity_weight: 0.0,
+            seed: 1,
+            ..SabreConfig::default()
+        };
+
+        let mapper = SabreMapping::new(topology, Some(fidelity), cfg).unwrap();
+        let prepared = preprocess_circuit(&circuit).unwrap();
+        let info = mapper.build_circuit_info(&prepared, prepared.logical_qubits.len());
+        let mut state = build_star_state(&mapper, &info, &[1, 2]);
+
+        let swaps = mapper.obtain_swaps(&info, &mut state);
+        let mut low_score = None;
+        let mut high_score = None;
+        for swap in swaps {
+            let pair = normalize_index_pair(swap.u, swap.v);
+            if pair == (0, 1) {
+                low_score = Some(swap.score);
+            } else if pair == (0, 2) {
+                high_score = Some(swap.score);
+            }
+        }
+
+        let low_score = low_score.expect("missing (0,1) swap candidate");
+        let high_score = high_score.expect("missing (0,2) swap candidate");
+        assert!(high_score < low_score);
+    }
+
+    #[test]
+    fn test_equal_cost_routes_prefer_higher_predicted_fidelity() {
+        let topology = star_topology();
+        let fidelity = star_fidelity_map();
+        let circuit = single_cx_circuit();
+        let cfg = SabreConfig {
+            vf2_policy: Vf2Policy::Disabled,
+            swap_fidelity_weight: 0.0,
+            predicted_fidelity_weight: 1.0,
+            swap_iterations: 32,
+            seed: 11,
+            ..SabreConfig::default()
+        };
+
+        let mut mapper = SabreMapping::new(topology, Some(fidelity), cfg).unwrap();
+        let prepared = preprocess_circuit(&circuit).unwrap();
+        let info = mapper.build_circuit_info(&prepared, prepared.logical_qubits.len());
+        let group = mapper
+            .execute_routing(&info, &prepared, &[1, 2], 32)
+            .unwrap();
+
+        assert_eq!(group.cost, 4);
+        match group.steps.first() {
+            Some(AnsStep::Swap { u, v }) => {
+                assert_eq!(normalize_index_pair(*u, *v), (0, 2));
+            }
+            _ => panic!("expected first routed step to be a SWAP"),
+        }
+    }
+
+    #[test]
+    fn test_objective_weights_adjust_cost_vs_fidelity_preference() {
+        let topology = star_topology();
+        let fidelity = star_fidelity_map();
+
+        let low_cost_cfg = SabreConfig {
+            gate_cost_weight: 1.0,
+            predicted_fidelity_weight: 0.1,
+            ..SabreConfig::default()
+        };
+        let fidelity_cfg = SabreConfig {
+            gate_cost_weight: 0.1,
+            predicted_fidelity_weight: 1.0,
+            ..SabreConfig::default()
+        };
+
+        let low_cost_mapper =
+            SabreMapping::new(topology.clone(), Some(fidelity.clone()), low_cost_cfg).unwrap();
+        let fidelity_mapper = SabreMapping::new(topology, Some(fidelity), fidelity_cfg).unwrap();
+
+        let mut candidate_a = AnsGroup {
+            initial_l2p: vec![0, 1],
+            final_l2p: vec![0, 1],
+            steps: vec![],
+            cost: 3,
+            log_fidelity: -8.0,
+            objective: 0.0,
+        };
+        let mut candidate_b = AnsGroup {
+            initial_l2p: vec![0, 2],
+            final_l2p: vec![0, 2],
+            steps: vec![],
+            cost: 4,
+            log_fidelity: -1.0,
+            objective: 0.0,
+        };
+
+        candidate_a.objective =
+            low_cost_mapper.routing_objective(candidate_a.cost, candidate_a.log_fidelity);
+        candidate_b.objective =
+            low_cost_mapper.routing_objective(candidate_b.cost, candidate_b.log_fidelity);
+        assert!(low_cost_mapper.group_better(&candidate_a, &candidate_b));
+
+        candidate_a.objective =
+            fidelity_mapper.routing_objective(candidate_a.cost, candidate_a.log_fidelity);
+        candidate_b.objective =
+            fidelity_mapper.routing_objective(candidate_b.cost, candidate_b.log_fidelity);
+        assert!(fidelity_mapper.group_better(&candidate_b, &candidate_a));
     }
 }

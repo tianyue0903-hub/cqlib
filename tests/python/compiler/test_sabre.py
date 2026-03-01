@@ -40,6 +40,22 @@ from . import count_gate
 from . import random_circuit
 
 
+def _ops_signature(circuit: Circuit) -> tuple:
+    """Builds a deterministic operation signature for mapped-circuit comparisons."""
+    return tuple((op.name, tuple(q.index for q in op.qubits)) for op in circuit.operations)
+
+
+def _swap_edges(circuit: Circuit) -> list[tuple[int, int]]:
+    """Extracts normalized SWAP edges from a circuit."""
+    edges = []
+    for op in circuit.operations:
+        if op.name.upper() != "SWAP":
+            continue
+        q0, q1 = (q.index for q in op.qubits)
+        edges.append(tuple(sorted((q0, q1))))
+    return edges
+
+
 class TestCompilerTopologyApi:
     """Tests topology construction, properties, and connectivity helpers."""
 
@@ -207,6 +223,176 @@ class TestCompilerWorkflowValidation:
 
         with pytest.raises(ValueError):
             map_with_vf2_sabre(circuit, topology, config=cfg)
+
+
+class TestSabreFidelityEnhancements:
+    """Tests the SABRE fidelity-aware additions and new configuration controls."""
+
+    def test_sabreconfig_exposes_new_fidelity_controls(self):
+        """Accepts and reports new VF2-seed and fidelity-objective configuration fields."""
+        config = SabreConfig(
+            vf2_seed_top_k=5,
+            vf2_seed_weight_fidelity=0.7,
+            vf2_seed_weight_topology=0.2,
+            vf2_seed_weight_gate_distribution=0.1,
+            swap_fidelity_weight=0.4,
+            gate_cost_weight=2.0,
+            predicted_fidelity_weight=0.8,
+        )
+        text = repr(config)
+        assert "vf2_seed_top_k=5" in text
+        assert "vf2_seed_weight_fidelity=0.7" in text
+        assert "vf2_seed_weight_topology=0.2" in text
+        assert "vf2_seed_weight_gate_distribution=0.1" in text
+        assert "swap_fidelity_weight=0.4" in text
+        assert "gate_cost_weight=2" in text
+        assert "predicted_fidelity_weight=0.8" in text
+
+    def test_vf2_seed_weight_changes_initial_only_mapping_result(self):
+        """Changing VF2 seed weights changes initial-only SABRE mapping behavior."""
+        topology = Topology.line([0, 1, 2, 3, 4, 5])
+        circuit = Circuit([10, 20, 30, 40])
+        circuit.cx(20, 10)
+        circuit.cx(20, 30)
+        circuit.cx(10, 20)
+        circuit.cx(30, 20)
+        circuit.cx(20, 40)
+        circuit.cx(10, 20)
+        circuit.h(10)
+        circuit.h(20)
+        circuit.cx(20, 10)
+
+        fidelity_map = {
+            (0, 1): 0.68,
+            (1, 2): 0.74,
+            (2, 3): 0.62,
+            (3, 4): 0.55,
+            (4, 5): 0.58,
+        }
+
+        common_kwargs = dict(
+            vf2_policy="initial_only",
+            seed=321,
+            initial_iterations=1,
+            repeat_iterations=0,
+            swap_iterations=2,
+            vf2_seed_top_k=8,
+            swap_fidelity_weight=0.0,
+            gate_cost_weight=1.0,
+            predicted_fidelity_weight=0.0,
+        )
+        fidelity_seed_cfg = SabreConfig(
+            vf2_seed_weight_fidelity=0.9,
+            vf2_seed_weight_topology=0.05,
+            vf2_seed_weight_gate_distribution=0.05,
+            **common_kwargs,
+        )
+        topology_seed_cfg = SabreConfig(
+            vf2_seed_weight_fidelity=0.05,
+            vf2_seed_weight_topology=0.9,
+            vf2_seed_weight_gate_distribution=0.05,
+            **common_kwargs,
+        )
+
+        mapped_fidelity_seed = map_with_vf2_sabre(
+            circuit,
+            topology,
+            fidelity_map=fidelity_map,
+            config=fidelity_seed_cfg,
+        )
+        mapped_topology_seed = map_with_vf2_sabre(
+            circuit,
+            topology,
+            fidelity_map=fidelity_map,
+            config=topology_seed_cfg,
+        )
+
+        assert_all_2q_on_topology(mapped_fidelity_seed, topology)
+        assert_all_2q_on_topology(mapped_topology_seed, topology)
+        assert _ops_signature(mapped_fidelity_seed) != _ops_signature(mapped_topology_seed)
+
+    def test_local_swap_prefers_high_fidelity_edge(self):
+        """On equal-distance choices, SABRE chooses SWAPs on higher-fidelity edges."""
+        topology = Topology([0, 1, 2], [(0, 1), (0, 2)])
+        circuit = Circuit(3)
+        circuit.cx(0, 1)
+        circuit.cx(1, 2)
+        circuit.cx(0, 2)
+
+        fidelity_map = {(0, 1): 0.2, (0, 2): 0.9}
+        config = SabreConfig(
+            vf2_policy="disabled",
+            seed=3,
+            initial_iterations=1,
+            repeat_iterations=0,
+            swap_iterations=16,
+            swap_fidelity_weight=1.0,
+            gate_cost_weight=1.0,
+            predicted_fidelity_weight=0.0,
+        )
+
+        mapped = map_with_vf2_sabre(
+            circuit,
+            topology,
+            fidelity_map=fidelity_map,
+            config=config,
+        )
+
+        swap_edges = _swap_edges(mapped)
+        assert swap_edges, "expected at least one SWAP in this routing case"
+        assert all(edge == (0, 2) for edge in swap_edges)
+        assert_all_2q_on_topology(mapped, topology)
+
+    def test_weight_ratio_changes_global_routing_choice(self):
+        """Changing cost-vs-fidelity objective weights changes selected routed circuit."""
+        topology = Topology.line([0, 1, 2, 3])
+        circuit = Circuit(4)
+        circuit.cx(3, 1)
+        circuit.cx(0, 2)
+        circuit.cx(1, 2)
+        circuit.cx(1, 0)
+        circuit.cx(2, 3)
+        circuit.cx(1, 3)
+
+        fidelity_map = {(0, 1): 0.8, (1, 2): 0.96, (2, 3): 0.28}
+
+        cost_priority_cfg = SabreConfig(
+            vf2_policy="disabled",
+            seed=77,
+            initial_iterations=3,
+            repeat_iterations=2,
+            swap_iterations=4,
+            swap_fidelity_weight=0.0,
+            gate_cost_weight=1.0,
+            predicted_fidelity_weight=0.0,
+        )
+        fidelity_priority_cfg = SabreConfig(
+            vf2_policy="disabled",
+            seed=77,
+            initial_iterations=3,
+            repeat_iterations=2,
+            swap_iterations=4,
+            swap_fidelity_weight=0.0,
+            gate_cost_weight=0.1,
+            predicted_fidelity_weight=5.0,
+        )
+
+        mapped_cost = map_with_vf2_sabre(
+            circuit,
+            topology,
+            fidelity_map=fidelity_map,
+            config=cost_priority_cfg,
+        )
+        mapped_fidelity = map_with_vf2_sabre(
+            circuit,
+            topology,
+            fidelity_map=fidelity_map,
+            config=fidelity_priority_cfg,
+        )
+
+        assert_all_2q_on_topology(mapped_cost, topology)
+        assert_all_2q_on_topology(mapped_fidelity, topology)
+        assert _ops_signature(mapped_cost) != _ops_signature(mapped_fidelity)
 
 
 class TestCompilerRandomizedStress:
