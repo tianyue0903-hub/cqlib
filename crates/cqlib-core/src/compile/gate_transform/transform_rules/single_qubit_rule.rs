@@ -6,11 +6,9 @@ use num::complex::ComplexFloat;
 use smallvec::{SmallVec, smallvec};
 use std::f64::consts::PI;
 
-
 pub struct SingleQubitRule {
     pub name: String,
     rule: fn(unitary: &Array2<Complex<f64>>) -> Vec<(StandardGate, SmallVec<[f64; 3]>)>,
-    global_phase: f64,
 }
 
 impl SingleQubitRule {
@@ -55,7 +53,10 @@ impl SingleQubitRule {
         }
     }
 
-    pub fn execute(&self, unitary: &Array2<Complex<f64>>) -> Vec<(StandardGate, SmallVec<[f64; 3]>)> {
+    pub fn execute(
+        &self,
+        unitary: &Array2<Complex<f64>>,
+    ) -> Vec<(StandardGate, SmallVec<[f64; 3]>)> {
         (self.rule)(unitary)
     }
 
@@ -98,6 +99,16 @@ impl SingleQubitRule {
             matrix.mapv_inplace(|x| x * phase.conj());
         }
         return phase;
+    }
+
+    fn close_to_identity(matrix: &Array2<Complex<f64>>) -> bool {
+        // check if matrix is close to identity up to a global phase
+        let eps: f64 = 1e-13;
+
+        // For U ≈ e^{iφ} I, off-diagonal terms are ~0 and diagonal terms are equal.
+        matrix[(0, 1)].norm() < eps
+            && matrix[(1, 0)].norm() < eps
+            && (matrix[(0, 0)] - matrix[(1, 1)]).norm() < eps
     }
 
     fn zxz_type_arg(unitary: &Array2<Complex<f64>>) -> (f64, f64, f64, f64, f64) {
@@ -156,6 +167,10 @@ impl SingleQubitRule {
         let mut unitary: Array2<Complex<f64>> = unitary.clone();
         let eps: f64 = 1e-6;
 
+        if Self::close_to_identity(&unitary) {
+            return vec![];
+        }
+
         let angle: f64 = unitary[(0, 0)].arg();
         let z: Complex<f64> = Complex::new(0.0, 1.0 * angle).exp();
         unitary = unitary / z;
@@ -190,47 +205,33 @@ impl SingleQubitRule {
             | !Self::check2pi(phi, eps)
             | !Self::check2pi(lambda, eps)
         {
-            decomposed_gates.push((
-                StandardGate::U,
-                smallvec![2.0 * theta, phi, lambda],
-            ));
+            decomposed_gates.push((StandardGate::U, smallvec![2.0 * theta, phi, lambda]));
         }
         decomposed_gates
     }
 
     fn zxz_rule(unitary: &Array2<Complex<f64>>) -> Vec<(StandardGate, SmallVec<[f64; 3]>)> {
         let mut unitary: Array2<Complex<f64>> = unitary.clone();
-        let eps: f64 = 1e-13;
-
+        if Self::close_to_identity(&unitary) {
+            return vec![];
+        }
         Self::u2_to_su2(&mut unitary);
-
+        let eps: f64 = 1e-13;
         let (_beta_plus_delta, _beta_minus_delta, gamma, beta, delta) =
             Self::zxz_type_arg(&unitary);
 
         let mut decomposed_gates: Vec<(StandardGate, SmallVec<[f64; 3]>)> = Vec::new();
         if Self::check2pi(gamma, eps) {
             if !Self::check2pi(delta + beta, eps) {
-                decomposed_gates.push((
-                    StandardGate::RZ,
-                    smallvec![delta + beta],
-                ));
+                decomposed_gates.push((StandardGate::RZ, smallvec![delta + beta]));
             }
         } else {
             if !Self::check2pi(delta, eps) {
-                decomposed_gates.push((
-                    StandardGate::RZ,
-                    smallvec![delta],
-                ));
+                decomposed_gates.push((StandardGate::RZ, smallvec![delta]));
             }
-            decomposed_gates.push((
-                StandardGate::RX,
-                smallvec![gamma],
-            ));
+            decomposed_gates.push((StandardGate::RX, smallvec![gamma]));
             if !Self::check2pi(beta, eps) {
-                decomposed_gates.push((
-                    StandardGate::RZ,
-                    smallvec![beta]
-                ));
+                decomposed_gates.push((StandardGate::RZ, smallvec![beta]));
             }
         }
         decomposed_gates
@@ -238,39 +239,27 @@ impl SingleQubitRule {
 
     fn hrz_rule(unitary: &Array2<Complex<f64>>) -> Vec<(StandardGate, SmallVec<[f64; 3]>)> {
         let mut unitary: Array2<Complex<f64>> = unitary.clone();
-        let eps: f64 = 1e-13;
-
+        if Self::close_to_identity(&unitary) {
+            return vec![];
+        }
         Self::u2_to_su2(&mut unitary);
-
+        let eps: f64 = 1e-13;
         let (_beta_plus_delta, _beta_minus_delta, gamma, beta, delta) =
             Self::zxz_type_arg(&unitary);
-
         let mut decomposed_gates: Vec<(StandardGate, SmallVec<[f64; 3]>)> = Vec::new();
         if Self::check2pi(gamma, eps) {
             if !Self::check2pi(delta + beta, eps) {
-                decomposed_gates.push((
-                    StandardGate::RZ,
-                    smallvec![delta + beta]
-                ));
+                decomposed_gates.push((StandardGate::RZ, smallvec![delta + beta]));
             }
         } else {
             if !Self::check2pi(delta, eps) {
-                decomposed_gates.push((
-                    StandardGate::RZ,
-                    smallvec![delta]
-                ));
+                decomposed_gates.push((StandardGate::RZ, smallvec![delta]));
             }
             decomposed_gates.push((StandardGate::H, smallvec![]));
-            decomposed_gates.push((
-                StandardGate::RZ,
-                smallvec![gamma]
-            ));
+            decomposed_gates.push((StandardGate::RZ, smallvec![gamma]));
             decomposed_gates.push((StandardGate::H, smallvec![]));
             if !Self::check2pi(beta, eps) {
-                decomposed_gates.push((
-                    StandardGate::RZ,
-                    smallvec![beta]
-                ));
+                decomposed_gates.push((StandardGate::RZ, smallvec![beta]));
             }
         }
         decomposed_gates
@@ -304,27 +293,15 @@ impl SingleQubitRule {
         let mut decomposed_gates: Vec<(StandardGate, SmallVec<[f64; 3]>)> = Vec::new();
         if Self::check2pi(gamma, eps) {
             if !Self::check2pi(delta + beta, eps) {
-                decomposed_gates.push((
-                    StandardGate::RX,
-                    smallvec![delta + beta]
-                ));
+                decomposed_gates.push((StandardGate::RX, smallvec![delta + beta]));
             }
         } else {
             if !Self::check2pi(delta, eps) {
-                decomposed_gates.push((
-                    StandardGate::RX,
-                    smallvec![delta]
-                ));
+                decomposed_gates.push((StandardGate::RX, smallvec![delta]));
             }
-            decomposed_gates.push((
-                StandardGate::RY,
-                smallvec![-gamma]
-            ));
+            decomposed_gates.push((StandardGate::RY, smallvec![-gamma]));
             if !Self::check2pi(beta, eps) {
-                decomposed_gates.push((
-                    StandardGate::RX,
-                    smallvec![beta]
-                ));
+                decomposed_gates.push((StandardGate::RX, smallvec![beta]));
             }
         }
         decomposed_gates
@@ -341,27 +318,15 @@ impl SingleQubitRule {
         let mut decomposed_gates: Vec<(StandardGate, SmallVec<[f64; 3]>)> = Vec::new();
         if Self::check2pi(gamma, eps) {
             if !Self::check2pi(delta + beta, eps) {
-                decomposed_gates.push((
-                    StandardGate::RZ,
-                    smallvec![delta + beta]
-                ));
+                decomposed_gates.push((StandardGate::RZ, smallvec![delta + beta]));
             }
         } else {
             if !Self::check2pi(delta, eps) {
-                decomposed_gates.push((
-                    StandardGate::RZ,
-                    smallvec![delta]
-                ));
+                decomposed_gates.push((StandardGate::RZ, smallvec![delta]));
             }
-            decomposed_gates.push((
-                StandardGate::RY,
-                smallvec![gamma]
-            ));
+            decomposed_gates.push((StandardGate::RY, smallvec![gamma]));
             if !Self::check2pi(beta, eps) {
-                decomposed_gates.push((
-                    StandardGate::RZ,
-                    smallvec![beta]
-                ));
+                decomposed_gates.push((StandardGate::RZ, smallvec![beta]));
             }
         }
         decomposed_gates
@@ -378,48 +343,24 @@ impl SingleQubitRule {
         let mut decomposed_gates: Vec<(StandardGate, SmallVec<[f64; 3]>)> = Vec::new();
         if Self::check2pi(gamma, eps) {
             if !Self::check2pi(delta + beta, eps) {
-                decomposed_gates.push((
-                    StandardGate::RZ,
-                    smallvec![delta + beta]
-                ));
+                decomposed_gates.push((StandardGate::RZ, smallvec![delta + beta]));
             }
         } else {
             if !Self::check2pi(gamma - PI, eps) {
                 if !Self::check2pi(delta, eps) {
-                    decomposed_gates.push((
-                        StandardGate::RZ,
-                        smallvec![delta]
-                    ));
+                    decomposed_gates.push((StandardGate::RZ, smallvec![delta]));
                 }
-                decomposed_gates.push((
-                    StandardGate::X2P,
-                    smallvec![]
-                ));
-                decomposed_gates.push((
-                    StandardGate::RZ,
-                    smallvec![gamma - PI]
-                ));
-                decomposed_gates.push((
-                    StandardGate::X2P,
-                    smallvec![]
-                ));
+                decomposed_gates.push((StandardGate::X2P, smallvec![]));
+                decomposed_gates.push((StandardGate::RZ, smallvec![gamma - PI]));
+                decomposed_gates.push((StandardGate::X2P, smallvec![]));
                 if !Self::check2pi(beta + PI, eps) {
-                    decomposed_gates.push((
-                        StandardGate::RZ,
-                        smallvec![beta + PI]
-                    ));
+                    decomposed_gates.push((StandardGate::RZ, smallvec![beta + PI]));
                 }
             } else {
                 if !Self::check2pi(delta - beta - PI, eps) {
-                    decomposed_gates.push((
-                        StandardGate::RZ,
-                        smallvec![delta - beta - PI]
-                    ));
+                    decomposed_gates.push((StandardGate::RZ, smallvec![delta - beta - PI]));
                 }
-                decomposed_gates.push((
-                    StandardGate::X,
-                    smallvec![]
-                ));
+                decomposed_gates.push((StandardGate::X, smallvec![]));
             }
         }
 
@@ -437,44 +378,23 @@ impl SingleQubitRule {
         let mut decomposed_gates: Vec<(StandardGate, SmallVec<[f64; 3]>)> = Vec::new();
 
         if !Self::check2pi(delta, eps) {
-            decomposed_gates.push((
-                StandardGate::RZ,
-                smallvec![delta]
-            ));
+            decomposed_gates.push((StandardGate::RZ, smallvec![delta]));
         }
 
         if !Self::check2pi(gamma, eps) {
             if Self::check_plus_half_pi(gamma, eps) {
-                decomposed_gates.push((
-                    StandardGate::Y2P,
-                    smallvec![]
-                ));
+                decomposed_gates.push((StandardGate::Y2P, smallvec![]));
             } else if Self::check_minus_half_pi(gamma, eps) {
-                decomposed_gates.push((
-                    StandardGate::Y2M,
-                    smallvec![]
-                ));
+                decomposed_gates.push((StandardGate::Y2M, smallvec![]));
             } else {
-                decomposed_gates.push((
-                    StandardGate::X2P, 
-                    smallvec![]
-                ));
-                decomposed_gates.push((
-                    StandardGate::RZ,
-                    smallvec![gamma]
-                ));
-                decomposed_gates.push((
-                    StandardGate::X2M, 
-                    smallvec![]
-                ));
+                decomposed_gates.push((StandardGate::X2P, smallvec![]));
+                decomposed_gates.push((StandardGate::RZ, smallvec![gamma]));
+                decomposed_gates.push((StandardGate::X2M, smallvec![]));
             }
         }
 
         if !Self::check2pi(beta, eps) {
-            decomposed_gates.push((
-                StandardGate::RZ,
-                smallvec![beta]
-            ));
+            decomposed_gates.push((StandardGate::RZ, smallvec![beta]));
         }
 
         decomposed_gates
@@ -588,10 +508,10 @@ mod test_single_qubit_rule {
 
     /// Build a random 2×2 unitary using cqlib U gate: U(θ, φ, λ) with random angles.
     fn get_random_unitary() -> Array2<Complex<f64>> {
-        let mut rng = rand::thread_rng();
-        let theta = rng.gen_range(0.0..PI);
-        let phi = rng.gen_range(0.0..(2.0 * PI));
-        let lam = rng.gen_range(0.0..(2.0 * PI));
+        let mut rng = rand::rng();
+        let theta = rng.random_range(0.0..PI);
+        let phi = rng.random_range(0.0..(2.0 * PI));
+        let lam = rng.random_range(0.0..(2.0 * PI));
         StandardGate::U.matrix(&[theta, phi, lam]).into_owned()
     }
 
@@ -642,7 +562,9 @@ mod test_single_qubit_rule {
         (cos_vec - 1.0).abs() < 1e-12
     }
 
-    fn matrix_from_gate_vec(gates: &Vec<(StandardGate, SmallVec<[f64; 3]>)>) -> Array2<Complex<f64>> {
+    fn matrix_from_gate_vec(
+        gates: &Vec<(StandardGate, SmallVec<[f64; 3]>)>,
+    ) -> Array2<Complex<f64>> {
         let mut total_u = StandardGate::I.matrix(&[]).into_owned();
 
         for (gate, param) in gates {
@@ -728,7 +650,10 @@ mod test_single_qubit_rule {
         }
     }
 
-    fn test_rule_clifford(rule: fn(&Array2<Complex<f64>>) -> Vec<(StandardGate, SmallVec<[f64; 3]>)>, rule_name: &str) {
+    fn test_rule_clifford(
+        rule: fn(&Array2<Complex<f64>>) -> Vec<(StandardGate, SmallVec<[f64; 3]>)>,
+        rule_name: &str,
+    ) {
         for case in PAULI_CASE {
             let matrix = get_pauli_matrix(case);
             assert_rule_decomposition(rule, &matrix, rule_name, case);
@@ -742,11 +667,11 @@ mod test_single_qubit_rule {
 
     #[test]
     fn test_matrix_equal_func() {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let ref_mat = StandardGate::Y.matrix(&[]).into_owned();
 
         for _ in 0..10 {
-            let random_phase = Complex::new(0.0, rng.gen_range(-PI..PI)).exp();
+            let random_phase = Complex::new(0.0, rng.random_range(-PI..PI)).exp();
             let test_mat = ref_mat.clone().into_owned() * random_phase;
             let is_equal = is_matrix_differ_by_phase(&ref_mat, &test_mat);
 
@@ -754,7 +679,7 @@ mod test_single_qubit_rule {
         }
 
         for _ in 0..10 {
-            let random_phase = Complex::new(0.0, rng.gen_range(-PI..PI)).exp();
+            let random_phase = Complex::new(0.0, rng.random_range(-PI..PI)).exp();
             let test_mat = StandardGate::X.matrix(&[]).into_owned() * random_phase;
             let is_not_equal = !is_matrix_differ_by_phase(&ref_mat, &test_mat);
 
