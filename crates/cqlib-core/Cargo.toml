@@ -37,6 +37,7 @@ rustworkx-core.workspace = true
 smallvec.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
+rand.workspace = true
 
 [build-dependencies]
 lalrpop.workspace = true

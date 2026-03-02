@@ -14,6 +14,8 @@ extern crate alloc;
 extern crate core;
 
 pub mod circuit;
+pub mod compile;
+pub mod device;
 pub mod ir;
 
 pub fn add(left: u64, right: u64) -> u64 {
