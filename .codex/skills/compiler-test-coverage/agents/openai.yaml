@@ -1,0 +1,4 @@
+interface:
+  display_name: "Compiler Test Coverage"
+  short_description: "Audit compiler Rust/Python test coverage"
+  default_prompt: "Use $compiler-test-coverage to audit compiler Rust/Python test-case coverage and parity before merge."
