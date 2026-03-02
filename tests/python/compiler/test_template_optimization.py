@@ -16,6 +16,7 @@ Template optimization compiler tests.
 Test coverage:
 - default template loading and execution
 - custom-template cancellation behavior
+- replacement behavior under cost/fidelity tie-breaking
 - iterative optimization behavior
 - file-based template loading behavior
 """
@@ -31,6 +32,16 @@ def _hh_template() -> Circuit:
     template = Circuit(1)
     template.h(0)
     template.h(0)
+    return template
+
+
+def _hcxh_cz_identity_template() -> Circuit:
+    """Builds identity template H-CX-H-CZ."""
+    template = Circuit(2)
+    template.h(1)
+    template.cx(0, 1)
+    template.h(1)
+    template.cz(0, 1)
     return template
 
 
@@ -71,6 +82,26 @@ class TestTemplateOptimization:
         optimizer = TemplateOptimization([_hh_template()])
         optimized = optimizer.execute_iterative(circuit, max_iterations=10)
         assert len(optimized.operations) == 0
+
+    def test_replacement_prefers_fidelity_on_cost_tie(self) -> None:
+        """Applies replacement when gate cost ties but predicted fidelity improves."""
+        circuit = Circuit(2)
+        circuit.h(1)
+        circuit.cx(0, 1)
+        circuit.h(1)
+
+        optimizer = TemplateOptimization([_hcxh_cz_identity_template()])
+        optimized = optimizer.execute(circuit)
+        assert len(optimized.operations) == 1
+
+    def test_replacement_skips_worse_fidelity_tie(self) -> None:
+        """Skips replacement when gate cost ties and predicted fidelity degrades."""
+        circuit = Circuit(2)
+        circuit.cz(0, 1)
+
+        optimizer = TemplateOptimization([_hcxh_cz_identity_template()])
+        optimized = optimizer.execute(circuit)
+        assert len(optimized.operations) == 1
 
     def test_json_template_file_loading(self, tmp_path: Path) -> None:
         """Loads templates from JSON file and executes optimization."""

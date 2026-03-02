@@ -24,11 +24,11 @@
 //! - commutation-aware DAG constraints
 //!
 //! Optimization behavior:
-//! - phase-1 applies full-template cancellations only
-//! - substitutions are applied only when cost strictly decreases
+//! - substitutions are built from template identities via inverse gates
+//! - candidates are selected by larger cost reduction first, then fidelity gain
 
 use crate::circuit::gate::{Instruction, StandardGate};
-use crate::circuit::param::ParameterValue;
+use crate::circuit::param::{CircuitParam, ParameterValue};
 use crate::circuit::{Circuit, Operation, Qubit};
 use crate::compile::error::CompileError;
 use crate::compile::graph::{CommutationView, GateGraph, GateNode};
@@ -36,7 +36,7 @@ use crate::compile::mapping::{append_operation, preprocess_circuit};
 use crate::ir::qcis_loads;
 use serde::Deserialize;
 use std::cmp::Ordering;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 
 /// Embedded default 1q/2q templates.
@@ -99,8 +99,16 @@ impl TemplateMatching {
             enumerate_qubit_mappings(t_prepared.logical_qubits.len(), c_prepared.logical_qubits.len());
 
         let mut out = HashSet::<TemplateMatch>::new();
+        let template_node_ids: Vec<usize> = (0..t_graph.size()).collect();
         for mapping in all_mappings {
-            let matches = match_under_mapping(&c_graph, &t_graph, &c_view, &t_view, &mapping);
+            let matches = match_under_mapping(
+                &c_graph,
+                &t_graph,
+                &c_view,
+                &t_view,
+                &template_node_ids,
+                &mapping,
+            );
             out.extend(matches);
         }
 
@@ -193,18 +201,12 @@ impl TemplateOptimization {
         let mut current = circuit.clone();
 
         for template in &self.templates {
-            let matches = TemplateMatching::run(
+            current = apply_template_substitutions(
                 &current,
                 template,
                 self.config.qubit_fixing_cnt,
                 self.config.prune_param,
             )?;
-            if matches.is_empty() {
-                continue;
-            }
-
-            let applied = apply_cancellation_matches(&current, template, &matches)?;
-            current = applied;
         }
 
         Ok(current)
@@ -268,8 +270,10 @@ struct SubstitutionCandidate {
     matched_nodes: Vec<usize>,
     /// Replacement operation sequence.
     replacement: Vec<Operation>,
-    /// Positive cost gain.
-    gain: i64,
+    /// Positive or zero gate-cost gain.
+    cost_gain: i64,
+    /// Fidelity-penalty gain (positive means higher predicted fidelity).
+    fidelity_gain: f64,
 }
 
 /// Runs matching under one fixed qubit mapping.
@@ -278,17 +282,26 @@ fn match_under_mapping(
     template_graph: &GateGraph,
     circuit_view: &CommutationView,
     template_view: &CommutationView,
+    template_node_ids: &[usize],
     qubit_mapping: &[usize],
 ) -> Vec<TemplateMatch> {
+    if template_node_ids.is_empty() {
+        return Vec::new();
+    }
+
     let t_size = template_graph.size();
     let c_size = circuit_graph.size();
 
-    let mut candidates = vec![Vec::<usize>::new(); t_size];
-    for (t_id, t_cands) in candidates.iter_mut().enumerate().take(t_size) {
+    let mut candidates = HashMap::<usize, Vec<usize>>::with_capacity(template_node_ids.len());
+    for &t_id in template_node_ids {
+        if t_id >= t_size {
+            return Vec::new();
+        }
         let Some(t_node) = template_graph.node(t_id) else {
             return Vec::new();
         };
         debug_assert_eq!(t_node.node_id, t_id);
+        let mut t_cands = Vec::<usize>::new();
         for c_id in 0..c_size {
             let Some(c_node) = circuit_graph.node(c_id) else {
                 continue;
@@ -301,11 +314,14 @@ fn match_under_mapping(
         if t_cands.is_empty() {
             return Vec::new();
         }
+        candidates.insert(t_id, t_cands);
     }
 
-    let mut order: Vec<usize> = (0..t_size).collect();
+    let mut order: Vec<usize> = template_node_ids.to_vec();
     order.sort_by(|&a, &b| {
-        let by_len = candidates[a].len().cmp(&candidates[b].len());
+        let a_len = candidates.get(&a).map_or(usize::MAX, Vec::len);
+        let b_len = candidates.get(&b).map_or(usize::MAX, Vec::len);
+        let by_len = a_len.cmp(&b_len);
         if by_len == Ordering::Equal {
             a.cmp(&b)
         } else {
@@ -324,6 +340,7 @@ fn match_under_mapping(
         circuit_view,
         &mut assigned_t,
         &mut used_c,
+        template_node_ids,
         qubit_mapping,
         &mut out,
     );
@@ -335,17 +352,21 @@ fn match_under_mapping(
 fn backtrack_matches(
     depth: usize,
     order: &[usize],
-    candidates: &[Vec<usize>],
+    candidates: &HashMap<usize, Vec<usize>>,
     template_view: &CommutationView,
     circuit_view: &CommutationView,
     assigned_t: &mut [Option<usize>],
     used_c: &mut [bool],
+    template_node_ids: &[usize],
     qubit_mapping: &[usize],
     out: &mut Vec<TemplateMatch>,
 ) {
     if depth == order.len() {
-        let mut pairs = Vec::with_capacity(order.len());
-        for (t_id, c_opt) in assigned_t.iter().enumerate() {
+        let mut pairs = Vec::with_capacity(template_node_ids.len());
+        for &t_id in template_node_ids {
+            let Some(c_opt) = assigned_t.get(t_id) else {
+                return;
+            };
             if let Some(c_id) = c_opt {
                 pairs.push((t_id, *c_id));
             } else {
@@ -361,7 +382,10 @@ fn backtrack_matches(
     }
 
     let t_id = order[depth];
-    for &c_id in &candidates[t_id] {
+    let Some(candidate_ids) = candidates.get(&t_id) else {
+        return;
+    };
+    for &c_id in candidate_ids {
         if used_c[c_id] {
             continue;
         }
@@ -379,6 +403,7 @@ fn backtrack_matches(
             circuit_view,
             assigned_t,
             used_c,
+            template_node_ids,
             qubit_mapping,
             out,
         );
@@ -490,45 +515,55 @@ fn build_qubit_mappings_dfs(
     }
 }
 
-/// Applies cancellation-only substitutions selected from matches.
-fn apply_cancellation_matches(
+/// Applies template substitutions selected by gate-cost and fidelity priority.
+fn apply_template_substitutions(
     circuit: &Circuit,
     template: &Circuit,
-    matches: &[TemplateMatch],
+    qubit_fixing_cnt: Option<usize>,
+    prune_param: Option<(usize, usize)>,
 ) -> Result<Circuit, CompileError> {
+    let _ = (qubit_fixing_cnt, prune_param);
+
     let prepared = preprocess_circuit(circuit)?;
     let template_prepared = preprocess_circuit(template)?;
-    let template_gate_cnt = template_prepared.operations.len();
+    if template_prepared.operations.is_empty() {
+        return Ok(circuit.clone());
+    }
+    if template_prepared.logical_qubits.len() > prepared.logical_qubits.len() {
+        return Ok(circuit.clone());
+    }
 
+    let circuit_graph = GateGraph::from_prepared(&prepared)?;
+    let template_graph = GateGraph::from_prepared(&template_prepared)?;
+    let circuit_view = circuit_graph.commutation_view()?;
+    let template_view = template_graph.commutation_view()?;
+    let qubit_mappings =
+        enumerate_qubit_mappings(template_prepared.logical_qubits.len(), prepared.logical_qubits.len());
+
+    let template_subsets = enumerate_template_node_subsets(template_graph.size());
     let mut candidates = Vec::<SubstitutionCandidate>::new();
-    for m in matches {
-        let replacement = build_replacement_ops_for_match(m, template_gate_cnt)?;
-        let Some(replacement_ops) = replacement else {
-            continue;
-        };
-
-        let mut matched_nodes: Vec<usize> = m.match_pairs.iter().map(|(_, c)| *c).collect();
-        matched_nodes.sort_unstable();
-        matched_nodes.dedup();
-        if matched_nodes.is_empty() {
-            continue;
+    for subset in template_subsets {
+        let matches = collect_matches_for_nodes(
+            &circuit_graph,
+            &template_graph,
+            &circuit_view,
+            &template_view,
+            &subset,
+            &qubit_mappings,
+        );
+        for m in matches {
+            let Some(candidate) = build_substitution_candidate(
+                &prepared,
+                &template_prepared,
+                &template_graph,
+                &template_view,
+                &m,
+            )?
+            else {
+                continue;
+            };
+            candidates.push(candidate);
         }
-
-        let old_cost: i64 = matched_nodes
-            .iter()
-            .map(|&idx| estimate_op_cost(&prepared.operations[idx].op))
-            .sum();
-        let new_cost: i64 = replacement_ops.iter().map(estimate_op_cost).sum();
-        let gain = old_cost - new_cost;
-        if gain <= 0 {
-            continue;
-        }
-
-        candidates.push(SubstitutionCandidate {
-            matched_nodes,
-            replacement: replacement_ops,
-            gain,
-        });
     }
 
     if candidates.is_empty() {
@@ -536,8 +571,9 @@ fn apply_cancellation_matches(
     }
 
     candidates.sort_by(|a, b| {
-        b.gain
-            .cmp(&a.gain)
+        b.cost_gain
+            .cmp(&a.cost_gain)
+            .then_with(|| b.fidelity_gain.total_cmp(&a.fidelity_gain))
             .then_with(|| a.matched_nodes[0].cmp(&b.matched_nodes[0]))
     });
 
@@ -547,9 +583,7 @@ fn apply_cancellation_matches(
         if cand.matched_nodes.iter().any(|idx| occupied.contains(idx)) {
             continue;
         }
-        for idx in &cand.matched_nodes {
-            occupied.insert(*idx);
-        }
+        occupied.extend(cand.matched_nodes.iter().copied());
         selected.push(cand);
     }
 
@@ -562,9 +596,7 @@ fn apply_cancellation_matches(
     for cand in &selected {
         let first = cand.matched_nodes[0];
         insertions.insert(first, cand.replacement.clone());
-        for idx in &cand.matched_nodes {
-            removed.insert(*idx);
-        }
+        removed.extend(cand.matched_nodes.iter().copied());
     }
 
     let mut output = Circuit::from_qubits(circuit.qubits())?;
@@ -592,18 +624,342 @@ fn apply_cancellation_matches(
     Ok(output)
 }
 
-/// Builds replacement operations for one match.
-///
-/// Phase-1 supports only full-template cancellation substitutions, therefore
-/// non-full matches are skipped safely.
-fn build_replacement_ops_for_match(
+/// Enumerates template node subsets used for substitution matching.
+fn enumerate_template_node_subsets(template_size: usize) -> Vec<Vec<usize>> {
+    const MAX_EXHAUSTIVE_TEMPLATE_SIZE: usize = 10;
+
+    if template_size == 0 {
+        return Vec::new();
+    }
+    if template_size > MAX_EXHAUSTIVE_TEMPLATE_SIZE {
+        return vec![(0..template_size).collect()];
+    }
+
+    let mut subsets = Vec::<Vec<usize>>::new();
+    let total = 1usize << template_size;
+    for mask in 1..total {
+        let mut subset = Vec::new();
+        for bit in 0..template_size {
+            if (mask >> bit) & 1 == 1 {
+                subset.push(bit);
+            }
+        }
+        subsets.push(subset);
+    }
+    subsets.sort_by(|a, b| b.len().cmp(&a.len()).then_with(|| a.cmp(b)));
+    subsets
+}
+
+/// Collects all matches for one selected subset of template nodes.
+fn collect_matches_for_nodes(
+    circuit_graph: &GateGraph,
+    template_graph: &GateGraph,
+    circuit_view: &CommutationView,
+    template_view: &CommutationView,
+    template_node_ids: &[usize],
+    qubit_mappings: &[Vec<usize>],
+) -> Vec<TemplateMatch> {
+    let mut out = HashSet::<TemplateMatch>::new();
+    for mapping in qubit_mappings {
+        out.extend(match_under_mapping(
+            circuit_graph,
+            template_graph,
+            circuit_view,
+            template_view,
+            template_node_ids,
+            mapping,
+        ));
+    }
+    let mut collected: Vec<TemplateMatch> = out.into_iter().collect();
+    collected.sort_by(|a, b| a.match_pairs.cmp(&b.match_pairs));
+    collected
+}
+
+/// Builds one substitution candidate and computes its ranking metrics.
+fn build_substitution_candidate(
+    prepared: &crate::compile::mapping::PreparedCircuit,
+    template_prepared: &crate::compile::mapping::PreparedCircuit,
+    template_graph: &GateGraph,
+    template_view: &CommutationView,
     match_info: &TemplateMatch,
-    template_gate_cnt: usize,
-) -> Result<Option<Vec<Operation>>, CompileError> {
-    if match_info.match_pairs.len() != template_gate_cnt {
+) -> Result<Option<SubstitutionCandidate>, CompileError> {
+    let replacement_ops = match build_replacement_ops_for_match(
+        match_info,
+        template_graph,
+        template_view,
+        template_prepared,
+        prepared,
+    )? {
+        Some(ops) => ops,
+        None => return Ok(None),
+    };
+
+    let mut matched_nodes: Vec<usize> = match_info.match_pairs.iter().map(|(_, c)| *c).collect();
+    matched_nodes.sort_unstable();
+    matched_nodes.dedup();
+    if matched_nodes.is_empty() {
         return Ok(None);
     }
-    Ok(Some(Vec::new()))
+
+    let old_cost: i64 = matched_nodes
+        .iter()
+        .map(|&idx| estimate_op_cost(&prepared.operations[idx].op))
+        .sum();
+    let new_cost: i64 = replacement_ops.iter().map(estimate_op_cost).sum();
+    let cost_gain = old_cost - new_cost;
+
+    let old_penalty: f64 = matched_nodes
+        .iter()
+        .map(|&idx| estimate_fidelity_penalty(&prepared.operations[idx].op))
+        .sum();
+    let new_penalty: f64 = replacement_ops.iter().map(estimate_fidelity_penalty).sum();
+    let fidelity_gain = old_penalty - new_penalty;
+
+    if cost_gain < 0 {
+        return Ok(None);
+    }
+    if cost_gain == 0 && fidelity_gain <= 1e-12 {
+        return Ok(None);
+    }
+
+    Ok(Some(SubstitutionCandidate {
+        matched_nodes,
+        replacement: replacement_ops,
+        cost_gain,
+        fidelity_gain,
+    }))
+}
+
+/// Builds replacement operations for one match using inverse unmatched template gates.
+fn build_replacement_ops_for_match(
+    match_info: &TemplateMatch,
+    template_graph: &GateGraph,
+    template_view: &CommutationView,
+    template_prepared: &crate::compile::mapping::PreparedCircuit,
+    circuit_prepared: &crate::compile::mapping::PreparedCircuit,
+) -> Result<Option<Vec<Operation>>, CompileError> {
+    let matched_template_nodes: HashSet<usize> =
+        match_info.match_pairs.iter().map(|(t, _)| *t).collect();
+    if matched_template_nodes.is_empty() {
+        return Ok(None);
+    }
+
+    let predecessors = collect_all_predecessors(template_view, &matched_template_nodes);
+    let mut successors = HashSet::<usize>::new();
+    for node_id in 0..template_graph.size() {
+        if matched_template_nodes.contains(&node_id) || predecessors.contains(&node_id) {
+            continue;
+        }
+        successors.insert(node_id);
+    }
+
+    let mut predecessor_ids: Vec<usize> = predecessors.into_iter().collect();
+    predecessor_ids.sort_unstable_by(|a, b| b.cmp(a));
+    let mut successor_ids: Vec<usize> = successors.into_iter().collect();
+    successor_ids.sort_unstable_by(|a, b| b.cmp(a));
+
+    let mut replacement = Vec::<Operation>::new();
+    for node_id in predecessor_ids
+        .into_iter()
+        .chain(successor_ids.into_iter())
+    {
+        let Some(template_node) = template_graph.node(node_id) else {
+            return Err(CompileError::Internal(format!(
+                "template node {} missing during substitution build",
+                node_id
+            )));
+        };
+        let Some(inverse_op) = build_inverse_template_op(
+            template_node,
+            match_info,
+            template_prepared,
+            circuit_prepared,
+        )?
+        else {
+            return Ok(None);
+        };
+        replacement.push(inverse_op);
+    }
+
+    Ok(Some(replacement))
+}
+
+/// Collects all transitive predecessors for a set of start nodes.
+fn collect_all_predecessors(
+    view: &CommutationView,
+    starts: &HashSet<usize>,
+) -> HashSet<usize> {
+    let mut out = HashSet::<usize>::new();
+    let mut queue = VecDeque::<usize>::new();
+    for &node in starts {
+        queue.push_back(node);
+    }
+
+    while let Some(node) = queue.pop_front() {
+        let Some(preds) = view.predecessors.get(node) else {
+            continue;
+        };
+        for &pred in preds {
+            if starts.contains(&pred) {
+                continue;
+            }
+            if out.insert(pred) {
+                queue.push_back(pred);
+            }
+        }
+    }
+
+    out
+}
+
+/// Builds one inverse replacement operation mapped onto circuit qubits.
+fn build_inverse_template_op(
+    template_node: &GateNode,
+    match_info: &TemplateMatch,
+    template_prepared: &crate::compile::mapping::PreparedCircuit,
+    circuit_prepared: &crate::compile::mapping::PreparedCircuit,
+) -> Result<Option<Operation>, CompileError> {
+    let Some(template_op) = template_prepared
+        .operations
+        .get(template_node.op_index)
+        .map(|p| &p.op)
+    else {
+        return Err(CompileError::Internal(format!(
+            "template operation {} missing during inverse construction",
+            template_node.op_index
+        )));
+    };
+
+    let mut params = smallvec::SmallVec::<[crate::circuit::Parameter; 3]>::new();
+    for param in &template_op.params {
+        match param {
+            CircuitParam::Fixed(v) => params.push(crate::circuit::Parameter::from(*v)),
+            CircuitParam::Index(index) => {
+                let idx = *index as usize;
+                let Some(symbolic) = template_prepared.parameters.get(idx) else {
+                    return Err(CompileError::Internal(format!(
+                        "template operation references missing parameter index {}",
+                        idx
+                    )));
+                };
+                params.push(symbolic.clone());
+            }
+        }
+    }
+
+    let Some((inverse_instruction, inverse_params)) = template_op.instruction.inverse(&params) else {
+        return Ok(None);
+    };
+
+    let mut mapped_qubits = smallvec::SmallVec::<[Qubit; 3]>::new();
+    for &template_logical in &template_node.logical_qubits {
+        let Some(&circuit_logical) = match_info.qubit_mapping.get(template_logical) else {
+            return Err(CompileError::Internal(format!(
+                "missing qubit mapping for template logical {}",
+                template_logical
+            )));
+        };
+        let Some(&mapped) = circuit_prepared.logical_qubits.get(circuit_logical) else {
+            return Err(CompileError::Internal(format!(
+                "mapped circuit logical {} is out of range",
+                circuit_logical
+            )));
+        };
+        mapped_qubits.push(mapped);
+    }
+
+    let mut mapped_params = smallvec::SmallVec::<[CircuitParam; 1]>::new();
+    for param in inverse_params {
+        if let Ok(v) = param.evaluate(&None) {
+            mapped_params.push(CircuitParam::Fixed(v));
+            continue;
+        }
+
+        if let Some(index) = find_parameter_index(circuit_prepared.parameters.as_slice(), &param) {
+            mapped_params.push(CircuitParam::Index(index));
+            continue;
+        }
+
+        return Ok(None);
+    }
+
+    Ok(Some(Operation {
+        instruction: inverse_instruction,
+        qubits: mapped_qubits,
+        params: mapped_params,
+        label: template_op.label.clone(),
+    }))
+}
+
+/// Finds one parameter index in a parameter pool by exact expression equality.
+fn find_parameter_index(
+    parameter_pool: &[crate::circuit::Parameter],
+    target: &crate::circuit::Parameter,
+) -> Option<u32> {
+    parameter_pool
+        .iter()
+        .position(|p| p == target)
+        .and_then(|idx| u32::try_from(idx).ok())
+}
+
+/// Returns negative-log fidelity penalty for one operation.
+fn estimate_fidelity_penalty(op: &Operation) -> f64 {
+    let fidelity = estimate_op_fidelity(op).clamp(1e-12, 1.0);
+    -fidelity.ln()
+}
+
+/// Returns a static fidelity estimate used for replacement ranking.
+fn estimate_op_fidelity(op: &Operation) -> f64 {
+    match &op.instruction {
+        Instruction::Standard(g) => estimate_standard_gate_fidelity(*g),
+        Instruction::McGate(g) => {
+            if g.num_qubits() <= 2 {
+                0.99
+            } else {
+                0.95
+            }
+        }
+        Instruction::UnitaryGate(_) | Instruction::CircuitGate(_) => 0.95,
+        Instruction::Directive(_) | Instruction::ControlFlowGate(_) | Instruction::Delay => 1e-6,
+    }
+}
+
+/// Returns default fidelity estimates for standard gates.
+fn estimate_standard_gate_fidelity(gate: StandardGate) -> f64 {
+    match gate {
+        StandardGate::I | StandardGate::GPhase => 1.0,
+        StandardGate::H
+        | StandardGate::RX
+        | StandardGate::RY
+        | StandardGate::RZ
+        | StandardGate::S
+        | StandardGate::SDG
+        | StandardGate::T
+        | StandardGate::TDG
+        | StandardGate::U
+        | StandardGate::X
+        | StandardGate::Y
+        | StandardGate::Z
+        | StandardGate::Phase
+        | StandardGate::X2P
+        | StandardGate::X2M
+        | StandardGate::Y2P
+        | StandardGate::Y2M => 0.9995,
+        StandardGate::CX | StandardGate::CY | StandardGate::CZ | StandardGate::XY => 0.99,
+        StandardGate::SWAP => 0.97,
+        StandardGate::RXX
+        | StandardGate::RXY
+        | StandardGate::RYY
+        | StandardGate::RZX
+        | StandardGate::RZZ
+        | StandardGate::CRX
+        | StandardGate::CRY
+        | StandardGate::CRZ
+        | StandardGate::XY2P
+        | StandardGate::XY2M
+        | StandardGate::FSIM => 0.985,
+        StandardGate::CCX => 0.94,
+    }
 }
 
 /// Returns a static operation cost estimate used by optimization.
@@ -644,8 +1000,9 @@ fn estimate_standard_gate_cost(gate: StandardGate) -> i64 {
         | StandardGate::X2M
         | StandardGate::Y2P
         | StandardGate::Y2M => 1,
-        StandardGate::CX | StandardGate::SWAP | StandardGate::XY | StandardGate::CZ => 2,
-        StandardGate::CY => 4,
+        StandardGate::CX | StandardGate::XY => 2,
+        StandardGate::CY | StandardGate::CZ => 4,
+        StandardGate::SWAP => 6,
         StandardGate::RXX
         | StandardGate::RXY
         | StandardGate::RYY
@@ -900,6 +1257,53 @@ mod tests {
         let optimizer = TemplateOptimization::new(vec![template], Some(1), Some((3, 1)));
         let optimized = optimizer.execute(&circuit).unwrap();
         assert_eq!(optimized.operations().len(), 1);
+    }
+
+    /// Verifies replacement can be selected on cost ties when fidelity improves.
+    #[test]
+    fn test_template_optimization_replacement_prefers_fidelity_on_tie() {
+        let mut circuit = Circuit::new(2);
+        circuit.h(Qubit::new(1)).unwrap();
+        circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
+        circuit.h(Qubit::new(1)).unwrap();
+
+        // Identity template:
+        // H(q1) CX(q0,q1) H(q1) CZ(q0,q1) = I
+        let mut template = Circuit::new(2);
+        template.h(Qubit::new(1)).unwrap();
+        template.cx(Qubit::new(0), Qubit::new(1)).unwrap();
+        template.h(Qubit::new(1)).unwrap();
+        template.cz(Qubit::new(0), Qubit::new(1)).unwrap();
+
+        let optimizer = TemplateOptimization::new(vec![template], None, None);
+        let optimized = optimizer.execute(&circuit).unwrap();
+        assert_eq!(optimized.operations().len(), 1);
+        assert!(matches!(
+            optimized.operations()[0].instruction,
+            Instruction::Standard(StandardGate::CZ)
+        ));
+    }
+
+    /// Verifies replacement is skipped on cost ties when fidelity gets worse.
+    #[test]
+    fn test_template_optimization_skips_lower_fidelity_tie() {
+        let mut circuit = Circuit::new(2);
+        circuit.cz(Qubit::new(0), Qubit::new(1)).unwrap();
+
+        // Same identity template as above.
+        let mut template = Circuit::new(2);
+        template.h(Qubit::new(1)).unwrap();
+        template.cx(Qubit::new(0), Qubit::new(1)).unwrap();
+        template.h(Qubit::new(1)).unwrap();
+        template.cz(Qubit::new(0), Qubit::new(1)).unwrap();
+
+        let optimizer = TemplateOptimization::new(vec![template], None, None);
+        let optimized = optimizer.execute(&circuit).unwrap();
+        assert_eq!(optimized.operations().len(), 1);
+        assert!(matches!(
+            optimized.operations()[0].instruction,
+            Instruction::Standard(StandardGate::CZ)
+        ));
     }
 
     /// Verifies iterative optimization converges.
