@@ -10,6 +10,17 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
+//! Python Bindings for Standard Quantum Gates
+//!
+//! This module provides Python bindings for the [`StandardGate`] enum from cqlib-core.
+//! It exposes standard quantum gates as class attributes and supports parameter binding
+//! via callable semantics.
+//!
+//! # Key Components
+//!
+//! - [`PyStandardGate`]: The main class wrapping `StandardGate` with Python-friendly interfaces.
+//! - Static attributes: Gate constants like `StandardGate.H`, `StandardGate.CX`, etc.
+
 use crate::circuit::parameter::PyParameter;
 use cqlib_core::circuit::Parameter;
 use cqlib_core::circuit::gate::{Instruction, StandardGate};
@@ -22,7 +33,12 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::RwLock;
 
-#[pyclass(name = "StandardGate", module = "cqlib.circuit.gates")]
+/// Python wrapper for `StandardGate` enum.
+///
+/// Represents a standard quantum gate with optional parameters.
+/// Can be instantiated via static attributes (e.g., `StandardGate.H`)
+/// or by calling a parametric gate with values (e.g., `StandardGate.RX(3.14)`).
+#[pyclass(name = "StandardGate", module = "cqlib.circuit.gate")]
 #[derive(Debug)]
 pub struct PyStandardGate {
     pub inner: StandardGate,
@@ -42,21 +58,33 @@ impl Clone for PyStandardGate {
 
 #[pymethods]
 impl PyStandardGate {
+    /// Disallows direct instantiation.
+    ///
+    /// Use static attributes like `StandardGate.H` or `StandardGate.RX(theta)`.
     #[new]
     fn new() -> PyResult<Self> {
-        // 禁止用户直接实例化 StandardGate()
         Err(PyValueError::new_err(
             "StandardGate cannot be instantiated directly. Use static attributes like StandardGate.H or StandardGate.RX",
         ))
     }
 
-    /// Magic method to make the gate callable for parameter binding.
-    /// Example: gate = StandardGate.RX(3.14)
+    /// Binds parameters to the gate.
+    ///
+    /// Enables callable syntax: `StandardGate.RX(3.14)` returns a new gate instance
+    /// with the specified parameter value.
+    ///
+    /// # Arguments
+    ///
+    /// * `args` - Positional arguments for gate parameters (float or `Parameter`).
+    ///
+    /// # Returns
+    ///
+    /// A new `PyStandardGate` with bound parameters.
     #[pyo3(signature = (*args))]
     fn __call__(&self, args: &Bound<'_, PyTuple>) -> PyResult<Self> {
         let expected_params = self.inner.num_params();
 
-        // 如果门不需要参数（如 H, X），调用它通常意味着克隆一个新实例
+        // If gate requires no parameters (e.g., H, X), calling it returns a clone
         if expected_params == 0 {
             if !args.is_empty() {
                 return Err(PyValueError::new_err(format!(
@@ -129,21 +157,54 @@ impl PyStandardGate {
         hash
     }
 
+    /// Customizes attribute access to only show relevant attributes.
+    ///
+    /// This prevents pollution from other gates in the same class.
+    /// For example, `StandardGate.H` will only show its own methods/properties,
+    /// not `StandardGate.X`, `StandardGate.RX`, etc.
+    fn __dir__(&self) -> Vec<&'static str> {
+        let mut attrs = vec![
+            // Magic methods
+            "__class__",
+            "__repr__",
+            "__eq__",
+            "__hash__",
+            // Properties
+            "num_qubits",
+            "num_ctrl_qubits",
+            "num_params",
+            "params",
+            // Methods
+            "matrix",
+            "control",
+            "inverse",
+        ];
+        // Only add __call__ for parametric gates
+        if self.inner.num_params() > 0 {
+            attrs.push("__call__");
+        }
+        attrs
+    }
+
+    /// Returns the total number of qubits this gate acts on.
     #[getter]
     fn num_qubits(&self) -> usize {
         self.inner.num_qubits()
     }
 
+    /// Returns the number of control qubits.
     #[getter]
     fn num_ctrl_qubits(&self) -> usize {
         self.inner.num_ctrl_qubits()
     }
 
+    /// Returns the number of parameters this gate accepts.
     #[getter]
     fn num_params(&self) -> usize {
         self.inner.num_params()
     }
 
+    /// Returns the bound parameters for this gate.
     #[getter]
     fn params(&self) -> Vec<PyParameter> {
         self.params
@@ -152,9 +213,16 @@ impl PyStandardGate {
             .collect()
     }
 
-    // --- Methods ---
-
-    /// Returns the unitary matrix of the gate as a NumPy array.
+    /// Returns the unitary matrix representation as a NumPy array.
+    ///
+    /// # Arguments
+    ///
+    /// * `params` - Optional concrete parameter values. Required for parametric gates
+    ///   that have symbolic parameters.
+    ///
+    /// # Returns
+    ///
+    /// A 2D NumPy array (dtype=complex128) representing the gate matrix.
     #[pyo3(signature = (params=None))]
     fn matrix<'py>(
         &self,
@@ -163,7 +231,7 @@ impl PyStandardGate {
     ) -> PyResult<Bound<'py, PyArray2<Complex64>>> {
         let eval_params: Vec<f64>;
 
-        // 逻辑：优先使用传入的 params，其次尝试计算内部存储的 params
+        // Priority: use provided params, then try to evaluate internal params
         if let Some(p) = params {
             if p.len() != self.inner.num_params() {
                 return Err(PyValueError::new_err(format!(
@@ -175,7 +243,7 @@ impl PyStandardGate {
             }
             eval_params = p;
         } else if !self.params.is_empty() {
-            // 尝试评估内部参数（必须是常数）
+            // Try to evaluate internal params (must be constant)
             let mut calculated = Vec::with_capacity(self.params.len());
             for p in &self.params {
                 match p.evaluate(&None) {
@@ -199,19 +267,28 @@ impl PyStandardGate {
             )));
         }
 
-        // StandardGate::matrix 返回 Cow<Array2>
-        // 使用 rust-numpy 的 to_pyarray 进行高效转换
+        // StandardGate::matrix returns Cow<Array2>
+        // Use rust-numpy to_pyarray for efficient conversion
         let mat_cow = self.inner.matrix(&eval_params);
         Ok(mat_cow.to_pyarray(py))
     }
 
+    /// Returns a controlled version of this gate.
+    ///
+    /// # Arguments
+    ///
+    /// * `num_ctrls` - Number of control qubits.
+    ///
+    /// # Returns
+    ///
+    /// A new gate with control qubits applied.
     fn control(&self, num_ctrls: usize) -> PyResult<Self> {
         let inst: Instruction = self.inner.into();
 
-        // 尝试生成控制门
+        // Try to generate controlled gate
         match inst.control(num_ctrls) {
             Some(Instruction::Standard(std_gate)) => {
-                // 如果结果仍然是 StandardGate (例如 X.control(1) -> CX)，我们很高兴
+                // If result is still StandardGate (e.g., X.control(1) -> CX), happy case
                 Ok(PyStandardGate {
                     inner: std_gate,
                     params: self.params.clone(),
@@ -219,7 +296,7 @@ impl PyStandardGate {
                 })
             }
             Some(_) => {
-                // 如果结果变成了 ExtendedGate (例如 H.control(1))，目前我们的简化架构不支持
+                // If result becomes ExtendedGate (e.g., H.control(1)), not supported in simplified version
                 Err(PyValueError::new_err(
                     "Controlled version of this gate results in a non-standard gate, which is not supported in this simplified version.",
                 ))
@@ -231,8 +308,13 @@ impl PyStandardGate {
         }
     }
 
+    /// Returns the inverse (Hermitian conjugate) of this gate.
+    ///
+    /// # Returns
+    ///
+    /// A new gate representing the inverse operation.
     fn inverse(&self) -> PyResult<Self> {
-        // 使用存储的参数，如果没有则使用默认值（通常 0.0 对于确定类型足够）
+        // Use stored params, or defaults if none (0.0 is sufficient for deterministic types)
         let params_to_use = if !self.params.is_empty() {
             self.params.clone()
         } else {
@@ -253,14 +335,16 @@ impl PyStandardGate {
     }
 }
 
-// 注册静态属性 (H, X, RX...)
+/// Registers static gate attributes on the `StandardGate` class.
+///
+/// Adds all standard gates (H, X, RX, CX, etc.) as class attributes
+/// to the Python `StandardGate` module.
 pub fn register_gates(module: &Bound<'_, PyModule>) -> PyResult<()> {
     let cls = module.getattr("StandardGate")?;
     let py = module.py();
 
-    // 辅助宏或函数来创建实例
-    // 由于我们没有公开 new，我们需要想办法构造。
-    // 实际上我们可以通过 Py::new 来构造，因为我们在 Rust 侧。
+    // Helper to create gate instances
+    // Since we don't expose new publicly, we use Py::new from Rust side
 
     let add_gate = |name: &str, gate: StandardGate| -> PyResult<()> {
         let instance = Py::new(
@@ -325,6 +409,7 @@ pub fn register_gates(module: &Bound<'_, PyModule>) -> PyResult<()> {
 }
 
 impl PyStandardGate {
+    /// Constructs a `PyStandardGate` from a core `StandardGate` and parameters.
     pub fn from(gate: StandardGate, params: Vec<Parameter>) -> Self {
         Self {
             inner: gate,
