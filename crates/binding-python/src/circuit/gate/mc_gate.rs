@@ -10,6 +10,15 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
+//! Python Bindings for Multi-Controlled Gates
+//!
+//! This module provides Python bindings for the [`MCGate`] from cqlib-core.
+//! It represents gates with multiple control qubits applied to a base gate.
+//!
+//! # Key Components
+//!
+//! - [`PyMcGate`]: The main class for multi-controlled quantum gates.
+
 use crate::circuit::PyStandardGate;
 use crate::circuit::parameter::PyParameter;
 use cqlib_core::circuit::Parameter;
@@ -20,7 +29,11 @@ use pyo3::prelude::*;
 use pyo3::{PyResult, pyclass, pymethods};
 use std::fmt;
 
-#[pyclass(name = "McGate", module = "cqlib.circuit.gates")]
+/// Python wrapper for `MCGate`.
+///
+/// Represents a multi-controlled quantum gate.
+/// The gate applies the base operation only when all control qubits are in the |1⟩ state.
+#[pyclass(name = "McGate", module = "cqlib.circuit.gate")]
 #[derive(Debug, Clone)]
 pub struct PyMcGate {
     pub inner: MCGate,
@@ -28,6 +41,22 @@ pub struct PyMcGate {
 
 #[pymethods]
 impl PyMcGate {
+    /// Creates a new multi-controlled gate.
+    ///
+    /// # Arguments
+    ///
+    /// * `num_controls` - The number of control qubits to add.
+    /// * `gate` - The base `StandardGate` to control.
+    ///
+    /// # Examples
+    ///
+    /// ```python
+    /// # Create a Toffoli-like gate (CCX) with 2 controls
+    /// ccx = McGate(2, StandardGate.X)
+    ///
+    /// # Create a multi-controlled Hadamard
+    /// mch = McGate(3, StandardGate.H)
+    /// ```
     #[new]
     pub fn new(num_controls: u8, gate: PyStandardGate) -> Self {
         Self {
@@ -35,29 +64,37 @@ impl PyMcGate {
         }
     }
 
-    /// Returns the unitary matrix representation of the gate.
+    /// Returns the unitary matrix representation as a NumPy array.
     ///
-    /// Args:
-    ///     params: A list of floating-point parameters for parametric gates.
+    /// # Arguments
     ///
-    /// Returns:
-    ///     The unitary matrix as a numpy array.
+    /// * `params` - Optional parameters for the base gate (if parametric).
+    ///
+    /// # Returns
+    ///
+    /// A 2D numpy array (dtype=complex128).
+    #[pyo3(signature = (params=None))]
     pub fn matrix<'py>(
         &self,
         py: Python<'py>,
-        params: Vec<f64>,
-    ) -> Bound<'py, PyArray2<Complex64>> {
+        params: Option<Vec<f64>>,
+    ) -> PyResult<Bound<'py, PyArray2<Complex64>>> {
+        let params = params.unwrap_or_default();
         let mat = self.inner.matrix(&params);
-        mat.to_pyarray(py)
+        Ok(mat.to_pyarray(py))
     }
 
     /// Computes the inverse (Hermitian conjugate) of the gate.
     ///
-    /// Args:
-    ///     params: A list of Parameter objects for parametric gates.
+    /// The inverse of a controlled gate C(U) is C(U†).
     ///
-    /// Returns:
-    ///     A tuple of (inverse McGate, inverse parameters) or None if not invertible.
+    /// # Arguments
+    ///
+    /// * `params` - Optional parameters for the base gate.
+    ///
+    /// # Returns
+    ///
+    /// A tuple of (inverse gate, inverse parameters), or None if not invertible.
     #[pyo3(signature = (params=None))]
     pub fn inverse(
         &self,
