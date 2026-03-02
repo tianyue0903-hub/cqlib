@@ -213,8 +213,6 @@ impl PyStandardGate {
             .collect()
     }
 
-    // --- Methods ---
-
     /// Returns the unitary matrix representation as a NumPy array.
     ///
     /// # Arguments
