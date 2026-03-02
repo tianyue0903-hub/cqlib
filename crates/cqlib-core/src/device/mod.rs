@@ -10,6 +10,12 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
-mod topology;
+pub mod device_impl;
+pub mod error;
+pub mod layout;
+pub mod topology;
 
+pub use device_impl::{Device, EdgeProp, InstructionProp, QubitProp};
+pub use error::{DeviceError, LayoutError, TopologyError};
+pub use layout::Layout;
 pub use topology::Topology;
