@@ -240,6 +240,8 @@ dependencies = [
  "rand",
  "regex",
  "rustworkx-core",
+ "serde",
+ "serde_json",
  "smallvec",
  "thiserror",
  "uuid",

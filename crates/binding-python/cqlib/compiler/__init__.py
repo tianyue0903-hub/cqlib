@@ -13,6 +13,8 @@
 from .._native import (
     Topology,
     SabreConfig,
+    TemplateMatching,
+    TemplateOptimization,
     vf2_is_subgraph_isomorphic,
     vf2_find_initial_layout,
     vf2_find_initial_layout_candidates,
@@ -23,6 +25,8 @@ from .._native import (
 __all__ = [
     "Topology",
     "SabreConfig",
+    "TemplateMatching",
+    "TemplateOptimization",
     "vf2_is_subgraph_isomorphic",
     "vf2_find_initial_layout",
     "vf2_find_initial_layout_candidates",

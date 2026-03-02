@@ -30,6 +30,7 @@ use super::{
 use crate::circuit::gate::{Instruction, StandardGate};
 use crate::circuit::{Circuit, Operation, Qubit};
 use crate::compile::error::CompileError;
+use crate::compile::graph::{DependencyNode, GateGraph};
 use crate::device::Topology;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
@@ -39,18 +40,9 @@ use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet, VecDeque};
 
 #[derive(Debug, Clone)]
-/// Internal struct `GateNode` used by compile mapping workflows.
-struct GateNode {
-    op_index: usize,
-    attach_ids: Vec<usize>,
-    next_ids: Vec<usize>,
-    logical_qubits: SmallVec<[usize; 2]>,
-}
-
-#[derive(Debug, Clone)]
 /// Internal struct `GateDependencyDag` used by compile mapping workflows.
 struct GateDependencyDag {
-    nodes: Vec<GateNode>,
+    nodes: Vec<DependencyNode>,
     indegree: Vec<usize>,
     initial_single_qubit_ops: Vec<(usize, usize)>,
     front_layer: HashSet<usize>,
@@ -58,7 +50,7 @@ struct GateDependencyDag {
 
 impl GateDependencyDag {
     /// Internal helper for node.
-    fn node(&self, gate_id: usize) -> Option<&GateNode> {
+    fn node(&self, gate_id: usize) -> Option<&DependencyNode> {
         self.nodes.get(gate_id.saturating_sub(1))
     }
 }
@@ -259,8 +251,8 @@ impl SabreMapping {
             });
         }
 
-        let original_info = self.build_circuit_info(&prepared, logical_width);
-        let reverse_info = self.build_circuit_info(&reverse_prepared, logical_width);
+        let original_info = self.build_circuit_info(&prepared, logical_width)?;
+        let reverse_info = self.build_circuit_info(&reverse_prepared, logical_width)?;
 
         let initial_iters = self.config.initial_iterations.max(1);
         let repeat_iters = self.config.repeat_iterations;
@@ -395,64 +387,22 @@ impl SabreMapping {
         &self,
         prepared: &PreparedCircuit,
         logical_width: usize,
-    ) -> GateDependencyDag {
-        let mut gateid = 0usize;
-        let mut nodes: Vec<GateNode> = Vec::with_capacity(prepared.operations.len());
-        let mut indegree = vec![0usize];
-        let mut initial_single_qubit_ops = Vec::new();
-        let mut front_layer = HashSet::new();
-        let mut pre_gate: Vec<Option<usize>> = vec![None; logical_width];
+    ) -> Result<GateDependencyDag, CompileError> {
+        let graph = GateGraph::from_prepared(prepared)?;
+        let view = graph.dependency_view(logical_width);
 
-        for (op_index, prep_op) in prepared.operations.iter().enumerate() {
-            gateid += 1;
-
-            let node = GateNode {
-                op_index,
-                attach_ids: Vec::new(),
-                next_ids: Vec::new(),
-                logical_qubits: prep_op.logical_qubits.clone(),
-            };
-
-            if prep_op.logical_qubits.len() == 1 {
-                let u = prep_op.logical_qubits[0];
-                if let Some(prev) = pre_gate[u] {
-                    nodes[prev - 1].attach_ids.push(gateid);
-                } else {
-                    initial_single_qubit_ops.push((op_index, u));
-                }
-                indegree.push(0);
-                nodes.push(node);
-                continue;
-            }
-
-            let mut pre_number = 0usize;
-            for &u in &prep_op.logical_qubits {
-                if let Some(prev) = pre_gate[u]
-                    && !nodes[prev - 1].next_ids.contains(&gateid)
-                {
-                    nodes[prev - 1].next_ids.push(gateid);
-                    pre_number += 1;
-                }
-            }
-
-            for &u in &prep_op.logical_qubits {
-                pre_gate[u] = Some(gateid);
-            }
-
-            if pre_number == 0 {
-                front_layer.insert(gateid);
-            }
-
-            indegree.push(pre_number);
-            nodes.push(node);
+        let mut indegree = Vec::with_capacity(view.nodes.len() + 1);
+        indegree.push(0);
+        for node in &view.nodes {
+            indegree.push(node.indegree);
         }
 
-        GateDependencyDag {
-            nodes,
+        Ok(GateDependencyDag {
+            nodes: view.nodes,
             indegree,
-            initial_single_qubit_ops,
-            front_layer,
-        }
+            initial_single_qubit_ops: view.initial_single_qubit_ops,
+            front_layer: view.front_layer,
+        })
     }
 
     /// Internal helper for execute routing.
@@ -827,7 +777,7 @@ impl SabreMapping {
     }
 
     /// Internal helper for can execute.
-    fn can_execute(&self, gate: &GateNode, state: &RoutingState) -> bool {
+    fn can_execute(&self, gate: &DependencyNode, state: &RoutingState) -> bool {
         let u = state.logic2phy[gate.logical_qubits[0]];
         let v = state.logic2phy[gate.logical_qubits[1]];
         self.topology.is_adjacent(u, v)
@@ -836,7 +786,7 @@ impl SabreMapping {
     /// Internal helper for can bridge.
     fn can_bridge(
         &self,
-        gate: &GateNode,
+        gate: &DependencyNode,
         info: &GateDependencyDag,
         prepared: &PreparedCircuit,
         state: &RoutingState,
@@ -926,7 +876,7 @@ impl SabreMapping {
     /// Internal helper for add ans 2qgate.
     fn add_ans_2qgate(
         &self,
-        gate: &GateNode,
+        gate: &DependencyNode,
         prepared: &PreparedCircuit,
         state: &mut RoutingState,
     ) {
@@ -940,7 +890,7 @@ impl SabreMapping {
     /// Internal helper for add ans 1qgate.
     fn add_ans_1qgate(
         &self,
-        gate: &GateNode,
+        gate: &DependencyNode,
         prepared: &PreparedCircuit,
         state: &mut RoutingState,
     ) {
@@ -953,7 +903,7 @@ impl SabreMapping {
     /// Internal helper for add bridge gate.
     fn add_bridge_gate(
         &self,
-        gate: &GateNode,
+        gate: &DependencyNode,
         state: &mut RoutingState,
     ) -> Result<(), CompileError> {
         let fixed_u = state.logic2phy[gate.logical_qubits[0]];
@@ -1515,7 +1465,9 @@ mod tests {
 
         let mapper = SabreMapping::new(topology, Some(fidelity), cfg).unwrap();
         let prepared = preprocess_circuit(&circuit).unwrap();
-        let info = mapper.build_circuit_info(&prepared, prepared.logical_qubits.len());
+        let info = mapper
+            .build_circuit_info(&prepared, prepared.logical_qubits.len())
+            .unwrap();
         let mut state = build_star_state(&mapper, &info, &[1, 2]);
 
         let swaps = mapper.obtain_swaps(&info, &mut state);
@@ -1551,7 +1503,9 @@ mod tests {
 
         let mut mapper = SabreMapping::new(topology, Some(fidelity), cfg).unwrap();
         let prepared = preprocess_circuit(&circuit).unwrap();
-        let info = mapper.build_circuit_info(&prepared, prepared.logical_qubits.len());
+        let info = mapper
+            .build_circuit_info(&prepared, prepared.logical_qubits.len())
+            .unwrap();
         let group = mapper
             .execute_routing(&info, &prepared, &[1, 2], 32)
             .unwrap();

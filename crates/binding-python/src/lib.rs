@@ -19,7 +19,7 @@ use pyo3::prelude::*;
 use crate::circuit::gates::{PyCircuitGate, PyMcGate, PyStandardGate, PyUnitaryGate};
 use circuit::circuit_to_matrix;
 use circuit::{PyCircuit, PyInstruction, PyOperation, PyParameter, PyQubit};
-use compile::{PySabreConfig, PyTopology};
+use compile::{PySabreConfig, PyTemplateMatching, PyTemplateOptimization, PyTopology};
 
 /// A Python module implemented in Rust.
 #[pymodule]
@@ -36,6 +36,8 @@ fn binding_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyInstruction>()?;
     m.add_class::<PyTopology>()?;
     m.add_class::<PySabreConfig>()?;
+    m.add_class::<PyTemplateMatching>()?;
+    m.add_class::<PyTemplateOptimization>()?;
 
     m.add_function(wrap_pyfunction!(ir::py_qasm2_load, m)?)?;
     m.add_function(wrap_pyfunction!(ir::py_qasm2_loads, m)?)?;
