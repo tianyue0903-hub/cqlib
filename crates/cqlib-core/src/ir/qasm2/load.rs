@@ -47,10 +47,6 @@ use smallvec::{SmallVec, smallvec};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-// =============================================================================
-// Source Resolver Abstraction (for WASM/Browser support)
-// =============================================================================
-
 /// A trait for resolving OpenQASM source code from a path.
 /// This allows abstracting away the file system for WASM or memory-based environments.
 pub trait QasmSourceResolver {
@@ -670,7 +666,6 @@ impl AstToCircuit {
         };
 
         match name {
-            // --- Gates with special parameter handling ---
             "u2" | "U2" => {
                 check_counts(1, 2)?;
                 // U2(phi, lambda) = U(pi/2, phi, lambda)
@@ -679,7 +674,6 @@ impl AstToCircuit {
                 Ok((Instruction::Standard(StandardGate::U), new_params))
             }
 
-            // --- Standard Parametrized Gates (1 qubit, 1 param) ---
             "rx" | "RX" => {
                 check_counts(1, 1)?;
                 Ok((Instruction::Standard(StandardGate::RX), params.to_vec()))
@@ -688,9 +682,13 @@ impl AstToCircuit {
                 check_counts(1, 1)?;
                 Ok((Instruction::Standard(StandardGate::RY), params.to_vec()))
             }
-            "rz" | "RZ" | "p" | "P" => {
+            "rz" | "RZ" => {
                 check_counts(1, 1)?;
                 Ok((Instruction::Standard(StandardGate::RZ), params.to_vec()))
+            }
+            "p" | "P" => {
+                check_counts(1, 1)?;
+                Ok((Instruction::Standard(StandardGate::Phase), params.to_vec()))
             }
             "u1" | "U1" => {
                 check_counts(1, 1)?;
@@ -703,7 +701,6 @@ impl AstToCircuit {
                 Ok((Instruction::Standard(StandardGate::U), params.to_vec()))
             }
 
-            // --- Two-qubit parametric gates ---
             "rxx" | "RXX" => {
                 check_counts(2, 1)?;
                 Ok((Instruction::Standard(StandardGate::RXX), params.to_vec()))
@@ -735,7 +732,6 @@ impl AstToCircuit {
                 Ok((Instruction::Standard(StandardGate::CRZ), params.to_vec()))
             }
 
-            // --- Simple single-qubit gates (No params) ---
             "h" | "H" => {
                 check_counts(1, 0)?;
                 Ok((Instruction::Standard(StandardGate::H), vec![]))
@@ -780,8 +776,6 @@ impl AstToCircuit {
                 check_counts(1, 0)?;
                 Ok((Instruction::Standard(StandardGate::I), vec![]))
             }
-
-            // --- Two-qubit gates (No params) ---
             "cx" | "CX" => {
                 check_counts(2, 0)?;
                 Ok((Instruction::Standard(StandardGate::CX), vec![]))
@@ -798,14 +792,11 @@ impl AstToCircuit {
                 check_counts(2, 0)?;
                 Ok((Instruction::Standard(StandardGate::SWAP), vec![]))
             }
-
-            // --- Three-qubit gates (No params) ---
             "ccx" | "CCX" | "toffoli" | "TOFFOLI" => {
                 check_counts(3, 0)?;
                 Ok((Instruction::Standard(StandardGate::CCX), vec![]))
             }
 
-            // --- Error Case ---
             _ => Err(QasmParseError::UndefinedGate(name.to_string())),
         }
     }
