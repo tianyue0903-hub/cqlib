@@ -163,6 +163,24 @@ impl PyIfElseGate {
         self.inner.num_params()
     }
 
+    /// Returns the true body operations.
+    #[getter]
+    fn true_body(&self) -> Vec<PyOperation> {
+        self.inner
+            .true_body()
+            .iter()
+            .map(|op| PyOperation::from(op.clone()))
+            .collect()
+    }
+
+    /// Returns the false body operations if present.
+    #[getter]
+    fn false_body(&self) -> Option<Vec<PyOperation>> {
+        self.inner
+            .false_body()
+            .map(|ops| ops.iter().map(|op| PyOperation::from(op.clone())).collect())
+    }
+
     fn __repr__(&self) -> String {
         format!(
             "IfElseGate(condition={:?})",
@@ -225,6 +243,16 @@ impl PyWhileLoopGate {
     #[getter]
     fn num_params(&self) -> usize {
         self.inner.num_params()
+    }
+
+    /// Returns the body operations.
+    #[getter]
+    fn body(&self) -> Vec<PyOperation> {
+        self.inner
+            .body()
+            .iter()
+            .map(|op| PyOperation::from(op.clone()))
+            .collect()
     }
 
     fn __repr__(&self) -> String {
@@ -322,6 +350,7 @@ impl PyControlFlow {
     }
 
     /// Returns the IfElseGate if this is an if-else, None otherwise.
+    #[getter]
     fn as_if_else(&self) -> Option<PyIfElseGate> {
         match &self.inner {
             ControlFlow::IfElse(gate) => Some(PyIfElseGate::from(gate.clone())),
@@ -330,6 +359,7 @@ impl PyControlFlow {
     }
 
     /// Returns the WhileLoopGate if this is a while-loop, None otherwise.
+    #[getter]
     fn as_while_loop(&self) -> Option<PyWhileLoopGate> {
         match &self.inner {
             ControlFlow::WhileLoop(gate) => Some(PyWhileLoopGate::from(gate.clone())),

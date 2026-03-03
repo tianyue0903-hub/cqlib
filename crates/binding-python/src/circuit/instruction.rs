@@ -213,6 +213,7 @@ impl PyInstruction {
     }
 
     /// Returns the control flow if this is a control flow instruction, None otherwise.
+    #[getter]
     fn control_flow(&self) -> Option<PyControlFlow> {
         match &self.inner {
             Instruction::ControlFlowGate(cf) => Some(PyControlFlow::from(cf.clone())),

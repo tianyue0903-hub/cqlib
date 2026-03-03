@@ -193,6 +193,16 @@ impl Circuit {
         Ok(())
     }
 
+    pub fn add_parameter(&mut self, param: Parameter) -> (usize, bool) {
+        let (index, is_new) = self.parameters.insert_full(param.clone());
+        if is_new {
+            for sym in param.get_symbols() {
+                self.symbols.insert(sym);
+            }
+        }
+        (index, is_new)
+    }
+
     /// Returns the number of qubits in the circuit.
     ///
     /// Alias for `num_qubits()`.

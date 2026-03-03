@@ -16,8 +16,8 @@ pub mod ir;
 use pyo3::prelude::*;
 
 use crate::circuit::gate::{
-    PyCircuitGate, PyConditionView, PyDelay, PyDirective, PyIfElseGate, PyMcGate, PyStandardGate,
-    PyUnitaryGate, PyWhileLoopGate,
+    PyCircuitGate, PyConditionView, PyControlFlow, PyDelay, PyDirective, PyIfElseGate, PyMcGate,
+    PyStandardGate, PyUnitaryGate, PyWhileLoopGate,
 };
 use circuit::circuit_to_matrix;
 use circuit::{PyCircuit, PyInstruction, PyOperation, PyParameter, PyQubit};
@@ -35,6 +35,7 @@ fn binding_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyCircuitGate>()?;
     m.add_class::<PyOperation>()?;
     m.add_class::<PyInstruction>()?;
+    m.add_class::<PyControlFlow>()?;
     m.add_class::<PyIfElseGate>()?;
     m.add_class::<PyWhileLoopGate>()?;
     m.add_class::<PyConditionView>()?;

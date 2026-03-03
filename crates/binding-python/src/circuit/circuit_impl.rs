@@ -50,14 +50,16 @@ use super::operation::PyOperation;
 use super::parameter::PyParameter;
 use crate::circuit::operation::PyOperationIter;
 use cqlib_core::circuit::gate::Instruction;
+use cqlib_core::circuit::param::CircuitParam;
 use cqlib_core::circuit::param::ParameterValue;
-use cqlib_core::circuit::{Circuit, Qubit};
+use cqlib_core::circuit::{Circuit, Operation, Qubit};
 use num_complex::Complex64;
 use numpy::{PyArray2, ToPyArray};
 use pyo3::IntoPyObjectExt;
 use pyo3::exceptions::{PyIndexError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyList, PySlice, PyTuple};
+use pyo3::types::*;
+use smallvec::SmallVec;
 use std::collections::HashMap;
 
 /// Parameter type that accepts either a fixed value or a symbolic parameter.
@@ -1184,26 +1186,17 @@ impl PyCircuit {
     ///
     /// Args:
     ///     condition: The classical condition to evaluate (ConditionView)
-    ///     true_body: Operations to execute when condition is true
-    ///     false_body: Optional operations to execute when condition is false
+    ///     true_body: List of operation tuples for the true branch.
+    ///         Each tuple is (gate, qubits) or (gate, qubits, params).
+    ///         - gate: The gate to apply (StandardGate, McGate, UnitaryGate)
+    ///         - qubits: List of qubit indices
+    ///         - params: Optional list of float parameters
+    ///     false_body: Optional list of operation tuples for the false branch.
     ///
     /// # Example
     ///
     /// ```python
-    /// from cqlib.circuit.gate import ConditionView
-    ///
-    /// circuit = Circuit(2)
-    /// circuit.x(0)
-    /// circuit.measure(0)
-    ///
-    /// # If qubit 0 is 1, apply X to qubit 1
-    /// condition = ConditionView(Qubit(0), 1)
-    /// circuit.if_else(condition, [Operation.x(1)], [Operation.z(1)])
-    /// ```
-    ///
-    /// # Example
-    ///
-    /// ```python
+    /// from cqlib import Circuit, StandardGate
     /// from cqlib.circuit.gate import ConditionView
     ///
     /// circuit = Circuit(2)
@@ -1212,18 +1205,24 @@ impl PyCircuit {
     ///
     /// # If qubit 0 is 1, apply X to qubit 1; otherwise apply Z
     /// condition = ConditionView(Qubit(0), 1)
-    /// circuit.if_else(condition, [Operation.x(1)], [Operation.z(1)])
+    /// circuit.if_else(
+    ///     condition,
+    ///     [(StandardGate.X, [1])],      # true body
+    ///     [(StandardGate.Z, [1])]       # false body
+    /// )
     /// ```
+    #[pyo3(signature = (condition, true_body, false_body=None))]
     fn if_else(
         &mut self,
+        py: Python<'_>,
         condition: PyConditionView,
-        true_body: Vec<PyOperation>,
-        false_body: Option<Vec<PyOperation>>,
+        true_body: Vec<PyOpTuple>,
+        false_body: Option<Vec<PyOpTuple>>,
     ) -> PyResult<()> {
-        let true_body_core: Vec<cqlib_core::circuit::Operation> =
-            true_body.into_iter().map(|op| op.operation).collect();
-        let false_body_core: Option<Vec<cqlib_core::circuit::Operation>> =
-            false_body.map(|ops| ops.into_iter().map(|op| op.operation).collect());
+        let true_body_core = convert_op_tuples(py, self, true_body)?;
+        let false_body_core = false_body
+            .map(|ops| convert_op_tuples(py, self, ops))
+            .transpose()?;
 
         self.inner
             .if_else(condition.inner, true_body_core, false_body_core)
@@ -1236,11 +1235,16 @@ impl PyCircuit {
     ///
     /// Args:
     ///     condition: The classical condition to evaluate before each iteration
-    ///     body: The operations to execute in each iteration
+    ///     body: List of operation tuples for the loop body.
+    ///         Each tuple is (gate, qubits) or (gate, qubits, params).
+    ///         - gate: The gate to apply (StandardGate, McGate, UnitaryGate)
+    ///         - qubits: List of qubit indices
+    ///         - params: Optional list of float parameters
     ///
     /// # Example
     ///
     /// ```python
+    /// from cqlib import Circuit, StandardGate
     /// from cqlib.circuit.gate import ConditionView
     ///
     /// circuit = Circuit(2)
@@ -1249,14 +1253,118 @@ impl PyCircuit {
     ///
     /// # While qubit 0 equals 1, apply H to qubit 1
     /// condition = ConditionView(Qubit(0), 1)
-    /// circuit.while_loop(condition, [Operation.h(1)])
+    /// circuit.while_loop(condition, [(StandardGate.H, [1])])
     /// ```
-    fn while_loop(&mut self, condition: PyConditionView, body: Vec<PyOperation>) -> PyResult<()> {
-        let body_core: Vec<cqlib_core::circuit::Operation> =
-            body.into_iter().map(|op| op.operation).collect();
+    fn while_loop(
+        &mut self,
+        py: Python<'_>,
+        condition: PyConditionView,
+        body: Vec<PyOpTuple>,
+    ) -> PyResult<()> {
+        let body_core = convert_op_tuples(py, self, body)?;
 
         self.inner
             .while_loop(condition.inner, body_core)
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
+}
+
+/// A tuple representing an operation for control flow bodies.
+/// Format: (gate, qubits) or (gate, qubits, params)
+/// - gate: StandardGate, McGate, or UnitaryGate
+/// - qubits: List of qubit indices or Qubit objects
+/// - params: Optional list of parameters (float or Parameter objects)
+pub struct PyOpTuple {
+    gate: Py<PyAny>,
+    qubits: PyIntListOrQubitList,
+    params: Option<Vec<PyParamLike>>,
+}
+
+impl<'py> FromPyObject<'_, 'py> for PyOpTuple {
+    type Error = PyErr;
+
+    fn extract(obj: Borrowed<'_, 'py, PyAny>) -> Result<Self, Self::Error> {
+        if let Ok((gate, qubits)) = obj.extract::<(Py<PyAny>, PyIntListOrQubitList)>() {
+            return Ok(PyOpTuple {
+                gate,
+                qubits,
+                params: None,
+            });
+        }
+        if let Ok((gate, qubits, params)) =
+            obj.extract::<(Py<PyAny>, PyIntListOrQubitList, Option<Vec<PyParamLike>>)>()
+        {
+            return Ok(PyOpTuple {
+                gate,
+                qubits,
+                params,
+            });
+        }
+
+        Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
+            "Expected a tuple of (gate, qubits) or (gate, qubits, params)",
+        ))
+    }
+}
+
+/// Converts a list of operation tuples to core Operations.
+fn convert_op_tuples(
+    py: Python,
+    circuit: &mut PyCircuit,
+    ops: Vec<PyOpTuple>,
+) -> PyResult<Vec<Operation>> {
+    ops.into_iter()
+        .map(|op_tuple| {
+            let PyOpTuple {
+                gate: gate_obj,
+                qubits,
+                params,
+            } = op_tuple;
+            // Extract instruction from gate object
+            let instruction: Instruction;
+
+            // Check the type of gate and extract the inner instruction
+            if let Ok(std_gate) = gate_obj.cast_bound::<PyStandardGate>(py) {
+                let py_gate = std_gate.extract::<PyStandardGate>()?;
+                instruction = py_gate.inner.into();
+            } else if let Ok(mc_gate) = gate_obj.cast_bound::<PyMcGate>(py) {
+                let py_gate = mc_gate.extract::<PyMcGate>()?;
+                instruction = Instruction::McGate(Box::new(py_gate.inner));
+            } else if let Ok(u_gate) = gate_obj.cast_bound::<PyUnitaryGate>(py) {
+                let py_gate = u_gate.extract::<PyUnitaryGate>()?;
+                instruction = Instruction::UnitaryGate(Box::new(py_gate.into()));
+            } else {
+                return Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
+                    "Gate must be StandardGate, McGate, or UnitaryGate",
+                ));
+            }
+
+            // Convert qubits
+            // let qubits: Vec<Qubit> = qubits.iter().map(|&q| Qubit::new(q as u32)).collect();
+            let qubits: SmallVec<[Qubit; 3]> = qubits.into_qubits().into_iter().collect();
+            // Convert params - handle both fixed values and symbolic parameters
+            let mut circuit_params = SmallVec::new();
+            if let Some(params) = params {
+                for p in params {
+                    match p {
+                        PyParamLike::Float(f) => {
+                            circuit_params.push(CircuitParam::Fixed(f));
+                        }
+                        PyParamLike::Param(py_param) => {
+                            let param = py_param.into_inner();
+                            // Add parameter to circuit's parameter table
+                            let (index, _) = circuit.inner.add_parameter(param);
+                            circuit_params.push(CircuitParam::Index(index as u32));
+                        }
+                    }
+                }
+            }
+            Ok(Operation {
+                instruction,
+                qubits,
+                params: circuit_params,
+                label: None,
+            })
+        })
+        .collect()
 }
