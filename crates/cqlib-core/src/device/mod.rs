@@ -11,5 +11,7 @@
 // that they have been altered from the originals.
 
 mod topology;
+mod instruction_set;
 
 pub use topology::Topology;
+pub use instruction_set::InstructionSet;

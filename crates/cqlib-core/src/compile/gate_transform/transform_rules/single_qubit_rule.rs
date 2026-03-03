@@ -17,37 +17,30 @@ impl SingleQubitRule {
             "u3_rule" => Self {
                 name,
                 rule: Self::u3_rule,
-                global_phase: 0.0,
             },
             "zxz_rule" => Self {
                 name,
                 rule: Self::zxz_rule,
-                global_phase: 0.0,
             },
             "zyz_rule" => Self {
                 name,
                 rule: Self::zyz_rule,
-                global_phase: 0.0,
             },
             "xyx_rule" => Self {
                 name,
                 rule: Self::xyx_rule,
-                global_phase: 0.0,
             },
             "hrz_rule" => Self {
                 name,
                 rule: Self::hrz_rule,
-                global_phase: 0.0,
             },
             "xsxrz_rule" => Self {
                 name,
                 rule: Self::xsxrz_rule,
-                global_phase: 0.0,
             },
             "sxypmrz_rule" => Self {
                 name,
                 rule: Self::sxypmrz_rule,
-                global_phase: 0.0,
             },
             _ => panic!("Invalid single qubit rule name"),
         }
