@@ -44,7 +44,7 @@ use crate::ir::qasm2::ast::{
     Argument, Expression, OpCode, OpenQASMProgram, Statement, UnaryOpCode,
 };
 use smallvec::{SmallVec, smallvec};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 /// A trait for resolving OpenQASM source code from a path.
@@ -170,6 +170,7 @@ pub enum QasmParseError {
     MismatchedParameterCount { expected: usize, actual: usize },
     RecursionLimitExceeded(String),
     EvaluationError(String),
+    CircularGateDependency { gate: String, dependency: String },
 }
 
 impl std::fmt::Display for QasmParseError {
@@ -200,6 +201,13 @@ impl std::fmt::Display for QasmParseError {
                 write!(f, "Recursion limit exceeded: {}", s)
             }
             QasmParseError::EvaluationError(s) => write!(f, "Evaluation error: {}", s),
+            QasmParseError::CircularGateDependency { gate, dependency } => {
+                write!(
+                    f,
+                    "Circular gate dependency detected: '{}' depends on '{}'",
+                    gate, dependency
+                )
+            }
         }
     }
 }
@@ -229,6 +237,8 @@ struct AstToCircuit {
     recursion_depth: usize,
     /// Maximum allowed recursion depth
     max_recursion_depth: usize,
+    /// Tracks gates currently being compiled to detect circular dependencies
+    compiling_gates: HashSet<String>,
     /// Source resolver for abstracting file system access
     resolver: Box<dyn QasmSourceResolver>,
 }
@@ -268,6 +278,7 @@ impl AstToCircuit {
             file_cache: HashMap::new(),
             recursion_depth: 0,
             max_recursion_depth: DEFAULT_MAX_RECURSION_DEPTH,
+            compiling_gates: HashSet::new(),
             resolver,
         }
     }
@@ -328,6 +339,14 @@ impl AstToCircuit {
             )));
         }
 
+        // Check for circular dependency: if the gate is already being compiled, we have a cycle
+        if self.compiling_gates.contains(name) {
+            return Err(QasmParseError::CircularGateDependency {
+                gate: name.to_string(),
+                dependency: name.to_string(),
+            });
+        }
+
         // Check if already compiled
         if let Some(def) = self.custom_gates.get(name) {
             if def.is_opaque {
@@ -347,6 +366,9 @@ impl AstToCircuit {
             return Err(QasmParseError::UndefinedGate(name.to_string()));
         };
 
+        // Mark this gate as being compiled (for cycle detection)
+        self.compiling_gates.insert(name.to_string());
+
         // Increment recursion depth
         self.recursion_depth += 1;
 
@@ -354,6 +376,13 @@ impl AstToCircuit {
         for stmt in &body {
             if let Statement::CustomGate(dep_name, _, _) = stmt {
                 if self.custom_gates.contains_key(dep_name) {
+                    // Check if this dependency creates a cycle
+                    if self.compiling_gates.contains(dep_name) {
+                        return Err(QasmParseError::CircularGateDependency {
+                            gate: name.to_string(),
+                            dependency: dep_name.to_string(),
+                        });
+                    }
                     self.compile_gate_if_needed(dep_name)?;
                 }
             }
@@ -364,6 +393,9 @@ impl AstToCircuit {
 
         // Decrement recursion depth
         self.recursion_depth -= 1;
+
+        // Mark this gate as no longer being compiled
+        self.compiling_gates.remove(name);
 
         // Store the compiled result
         if let Some(def) = self.custom_gates.get_mut(name) {
