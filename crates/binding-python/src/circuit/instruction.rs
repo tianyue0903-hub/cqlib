@@ -13,7 +13,9 @@
 use cqlib_core::circuit::gate::instruction::Instruction;
 use pyo3::prelude::*;
 
-use crate::circuit::gates::{PyMcGate, PyStandardGate, PyUnitaryGate};
+use crate::circuit::{
+    PyControlFlow, PyDelay, PyDirective, PyMcGate, PyStandardGate, PyUnitaryGate,
+};
 
 #[pyclass(name = "Instruction", module = "cqlib.circuit")]
 #[derive(Debug, Clone)]
@@ -35,6 +37,72 @@ impl From<PyInstruction> for Instruction {
 
 #[pymethods]
 impl PyInstruction {
+    /// Creates an instruction from a standard gate.
+    ///
+    /// Args:
+    ///     gate: The standard gate.
+    #[staticmethod]
+    fn from_standard_gate(gate: PyStandardGate) -> Self {
+        PyInstruction {
+            inner: Instruction::Standard(gate.inner),
+        }
+    }
+
+    /// Creates an instruction from a multi-controlled gate.
+    ///
+    /// Args:
+    ///     gate: The multi-controlled gate.
+    #[staticmethod]
+    fn from_mc_gate(gate: PyMcGate) -> Self {
+        PyInstruction {
+            inner: Instruction::McGate(Box::new(gate.inner)),
+        }
+    }
+
+    /// Creates an instruction from a unitary gate.
+    ///
+    /// Args:
+    ///     gate: The unitary gate.
+    #[staticmethod]
+    fn from_unitary_gate(gate: PyUnitaryGate) -> Self {
+        PyInstruction {
+            inner: Instruction::UnitaryGate(Box::new(gate.into())),
+        }
+    }
+
+    /// Creates a directive instruction (barrier, measure, reset).
+    ///
+    /// Args:
+    ///     directive: The directive.
+    #[staticmethod]
+    fn from_directive(directive: PyDirective) -> Self {
+        PyInstruction {
+            inner: Instruction::Directive(directive.inner),
+        }
+    }
+
+    /// Creates a delay instruction.
+    ///
+    /// Args:
+    ///     delay: The delay operation.
+    #[staticmethod]
+    fn from_delay(_delay: PyDelay) -> Self {
+        PyInstruction {
+            inner: Instruction::Delay,
+        }
+    }
+
+    /// Creates a control flow instruction.
+    ///
+    /// Args:
+    ///     control_flow: The control flow operation.
+    #[staticmethod]
+    fn from_control_flow(control_flow: PyControlFlow) -> Self {
+        PyInstruction {
+            inner: Instruction::ControlFlowGate(control_flow.inner),
+        }
+    }
+
     /// Returns the name of the instruction.
     #[getter]
     fn name(&self) -> String {
@@ -119,6 +187,35 @@ impl PyInstruction {
     fn unitary_gate(&self) -> Option<PyUnitaryGate> {
         match &self.inner {
             Instruction::UnitaryGate(g) => Some(PyUnitaryGate::from(g.as_ref().clone())),
+            _ => None,
+        }
+    }
+
+    /// Returns true if this is a delay instruction.
+    #[getter]
+    fn is_delay(&self) -> bool {
+        matches!(self.inner, Instruction::Delay)
+    }
+
+    /// Returns true if this is a control flow instruction.
+    #[getter]
+    fn is_control_flow(&self) -> bool {
+        matches!(self.inner, Instruction::ControlFlowGate(_))
+    }
+
+    /// Returns the directive if this is a directive instruction, None otherwise.
+    #[getter]
+    fn directive(&self) -> Option<PyDirective> {
+        match &self.inner {
+            Instruction::Directive(d) => Some(PyDirective::from(*d)),
+            _ => None,
+        }
+    }
+
+    /// Returns the control flow if this is a control flow instruction, None otherwise.
+    fn control_flow(&self) -> Option<PyControlFlow> {
+        match &self.inner {
+            Instruction::ControlFlowGate(cf) => Some(PyControlFlow::from(cf.clone())),
             _ => None,
         }
     }

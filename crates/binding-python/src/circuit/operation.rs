@@ -10,6 +10,22 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
+//! Python Bindings for Quantum Circuit Operations
+//!
+//! This module provides Python bindings for [`Operation`] from cqlib-core.
+//! It represents a single, concrete execution step within a quantum circuit.
+//!
+//! # Key Components
+//!
+//! - [`PyOperation`]: A fully resolved operation binding a gate to specific qubits and parameters.
+//! - [`PyOperationIter`]: An iterator over operations in a circuit.
+//!
+//! # Operation vs Instruction
+//!
+//! While [`Instruction`](cqlib_core::circuit::gate::instruction::Instruction) defines *what* to do
+//! (e.g., "apply a Hadamard gate"), [`PyOperation`] defines *where* and *how* to do it.
+//! An operation binds an instruction to specific qubits and concrete parameter values.
+
 use crate::circuit::bit::PyQubit;
 use crate::circuit::instruction::PyInstruction;
 use cqlib_core::circuit::operation::Operation;
@@ -19,6 +35,24 @@ use pyo3::IntoPyObjectExt;
 use pyo3::prelude::*;
 use std::sync::Arc;
 
+/// Python wrapper for `Operation`.
+///
+/// Represents a fully resolved operation in a quantum circuit.
+/// Each operation binds a gate (instruction) to specific qubits and parameters.
+///
+/// # Examples
+///
+/// ```python
+/// from cqlib import Circuit
+///
+/// circuit = Circuit(2)
+/// circuit.h(0)
+/// circuit.cx(0, 1)
+/// circuit.rx(0, 0.5)
+///
+/// for op in circuit.operations():
+///     print(f"Gate: {op.name}, Qubits: {op.num_qubits}")
+/// ```
 #[pyclass(name = "Operation", module = "cqlib.circuit")]
 #[derive(Debug, Clone)]
 pub struct PyOperation {
@@ -40,12 +74,16 @@ impl From<PyOperation> for Operation {
 #[pymethods]
 impl PyOperation {
     /// Returns the instruction (gate type) of this operation.
+    ///
+    /// The instruction defines what type of gate or operation to apply.
     #[getter]
     fn instruction(&self) -> PyInstruction {
         PyInstruction::from(self.operation.instruction.clone())
     }
 
     /// Returns the qubits this operation acts on.
+    ///
+    /// For controlled gates, control qubits usually come first, followed by target qubits.
     #[getter]
     fn qubits(&self) -> Vec<PyQubit> {
         self.operation
@@ -62,7 +100,10 @@ impl PyOperation {
     }
 
     /// Returns the parameters of this operation.
-    /// Parameters can be either fixed float values or symbolic parameters.
+    ///
+    /// Parameters can be either:
+    /// - Fixed float values (e.g., `0.5` for rotation angle)
+    /// - Symbolic parameter indices (returned as tuple `("param", index)`)
     #[getter]
     fn params(&self, py: Python<'_>) -> PyResult<Vec<Py<PyAny>>> {
         let mut result = Vec::with_capacity(self.operation.params.len());
@@ -82,6 +123,15 @@ impl PyOperation {
         Ok(result)
     }
 
+    /// Returns the unitary matrix representation of this operation.
+    ///
+    /// # Returns
+    ///
+    /// A 2D numpy array (dtype=complex128) representing the unitary matrix.
+    ///
+    /// # Raises
+    ///
+    /// RuntimeError if the operation is non-unitary (e.g., Measure, Barrier).
     fn matrix(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let matrix_cow = self
             .operation
@@ -103,6 +153,8 @@ impl PyOperation {
     }
 
     /// Returns the name of the instruction.
+    ///
+    /// Examples: "h", "cx", "rx", "measure"
     #[getter]
     fn name(&self) -> String {
         format!("{}", self.operation.instruction)
@@ -126,6 +178,7 @@ impl PyOperation {
     }
 }
 
+/// Iterator over operations in a circuit.
 #[pyclass]
 pub struct PyOperationIter {
     ops: Arc<Vec<Operation>>,
@@ -151,6 +204,7 @@ impl PyOperationIter {
 }
 
 impl PyOperationIter {
+    /// Creates a new operation iterator.
     pub fn new(ops: Vec<Operation>, index: usize) -> Self {
         Self {
             ops: Arc::new(ops),

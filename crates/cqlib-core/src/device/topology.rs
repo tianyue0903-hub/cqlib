@@ -17,40 +17,10 @@
 //! and edges represent the coupling (entanglement capability) between qubits.
 
 use crate::circuit::Qubit;
+use crate::device::error::TopologyError;
 use rustworkx_core::petgraph::prelude::{NodeIndex, StableGraph};
 use rustworkx_core::petgraph::visit::EdgeRef;
 use std::collections::HashMap;
-use std::fmt;
-
-/// Errors that can occur when operating on a Topology.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TopologyError {
-    /// Tried to operate on a qubit that doesn't exist in the topology.
-    QubitNotFound(Qubit),
-    /// Tried to operate on a coupling edge that doesn't exist.
-    CouplingNotFound { control: Qubit, target: Qubit },
-    /// Tried to add a duplicate qubit.
-    QubitAlreadyExists(Qubit),
-    /// Tried to add a duplicate coupling.
-    CouplingAlreadyExists { control: Qubit, target: Qubit },
-}
-
-impl fmt::Display for TopologyError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            TopologyError::QubitNotFound(q) => write!(f, "Qubit {:?} not found", q),
-            TopologyError::CouplingNotFound { control, target } => {
-                write!(f, "Coupling ({:?} -> {:?}) not found", control, target)
-            }
-            TopologyError::QubitAlreadyExists(q) => write!(f, "Qubit {:?} already exists", q),
-            TopologyError::CouplingAlreadyExists { control, target } => {
-                write!(f, "Coupling ({:?} -> {:?}) already exists", control, target)
-            }
-        }
-    }
-}
-
-impl std::error::Error for TopologyError {}
 
 /// Represents the coupling/connectivity of a quantum device.
 ///

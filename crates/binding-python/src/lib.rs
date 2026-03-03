@@ -16,7 +16,10 @@ pub mod ir;
 
 use pyo3::prelude::*;
 
-use crate::circuit::gates::{PyCircuitGate, PyMcGate, PyStandardGate, PyUnitaryGate};
+use crate::circuit::gate::{
+    PyCircuitGate, PyConditionView, PyIfElseGate, PyMcGate, PyStandardGate, PyUnitaryGate,
+    PyWhileLoopGate,
+};
 use circuit::circuit_to_matrix;
 use circuit::{PyCircuit, PyInstruction, PyOperation, PyParameter, PyQubit};
 use compile::{PySabreConfig, PyTopology};
@@ -36,6 +39,9 @@ fn binding_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyInstruction>()?;
     m.add_class::<PyTopology>()?;
     m.add_class::<PySabreConfig>()?;
+    m.add_class::<PyIfElseGate>()?;
+    m.add_class::<PyWhileLoopGate>()?;
+    m.add_class::<PyConditionView>()?;
 
     m.add_function(wrap_pyfunction!(ir::py_qasm2_load, m)?)?;
     m.add_function(wrap_pyfunction!(ir::py_qasm2_loads, m)?)?;
@@ -59,7 +65,7 @@ fn binding_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(compile::py_map_with_vf2_sabre, m)?)?;
 
     // Register static gate instances (H, X, etc.) to StandardGate class
-    circuit::gates::standard::register_gates(m)?;
+    circuit::gate::standard::register_gates(m)?;
 
     Ok(())
 }

@@ -822,3 +822,132 @@ fn test_if_statement_param_evaluation() {
         }
     }
 }
+
+#[test]
+fn test_if_statement_undefined_symbol_fails() {
+    // OpenQASM 2.0 does not support global variables or parameters.
+    // Using undefined symbols like 'theta' should be an error.
+    let qasm_undefined = r#"
+        OPENQASM 2.0;
+        qreg q[1];
+        creg c[1];
+        if (c==1) rx(theta) q[0];
+    "#;
+
+    let result = loads(qasm_undefined);
+    assert!(
+        result.is_err(),
+        "Undefined symbol 'theta' should cause an error"
+    );
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("Unknown parameter") || err.contains("Evaluation error"),
+        "Expected 'Unknown parameter' or 'Evaluation error', got: {}",
+        err
+    );
+}
+
+#[test]
+fn test_if_statement_multibit_register_fails() {
+    // The backend only supports single-bit conditions.
+    // Using a multi-bit register should fail with a clear error.
+    let qasm_multibit = r#"
+        OPENQASM 2.0;
+        qreg q[2];
+        creg c_reg[3];
+        h q[0];
+        measure q[0] -> c_reg[0];
+        if (c_reg==1) x q[1];
+    "#;
+
+    let result = loads(qasm_multibit);
+    assert!(
+        result.is_err(),
+        "Multi-bit register condition should cause an error"
+    );
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("single-bit conditions") || err.contains("not supported"),
+        "Expected error about single-bit conditions, got: {}",
+        err
+    );
+}
+
+#[test]
+fn test_memory_resolver_include() {
+    // Test the source resolver abstraction using a mock memory resolver
+    use std::collections::HashMap;
+    use std::path::{Path, PathBuf};
+
+    /// A mock resolver that serves files from memory
+    struct MemoryResolver {
+        files: HashMap<PathBuf, String>,
+    }
+
+    impl MemoryResolver {
+        fn new() -> Self {
+            let mut files = HashMap::new();
+            // Add a mock include file
+            files.insert(
+                PathBuf::from("mylib.inc"),
+                r#"
+                gate my_gate a {
+                    h a;
+                    x a;
+                }
+                "#
+                .to_string(),
+            );
+            Self { files }
+        }
+    }
+
+    impl QasmSourceResolver for MemoryResolver {
+        fn resolve_source(&self, path: &Path) -> Result<String, String> {
+            self.files
+                .get(path)
+                .cloned()
+                .ok_or_else(|| format!("File not found: {:?}", path))
+        }
+    }
+
+    // Test parsing with the mock resolver
+    let qasm_with_include = r#"
+        OPENQASM 2.0;
+        include "mylib.inc";
+        qreg q[1];
+        my_gate q[0];
+    "#;
+
+    // Use the internal parser with our mock resolver
+    let resolver = Box::new(MemoryResolver::new());
+    let result = parse_qasm_with_context(qasm_with_include, None, resolver);
+
+    assert!(
+        result.is_ok(),
+        "Memory resolver should work: {:?}",
+        result.err()
+    );
+    let circuit = result.unwrap();
+    assert_eq!(circuit.num_qubits(), 1);
+}
+
+#[test]
+fn test_null_resolver_recludes_includes() {
+    // Test that NullResolver rejects include statements
+    let qasm_with_include = r#"
+        OPENQASM 2.0;
+        include "somefile.inc";
+        qreg q[1];
+    "#;
+
+    // loads uses NullResolver, so includes should fail
+    let result = loads(qasm_with_include);
+    assert!(result.is_err(), "Include in raw string mode should fail");
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("raw string mode") || err.contains("Cannot include"),
+        "Expected error about raw string mode, got: {}",
+        err
+    );
+}
