@@ -37,7 +37,7 @@ use crate::circuit::gate::circuit_gate::{CircuitGate, FrozenCircuit};
 use crate::circuit::gate::control_flow::{ConditionView, ControlFlow, IfElseGate};
 use crate::circuit::gate::{Directive, Instruction, StandardGate};
 use crate::circuit::operation::Operation;
-use crate::circuit::param::ParameterValue;
+use crate::circuit::param::{CircuitParam, ParameterValue};
 
 use crate::circuit::parameter::Parameter;
 use crate::ir::qasm2::ast::{
@@ -45,8 +45,39 @@ use crate::ir::qasm2::ast::{
 };
 use smallvec::{SmallVec, smallvec};
 use std::collections::HashMap;
-use std::fs;
 use std::path::{Path, PathBuf};
+
+// =============================================================================
+// Source Resolver Abstraction (for WASM/Browser support)
+// =============================================================================
+
+/// A trait for resolving OpenQASM source code from a path.
+/// This allows abstracting away the file system for WASM or memory-based environments.
+pub trait QasmSourceResolver {
+    /// Resolve the content of a file given its path.
+    fn resolve_source(&self, path: &Path) -> Result<String, String>;
+}
+
+/// Default resolver that uses the real file system.
+pub struct FileSystemResolver;
+
+impl QasmSourceResolver for FileSystemResolver {
+    fn resolve_source(&self, path: &Path) -> Result<String, String> {
+        std::fs::read_to_string(path).map_err(|e| e.to_string())
+    }
+}
+
+/// A null resolver that fails on any include. Used when loading raw strings without context.
+pub struct NullResolver;
+
+impl QasmSourceResolver for NullResolver {
+    fn resolve_source(&self, path: &Path) -> Result<String, String> {
+        Err(format!(
+            "Cannot include files in raw string mode (path: {:?})",
+            path
+        ))
+    }
+}
 
 /// Built-in qelib1.inc content
 const QELIB1: &str = include_str!("qelib1.inc");
@@ -75,6 +106,14 @@ const QELIB1_STANDARD_GATES: &[&str] = &[
     "u1", "U1", // mapped to StandardGate::Phase
     "u2", "U2", // decomposed to U gate
     "u3", "U3", // mapped to StandardGate::U
+    // Additional standard gates
+    "rxx", "RXX", // mapped to StandardGate::RXX
+    "ryy", "RYY", // mapped to StandardGate::RYY
+    "rzz", "RZZ", // mapped to StandardGate::RZZ
+    "fsim", "FSIM", // mapped to StandardGate::FSIM
+    "crx", "CRX", // mapped to StandardGate::CRX
+    "cry", "CRY", // mapped to StandardGate::CRY
+    "crz", "CRZ", // mapped to StandardGate::CRZ
 ];
 
 #[rustfmt::skip]
@@ -85,22 +124,31 @@ mod parser {
 /// Parse OpenQASM 2.0 file and convert to Circuit
 pub fn load<P: AsRef<Path>>(path: P) -> Result<Circuit, QasmParseError> {
     let path = path.as_ref();
-    let content = fs::read_to_string(path).map_err(|e| QasmParseError::IoError(e.to_string()))?;
+
+    // Use FileSystemResolver for file-based loading
+    let resolver = Box::new(FileSystemResolver);
+
+    // Get content using the resolver
+    let content = resolver
+        .resolve_source(path)
+        .map_err(|e| QasmParseError::IoError(e))?;
 
     // Pass the parent directory as the base path for includes
     let base_path = path.parent().map(|p| p.to_path_buf());
 
-    parse_qasm_with_path(&content, base_path)
+    parse_qasm_with_context(&content, base_path, resolver)
 }
 
 /// Parse OpenQASM 2.0 string and convert to Circuit
 pub fn loads(source: &str) -> Result<Circuit, QasmParseError> {
-    parse_qasm_with_path(source, None)
+    // Use NullResolver for string-based loading (no file includes allowed)
+    parse_qasm_with_context(source, None, Box::new(NullResolver))
 }
 
-fn parse_qasm_with_path(
+fn parse_qasm_with_context(
     source: &str,
     base_path: Option<PathBuf>,
+    resolver: Box<dyn QasmSourceResolver>,
 ) -> Result<Circuit, QasmParseError> {
     let parser = parser::MainParser::new();
     let program = match parser.parse(source) {
@@ -108,7 +156,7 @@ fn parse_qasm_with_path(
         Err(e) => return Err(QasmParseError::ParseError(format!("{:?}", e))),
     };
 
-    let mut converter = AstToCircuit::new(base_path);
+    let mut converter = AstToCircuit::new(base_path, resolver);
     converter.convert(&program)
 }
 
@@ -185,6 +233,16 @@ struct AstToCircuit {
     recursion_depth: usize,
     /// Maximum allowed recursion depth
     max_recursion_depth: usize,
+    /// Source resolver for abstracting file system access
+    resolver: Box<dyn QasmSourceResolver>,
+}
+
+/// Enum to distinguish between a specific classical bit reference and a whole register reference.
+enum ClassicalRef {
+    /// A specific bit reference, e.g., "c[0]"
+    Single(String, usize),
+    /// A whole register reference, e.g., "c"
+    Whole(String),
 }
 
 /// A custom gate definition that stores either AST or compiled CircuitGate
@@ -203,7 +261,7 @@ struct CustomGateDef {
 }
 
 impl AstToCircuit {
-    fn new(base_path: Option<PathBuf>) -> Self {
+    fn new(base_path: Option<PathBuf>, resolver: Box<dyn QasmSourceResolver>) -> Self {
         Self {
             qregs: HashMap::new(),
             qreg_order: Vec::new(),
@@ -214,6 +272,7 @@ impl AstToCircuit {
             file_cache: HashMap::new(),
             recursion_depth: 0,
             max_recursion_depth: DEFAULT_MAX_RECURSION_DEPTH,
+            resolver,
         }
     }
 
@@ -357,16 +416,13 @@ impl AstToCircuit {
 
                     if !self.file_cache.contains_key(&target_path) {
                         let content_res = if filename == "qelib1.inc" {
+                            // Built-in qelib1.inc content - always available
                             Ok(QELIB1.to_string())
-                        } else if target_path.exists() {
-                            fs::read_to_string(&target_path).map_err(|e| {
+                        } else {
+                            // Use resolver for external files
+                            self.resolver.resolve_source(&target_path).map_err(|e| {
                                 QasmParseError::IoError(format!("Include {}: {}", filename, e))
                             })
-                        } else {
-                            Err(QasmParseError::IoError(format!(
-                                "Include file not found: {:?}",
-                                target_path
-                            )))
                         };
 
                         let content = content_res?;
@@ -585,7 +641,176 @@ impl AstToCircuit {
         }
     }
 
-    /// Append a standard gate to the circuit
+    /// Build a standard gate instruction with validated parameters.
+    ///
+    /// This centralized function handles all standard gate name matching, qubit/parameter count
+    /// validation, and special parameter transformations (like U2).
+    ///
+    /// Returns the Instruction and the validated ParameterValues to use.
+    fn build_standard_gate_instruction(
+        name: &str,
+        params: &[ParameterValue],
+        qubits: &[Qubit],
+    ) -> Result<(Instruction, Vec<ParameterValue>), QasmParseError> {
+        // Helper closure for checking qubit and parameter counts
+        let check_counts = |req_q: usize, req_p: usize| -> Result<(), QasmParseError> {
+            if qubits.len() != req_q {
+                return Err(QasmParseError::MismatchedQubitCount {
+                    expected: req_q,
+                    actual: qubits.len(),
+                });
+            }
+            if params.len() != req_p {
+                return Err(QasmParseError::MismatchedParameterCount {
+                    expected: req_p,
+                    actual: params.len(),
+                });
+            }
+            Ok(())
+        };
+
+        match name {
+            // --- Gates with special parameter handling ---
+            "u2" | "U2" => {
+                check_counts(1, 2)?;
+                // U2(phi, lambda) = U(pi/2, phi, lambda)
+                let pi_2 = ParameterValue::Param(Parameter::pi() / 2.0);
+                let new_params = vec![pi_2, params[0].clone(), params[1].clone()];
+                Ok((Instruction::Standard(StandardGate::U), new_params))
+            }
+
+            // --- Standard Parametrized Gates (1 qubit, 1 param) ---
+            "rx" | "RX" => {
+                check_counts(1, 1)?;
+                Ok((Instruction::Standard(StandardGate::RX), params.to_vec()))
+            }
+            "ry" | "RY" => {
+                check_counts(1, 1)?;
+                Ok((Instruction::Standard(StandardGate::RY), params.to_vec()))
+            }
+            "rz" | "RZ" | "p" | "P" => {
+                check_counts(1, 1)?;
+                Ok((Instruction::Standard(StandardGate::RZ), params.to_vec()))
+            }
+            "u1" | "U1" => {
+                check_counts(1, 1)?;
+                Ok((Instruction::Standard(StandardGate::Phase), params.to_vec()))
+            }
+
+            // --- Standard Parametrized Gates (1 qubit, 3 params) ---
+            "u3" | "U3" | "u" | "U" => {
+                check_counts(1, 3)?;
+                Ok((Instruction::Standard(StandardGate::U), params.to_vec()))
+            }
+
+            // --- Two-qubit parametric gates ---
+            "rxx" | "RXX" => {
+                check_counts(2, 1)?;
+                Ok((Instruction::Standard(StandardGate::RXX), params.to_vec()))
+            }
+            "ryy" | "RYY" => {
+                check_counts(2, 1)?;
+                Ok((Instruction::Standard(StandardGate::RYY), params.to_vec()))
+            }
+            "rzz" | "RZZ" => {
+                check_counts(2, 1)?;
+                Ok((Instruction::Standard(StandardGate::RZZ), params.to_vec()))
+            }
+            "fsim" | "FSIM" => {
+                check_counts(2, 2)?;
+                Ok((Instruction::Standard(StandardGate::FSIM), params.to_vec()))
+            }
+
+            // --- Controlled rotation gates (2 qubits, 1 param) ---
+            "crx" | "CRX" => {
+                check_counts(2, 1)?;
+                Ok((Instruction::Standard(StandardGate::CRX), params.to_vec()))
+            }
+            "cry" | "CRY" => {
+                check_counts(2, 1)?;
+                Ok((Instruction::Standard(StandardGate::CRY), params.to_vec()))
+            }
+            "crz" | "CRZ" => {
+                check_counts(2, 1)?;
+                Ok((Instruction::Standard(StandardGate::CRZ), params.to_vec()))
+            }
+
+            // --- Simple single-qubit gates (No params) ---
+            "h" | "H" => {
+                check_counts(1, 0)?;
+                Ok((Instruction::Standard(StandardGate::H), vec![]))
+            }
+            "x" | "X" => {
+                check_counts(1, 0)?;
+                Ok((Instruction::Standard(StandardGate::X), vec![]))
+            }
+            "y" | "Y" => {
+                check_counts(1, 0)?;
+                Ok((Instruction::Standard(StandardGate::Y), vec![]))
+            }
+            "z" | "Z" => {
+                check_counts(1, 0)?;
+                Ok((Instruction::Standard(StandardGate::Z), vec![]))
+            }
+            "s" | "S" => {
+                check_counts(1, 0)?;
+                Ok((Instruction::Standard(StandardGate::S), vec![]))
+            }
+            "sdg" | "SDG" => {
+                check_counts(1, 0)?;
+                Ok((Instruction::Standard(StandardGate::SDG), vec![]))
+            }
+            "t" | "T" => {
+                check_counts(1, 0)?;
+                Ok((Instruction::Standard(StandardGate::T), vec![]))
+            }
+            "tdg" | "TDG" => {
+                check_counts(1, 0)?;
+                Ok((Instruction::Standard(StandardGate::TDG), vec![]))
+            }
+            "sx" | "SX" => {
+                check_counts(1, 0)?;
+                Ok((Instruction::Standard(StandardGate::X2P), vec![]))
+            }
+            "sxdg" | "SXDG" => {
+                check_counts(1, 0)?;
+                Ok((Instruction::Standard(StandardGate::X2M), vec![]))
+            }
+            "id" | "ID" | "i" | "I" => {
+                check_counts(1, 0)?;
+                Ok((Instruction::Standard(StandardGate::I), vec![]))
+            }
+
+            // --- Two-qubit gates (No params) ---
+            "cx" | "CX" => {
+                check_counts(2, 0)?;
+                Ok((Instruction::Standard(StandardGate::CX), vec![]))
+            }
+            "cy" | "CY" => {
+                check_counts(2, 0)?;
+                Ok((Instruction::Standard(StandardGate::CY), vec![]))
+            }
+            "cz" | "CZ" => {
+                check_counts(2, 0)?;
+                Ok((Instruction::Standard(StandardGate::CZ), vec![]))
+            }
+            "swap" | "SWAP" => {
+                check_counts(2, 0)?;
+                Ok((Instruction::Standard(StandardGate::SWAP), vec![]))
+            }
+
+            // --- Three-qubit gates (No params) ---
+            "ccx" | "CCX" | "toffoli" | "TOFFOLI" => {
+                check_counts(3, 0)?;
+                Ok((Instruction::Standard(StandardGate::CCX), vec![]))
+            }
+
+            // --- Error Case ---
+            _ => Err(QasmParseError::UndefinedGate(name.to_string())),
+        }
+    }
+
+    /// Append a standard gate to the circuit (used in gate declarations)
     fn append_standard_gate(
         &self,
         circuit: &mut Circuit,
@@ -593,204 +818,11 @@ impl AstToCircuit {
         params: &[ParameterValue],
         qubits: &[Qubit],
     ) -> Result<(), QasmParseError> {
-        let p = |i: usize| {
-            params
-                .get(i)
-                .cloned()
-                .ok_or(QasmParseError::MismatchedParameterCount {
-                    expected: i + 1,
-                    actual: params.len(),
-                })
-        };
-        let q = |i: usize| {
-            qubits
-                .get(i)
-                .cloned()
-                .ok_or(QasmParseError::MismatchedQubitCount {
-                    expected: i + 1,
-                    actual: qubits.len(),
-                })
-        };
-
-        match name {
-            "h" | "H" => {
-                let q0 = q(0)?;
-                circuit
-                    .append(Instruction::Standard(StandardGate::H), [q0], [], None)
-                    .map_err(|e| QasmParseError::ConversionError(e.to_string()))?;
-            }
-            "x" | "X" => {
-                let q0 = q(0)?;
-                circuit
-                    .append(Instruction::Standard(StandardGate::X), [q0], [], None)
-                    .map_err(|e| QasmParseError::ConversionError(e.to_string()))?;
-            }
-            "y" | "Y" => {
-                let q0 = q(0)?;
-                circuit
-                    .append(Instruction::Standard(StandardGate::Y), [q0], [], None)
-                    .map_err(|e| QasmParseError::ConversionError(e.to_string()))?;
-            }
-            "z" | "Z" => {
-                let q0 = q(0)?;
-                circuit
-                    .append(Instruction::Standard(StandardGate::Z), [q0], [], None)
-                    .map_err(|e| QasmParseError::ConversionError(e.to_string()))?;
-            }
-            "s" | "S" => {
-                let q0 = q(0)?;
-                circuit
-                    .append(Instruction::Standard(StandardGate::S), [q0], [], None)
-                    .map_err(|e| QasmParseError::ConversionError(e.to_string()))?;
-            }
-            "sdg" | "SDG" => {
-                let q0 = q(0)?;
-                circuit
-                    .append(Instruction::Standard(StandardGate::SDG), [q0], [], None)
-                    .map_err(|e| QasmParseError::ConversionError(e.to_string()))?;
-            }
-            "t" | "T" => {
-                let q0 = q(0)?;
-                circuit
-                    .append(Instruction::Standard(StandardGate::T), [q0], [], None)
-                    .map_err(|e| QasmParseError::ConversionError(e.to_string()))?;
-            }
-            "tdg" | "TDG" => {
-                let q0 = q(0)?;
-                circuit
-                    .append(Instruction::Standard(StandardGate::TDG), [q0], [], None)
-                    .map_err(|e| QasmParseError::ConversionError(e.to_string()))?;
-            }
-            "sx" | "SX" => {
-                let q0 = q(0)?;
-                circuit
-                    .append(Instruction::Standard(StandardGate::X2P), [q0], [], None)
-                    .map_err(|e| QasmParseError::ConversionError(e.to_string()))?;
-            }
-            "sxdg" | "SXDG" => {
-                let q0 = q(0)?;
-                circuit
-                    .append(Instruction::Standard(StandardGate::X2M), [q0], [], None)
-                    .map_err(|e| QasmParseError::ConversionError(e.to_string()))?;
-            }
-            "rx" | "RX" => {
-                let q0 = q(0)?;
-                circuit
-                    .append(Instruction::Standard(StandardGate::RX), [q0], [p(0)?], None)
-                    .map_err(|e| QasmParseError::ConversionError(e.to_string()))?;
-            }
-            "ry" | "RY" => {
-                let q0 = q(0)?;
-                circuit
-                    .append(Instruction::Standard(StandardGate::RY), [q0], [p(0)?], None)
-                    .map_err(|e| QasmParseError::ConversionError(e.to_string()))?;
-            }
-            "rz" | "RZ" | "p" | "P" => {
-                let q0 = q(0)?;
-                circuit
-                    .append(Instruction::Standard(StandardGate::RZ), [q0], [p(0)?], None)
-                    .map_err(|e| QasmParseError::ConversionError(e.to_string()))?;
-            }
-            "u1" | "U1" => {
-                let q0 = q(0)?;
-                circuit
-                    .append(
-                        Instruction::Standard(StandardGate::Phase),
-                        [q0],
-                        [p(0)?],
-                        None,
-                    )
-                    .map_err(|e| QasmParseError::ConversionError(e.to_string()))?;
-            }
-            "u2" | "U2" => {
-                let q0 = q(0)?;
-                // U2(phi, lambda) = U(pi/2, phi, lambda)
-                let pi_2 = ParameterValue::Param(Parameter::pi() / 2.0);
-                circuit
-                    .append(
-                        Instruction::Standard(StandardGate::U),
-                        [q0],
-                        [pi_2, p(0)?, p(1)?],
-                        None,
-                    )
-                    .map_err(|e| QasmParseError::ConversionError(e.to_string()))?;
-            }
-            "u3" | "U3" | "u" | "U" => {
-                // Built-in U gate (primitive)
-                let q0 = q(0)?;
-                circuit
-                    .append(
-                        Instruction::Standard(StandardGate::U),
-                        [q0],
-                        [p(0)?, p(1)?, p(2)?],
-                        None,
-                    )
-                    .map_err(|e| QasmParseError::ConversionError(e.to_string()))?;
-            }
-            "cx" => {
-                let q0 = q(0)?;
-                let q1 = q(1)?;
-                circuit
-                    .append(Instruction::Standard(StandardGate::CX), [q0, q1], [], None)
-                    .map_err(|e| QasmParseError::ConversionError(e.to_string()))?;
-            }
-            "CX" => {
-                // Built-in CX gate (primitive)
-                let q0 = q(0)?;
-                let q1 = q(1)?;
-                circuit
-                    .append(Instruction::Standard(StandardGate::CX), [q0, q1], [], None)
-                    .map_err(|e| QasmParseError::ConversionError(e.to_string()))?;
-            }
-            "cy" | "CY" => {
-                let q0 = q(0)?;
-                let q1 = q(1)?;
-                circuit
-                    .append(Instruction::Standard(StandardGate::CY), [q0, q1], [], None)
-                    .map_err(|e| QasmParseError::ConversionError(e.to_string()))?;
-            }
-            "cz" | "CZ" => {
-                let q0 = q(0)?;
-                let q1 = q(1)?;
-                circuit
-                    .append(Instruction::Standard(StandardGate::CZ), [q0, q1], [], None)
-                    .map_err(|e| QasmParseError::ConversionError(e.to_string()))?;
-            }
-            "swap" | "SWAP" => {
-                let q0 = q(0)?;
-                let q1 = q(1)?;
-                circuit
-                    .append(
-                        Instruction::Standard(StandardGate::SWAP),
-                        [q0, q1],
-                        [],
-                        None,
-                    )
-                    .map_err(|e| QasmParseError::ConversionError(e.to_string()))?;
-            }
-            "ccx" | "CCX" => {
-                let q0 = q(0)?;
-                let q1 = q(1)?;
-                let q2 = q(2)?;
-                circuit
-                    .append(
-                        Instruction::Standard(StandardGate::CCX),
-                        [q0, q1, q2],
-                        [],
-                        None,
-                    )
-                    .map_err(|e| QasmParseError::ConversionError(e.to_string()))?;
-            }
-            "id" | "ID" => {
-                let q0 = q(0)?;
-                circuit
-                    .append(Instruction::Standard(StandardGate::I), [q0], [], None)
-                    .map_err(|e| QasmParseError::ConversionError(e.to_string()))?;
-            }
-            _ => {
-                return Err(QasmParseError::UndefinedGate(name.to_string()));
-            }
-        }
+        let (instruction, valid_params) =
+            Self::build_standard_gate_instruction(name, params, qubits)?;
+        circuit
+            .append(instruction, qubits.to_vec(), valid_params, None)
+            .map_err(|e| QasmParseError::ConversionError(e.to_string()))?;
         Ok(())
     }
 
@@ -912,40 +944,55 @@ impl AstToCircuit {
                     }
                 }
                 Statement::If(creg, value, stmt) => {
-                    // Parse if statement: if (creg == value) stmt
-                    // creg format: "c" or "c[0]"
-                    // value: the classical value to compare against (usually 0 or 1)
+                    // 1. Parse the classical register reference
+                    let creg_ref = Self::parse_creg_reference(creg)?;
 
-                    // Extract creg name and index
-                    let (creg_name, creg_index) = Self::parse_creg_reference(creg)?;
+                    // 2. Resolve to name and index, enforcing backend limitations
+                    let (target_name, target_index) = match creg_ref {
+                        ClassicalRef::Single(name, idx) => (name, idx),
+                        ClassicalRef::Whole(name) => {
+                            let size = *self.cregs.get(&name).ok_or_else(|| {
+                                QasmParseError::UndefinedRegister(format!(
+                                    "Classical register '{}' not defined",
+                                    name
+                                ))
+                            })?;
 
-                    // First, convert the inner statement to Operation
+                            if size > 1 {
+                                return Err(QasmParseError::ConversionError(format!(
+                                    "Unsupported: The backend only supports single-bit conditions. Register '{}' has {} bits.",
+                                    name, size
+                                )));
+                            }
+                            // If size is 1, treat "c" as "c[0]"
+                            (name, 0)
+                        }
+                    };
+
+                    // 3. Convert inner statement to operations
+                    // Note: Symbolic parameters are NOT allowed in if bodies per OpenQASM 2.0 spec
                     let true_body = self.statement_to_operations(stmt, reg_start_map)?;
 
-                    // Then, find the qubit that corresponds to this creg index
+                    // 4. Find the corresponding measured qubit
                     let condition_qubit = self
                         .creg_to_qubit_map
-                        .get(&(creg_name.clone(), creg_index))
+                        .get(&(target_name.clone(), target_index))
                         .ok_or_else(|| {
                             QasmParseError::ConversionError(format!(
-                                "No measurement found for classical register '{}' at index {}. {}",
-                                creg_name,
-                                creg_index,
-                                "If statements require a prior measurement to establish the condition."
+                                "No measurement found for classical bit '{}[{}]'. Conditional operations require a prior measurement.",
+                                target_name, target_index
                             ))
                         })?;
 
-                    // Create ConditionView
+                    // 5. Create ConditionView and IfElseGate
                     let condition = ConditionView::new(*condition_qubit, *value as u8);
-
-                    // Create IfElseGate
                     let if_else_gate = IfElseGate::new(condition, true_body, None);
 
-                    // Add to circuit as ControlFlow
+                    // 6. Add to circuit as ControlFlow
                     circuit
                         .append(
                             Instruction::ControlFlowGate(ControlFlow::IfElse(if_else_gate)),
-                            vec![*condition_qubit], // Include condition qubit
+                            vec![*condition_qubit],
                             std::iter::empty(),
                             None,
                         )
@@ -1077,35 +1124,34 @@ impl AstToCircuit {
         Ok(indices)
     }
 
-    /// Parse classical register reference from if statement
-    /// Handles formats like "c" -> (c, 0) or "c[0]" -> (c, 0)
-    fn parse_creg_reference(creg: &str) -> Result<(String, usize), QasmParseError> {
-        if creg.contains('[') && creg.contains(']') {
-            // Format: "c[0]"
-            let parts: Vec<&str> = creg.split('[').collect();
-            if parts.len() != 2 {
-                return Err(QasmParseError::InvalidArgument(format!(
-                    "Invalid classical register reference: {}",
+    /// Parse classical register reference from if statement.
+    /// Handles formats like "c" (whole register) or "c[0]" (single bit).
+    fn parse_creg_reference(creg: &str) -> Result<ClassicalRef, QasmParseError> {
+        if let Some(start) = creg.find('[') {
+            if let Some(end) = creg.find(']') {
+                let name = creg[0..start].to_string();
+                let index_str = &creg[start + 1..end];
+                let index: usize = index_str.parse().map_err(|_| {
+                    QasmParseError::InvalidArgument(format!(
+                        "Invalid register index: {}",
+                        index_str
+                    ))
+                })?;
+                Ok(ClassicalRef::Single(name, index))
+            } else {
+                Err(QasmParseError::InvalidArgument(format!(
+                    "Unclosed bracket in: {}",
                     creg
-                )));
+                )))
             }
-            let name = parts[0].to_string();
-            let index_str = parts[1].trim_end_matches(']');
-            let index: usize = index_str.parse().map_err(|_| {
-                QasmParseError::InvalidArgument(format!(
-                    "Invalid classical register index: {}",
-                    index_str
-                ))
-            })?;
-            Ok((name, index))
         } else {
-            // Format: "c" - assume index 0
-            Ok((creg.to_string(), 0))
+            // No brackets means whole register reference
+            Ok(ClassicalRef::Whole(creg.to_string()))
         }
     }
 
-    /// Convert a single Statement to Operations for use in if-else body
-    /// For symbolic parameters in if-body, we try to evaluate them or return an error
+    /// Convert a single Statement to Operations for use in if-else body.
+    /// Note: Symbolic parameters are NOT allowed in conditional bodies per OpenQASM 2.0 spec.
     fn statement_to_operations(
         &mut self,
         stmt: &Statement,
@@ -1115,7 +1161,7 @@ impl AstToCircuit {
 
         match stmt {
             Statement::CustomGate(name, params, args) => {
-                // Convert parameters
+                // Convert parameters - symbolic parameters are NOT allowed in if bodies
                 let mut param_values: SmallVec<[ParameterValue; 3]> = smallvec![];
                 let empty_param_map: HashMap<String, Parameter> = HashMap::new();
                 for e in params {
@@ -1128,44 +1174,42 @@ impl AstToCircuit {
                 // Try to find the gate definition
                 if let Some(gate_def) = self.custom_gates.get(name) {
                     if let Some(ref cg) = gate_def.circuit_gate {
+                        // Strict conversion: symbolic parameters are not allowed
+                        let mut circuit_params = SmallVec::new();
+                        for pv in param_values {
+                            match pv {
+                                ParameterValue::Fixed(v) => {
+                                    circuit_params.push(CircuitParam::Fixed(v))
+                                }
+                                ParameterValue::Param(p) => {
+                                    return Err(QasmParseError::ConversionError(format!(
+                                        "Symbolic parameters (like '{}') are not allowed in conditional 'if' statements. Only constants are permitted.",
+                                        p
+                                    )));
+                                }
+                            }
+                        }
                         operations.push(Operation {
                             instruction: Instruction::CircuitGate(Box::new(cg.clone())),
                             qubits: qubits.into(),
-                            params: param_values
-                                .into_iter()
-                                .map(|pv| match pv {
-                                    ParameterValue::Fixed(v) => {
-                                        crate::circuit::param::CircuitParam::Fixed(v)
-                                    }
-                                    ParameterValue::Param(_p) => {
-                                        // For simplicity, use a placeholder
-                                        // In practice, we'd need to intern the parameter
-                                        crate::circuit::param::CircuitParam::Fixed(0.0)
-                                    }
-                                })
-                                .collect(),
+                            params: circuit_params,
                             label: None,
                         });
                         return Ok(operations);
                     }
                 }
 
-                // Try standard gate
-                let mut params_vec: Vec<f64> = Vec::new();
+                // Try standard gate with strict parameter checking
+                let mut param_values: SmallVec<[ParameterValue; 3]> = smallvec![];
                 let symbols: HashMap<String, Parameter> = HashMap::new();
                 for e in params {
                     let param = Self::expr_to_parameter(e, &symbols)?;
-                    if let Ok(val) = param.evaluate(&None) {
-                        params_vec.push(val);
-                    } else {
-                        // Symbolic parameter - use 0.0 as placeholder
-                        params_vec.push(0.0);
-                    }
+                    param_values.push(ParameterValue::from(param));
                 }
 
                 self.append_standard_gate_to_operation(
                     name,
-                    &params_vec,
+                    &param_values,
                     &qubits,
                     &mut operations,
                 )?;
@@ -1214,310 +1258,42 @@ impl AstToCircuit {
         Ok(operations)
     }
 
+    /// Converts a ParameterValue to a CircuitParam for if-statement bodies.
+    /// Returns an error for symbolic parameters (OpenQASM 2.0 strict compliance).
+    fn param_value_to_circuit_param(pv: ParameterValue) -> Result<CircuitParam, QasmParseError> {
+        match pv {
+            ParameterValue::Fixed(v) => Ok(CircuitParam::Fixed(v)),
+            ParameterValue::Param(p) => Err(QasmParseError::ConversionError(format!(
+                "Symbolic parameters (like '{}') are not allowed in conditional 'if' statements. Only constants are permitted.",
+                p
+            ))),
+        }
+    }
+
     /// Append a standard gate to operations (helper for if-statement)
+    /// Strictly enforces that only constant parameters are allowed.
     fn append_standard_gate_to_operation(
         &self,
         name: &str,
-        params: &[f64],
+        params: &[ParameterValue],
         qubits: &[Qubit],
         operations: &mut Vec<Operation>,
     ) -> Result<(), QasmParseError> {
-        match name {
-            "h" | "H" => {
-                if qubits.len() != 1 {
-                    return Err(QasmParseError::InvalidArgument(format!(
-                        "H gate requires 1 qubit, got {}",
-                        qubits.len()
-                    )));
-                }
-                operations.push(Operation {
-                    instruction: Instruction::Standard(StandardGate::H),
-                    qubits: qubits.into(),
-                    params: smallvec![],
-                    label: None,
-                });
-            }
-            "x" | "X" | "cx" | "CX" => {
-                if qubits.is_empty() {
-                    return Err(QasmParseError::InvalidArgument(
-                        "X/CX gate requires at least 1 qubit".to_string(),
-                    ));
-                }
-                if qubits.len() == 1 {
-                    operations.push(Operation {
-                        instruction: Instruction::Standard(StandardGate::X),
-                        qubits: qubits.into(),
-                        params: smallvec![],
-                        label: None,
-                    });
-                } else if qubits.len() == 2 {
-                    operations.push(Operation {
-                        instruction: Instruction::Standard(StandardGate::CX),
-                        qubits: qubits.into(),
-                        params: smallvec![],
-                        label: None,
-                    });
-                } else {
-                    return Err(QasmParseError::InvalidArgument(format!(
-                        "X/CX gate with {} qubits not supported in if-body",
-                        qubits.len()
-                    )));
-                }
-            }
-            "z" | "Z" => {
-                if qubits.len() != 1 {
-                    return Err(QasmParseError::InvalidArgument(
-                        "Z gate requires 1 qubit".to_string(),
-                    ));
-                }
-                operations.push(Operation {
-                    instruction: Instruction::Standard(StandardGate::Z),
-                    qubits: qubits.into(),
-                    params: smallvec![],
-                    label: None,
-                });
-            }
-            "y" | "Y" => {
-                if qubits.len() != 1 {
-                    return Err(QasmParseError::InvalidArgument(
-                        "Y gate requires 1 qubit".to_string(),
-                    ));
-                }
-                operations.push(Operation {
-                    instruction: Instruction::Standard(StandardGate::Y),
-                    qubits: qubits.into(),
-                    params: smallvec![],
-                    label: None,
-                });
-            }
-            "s" | "S" => {
-                if qubits.len() != 1 {
-                    return Err(QasmParseError::InvalidArgument(
-                        "S gate requires 1 qubit".to_string(),
-                    ));
-                }
-                operations.push(Operation {
-                    instruction: Instruction::Standard(StandardGate::S),
-                    qubits: qubits.into(),
-                    params: smallvec![],
-                    label: None,
-                });
-            }
-            "sdg" | "SDG" => {
-                if qubits.len() != 1 {
-                    return Err(QasmParseError::InvalidArgument(
-                        "SDG gate requires 1 qubit".to_string(),
-                    ));
-                }
-                operations.push(Operation {
-                    instruction: Instruction::Standard(StandardGate::SDG),
-                    qubits: qubits.into(),
-                    params: smallvec![],
-                    label: None,
-                });
-            }
-            "t" | "T" => {
-                if qubits.len() != 1 {
-                    return Err(QasmParseError::InvalidArgument(
-                        "T gate requires 1 qubit".to_string(),
-                    ));
-                }
-                operations.push(Operation {
-                    instruction: Instruction::Standard(StandardGate::T),
-                    qubits: qubits.into(),
-                    params: smallvec![],
-                    label: None,
-                });
-            }
-            "tdg" | "TDG" => {
-                if qubits.len() != 1 {
-                    return Err(QasmParseError::InvalidArgument(
-                        "TDG gate requires 1 qubit".to_string(),
-                    ));
-                }
-                operations.push(Operation {
-                    instruction: Instruction::Standard(StandardGate::TDG),
-                    qubits: qubits.into(),
-                    params: smallvec![],
-                    label: None,
-                });
-            }
-            "rx" | "RX" => {
-                if qubits.len() != 1 || params.len() != 1 {
-                    return Err(QasmParseError::InvalidArgument(
-                        "RX gate requires 1 qubit and 1 parameter".to_string(),
-                    ));
-                }
-                operations.push(Operation {
-                    instruction: Instruction::Standard(StandardGate::RX),
-                    qubits: qubits.into(),
-                    params: smallvec![params[0].into()],
-                    label: None,
-                });
-            }
-            "ry" | "RY" => {
-                if qubits.len() != 1 || params.len() != 1 {
-                    return Err(QasmParseError::InvalidArgument(
-                        "RY gate requires 1 qubit and 1 parameter".to_string(),
-                    ));
-                }
-                operations.push(Operation {
-                    instruction: Instruction::Standard(StandardGate::RY),
-                    qubits: qubits.into(),
-                    params: smallvec![params[0].into()],
-                    label: None,
-                });
-            }
-            "rz" | "RZ" => {
-                if qubits.len() != 1 || params.len() != 1 {
-                    return Err(QasmParseError::InvalidArgument(
-                        "RZ gate requires 1 qubit and 1 parameter".to_string(),
-                    ));
-                }
-                operations.push(Operation {
-                    instruction: Instruction::Standard(StandardGate::RZ),
-                    qubits: qubits.into(),
-                    params: smallvec![params[0].into()],
-                    label: None,
-                });
-            }
-            "u" | "U" => {
-                if qubits.len() != 1 || params.len() != 3 {
-                    return Err(QasmParseError::InvalidArgument(
-                        "U gate requires 1 qubit and 3 parameters".to_string(),
-                    ));
-                }
-                operations.push(Operation {
-                    instruction: Instruction::Standard(StandardGate::U),
-                    qubits: qubits.into(),
-                    params: params.iter().cloned().map(|p| p.into()).collect(),
-                    label: None,
-                });
-            }
-            "cz" | "CZ" => {
-                if qubits.len() != 2 {
-                    return Err(QasmParseError::InvalidArgument(
-                        "CZ gate requires 2 qubits".to_string(),
-                    ));
-                }
-                operations.push(Operation {
-                    instruction: Instruction::Standard(StandardGate::CZ),
-                    qubits: qubits.into(),
-                    params: smallvec![],
-                    label: None,
-                });
-            }
-            "cy" | "CY" => {
-                if qubits.len() != 2 {
-                    return Err(QasmParseError::InvalidArgument(
-                        "CY gate requires 2 qubits".to_string(),
-                    ));
-                }
-                operations.push(Operation {
-                    instruction: Instruction::Standard(StandardGate::CY),
-                    qubits: qubits.into(),
-                    params: smallvec![],
-                    label: None,
-                });
-            }
-            "swap" | "SWAP" => {
-                if qubits.len() != 2 {
-                    return Err(QasmParseError::InvalidArgument(
-                        "SWAP gate requires 2 qubits".to_string(),
-                    ));
-                }
-                operations.push(Operation {
-                    instruction: Instruction::Standard(StandardGate::SWAP),
-                    qubits: qubits.into(),
-                    params: smallvec![],
-                    label: None,
-                });
-            }
-            "ccx" | "CCX" | "toffoli" | "TOFFOLI" => {
-                if qubits.len() != 3 {
-                    return Err(QasmParseError::InvalidArgument(
-                        "CCX gate requires 3 qubits".to_string(),
-                    ));
-                }
-                operations.push(Operation {
-                    instruction: Instruction::Standard(StandardGate::CCX),
-                    qubits: qubits.into(),
-                    params: smallvec![],
-                    label: None,
-                });
-            }
-            "rxx" | "RXX" => {
-                if qubits.len() != 2 || params.len() != 1 {
-                    return Err(QasmParseError::InvalidArgument(
-                        "RXX gate requires 2 qubits and 1 parameter".to_string(),
-                    ));
-                }
-                operations.push(Operation {
-                    instruction: Instruction::Standard(StandardGate::RXX),
-                    qubits: qubits.into(),
-                    params: smallvec![params[0].into()],
-                    label: None,
-                });
-            }
-            "ryy" | "RYY" => {
-                if qubits.len() != 2 || params.len() != 1 {
-                    return Err(QasmParseError::InvalidArgument(
-                        "RYY gate requires 2 qubits and 1 parameter".to_string(),
-                    ));
-                }
-                operations.push(Operation {
-                    instruction: Instruction::Standard(StandardGate::RYY),
-                    qubits: qubits.into(),
-                    params: smallvec![params[0].into()],
-                    label: None,
-                });
-            }
-            "rzz" | "RZZ" => {
-                if qubits.len() != 2 || params.len() != 1 {
-                    return Err(QasmParseError::InvalidArgument(
-                        "RZZ gate requires 2 qubits and 1 parameter".to_string(),
-                    ));
-                }
-                operations.push(Operation {
-                    instruction: Instruction::Standard(StandardGate::RZZ),
-                    qubits: qubits.into(),
-                    params: smallvec![params[0].into()],
-                    label: None,
-                });
-            }
-            "fsim" | "FSIM" => {
-                if qubits.len() != 2 || params.len() != 2 {
-                    return Err(QasmParseError::InvalidArgument(
-                        "fSim gate requires 2 qubits and 2 parameters".to_string(),
-                    ));
-                }
-                operations.push(Operation {
-                    instruction: Instruction::Standard(StandardGate::FSIM),
-                    qubits: qubits.into(),
-                    params: params.iter().cloned().map(|p| p.into()).collect(),
-                    label: None,
-                });
-            }
-            "id" | "ID" | "i" | "I" => {
-                if qubits.len() != 1 {
-                    return Err(QasmParseError::InvalidArgument(
-                        "I gate requires 1 qubit".to_string(),
-                    ));
-                }
-                operations.push(Operation {
-                    instruction: Instruction::Standard(StandardGate::I),
-                    qubits: qubits.into(),
-                    params: smallvec![],
-                    label: None,
-                });
-            }
-            _ => {
-                return Err(QasmParseError::UndefinedGate(format!(
-                    "Gate '{}' not supported in if-body",
-                    name
-                )));
-            }
-        }
+        let (instruction, valid_params) =
+            Self::build_standard_gate_instruction(name, params, qubits)?;
+
+        // Strict conversion: symbolic parameters are not allowed in if bodies
+        let circuit_params: SmallVec<[CircuitParam; 1]> = valid_params
+            .into_iter()
+            .map(Self::param_value_to_circuit_param)
+            .collect::<Result<_, _>>()?;
+
+        operations.push(Operation {
+            instruction,
+            qubits: qubits.into(),
+            params: circuit_params,
+            label: None,
+        });
         Ok(())
     }
 
@@ -1529,190 +1305,11 @@ impl AstToCircuit {
         params: &[ParameterValue],
         qubits: &[Qubit],
     ) -> Result<(), QasmParseError> {
-        let p = |i: usize| {
-            params
-                .get(i)
-                .cloned()
-                .ok_or(QasmParseError::MismatchedParameterCount {
-                    expected: i + 1,
-                    actual: params.len(),
-                })
-        };
-        let q = |i: usize| {
-            qubits
-                .get(i)
-                .cloned()
-                .ok_or(QasmParseError::MismatchedQubitCount {
-                    expected: i + 1,
-                    actual: qubits.len(),
-                })
-        };
-
-        match name {
-            // OpenQASM 2.0 built-in primitive gates
-            "U" => {
-                let q0 = q(0)?;
-                circuit
-                    .u(q0, p(0)?, p(1)?, p(2)?)
-                    .map_err(|e| QasmParseError::ConversionError(e.to_string()))?;
-            }
-            "CX" => {
-                let q0 = q(0)?;
-                let q1 = q(1)?;
-                circuit
-                    .cx(q0, q1)
-                    .map_err(|e| QasmParseError::ConversionError(e.to_string()))?;
-            }
-            // Standard gates
-            "h" | "H" => {
-                let q0 = q(0)?;
-                circuit
-                    .h(q0)
-                    .map_err(|e| QasmParseError::ConversionError(e.to_string()))?;
-            }
-            "x" | "X" => {
-                let q0 = q(0)?;
-                circuit
-                    .x(q0)
-                    .map_err(|e| QasmParseError::ConversionError(e.to_string()))?;
-            }
-            "y" | "Y" => {
-                let q0 = q(0)?;
-                circuit
-                    .y(q0)
-                    .map_err(|e| QasmParseError::ConversionError(e.to_string()))?;
-            }
-            "z" | "Z" => {
-                let q0 = q(0)?;
-                circuit
-                    .z(q0)
-                    .map_err(|e| QasmParseError::ConversionError(e.to_string()))?;
-            }
-            "s" | "S" => {
-                let q0 = q(0)?;
-                circuit
-                    .s(q0)
-                    .map_err(|e| QasmParseError::ConversionError(e.to_string()))?;
-            }
-            "sdg" | "SDG" => {
-                let q0 = q(0)?;
-                circuit
-                    .sdg(q0)
-                    .map_err(|e| QasmParseError::ConversionError(e.to_string()))?;
-            }
-            "t" | "T" => {
-                let q0 = q(0)?;
-                circuit
-                    .t(q0)
-                    .map_err(|e| QasmParseError::ConversionError(e.to_string()))?;
-            }
-            "tdg" | "TDG" => {
-                let q0 = q(0)?;
-                circuit
-                    .tdg(q0)
-                    .map_err(|e| QasmParseError::ConversionError(e.to_string()))?;
-            }
-            "sx" | "SX" => {
-                let q0 = q(0)?;
-                circuit
-                    .x2p(q0)
-                    .map_err(|e| QasmParseError::ConversionError(e.to_string()))?;
-            }
-            "sxdg" | "SXDG" => {
-                let q0 = q(0)?;
-                circuit
-                    .x2m(q0)
-                    .map_err(|e| QasmParseError::ConversionError(e.to_string()))?;
-            }
-            "rx" | "RX" => {
-                let q0 = q(0)?;
-                circuit
-                    .rx(q0, p(0)?)
-                    .map_err(|e| QasmParseError::ConversionError(e.to_string()))?;
-            }
-            "ry" | "RY" => {
-                let q0 = q(0)?;
-                circuit
-                    .ry(q0, p(0)?)
-                    .map_err(|e| QasmParseError::ConversionError(e.to_string()))?;
-            }
-            "rz" | "RZ" => {
-                let q0 = q(0)?;
-                circuit
-                    .rz(q0, p(0)?)
-                    .map_err(|e| QasmParseError::ConversionError(e.to_string()))?;
-            }
-            "p" | "P" => {
-                let q0 = q(0)?;
-                circuit
-                    .phase(q0, p(0)?)
-                    .map_err(|e| QasmParseError::ConversionError(e.to_string()))?;
-            }
-            "u1" | "U1" => {
-                let q0 = q(0)?;
-                circuit
-                    .phase(q0, p(0)?)
-                    .map_err(|e| QasmParseError::ConversionError(e.to_string()))?;
-            }
-            "u2" | "U2" => {
-                let q0 = q(0)?;
-                let pi_2 = ParameterValue::Param(Parameter::pi() / 2.0);
-                circuit
-                    .u(q0, pi_2, p(0)?, p(1)?)
-                    .map_err(|e| QasmParseError::ConversionError(e.to_string()))?;
-            }
-            "u3" | "U3" | "u" => {
-                let q0 = q(0)?;
-                circuit
-                    .u(q0, p(0)?, p(1)?, p(2)?)
-                    .map_err(|e| QasmParseError::ConversionError(e.to_string()))?;
-            }
-            "cx" => {
-                let q0 = q(0)?;
-                let q1 = q(1)?;
-                circuit
-                    .cx(q0, q1)
-                    .map_err(|e| QasmParseError::ConversionError(e.to_string()))?;
-            }
-            "cy" | "CY" => {
-                let q0 = q(0)?;
-                let q1 = q(1)?;
-                circuit
-                    .cy(q0, q1)
-                    .map_err(|e| QasmParseError::ConversionError(e.to_string()))?;
-            }
-            "cz" | "CZ" => {
-                let q0 = q(0)?;
-                let q1 = q(1)?;
-                circuit
-                    .cz(q0, q1)
-                    .map_err(|e| QasmParseError::ConversionError(e.to_string()))?;
-            }
-            "swap" | "SWAP" => {
-                let q0 = q(0)?;
-                let q1 = q(1)?;
-                circuit
-                    .swap(q0, q1)
-                    .map_err(|e| QasmParseError::ConversionError(e.to_string()))?;
-            }
-            "ccx" | "CCX" => {
-                let q0 = q(0)?;
-                let q1 = q(1)?;
-                let q2 = q(2)?;
-                circuit
-                    .ccx(q0, q1, q2)
-                    .map_err(|e| QasmParseError::ConversionError(e.to_string()))?;
-            }
-            "id" | "ID" => {
-                let q0 = q(0)?;
-                circuit
-                    .i(q0)
-                    .map_err(|e| QasmParseError::ConversionError(e.to_string()))?;
-            }
-            _ => {
-                return Err(QasmParseError::UndefinedGate(name.to_string()));
-            }
-        }
+        let (instruction, valid_params) =
+            Self::build_standard_gate_instruction(name, params, qubits)?;
+        circuit
+            .append(instruction, qubits.to_vec(), valid_params, None)
+            .map_err(|e| QasmParseError::ConversionError(e.to_string()))?;
         Ok(())
     }
 }

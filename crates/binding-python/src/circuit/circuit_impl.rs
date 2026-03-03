@@ -11,9 +11,9 @@
 // that they have been altered from the originals.
 
 use super::bit::PyQubit;
-use super::gates::{PyCircuitGate, PyMcGate, PyStandardGate, PyUnitaryGate};
+use super::gate::{PyCircuitGate, PyConditionView, PyMcGate, PyStandardGate, PyUnitaryGate};
+use super::operation::PyOperation;
 use super::parameter::PyParameter;
-use crate::circuit::PyOperation;
 use crate::circuit::operation::PyOperationIter;
 use cqlib_core::circuit::gate::Instruction;
 use cqlib_core::circuit::param::ParameterValue;
@@ -609,5 +609,123 @@ impl PyCircuit {
 
     fn __len__(&self) -> usize {
         self.inner.operations().len()
+    }
+
+    /// Adds new qubits to the circuit.
+    ///
+    /// # Arguments
+    ///
+    /// * `qubits` - A list of qubit indices to add.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ValueError` if any qubit already exists in the circuit.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use cqlib_core::circuit::circuit_impl::Circuit;
+    ///
+    /// let mut circuit = Circuit::new(2);
+    /// circuit.add_qubits(vec![2, 3]).unwrap();
+    /// ```
+    fn add_qubits(&mut self, qubits: Vec<usize>) -> PyResult<()> {
+        let qubits_core: Vec<Qubit> = qubits
+            .into_iter()
+            .map(|idx| Qubit::new(idx as u32))
+            .collect();
+        self.inner
+            .add_qubits(qubits_core)
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    /// Appends a conditional (if-else) operation to the circuit.
+    ///
+    /// Executes different quantum operations based on a classical condition.
+    ///
+    /// # Arguments
+    ///
+    /// * `condition` - The classical condition to evaluate.
+    /// * `true_body` - Operations to execute when condition is true.
+    /// * `false_body` - Optional operations to execute when condition is false.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use cqlib_core::circuit::circuit_impl::Circuit;
+    /// use cqlib_core::circuit::{Qubit, Operation, Instruction, StandardGate, ConditionView};
+    /// use smallvec::smallvec;
+    ///
+    /// let mut circuit = Circuit::new(2);
+    /// circuit.x(Qubit::new(0)).unwrap();
+    /// circuit.measure(Qubit::new(0)).unwrap();
+    ///
+    /// let condition = ConditionView::new(Qubit::new(0), 1);
+    /// let true_body = vec![Operation {
+    ///     instruction: Instruction::Standard(StandardGate::X),
+    ///     qubits: smallvec![Qubit::new(1)],
+    ///     params: smallvec![],
+    ///     label: None,
+    /// }];
+    /// let false_body = vec![Operation {
+    ///     instruction: Instruction::Standard(StandardGate::Z),
+    ///     qubits: smallvec![Qubit::new(1)],
+    ///     params: smallvec![],
+    ///     label: None,
+    /// }];
+    /// circuit.if_else(condition, true_body, Some(false_body)).unwrap();
+    /// ```
+    fn if_else(
+        &mut self,
+        condition: PyConditionView,
+        true_body: Vec<PyOperation>,
+        false_body: Option<Vec<PyOperation>>,
+    ) -> PyResult<()> {
+        let true_body_core: Vec<cqlib_core::circuit::Operation> =
+            true_body.into_iter().map(|op| op.operation).collect();
+        let false_body_core: Option<Vec<cqlib_core::circuit::Operation>> =
+            false_body.map(|ops| ops.into_iter().map(|op| op.operation).collect());
+
+        self.inner
+            .if_else(condition.inner, true_body_core, false_body_core)
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    /// Appends a while-loop operation to the circuit.
+    ///
+    /// Repeatedly executes quantum operations while a classical condition is true.
+    ///
+    /// # Arguments
+    ///
+    /// * `condition` - The classical condition to evaluate before each iteration.
+    /// * `body` - The operations to execute in each iteration.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use cqlib_core::circuit::circuit_impl::Circuit;
+    /// use cqlib_core::circuit::{Qubit, Operation, Instruction, StandardGate, ConditionView};
+    /// use smallvec::smallvec;
+    ///
+    /// let mut circuit = Circuit::new(2);
+    /// circuit.x(Qubit::new(0)).unwrap();
+    /// circuit.measure(Qubit::new(0)).unwrap();
+    ///
+    /// let condition = ConditionView::new(Qubit::new(0), 1);
+    /// let body = vec![Operation {
+    ///     instruction: Instruction::Standard(StandardGate::H),
+    ///     qubits: smallvec![Qubit::new(1)],
+    ///     params: smallvec![],
+    ///     label: None,
+    /// }];
+    /// circuit.while_loop(condition, body).unwrap();
+    /// ```
+    fn while_loop(&mut self, condition: PyConditionView, body: Vec<PyOperation>) -> PyResult<()> {
+        let body_core: Vec<cqlib_core::circuit::Operation> =
+            body.into_iter().map(|op| op.operation).collect();
+
+        self.inner
+            .while_loop(condition.inner, body_core)
+            .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 }

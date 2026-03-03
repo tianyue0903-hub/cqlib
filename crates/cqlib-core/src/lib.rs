@@ -1,6 +1,6 @@
 // This code is part of Cqlib.
 //
-// (C) Copyright China Telecom Quantum Group 2025
+// (C) Copyright China Telecom Quantum Group 2025-2026
 //
 // This code is licensed under the Apache License, Version 2.0. You may
 // obtain a copy of this license in the LICENSE.txt file in the root directory
@@ -17,7 +17,3 @@ pub mod circuit;
 pub mod compile;
 pub mod device;
 pub mod ir;
-
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}

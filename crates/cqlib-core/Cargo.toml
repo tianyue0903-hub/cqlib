@@ -36,6 +36,7 @@ regex.workspace = true
 rustworkx-core.workspace = true
 smallvec.workspace = true
 thiserror.workspace = true
+time.workspace = true
 uuid.workspace = true
 rand.workspace = true
 

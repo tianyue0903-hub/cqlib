@@ -10,11 +10,31 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
+//! Python Bindings for Quantum Bits
+//!
+//! This module provides Python bindings for quantum bit (qubit) types.
+//! It represents a quantum register index used in circuit operations.
+
 use cqlib_core::circuit::Qubit;
 use pyo3::prelude::*;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
+/// Python wrapper for `Qubit`.
+///
+/// Represents a quantum bit identified by its index in a quantum register.
+/// Qubits are copyable and comparable for use in circuit construction.
+///
+/// # Examples
+///
+/// ```python
+/// from cqlib import Qubit
+///
+/// q0 = Qubit(0)
+/// q1 = Qubit(1)
+/// print(q0.index)  # 0
+/// print(q0 < q1)   # True
+/// ```
 #[pyclass(name = "Qubit", module = "cqlib.circuit")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct PyQubit {
@@ -23,6 +43,11 @@ pub struct PyQubit {
 
 #[pymethods]
 impl PyQubit {
+    /// Creates a new qubit with the given index.
+    ///
+    /// # Arguments
+    ///
+    /// * `index` - The index of the qubit in the quantum register.
     #[new]
     fn new(index: u32) -> Self {
         PyQubit {
@@ -30,6 +55,7 @@ impl PyQubit {
         }
     }
 
+    /// Returns the index of this qubit.
     #[getter]
     fn index(&self) -> usize {
         self.inner.index()
