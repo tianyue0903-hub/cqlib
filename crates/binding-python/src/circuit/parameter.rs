@@ -440,7 +440,7 @@ impl PyParameter {
 
     /// Consumes the wrapper and returns the inner core Parameter.
     pub fn into_inner(self) -> Parameter {
-        self.inner.clone()
+        self.inner
     }
 }
 

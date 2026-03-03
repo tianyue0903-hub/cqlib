@@ -131,7 +131,7 @@ pub fn load<P: AsRef<Path>>(path: P) -> Result<Circuit, QasmParseError> {
     // Get content using the resolver
     let content = resolver
         .resolve_source(path)
-        .map_err(|e| QasmParseError::IoError(e))?;
+        .map_err(QasmParseError::IoError)?;
 
     // Pass the parent directory as the base path for includes
     let base_path = path.parent().map(|p| p.to_path_buf());
