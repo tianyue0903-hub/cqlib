@@ -303,6 +303,44 @@ impl PyCircuit {
         )
     }
 
+    /// Returns the width (number of qubits) of the circuit.
+    ///
+    /// This is an alias for `num_qubits`.
+    #[getter]
+    fn width(&self) -> usize {
+        self.inner.width()
+    }
+
+    /// Returns a tuple of all symbolic variable names used in the circuit.
+    #[getter]
+    fn symbols<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        PyTuple::new(py, self.inner.symbols().iter().map(|s| s.as_str()))
+    }
+
+    /// Returns the global phase of the circuit as a Parameter.
+    ///
+    /// The global phase represents a scalar factor e^(i*theta).
+    /// While unobservable in isolated systems, it is critical for
+    /// controlled operations and sub-circuit composition.
+    #[getter]
+    fn global_phase(&self) -> PyParameter {
+        PyParameter::from(self.inner.global_phase())
+    }
+
+    /// Sets the global phase of the circuit.
+    ///
+    /// Args:
+    ///     phase: The phase value (can be float or Parameter)
+    fn set_global_phase(&mut self, phase: PyParamLike) -> PyResult<()> {
+        use cqlib_core::circuit::parameter::Parameter;
+        let param: Parameter = match phase {
+            PyParamLike::Float(f) => Parameter::from(f),
+            PyParamLike::Param(p) => p.into_inner(),
+        };
+        self.inner.set_global_phase(param);
+        Ok(())
+    }
+
     /// Applies an Identity (I) gate to the specified qubit.
     ///
     /// Identity gate is a no-operation that leaves the qubit state unchanged.

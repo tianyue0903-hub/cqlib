@@ -23,6 +23,7 @@
 //! - Symbolic differentiation and simplification
 
 use cqlib_core::circuit::Parameter;
+use cqlib_core::circuit::parameter::parse_parameter;
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use std::collections::HashMap;
@@ -41,29 +42,63 @@ pub struct PyParameter {
 
 #[pymethods]
 impl PyParameter {
-    /// Creates a new symbolic parameter.
+    /// Creates a new parameter.
+    ///
+    /// This method intelligently detects the input type:
+    /// - If a number is passed, creates a numeric parameter (e.g., `Parameter(3.14)` creates 3.14)
+    /// - If a string that looks like a pure number is passed, creates a numeric parameter
+    /// - Otherwise, creates a symbolic parameter (e.g., `Parameter("theta")`)
     ///
     /// # Arguments
     ///
-    /// * `name` - The symbol name (e.g., "theta", "x").
+    /// * `value` - The value (number or string symbol name).
+    ///
+    /// # Examples
+    ///
+    /// ```python
+    /// # Numeric parameter
+    /// p1 = Parameter(3.14)  # Creates 3.14
+    /// p2 = Parameter("3.14") # Also creates 3.14
+    ///
+    /// # Symbolic parameter
+    /// p3 = Parameter("theta") # Creates symbol 'theta'
+    /// p4 = Parameter("x + 1") # Creates expression
+    /// ```
     #[new]
-    #[pyo3(signature = (name))]
-    fn new(name: String) -> Self {
-        PyParameter {
-            inner: Parameter::symbol(name),
+    fn new(value: &Bound<'_, PyAny>) -> PyResult<Self> {
+        // First, try to extract as a number (int or float)
+        if let Ok(val) = value.extract::<f64>() {
+            return Ok(PyParameter {
+                inner: Parameter::from(val),
+            });
         }
-    }
+        if let Ok(val) = value.extract::<i64>() {
+            return Ok(PyParameter {
+                inner: Parameter::from(val as f64),
+            });
+        }
 
-    /// Creates a parameter from a float value.
-    ///
-    /// # Arguments
-    ///
-    /// * `val` - A floating-point number.
-    #[staticmethod]
-    fn from_float(val: f64) -> Self {
-        PyParameter {
-            inner: Parameter::from(val),
+        // If not a number, try as string
+        if let Ok(name) = value.extract::<String>() {
+            // Try to parse as a number first
+            if let Ok(num) = name.parse::<f64>() {
+                return Ok(PyParameter {
+                    inner: Parameter::from(num),
+                });
+            }
+            // Try to parse as expression (might contain numbers like "3.14+2")
+            if let Ok(param) = parse_parameter(&name) {
+                return Ok(PyParameter { inner: param });
+            }
+            // Otherwise, treat as a symbol name
+            return Ok(PyParameter {
+                inner: Parameter::symbol(name),
+            });
         }
+
+        Err(PyTypeError::new_err(
+            "Parameter value must be a number or string",
+        ))
     }
 
     /// Parses a mathematical expression string into a Parameter.
@@ -152,6 +187,41 @@ impl PyParameter {
     fn derivative(&self, var: String) -> Self {
         PyParameter {
             inner: self.inner.derivative(&var),
+        }
+    }
+
+    /// Returns the power of this parameter raised to the given exponent.
+    ///
+    /// # Arguments
+    ///
+    /// * `val` - The exponent (can be a float or Parameter).
+    ///
+    /// # Returns
+    ///
+    /// A new parameter representing `self^val`.
+    ///
+    /// # Example
+    ///
+    /// ```python
+    /// x = Parameter("x")
+    /// y = Parameter("y")
+    /// result = x.pow(y)  # x^y
+    /// result = x.pow(2)  # x^2
+    /// ```
+    fn pow(&self, val: &Bound<'_, PyAny>) -> PyResult<Self> {
+        if let Ok(param) = val.extract::<PyParameter>() {
+            Ok(PyParameter {
+                inner: self.inner.pow(&param.inner),
+            })
+        } else if let Ok(val_f64) = val.extract::<f64>() {
+            let exp_param = Parameter::from(val_f64);
+            Ok(PyParameter {
+                inner: self.inner.pow(&exp_param),
+            })
+        } else {
+            Err(PyTypeError::new_err(
+                "pow argument must be a number or Parameter",
+            ))
         }
     }
 

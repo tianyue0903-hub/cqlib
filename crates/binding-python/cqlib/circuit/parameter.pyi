@@ -13,15 +13,26 @@
 from typing import Optional
 
 class Parameter:
-    """A symbolic parameter used in parameterized quantum circuits (PQC)."""
+    """A symbolic parameter used in parameterized quantum circuits (PQC).
 
-    def __init__(self, name: str) -> None:
-        """Create a symbolic parameter from a name."""
-        ...
+    This class intelligently detects the input type:
+    - If a number is passed, creates a numeric parameter (e.g., `Parameter(3.14)` creates 3.14)
+    - If a string that looks like a pure number is passed, creates a numeric parameter
+    - Otherwise, creates a symbolic parameter (e.g., `Parameter("theta")`)
+    """
 
-    @staticmethod
-    def from_float(val: float) -> "Parameter":
-        """Create a parameter from a float value."""
+    def __init__(self, value: int | float | str) -> None:
+        """Create a new parameter.
+
+        Args:
+            value: The value (number or string symbol name).
+
+        Examples:
+            >>> Parameter(3.14)       # Creates numeric parameter 3.14
+            >>> Parameter("3.14")     # Also creates numeric parameter 3.14
+            >>> Parameter("theta")    # Creates symbolic parameter 'theta'
+            >>> Parameter("x + 1")   # Creates expression
+        """
         ...
 
     @staticmethod
@@ -90,5 +101,41 @@ class Parameter:
     def log(self, base: Optional["Parameter"] = None) -> "Parameter": ...
     def sqrt(self) -> "Parameter": ...
     def abs(self) -> "Parameter": ...
+    def pow(self, val: "Parameter" | float) -> "Parameter":
+        """Returns the power of this parameter raised to the given exponent.
+
+        Args:
+            val: The exponent (can be a float or Parameter).
+
+        Returns:
+            A new parameter representing `self^val`.
+
+        Example:
+            >>> x = Parameter("x")
+            >>> y = Parameter("y")
+            >>> result = x.pow(y)  # x^y
+            >>> result = x.pow(2)  # x^2
+        """
+        ...
+
+    def replace(self, symbol: str, param: "Parameter") -> "Parameter":
+        """Replaces all occurrences of a symbol with another parameter expression.
+
+        Args:
+            symbol: The name of the symbol to replace.
+            param: The parameter expression to substitute.
+
+        Returns:
+            A new parameter with the substitution applied.
+
+        Example:
+            >>> x = Parameter("x")
+            >>> expr = x + Parameter(2.0)
+            >>> y = Parameter("y")
+            >>> replacement = y * Parameter(3.0)
+            >>> new_expr = expr.replace("x", replacement)  # (y * 3) + 2
+        """
+        ...
+
     def __str__(self) -> str: ...
     def __repr__(self) -> str: ...

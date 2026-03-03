@@ -78,6 +78,14 @@ class Circuit:
         ...
 
     @property
+    def width(self) -> int:
+        """Returns the width (number of qubits) of the circuit.
+
+        This is an alias for `num_qubits`.
+        """
+        ...
+
+    @property
     def qubits(self) -> list[Qubit]:
         """Returns a list of all qubits in the circuit."""
         ...
@@ -85,6 +93,29 @@ class Circuit:
     @property
     def parameters(self) -> list[Parameter]:
         """Returns a list of all symbolic parameters used in the circuit."""
+        ...
+
+    @property
+    def symbols(self) -> list[str]:
+        """Returns a list of all symbolic variable names used in the circuit."""
+        ...
+
+    @property
+    def global_phase(self) -> Parameter:
+        """Returns the global phase of the circuit as a Parameter.
+
+        The global phase represents a scalar factor e^(i*theta).
+        While unobservable in isolated systems, it is critical for
+        controlled operations and sub-circuit composition.
+        """
+        ...
+
+    def set_global_phase(self, phase: float | Parameter) -> None:
+        """Sets the global phase of the circuit.
+
+        Args:
+            phase: The phase value (can be float or Parameter).
+        """
         ...
 
     @property
