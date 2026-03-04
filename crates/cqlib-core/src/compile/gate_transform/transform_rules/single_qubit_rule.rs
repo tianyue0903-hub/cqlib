@@ -107,7 +107,8 @@ impl SingleQubitRule {
     fn zxz_type_arg(unitary: &Array2<Complex<f64>>) -> (f64, f64, f64, f64, f64) {
         let beta_plus_delta: f64 = 2.0 * unitary[(1, 1)].arg();
         let beta_minus_delta: f64 = 2.0 * unitary[(1, 0)].arg() + PI;
-        let gamma: f64 = 2.0 * unitary[(0, 0)].abs().acos();
+        let gamma_input = Self::clamp_acos(unitary[(0, 0)].abs());
+        let gamma: f64 = 2.0 * gamma_input.acos();
         let beta: f64 = (beta_plus_delta + beta_minus_delta) / 2.0;
         let delta: f64 = beta_plus_delta - beta;
         (beta_plus_delta, beta_minus_delta, gamma, beta, delta)
@@ -126,10 +127,10 @@ impl SingleQubitRule {
 
         if unitary[(0, 0)].abs() > unitary[(0, 1)].abs() && unitary[(0, 1)].abs() > eps {
             let acos_arg = Self::clamp_acos(2.0 * (unitary[(0, 0)] * unitary[(1, 1)]).re - 1.0);
-            gamma = acos_arg.acos();
+            gamma = Self::clamp_acos(acos_arg).acos();
         } else {
             let acos_arg = Self::clamp_acos(2.0 * (unitary[(0, 1)] * unitary[(1, 0)]).re + 1.0);
-            gamma = acos_arg.acos();
+            gamma = Self::clamp_acos(acos_arg).acos();
         }
 
         if unitary[(0, 0)].abs() > eps {
@@ -168,7 +169,7 @@ impl SingleQubitRule {
         let z: Complex<f64> = Complex::new(0.0, 1.0 * angle).exp();
         unitary = unitary / z;
 
-        let mut theta: f64 = unitary[(0, 0)].re.acos();
+        let mut theta: f64 = Self::clamp_acos(unitary[(0, 0)].re).acos();
         let sin_theta: f64 = theta.sin();
 
         let mut lambda: f64 = 0.0;
