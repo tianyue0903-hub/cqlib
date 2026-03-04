@@ -39,6 +39,7 @@ impl DecomposedTwoQubitGate {
 /// Categories (gates in the same category are equivalent under 1-qubit gates):
 /// - CX category (key: CX): CX, CY, CZ
 /// - RZZ category (key: RZZ): RXX, RYY, RZX, RZZ
+/// - FSim category (key: FSim): FSim
 ///
 /// Following the minimal necessary principle, only rules between:
 /// 1. Key gates of different categories (CX <-> RZZ)
@@ -55,7 +56,7 @@ impl DoubleQubitRule {
     }
 
     // ========================================================================
-    // Rules between categories (CX <-> RZZ)
+    // Rules between categories (CX <-> RZZ, CX <-> FSIM, RZZ <-> FSIM)
     // ========================================================================
 
     /// CX = (global phase) · H(t) · RZ(-π/2)(c) · RZ(-π/2)(t) · RZZ(π/2) · H(t)
@@ -92,6 +93,89 @@ impl DoubleQubitRule {
         result.push_two(StandardGate::CX, smallvec![], 0, 1);
         result.push_single(StandardGate::RZ, smallvec![theta], 1);
         result.push_two(StandardGate::CX, smallvec![], 0, 1);
+
+        result
+    }
+
+    /// CX = H(1) · FSIM(0, π) · H(1)
+    pub fn cx2fsim_rule(_gate: &StandardGate, _parameters: &SmallVec<[f64; 3]>) -> DecomposedTwoQubitGate {
+        let mut result = DecomposedTwoQubitGate::new();
+
+        result.push_single(StandardGate::H, smallvec![], 1);
+        result.push_two(StandardGate::FSIM, smallvec![0.0, PI], 0, 1);
+        result.push_single(StandardGate::H, smallvec![], 1);
+
+        result
+    }
+
+    /// FSIM(θ, φ) decomposition into CX-based sequence.
+    pub fn fsim2cx_rule(_gate: &StandardGate, parameters: &SmallVec<[f64; 3]>) -> DecomposedTwoQubitGate {
+        let theta = parameters[0].clone();
+        let phi = parameters[1].clone();
+        let mut result = DecomposedTwoQubitGate::new();
+
+        result.push_two(StandardGate::CX, smallvec![], 0, 1);
+        result.push_single(StandardGate::H, smallvec![], 0);
+        result.push_two(StandardGate::CX, smallvec![], 1, 0);
+        result.push_single(StandardGate::RZ, smallvec![-theta], 0);
+        result.push_two(StandardGate::CX, smallvec![], 1, 0);
+        result.push_single(StandardGate::RZ, smallvec![theta], 0);
+        result.push_single(StandardGate::H, smallvec![], 0);
+        result.push_two(StandardGate::CX, smallvec![], 0, 1);
+        result.push_single(StandardGate::Phase, smallvec![-phi / 2.0], 1);
+        result.push_two(StandardGate::CX, smallvec![], 0, 1);
+        result.push_single(StandardGate::Phase, smallvec![phi / 2.0], 1);
+        result.push_two(StandardGate::CX, smallvec![], 0, 1);
+        result.push_single(StandardGate::RZ, smallvec![-phi / 2.0], 0);
+
+        result
+    }
+
+    /// RZZ(θ) = H(1) · FSIM(0, π) · RX(θ)(1) · FSIM(0, π) · H(1)
+    pub fn rzz2fsim_rule(_gate: &StandardGate, parameters: &SmallVec<[f64; 3]>) -> DecomposedTwoQubitGate {
+        let theta = parameters[0].clone();
+        let mut result = DecomposedTwoQubitGate::new();
+
+        result.push_single(StandardGate::H, smallvec![], 1);
+        result.push_two(StandardGate::FSIM, smallvec![0.0, PI], 0, 1);
+        result.push_single(StandardGate::RX, smallvec![theta], 1);
+        result.push_two(StandardGate::FSIM, smallvec![0.0, PI], 0, 1);
+        result.push_single(StandardGate::H, smallvec![], 1);
+
+        result
+    }
+
+    /// FSIM(θ, φ) decomposition into RZZ-based sequence.
+    pub fn fsim2rzz_rule(_gate: &StandardGate, parameters: &SmallVec<[f64; 3]>) -> DecomposedTwoQubitGate {
+        let theta = parameters[0].clone();
+        let phi = parameters[1].clone();
+        let mut result = DecomposedTwoQubitGate::new();
+
+        result.push_single(StandardGate::H, smallvec![], 0);
+        result.push_single(StandardGate::H, smallvec![], 1);
+        result.push_two(StandardGate::RZZ, smallvec![theta], 0, 1);
+        result.push_single(StandardGate::H, smallvec![], 1);
+        result.push_single(StandardGate::H, smallvec![], 0);
+        result.push_single(StandardGate::RX, smallvec![PI / 2.0], 0);
+        result.push_single(StandardGate::RX, smallvec![PI / 2.0], 1);
+        result.push_two(StandardGate::RZZ, smallvec![theta], 0, 1);
+        result.push_single(StandardGate::RX, smallvec![-PI], 0);
+        result.push_single(StandardGate::RZ, smallvec![-PI / 2.0], 0);
+        result.push_single(StandardGate::H, smallvec![], 0);
+        result.push_single(StandardGate::RX, smallvec![-PI], 1);
+        result.push_single(StandardGate::RY, smallvec![-phi / 2.0], 1);
+        result.push_single(StandardGate::H, smallvec![], 1);
+        result.push_two(StandardGate::RZZ, smallvec![PI / 2.0], 0, 1);
+        result.push_single(StandardGate::RZ, smallvec![-PI / 2.0], 0);
+        result.push_single(StandardGate::H, smallvec![], 1);
+        result.push_single(StandardGate::Phase, smallvec![phi / 2.0], 1);
+        result.push_single(StandardGate::RX, smallvec![-PI / 2.0], 1);
+        result.push_single(StandardGate::H, smallvec![], 1);
+        result.push_two(StandardGate::RZZ, smallvec![PI / 2.0], 0, 1);
+        result.push_single(StandardGate::H, smallvec![], 1);
+        result.push_single(StandardGate::H, smallvec![], 0);
+        result.push_single(StandardGate::RY, smallvec![-PI / 2.0], 0);
+        result.push_single(StandardGate::RZ, smallvec![-phi / 2.0], 0);
 
         result
     }
@@ -546,11 +630,51 @@ mod tests {
 
     #[test]
     fn test_rzz2cx_rule() {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         for _ in 0..5 {
-            let theta = rng.gen_range(-PI..PI);
+            let theta = rng.random_range(-PI..PI);
             assert_rule_decomposition(
                 DoubleQubitRule::rzz2cx_rule, &StandardGate::RZZ, &smallvec![theta], "rzz2cx_rule");
+        }
+    }
+
+    #[test]
+    fn test_cx2fsim_rule() {
+        let gate = StandardGate::CX;
+        assert_rule_decomposition(
+            DoubleQubitRule::cx2fsim_rule, &gate, &smallvec![], "cx2fsim_rule"
+        );
+    }
+
+    #[test]
+    fn test_fsim2cx_rule() {
+        let mut rng = rand::rng();
+        for _ in 0..5 {
+            let theta = rng.random_range(-PI..PI);
+            let phi = rng.random_range(-PI..PI);
+            assert_rule_decomposition(
+                DoubleQubitRule::fsim2cx_rule, &StandardGate::FSIM, &smallvec![theta, phi], "fsim2cx_rule");
+        }
+    }
+
+    #[test]
+    fn test_rzz2fsim_rule() {
+        let mut rng = rand::rng();
+        for _ in 0..5 {
+            let theta = rng.random_range(-PI..PI);
+            assert_rule_decomposition(
+                DoubleQubitRule::rzz2fsim_rule, &StandardGate::RZZ, &smallvec![theta], "rzz2fsim_rule");
+        }
+    }
+
+    #[test]
+    fn test_fsim2rzz_rule() {
+        let mut rng = rand::rng();
+        for _ in 0..5 {
+            let theta = rng.random_range(-PI..PI);
+            let phi = rng.random_range(-PI..PI);
+            assert_rule_decomposition(
+                DoubleQubitRule::fsim2rzz_rule, &StandardGate::FSIM, &smallvec![theta, phi], "fsim2rzz_rule");
         }
     }
 
@@ -596,9 +720,9 @@ mod tests {
 
     #[test]
     fn test_rzz2rxx_rule() {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         for _ in 0..5 {
-            let theta = rng.gen_range(-PI..PI);
+            let theta = rng.random_range(-PI..PI);
             assert_rule_decomposition(
                 DoubleQubitRule::rzz2rxx_rule, &StandardGate::RZZ, &smallvec![theta], "rzz2rxx_rule"
             );
@@ -607,9 +731,9 @@ mod tests {
 
     #[test]
     fn test_rxx2rzz_rule() {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         for _ in 0..5 {
-            let theta = rng.gen_range(-PI..PI);
+            let theta = rng.random_range(-PI..PI);
             assert_rule_decomposition(
                 DoubleQubitRule::rxx2rzz_rule, &StandardGate::RXX, &smallvec![theta], "rxx2rzz_rule"
             );
@@ -618,9 +742,9 @@ mod tests {
 
     #[test]
     fn test_rzz2ryy_rule() {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         for _ in 0..5 {
-            let theta = rng.gen_range(-PI..PI);
+            let theta = rng.random_range(-PI..PI);
             assert_rule_decomposition(
                 DoubleQubitRule::rzz2ryy_rule, &StandardGate::RZZ, &smallvec![theta], "rzz2ryy_rule"
             );
@@ -629,9 +753,9 @@ mod tests {
 
     #[test]
     fn test_ryy2rzz_rule() {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         for _ in 0..5 {
-            let theta = rng.gen_range(-PI..PI);
+            let theta = rng.random_range(-PI..PI);
             assert_rule_decomposition(
                 DoubleQubitRule::ryy2rzz_rule, &StandardGate::RYY, &smallvec![theta], "ryy2rzz_rule"
             );
@@ -640,9 +764,9 @@ mod tests {
 
     #[test]
     fn test_rzz2rzx_rule() {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         for _ in 0..5 {
-            let theta = rng.gen_range(-PI..PI);
+            let theta = rng.random_range(-PI..PI);
             assert_rule_decomposition(
                 DoubleQubitRule::rzz2rzx_rule, &StandardGate::RZZ, &smallvec![theta], "rzz2rzx_rule"
             );
@@ -651,9 +775,9 @@ mod tests {
 
     #[test]
     fn test_rzx2rzz_rule() {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         for _ in 0..5 {
-            let theta = rng.gen_range(-PI..PI);
+            let theta = rng.random_range(-PI..PI);
             assert_rule_decomposition(
                 DoubleQubitRule::rzx2rzz_rule, &StandardGate::RZX, &smallvec![theta], "rzx2rzz_rule"
             );
@@ -662,9 +786,9 @@ mod tests {
 
     #[test]
     fn test_rzz2crz_rule() {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         for _ in 0..5 {
-            let theta = rng.gen_range(-PI..PI);
+            let theta = rng.random_range(-PI..PI);
             assert_rule_decomposition(
                 DoubleQubitRule::rzz2crz_rule, &StandardGate::RZZ, &smallvec![theta], "rzz2crz_rule"
             );
@@ -673,9 +797,9 @@ mod tests {
 
     #[test]
     fn test_crz2rzz_rule() {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         for _ in 0..5 {
-            let theta = rng.gen_range(-PI..PI);
+            let theta = rng.random_range(-PI..PI);
             assert_rule_decomposition(
                 DoubleQubitRule::crz2rzz_rule, &StandardGate::CRZ, &smallvec![theta], "crz2rzz_rule"
             );
@@ -684,9 +808,9 @@ mod tests {
 
     #[test]
     fn test_rzz2crx_rule() {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         for _ in 0..5 {
-            let theta = rng.gen_range(-PI..PI);
+            let theta = rng.random_range(-PI..PI);
             assert_rule_decomposition(
                 DoubleQubitRule::rzz2crx_rule, &StandardGate::RZZ, &smallvec![theta], "rzz2crx_rule"
             );
@@ -695,9 +819,9 @@ mod tests {
 
     #[test]
     fn test_crx2rzz_rule() {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         for _ in 0..5 {
-            let theta = rng.gen_range(-PI..PI);
+            let theta = rng.random_range(-PI..PI);
             assert_rule_decomposition(
                 DoubleQubitRule::crx2rzz_rule, &StandardGate::CRX, &smallvec![theta], "crx2rzz_rule"
             );
@@ -706,9 +830,9 @@ mod tests {
 
     #[test]
     fn test_rzz2cry_rule() {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         for _ in 0..5 {
-            let theta = rng.gen_range(-PI..PI);
+            let theta = rng.random_range(-PI..PI);
             assert_rule_decomposition(
                 DoubleQubitRule::rzz2cry_rule, &StandardGate::RZZ, &smallvec![theta], "rzz2cry_rule"
             );
@@ -717,9 +841,9 @@ mod tests {
 
     #[test]
     fn test_cry2rzz_rule() {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         for _ in 0..5 {
-            let theta = rng.gen_range(-PI..PI);
+            let theta = rng.random_range(-PI..PI);
             assert_rule_decomposition(
                 DoubleQubitRule::cry2rzz_rule, &StandardGate::CRY, &smallvec![theta], "cry2rzz_rule"
             );
