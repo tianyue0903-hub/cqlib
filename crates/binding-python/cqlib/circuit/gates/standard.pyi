@@ -10,12 +10,11 @@
 # copyright notice, and modified files need to carry a notice indicating
 # that they have been altered from the originals.
 
-from typing import List, Union, Optional
+from typing import Optional
 import numpy as np
 import numpy.typing as npt
 from typing_extensions import final
 from ..parameter import Parameter
-
 
 @final
 class StandardGate:
@@ -79,11 +78,11 @@ class StandardGate:
         ...
 
     @property
-    def params(self) -> List[Parameter]:
+    def params(self) -> list[Parameter]:
         """Returns the parameters bound to this gate instance."""
         ...
 
-    def __call__(self, *args: Union[float, Parameter]) -> "StandardGate":
+    def __call__(self, *args: float | Parameter) -> "StandardGate":
         """Bind parameters to a parametric gate.
 
         Example:
@@ -92,7 +91,7 @@ class StandardGate:
         ...
 
     def matrix(
-            self, params: Optional[List[float]] = None
+        self, params: Optional[list[float]] = None
     ) -> npt.NDArray[np.complex128]:
         """Returns the unitary matrix representation of the gate.
 
