@@ -743,7 +743,7 @@ fn dump_control_flow(
             // Dump true body operations
             let true_body = if_else.true_body();
             for body_op in true_body {
-                let body_qasm = operation_to_qasm(body_op, circuit, qubit_map, param_map);
+                let body_qasm = operation_to_qasm(body_op, circuit, qubit_map, param_map)?;
                 // OpenQASM 2.0 format: if (creg == value) op;
                 writeln!(
                     output,
@@ -756,7 +756,7 @@ fn dump_control_flow(
             // OpenQASM 2.0 doesn't have native else, so we use inverted condition
             if let Some(false_body) = if_else.false_body() {
                 for body_op in false_body {
-                    let body_qasm = operation_to_qasm(body_op, circuit, qubit_map, param_map);
+                    let body_qasm = operation_to_qasm(body_op, circuit, qubit_map, param_map)?;
                     // Invert condition: if (creg == 1-value) op;
                     let inverted_value = if target_value == 0 { 1 } else { 0 };
                     writeln!(
@@ -781,7 +781,7 @@ fn operation_to_qasm(
     circuit: &Circuit,
     qubit_map: &HashMap<Qubit, String>,
     param_map: &HashMap<String, Parameter>,
-) -> String {
+) -> Result<String, QasmDumpError> {
     match &op.instruction {
         Instruction::Standard(gate) => {
             // Use the same pattern as dump_standard_gate
@@ -819,47 +819,59 @@ fn operation_to_qasm(
             };
             let params_str = format_params(op, circuit, param_map);
             let mapped_qs = map_qubits(op, qubit_map);
-            format!("{}{} {}", name, params_str, mapped_qs.join(","))
+            Ok(format!("{}{} {}", name, params_str, mapped_qs.join(",")))
         }
         Instruction::McGate(mc_gate) => {
             let num_ctrl = mc_gate.num_ctrl_qubits();
             let base = mc_gate.base_gate();
             let name = match (num_ctrl, base) {
                 (1, StandardGate::X) => "cx",
+                (2, StandardGate::X) => "ccx",
                 (1, StandardGate::Z) => "cz",
                 (1, StandardGate::Y) => "cy",
                 (1, StandardGate::H) => "ch",
                 (1, StandardGate::CX) => "ccx",
-                _ => "mcgate",
+                (1, StandardGate::RX) => "crx",
+                (1, StandardGate::RY) => "cry",
+                (1, StandardGate::RZ) => "crz",
+                (1, StandardGate::SWAP) => "cswap",
+                (1, StandardGate::Phase) => "cu1",
+                _ => {
+                    return Err(QasmDumpError::FormatError(format!(
+                        "Unsupported multi-controlled gate: {}-controlled {:?}",
+                        num_ctrl, base
+                    )));
+                }
             };
+            let params_str = format_params(op, circuit, param_map);
             let mapped_qs = map_qubits(op, qubit_map);
-            format!("{} {}", name, mapped_qs.join(","))
+            Ok(format!("{}{} {}", name, params_str, mapped_qs.join(",")))
         }
         Instruction::Directive(directive) => match directive {
             Directive::Barrier => {
                 let mapped_qs = map_qubits(op, qubit_map);
-                format!("barrier {}", mapped_qs.join(","))
+                Ok(format!("barrier {}", mapped_qs.join(",")))
             }
             Directive::Reset => {
                 let mapped_qs = map_qubits(op, qubit_map);
-                format!("reset {}", mapped_qs[0])
+                Ok(format!("reset {}", mapped_qs[0]))
             }
-            Directive::Measure => "// measure not supported in if-body".to_string(),
+            Directive::Measure => Err(QasmDumpError::MeasureInGateNotAllowed),
         },
         Instruction::CircuitGate(cg) => {
             let params_str = format_params(op, circuit, param_map);
             let mapped_qs = map_qubits(op, qubit_map);
-            format!("{}{} {}", cg.name, params_str, mapped_qs.join(","))
+            Ok(format!("{}{} {}", cg.name, params_str, mapped_qs.join(",")))
         }
         Instruction::UnitaryGate(unitary_gate) => {
             let mapped_qs = map_qubits(op, qubit_map);
-            format!("{} {}", unitary_gate.label(), mapped_qs.join(","))
+            Ok(format!("{} {}", unitary_gate.label(), mapped_qs.join(",")))
         }
-        Instruction::ControlFlowGate(_) => "// nested control flow not supported".to_string(),
+        Instruction::ControlFlowGate(_) => Err(QasmDumpError::NestedControlFlowNotSupported),
         Instruction::Delay => {
             let params_str = format_params(op, circuit, param_map);
             let mapped_qs = map_qubits(op, qubit_map);
-            format!("delay({}) {}", params_str, mapped_qs[0])
+            Ok(format!("delay({}) {}", params_str, mapped_qs[0]))
         }
     }
 }
