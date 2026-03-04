@@ -355,7 +355,7 @@ fn test_decompose() {
         .unwrap();
 
     // 3. Decompose
-    let decomposed = outer.decompose();
+    let decomposed = outer.decompose().unwrap();
 
     // 4. Verify
     assert_eq!(decomposed.num_qubits(), 2);
@@ -427,7 +427,7 @@ fn test_decompose_nested() {
     top.append(g2, [Qubit::new(0)], [ParameterValue::Param(phi)], None)
         .unwrap();
 
-    let flat = top.decompose();
+    let flat = top.decompose().unwrap();
     assert_eq!(flat.data.len(), 2);
 
     assert!(matches!(
@@ -620,7 +620,7 @@ fn test_decompose_preserves_control_flow() {
     circuit.if_else(condition, true_body, None).unwrap();
 
     // Decompose the circuit
-    let decomposed = circuit.decompose();
+    let decomposed = circuit.decompose().unwrap();
 
     // Should have the control flow preserved
     assert_eq!(decomposed.data.len(), 1);
@@ -661,7 +661,7 @@ fn test_decompose_control_flow_multiple_qubits() {
     circuit.if_else(condition, true_body, None).unwrap();
 
     // Decompose should work without error
-    let decomposed = circuit.decompose();
+    let decomposed = circuit.decompose().unwrap();
 
     // Control flow should be preserved
     let has_control_flow = decomposed

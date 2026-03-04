@@ -377,3 +377,81 @@ fn test_replace_no_change() {
         panic!("New expression changed type?!");
     }
 }
+
+#[test]
+fn test_evaluate_depth_limit_exceeded() {
+    // Test that the depth limit is enforced by calling evaluate_with_depth directly
+    // with a low limit to avoid actually creating a super deep expression
+    let x = ExprNode::Symbol("x".to_string());
+    let one = ExprNode::Integer(1);
+
+    // Create a moderately nested expression: ((x + 1) + 1) + 1
+    // Expression tree depth = 4 (Symbol is depth 0)
+    let expr = ExprNode::Add(
+        Arc::new(ExprNode::Add(
+            Arc::new(ExprNode::Add(Arc::new(x), Arc::new(one.clone()))),
+            Arc::new(one.clone()),
+        )),
+        Arc::new(one.clone()),
+    );
+
+    let mut bindings = HashMap::new();
+    bindings.insert("x".to_string(), 0.0);
+
+    // Call evaluate_with_depth with a limit of 2 (should fail at depth 3)
+    let result = expr.evaluate_with_depth(&bindings, 0, 2);
+    assert!(
+        matches!(result, Err(EvalError::MaxRecursionDepthExceeded(2))),
+        "Expected MaxRecursionDepthExceeded(2), got {:?}",
+        result
+    );
+
+    // Verify it succeeds with a higher limit
+    let result = expr.evaluate_with_depth(&bindings, 0, 10);
+    assert!(
+        result.is_ok(),
+        "Expected success with depth limit 10, got {:?}",
+        result
+    );
+    assert_eq!(result.unwrap(), 3.0);
+}
+
+#[test]
+fn test_evaluate_depth_within_limit() {
+    // Create a moderately nested expression that stays within the limit
+    let depth = 100;
+    let x = ExprNode::Symbol("x".to_string());
+    let one = ExprNode::Integer(1);
+
+    // Build nested expression: x + 1 + 1 + ... (100 times)
+    let mut expr = x;
+    for _ in 0..depth {
+        expr = ExprNode::Add(Arc::new(expr), Arc::new(one.clone()));
+    }
+
+    let mut bindings = HashMap::new();
+    bindings.insert("x".to_string(), 0.0);
+
+    // Should succeed: 0 + 1*100 = 100
+    let result = expr.evaluate(&bindings).unwrap();
+    assert_eq!(result, 100.0);
+}
+
+#[test]
+fn test_evaluate_with_depth_function_chain() {
+    // Test depth counting with function chains: sin(sin(sin(...x...)))
+    let depth = 50;
+    let x = ExprNode::Symbol("x".to_string());
+
+    let mut expr = x;
+    for _ in 0..depth {
+        expr = ExprNode::Sin(Arc::new(expr));
+    }
+
+    let mut bindings = HashMap::new();
+    bindings.insert("x".to_string(), 0.0); // sin(0) = 0, so result should be 0
+
+    // Should succeed: sin(sin(...sin(0)...)) = 0
+    let result = expr.evaluate(&bindings).unwrap();
+    assert!(result.abs() < 1e-10, "Expected ~0, got {}", result);
+}

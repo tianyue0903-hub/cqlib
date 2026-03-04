@@ -58,7 +58,12 @@ pub fn py_circuit_to_matrix<'py>(
     circuit: &PyCircuit,
     qubits_order: Option<Vec<usize>>,
 ) -> PyResult<Bound<'py, PyArray2<Complex64>>> {
-    circuit_to_matrix(&circuit.inner, qubits_order.as_ref())
+    // Clone circuit data for thread-safe access without holding GIL
+    let circuit_inner = circuit.inner.clone();
+    let order = qubits_order.clone();
+    // Release GIL during potentially expensive matrix computation
+    let result = py.detach(move || circuit_to_matrix(&circuit_inner, order.as_ref()));
+    result
         .map(|arr| arr.into_pyarray(py))
         .map_err(|e| PyRuntimeError::new_err(e.to_string()))
 }

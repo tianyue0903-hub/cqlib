@@ -176,9 +176,17 @@ impl ExprNode {
         all_symbols
     }
 
+    /// Default maximum recursion depth for expression evaluation.
+    ///
+    /// This limit prevents stack overflow from malicious or accidentally deeply nested expressions.
+    /// A depth of 1000 is sufficient for realistic quantum circuit parameters while providing
+    /// a safety margin against stack exhaustion.
+    pub const DEFAULT_MAX_DEPTH: usize = 1000;
+
     /// Evaluates the expression tree numerically using the provided variable bindings.
     ///
     /// This method traverses the AST recursively and computes the final floating-point result.
+    /// It uses a default maximum recursion depth of [`DEFAULT_MAX_DEPTH`] to prevent stack overflow.
     ///
     /// # Arguments
     ///
@@ -198,6 +206,7 @@ impl ExprNode {
     /// * `EvalError::DomainError`: If a mathematical function is called with an invalid argument
     ///   (e.g., `sqrt(-1.0)`, `ln(-5.0)`, `asin(1.5)`).
     /// * `EvalError::NaN`: If intermediate calculation results in `NaN`.
+    /// * `EvalError::MaxRecursionDepthExceeded`: If the expression nesting exceeds [`DEFAULT_MAX_DEPTH`].
     ///
     /// # Examples
     ///
@@ -218,7 +227,31 @@ impl ExprNode {
     /// assert_eq!(result, 5.0);
     /// ```
     pub fn evaluate(&self, bindings: &HashMap<String, f64>) -> Result<f64, EvalError> {
+        self.evaluate_with_depth(bindings, 0, Self::DEFAULT_MAX_DEPTH)
+    }
+
+    /// Evaluates the expression tree with a custom maximum recursion depth.
+    ///
+    /// This is the internal implementation that tracks recursion depth.
+    ///
+    /// # Arguments
+    ///
+    /// * `bindings` - A map containing values for any `Symbol` nodes present in the tree.
+    /// * `current_depth` - The current recursion depth (starts at 0).
+    /// * `max_depth` - The maximum allowed recursion depth.
+    fn evaluate_with_depth(
+        &self,
+        bindings: &HashMap<String, f64>,
+        current_depth: usize,
+        max_depth: usize,
+    ) -> Result<f64, EvalError> {
+        if current_depth > max_depth {
+            return Err(EvalError::MaxRecursionDepthExceeded(max_depth));
+        }
+
         use std::f64::consts::{E, PI};
+
+        let next_depth = current_depth + 1;
 
         let result = match self {
             ExprNode::Integer(i) => *i as f64,
@@ -228,7 +261,7 @@ impl ExprNode {
                 .copied()
                 .ok_or_else(|| EvalError::UndefinedSymbol(name.clone()))?,
             ExprNode::Sign(inner) => {
-                let value = inner.evaluate(bindings)?;
+                let value = inner.evaluate_with_depth(bindings, next_depth, max_depth)?;
                 if value > 0.0 {
                     1.0
                 } else if value < 0.0 {
@@ -240,18 +273,22 @@ impl ExprNode {
             ExprNode::Pi => PI,
             ExprNode::E => E,
             // Single-variable function
-            ExprNode::Abs(inner) => inner.evaluate(bindings)?.abs(),
+            ExprNode::Abs(inner) => inner
+                .evaluate_with_depth(bindings, next_depth, max_depth)?
+                .abs(),
             ExprNode::Sqrt(inner) => {
-                let value = inner.evaluate(bindings)?;
+                let value = inner.evaluate_with_depth(bindings, next_depth, max_depth)?;
                 if value < 0.0 {
                     return Err(EvalError::DomainError(format!("sqrt({})", value)));
                 }
                 value.sqrt()
             }
-            ExprNode::Exp(inner) => inner.evaluate(bindings)?.exp(),
-            ExprNode::Neg(inner) => -inner.evaluate(bindings)?,
+            ExprNode::Exp(inner) => inner
+                .evaluate_with_depth(bindings, next_depth, max_depth)?
+                .exp(),
+            ExprNode::Neg(inner) => -inner.evaluate_with_depth(bindings, next_depth, max_depth)?,
             ExprNode::Ln(inner) => {
-                let value = inner.evaluate(bindings)?;
+                let value = inner.evaluate_with_depth(bindings, next_depth, max_depth)?;
                 if value <= 0.0 {
                     return Err(EvalError::DomainError(format!(
                         "ln({}) - argument must be positive",
@@ -261,8 +298,8 @@ impl ExprNode {
                 value.ln()
             }
             ExprNode::Log(arg, base) => {
-                let arg_val = arg.evaluate(bindings)?;
-                let base_val = base.evaluate(bindings)?;
+                let arg_val = arg.evaluate_with_depth(bindings, next_depth, max_depth)?;
+                let base_val = base.evaluate_with_depth(bindings, next_depth, max_depth)?;
 
                 if arg_val <= 0.0 {
                     return Err(EvalError::DomainError(format!(
@@ -279,44 +316,63 @@ impl ExprNode {
                 arg_val.log(base_val)
             }
 
-            ExprNode::Sin(inner) => inner.evaluate(bindings)?.sin(),
+            ExprNode::Sin(inner) => inner
+                .evaluate_with_depth(bindings, next_depth, max_depth)?
+                .sin(),
             ExprNode::ASin(inner) => {
-                let value = inner.evaluate(bindings)?;
+                let value = inner.evaluate_with_depth(bindings, next_depth, max_depth)?;
                 if !(-1.0..=1.0).contains(&value) {
                     return Err(EvalError::DomainError(format!("asin({})", value)));
                 }
                 value.asin()
             }
-            ExprNode::Cos(inner) => inner.evaluate(bindings)?.cos(),
+            ExprNode::Cos(inner) => inner
+                .evaluate_with_depth(bindings, next_depth, max_depth)?
+                .cos(),
             ExprNode::ACos(inner) => {
-                let value = inner.evaluate(bindings)?;
+                let value = inner.evaluate_with_depth(bindings, next_depth, max_depth)?;
                 if !(-1.0..=1.0).contains(&value) {
                     return Err(EvalError::DomainError(format!("acos({})", value)));
                 }
                 value.acos()
             }
-            ExprNode::Tan(inner) => inner.evaluate(bindings)?.tan(),
-            ExprNode::ATan(inner) => inner.evaluate(bindings)?.atan(),
+            ExprNode::Tan(inner) => inner
+                .evaluate_with_depth(bindings, next_depth, max_depth)?
+                .tan(),
+            ExprNode::ATan(inner) => inner
+                .evaluate_with_depth(bindings, next_depth, max_depth)?
+                .atan(),
 
             // Binary operation
-            ExprNode::Add(lhs, rhs) => lhs.evaluate(bindings)? + rhs.evaluate(bindings)?,
-            ExprNode::Sub(lhs, rhs) => lhs.evaluate(bindings)? - rhs.evaluate(bindings)?,
-            ExprNode::Mul(lhs, rhs) => lhs.evaluate(bindings)? * rhs.evaluate(bindings)?,
+            ExprNode::Add(lhs, rhs) => {
+                lhs.evaluate_with_depth(bindings, next_depth, max_depth)?
+                    + rhs.evaluate_with_depth(bindings, next_depth, max_depth)?
+            }
+            ExprNode::Sub(lhs, rhs) => {
+                lhs.evaluate_with_depth(bindings, next_depth, max_depth)?
+                    - rhs.evaluate_with_depth(bindings, next_depth, max_depth)?
+            }
+            ExprNode::Mul(lhs, rhs) => {
+                lhs.evaluate_with_depth(bindings, next_depth, max_depth)?
+                    * rhs.evaluate_with_depth(bindings, next_depth, max_depth)?
+            }
             ExprNode::Div(lhs, rhs) => {
-                let denominator = rhs.evaluate(bindings)?;
+                let denominator = rhs.evaluate_with_depth(bindings, next_depth, max_depth)?;
                 if denominator.abs() < f64::EPSILON {
                     return Err(EvalError::DivisionByZero);
                 }
-                lhs.evaluate(bindings)? / denominator
+                lhs.evaluate_with_depth(bindings, next_depth, max_depth)? / denominator
             }
             ExprNode::Mod(lhs, rhs) => {
-                let divisor = rhs.evaluate(bindings)?;
+                let divisor = rhs.evaluate_with_depth(bindings, next_depth, max_depth)?;
                 if divisor.abs() < f64::EPSILON {
                     return Err(EvalError::DivisionByZero);
                 }
-                lhs.evaluate(bindings)? % divisor
+                lhs.evaluate_with_depth(bindings, next_depth, max_depth)? % divisor
             }
-            ExprNode::Pow(lhs, rhs) => lhs.evaluate(bindings)?.powf(rhs.evaluate(bindings)?),
+            ExprNode::Pow(lhs, rhs) => lhs
+                .evaluate_with_depth(bindings, next_depth, max_depth)?
+                .powf(rhs.evaluate_with_depth(bindings, next_depth, max_depth)?),
         };
 
         if result.is_nan() {
