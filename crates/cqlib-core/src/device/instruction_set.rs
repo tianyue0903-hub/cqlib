@@ -26,6 +26,7 @@ impl TransformStep {
 /// Categories:
 /// - CX category (key: CX): CX, CY, CZ
 /// - RZZ category (key: RZZ): RXX, RYY, RZX, RZZ
+/// - FSIM category (key: FSIM): FSIM
 fn get_two_qubit_categories() -> HashMap<StandardGate, Vec<StandardGate>> {
     let mut categories = HashMap::new();
     categories.insert(StandardGate::CX, vec![StandardGate::CX, StandardGate::CY, StandardGate::CZ]);
@@ -41,6 +42,7 @@ fn get_two_qubit_categories() -> HashMap<StandardGate, Vec<StandardGate>> {
             StandardGate::CRZ,
         ],
     );
+    categories.insert(StandardGate::FSIM, vec![StandardGate::FSIM]);
     categories
 }
 
@@ -361,6 +363,50 @@ mod tests {
         assert_eq!(rules.len(), 1);
         assert_eq!(rules[0].source_gate, StandardGate::CX);
         assert_eq!(rules[0].rule_name, "cx2rzz_rule");
+    }
+
+    #[test]
+    fn test_select_transform_rule_cx_to_fsim() {
+        // CX -> FSIM (different categories, both are keys)
+        let mut iset = InstructionSet::new(
+            vec![StandardGate::RZ, StandardGate::RX],
+            vec![StandardGate::FSIM],
+            None
+        );
+        let rules = iset.select_transform_rule(StandardGate::CX).unwrap();
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].source_gate, StandardGate::CX);
+        assert_eq!(rules[0].rule_name, "cx2fsim_rule");
+    }
+
+    #[test]
+    fn test_select_transform_rule_fsim_to_cx() {
+        // FSIM -> CX (different categories, both are keys)
+        let mut iset = InstructionSet::new(
+            vec![StandardGate::RZ, StandardGate::RX],
+            vec![StandardGate::CX],
+            None
+        );
+        let rules = iset.select_transform_rule(StandardGate::FSIM).unwrap();
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].source_gate, StandardGate::FSIM);
+        assert_eq!(rules[0].rule_name, "fsim2cx_rule");
+    }
+
+    #[test]
+    fn test_select_transform_rule_fsim_to_rxx() {
+        // FSIM -> RXX (different categories, FSIM key to RZZ member)
+        let mut iset = InstructionSet::new(
+            vec![StandardGate::RZ, StandardGate::RX],
+            vec![StandardGate::RXX],
+            None
+        );
+        let rules = iset.select_transform_rule(StandardGate::FSIM).unwrap();
+        assert_eq!(rules.len(), 2);
+        assert_eq!(rules[0].source_gate, StandardGate::FSIM);
+        assert_eq!(rules[0].rule_name, "fsim2rzz_rule");
+        assert_eq!(rules[1].source_gate, StandardGate::RZZ);
+        assert_eq!(rules[1].rule_name, "rzz2rxx_rule");
     }
 
     #[test]
