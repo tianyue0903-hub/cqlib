@@ -10,6 +10,48 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
+//! OpenQASM 2.0 Serializer Module
+//!
+//! This module provides functionality to serialize internal `Circuit` representations
+//! into OpenQASM 2.0 format.
+//!
+//! ## Features
+//!
+//! - **Standard Gates**: Outputs all standard quantum gates with correct QASM syntax
+//! - **Custom Gates**: Outputs user-defined gates as gate definitions followed by invocations
+//! - **Control Flow**: Handles conditional (if-else) operations with proper QASM format
+//! - **Extended Gates**: Automatically includes definitions for non-standard gates (CRX, CRY, etc.)
+//! - **Parameter Formatting**: Formats floating-point parameters using common constants (pi, pi/2, etc.)
+//!
+//! ## Output Format
+//!
+//! The serializer generates valid OpenQASM 2.0 code:
+//! - Header with version and include statement
+//! - Quantum register declaration
+//! - Classical register declarations (for conditional operations)
+//! - Gate definitions (for custom gates)
+//! - Circuit operations
+//!
+//! ## Example
+//!
+//! ```rust
+//! use cqlib_core::ir::qasm2::dump::dumps;
+//! use cqlib_core::circuit::{Circuit, Qubit};
+//!
+//! let mut circuit = Circuit::new(2);
+//! circuit.h(Qubit::new(0)).unwrap();
+//! circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
+//!
+//! let qasm = dumps(&circuit).unwrap();
+//! // Output contains: OPENQASM 2.0; include "qelib1.inc"; ...
+//! ```
+//!
+//! ## Limitations
+//!
+//! - While loops are not supported in OpenQASM 2.0 and will return an error
+//! - Nested control flow is not supported
+//! - Measurements inside gate definitions are silently ignored (OpenQASM restriction)
+
 use crate::circuit::gate::circuit_gate::{CircuitGate, FrozenCircuit};
 use crate::circuit::gate::control_flow::ControlFlow;
 use crate::circuit::gate::{Directive, Instruction, StandardGate};
@@ -25,20 +67,23 @@ use std::io::{self, Write as IoWrite};
 use std::path::Path;
 use std::sync::Arc;
 
-/// Errors that can occur during OpenQASM dumping
+/// Errors that can occur during OpenQASM serialization.
+///
+/// These errors indicate problems that prevent successful conversion
+/// from internal Circuit representation to OpenQASM 2.0 format.
 #[derive(Debug, Clone, PartialEq)]
 pub enum QasmDumpError {
-    /// IO error during file writing
+    /// File system or I/O error during file writing
     IoError(String),
-    /// Format error during string generation
+    /// Format error (invalid gate, parameter, or syntax generation failure)
     FormatError(String),
     /// While loops are not supported in OpenQASM 2.0
     WhileLoopNotSupported,
-    /// Measure inside gate definition is not allowed
+    /// Measure directives inside gate definitions are invalid in OpenQASM 2.0
     MeasureInGateNotAllowed,
-    /// Invalid qubit index
+    /// Invalid qubit index in quantum register
     InvalidQubitIndex(String),
-    /// Nested control flow is not supported
+    /// Nested control flow (if inside if) is not supported
     NestedControlFlowNotSupported,
 }
 
@@ -249,6 +294,14 @@ fn collect_conditional_qubits_from_op(op: &Operation, qubits: &mut HashSet<usize
     }
 }
 
+/// Collects all custom gate definitions from a circuit for output.
+///
+/// This is the first pass of serialization - it traverses the circuit recursively
+/// to find all CircuitGate and UnitaryGate definitions that need to be output
+/// as gate declarations in the QASM output.
+///
+/// Uses post-order traversal to ensure dependencies are collected before the gates
+/// that depend on them (important for correct gate ordering in output).
 fn collect_gates(
     circuit: &Circuit,
     defined_gates: &mut IndexMap<String, CircuitGate>,
@@ -722,7 +775,13 @@ fn collect_used_standard_gates(circuit: &Circuit, used_gates: &mut HashSet<Stand
     }
 }
 
-/// Dump a control flow gate (IfElse or WhileLoop) to QASM format
+/// Dumps a control flow gate (IfElse or WhileLoop) to QASM format.
+///
+/// Handles conversion of conditional quantum operations to OpenQASM 2.0 format:
+/// - **IfElse**: Outputs as `if (creg == value) op;`
+/// - **WhileLoop**: Returns error (not supported in OpenQASM 2.0)
+///
+/// For else branches, inverts the condition (e.g., `if (c0 == 0)` instead of else).
 fn dump_control_flow(
     gate: &ControlFlow,
     _op: &Operation,

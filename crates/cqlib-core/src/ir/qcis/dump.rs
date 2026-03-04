@@ -10,6 +10,56 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
+//! QCIS Serializer Module
+//!
+//! This module provides functionality to serialize internal `Circuit` representations
+//! into QCIS (Quantum Circuit Intermediate Representation) format.
+//!
+//! ## QCIS Output Format
+//!
+//! The serializer outputs one operation per line:
+//! ```text
+//! GATE Q0 Q1 ... [param1] [param2] ...
+//! ```
+//!
+//! ## Gate Mapping
+//!
+//! Standard gates are mapped to QCIS equivalents:
+//! - `SDG` (S dagger) → `SD`
+//! - `TDG` (T dagger) → `TD`
+//!
+//! ## Parameter Formatting
+//!
+//! Common values are simplified:
+//! - `pi` for π
+//! - `-pi` for -π
+//! - `pi/2` for π/2
+//! - `-pi/2` for -π/2
+//! - `pi/4` for π/4
+//! - `-pi/4` for -π/4
+//! - Integers without decimal when whole number
+//!
+//! ## Example
+//!
+//! ```rust
+//! use cqlib_core::ir::qcis::dumps;
+//! use cqlib_core::circuit::{Circuit, Qubit};
+//!
+//! let mut circuit = Circuit::new(2);
+//! circuit.h(Qubit::new(0)).unwrap();
+//! circuit.cz(Qubit::new(0), Qubit::new(1)).unwrap();
+//!
+//! let qcis = dumps(&circuit).unwrap();
+//! assert_eq!(qcis, "H Q0\nCZ Q0 Q1\n");
+//! ```
+//!
+//! ## Limitations
+//!
+//! - Gates not in the QCIS basis set return errors
+//! - Control flow gates (if/while) are not supported
+//! - Custom gates (CircuitGate, UnitaryGate) require prior compilation
+//! - Symbolic parameters cannot be resolved without binding
+
 use crate::circuit::Circuit;
 use crate::circuit::bit::Qubit;
 

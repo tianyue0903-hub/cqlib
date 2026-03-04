@@ -10,6 +10,42 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
+//! QCIS Parser Module
+//!
+//! This module provides functionality to parse QCIS (Quantum Circuit Intermediate Representation)
+//! format into the internal `Circuit` representation.
+//!
+//! ## QCIS Format
+//!
+//! Each line in QCIS represents a quantum operation with the format:
+//! ```text
+//! GATE_NAME QUBIT_LIST [PARAMETER_LIST]
+//! ```
+//!
+//! - **QUBIT_LIST**: Space-separated list of qubits in `Q<id>` format (e.g., `Q0`, `Q1`)
+//! - **PARAMETER_LIST**: Optional space-separated parameters (numeric values or expressions)
+//!
+//! ## Examples
+//!
+//! ```rust
+//! use cqlib_core::ir::qcis::loads;
+//!
+//! // Single-qubit gate
+//! let circuit = loads("H Q0").unwrap();
+//!
+//! // Two-qubit gate
+//! let circuit = loads("CZ Q0 Q1").unwrap();
+//!
+//! // Parametrized gate
+//! let circuit = loads("RX Q0 1.57").unwrap();
+//! ```
+//!
+//! ## Comments and Whitespace
+//!
+//! - Lines starting with `//` are treated as comments and ignored
+//! - Empty lines are ignored
+//! - Extra whitespace is normalized
+
 use crate::circuit::param::ParameterValue;
 use crate::circuit::parameter::parse::parse_parameter;
 use crate::circuit::{Circuit, Qubit};
@@ -69,6 +105,8 @@ pub enum QcisParseError {
 pub type Result<T> = std::result::Result<T, QcisParseError>;
 
 /// Gate specification defining required qubit and parameter counts.
+///
+/// Used to validate gate invocations against the QCIS specification.
 #[derive(Debug, Clone, Copy)]
 struct GateSpec {
     min_qubits: usize,
@@ -97,7 +135,7 @@ impl GateSpec {
         Self::new(qubits, qubits, params, params)
     }
 
-    /// Variable qubits (at least min), exact parameters.
+    /// Variable qubit count (at least min), exact parameters.
     const fn min_qubits(min_qubits: usize, params: usize) -> Self {
         Self::new(min_qubits, usize::MAX, params, params)
     }

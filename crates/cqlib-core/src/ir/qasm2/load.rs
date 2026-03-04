@@ -15,20 +15,57 @@
 //! This module provides functionality to parse OpenQASM 2.0 quantum programs
 //! and convert them into the internal `Circuit` representation.
 //!
-//! # Example
+//! ## Features
+//!
+//! - **Full OpenQASM 2.0 Support**: Parses all standard statements including quantum registers,
+//!   classical registers, gates, measurements, barriers, resets, and conditional execution
+//! - **Custom Gate Compilation**: Compiles user-defined gates into internal representations
+//! - **Include Processing**: Handles `include` statements for standard gate libraries (qelib1.inc)
+//! - **Expression Evaluation**: Evaluates mathematical expressions in gate parameters
+//! - **Error Handling**: Provides detailed error messages with line numbers and context
+//!
+//! ## Architecture
+//!
+//! The parser works in multiple phases:
+//! 1. **Discovery Pass**: Collects register declarations, gate definitions, and processes includes
+//! 2. **Compilation Phase**: Compiles custom gates into internal `CircuitGate` representations
+//! 3. **Generation Pass**: Converts AST statements into circuit operations
+//!
+//! ## Example
 //!
 //! ```rust
 //! use cqlib_core::ir::qasm2::load::loads;
 //!
 //! let qasm = r#"
 //!     OPENQASM 2.0;
+//!     include "qelib1.inc";
 //!     qreg q[2];
+//!     creg c[2];
 //!     h q[0];
 //!     cx q[0], q[1];
+//!     measure q[0] -> c[0];
+//!     measure q[1] -> c[1];
 //! "#;
 //!
 //! let circuit = loads(qasm).unwrap();
 //! assert_eq!(circuit.num_qubits(), 2);
+//! ```
+//!
+//! ## Gate Compilation
+//!
+//! Custom gates are lazily compiled on first use to detect circular dependencies:
+//!
+//! ```rust
+//! use cqlib_core::ir::qasm2::load::loads;
+//!
+//! let qasm = r#"
+//!     OPENQASM 2.0;
+//!     qreg q[1];
+//!     gate my_gate q { h q; }
+//!     my_gate q;
+//! "#;
+//!
+//! let circuit = loads(qasm).unwrap();
 //! ```
 
 use crate::circuit::Circuit;
@@ -47,10 +84,21 @@ use smallvec::{SmallVec, smallvec};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-/// A trait for resolving OpenQASM source code from a path.
-/// This allows abstracting away the file system for WASM or memory-based environments.
+/// Trait for abstracting file system access during OpenQASM parsing.
+///
+/// This allows the parser to work in different environments:
+/// - Real file system (use `FileSystemResolver`)
+/// - Memory-only mode (use `NullResolver`)
+/// - Custom resolvers for WASM or embedded files
 pub trait QasmSourceResolver {
     /// Resolve the content of a file given its path.
+    ///
+    /// # Arguments
+    /// * `path` - The file path to resolve
+    ///
+    /// # Returns
+    /// * `Ok(String)` - The file contents
+    /// * `Err(String)` - Error message if resolution fails
     fn resolve_source(&self, path: &Path) -> Result<String, String>;
 }
 
@@ -156,20 +204,35 @@ fn parse_qasm_with_context(
     converter.convert(&program)
 }
 
-/// Errors that can occur during OpenQASM parsing
+/// Errors that can occur during OpenQASM parsing and conversion.
+///
+/// Each variant represents a distinct error category that can occur
+/// when processing OpenQASM 2.0 source code.
 #[derive(Debug, Clone, PartialEq)]
 pub enum QasmParseError {
+    /// File system or I/O error (file not found, permission denied, etc.)
     IoError(String),
+    /// Syntax error during parsing (invalid QASM syntax)
     ParseError(String),
+    /// Semantic error during AST to Circuit conversion
     ConversionError(String),
+    /// Reference to undefined quantum register or qubit
     UndefinedQubit(String),
+    /// Reference to undefined classical register
     UndefinedRegister(String),
+    /// Reference to undefined gate
     UndefinedGate(String),
+    /// Invalid argument format or usage
     InvalidArgument(String),
+    /// Gate applied to wrong number of qubits
     MismatchedQubitCount { expected: usize, actual: usize },
+    /// Gate called with wrong number of parameters
     MismatchedParameterCount { expected: usize, actual: usize },
+    /// Gate expansion exceeded maximum recursion depth (circular definition likely)
     RecursionLimitExceeded(String),
+    /// Failed to evaluate parameter expression (undefined variable, division by zero, etc.)
     EvaluationError(String),
+    /// Circular gate dependency detected (gate calls itself directly or indirectly)
     CircularGateDependency { gate: String, dependency: String },
 }
 
@@ -217,29 +280,35 @@ impl std::error::Error for QasmParseError {}
 /// Default maximum recursion depth for gate expansion
 const DEFAULT_MAX_RECURSION_DEPTH: usize = 100;
 
-/// Converts OpenQASM AST to Circuit
+/// Converts OpenQASM AST to internal Circuit representation.
+///
+/// This struct performs multi-phase conversion:
+/// 1. **Discovery**: Collects register declarations and gate definitions
+/// 2. **Compilation**: Compiles custom gates into CircuitGate
+/// 3. **Generation**: Converts statements to circuit operations
 struct AstToCircuit {
-    /// Maps register names to their sizes
+    /// Quantum register name -> size mapping
     qregs: HashMap<String, i64>,
-    /// Tracks the order of register declarations to ensure deterministic qubit mapping
+    /// Declaration order for deterministic qubit indexing
     qreg_order: Vec<String>,
+    /// Classical register name -> size mapping
     cregs: HashMap<String, i64>,
-    /// Maps (creg_name, creg_index) -> qubit to track measurement results
-    /// This is populated when processing Measure statements
+    /// Maps (creg_name, creg_index) -> qubit for condition tracking
+    /// Populated during measure processing; used for if-statement conditions
     creg_to_qubit_map: HashMap<(String, usize), Qubit>,
-    /// Custom gate definitions
+    /// Custom gate definitions (name -> definition)
     custom_gates: HashMap<String, CustomGateDef>,
-    /// Base path for resolving includes
+    /// Base path for resolving relative include paths
     base_path: Option<PathBuf>,
-    /// Cache of parsed included files to avoid expensive re-parsing
+    /// Parsed include cache (path -> AST) to avoid re-parsing
     file_cache: HashMap<PathBuf, OpenQASMProgram>,
-    /// Current recursion depth for gate expansion
+    /// Current gate expansion depth (for recursion limiting)
     recursion_depth: usize,
-    /// Maximum allowed recursion depth
+    /// Maximum allowed recursion depth (default: 100)
     max_recursion_depth: usize,
-    /// Tracks gates currently being compiled to detect circular dependencies
+    /// Gates currently being compiled (for cycle detection)
     compiling_gates: HashSet<String>,
-    /// Source resolver for abstracting file system access
+    /// File system abstraction
     resolver: Box<dyn QasmSourceResolver>,
 }
 
