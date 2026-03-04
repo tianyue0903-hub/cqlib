@@ -42,14 +42,8 @@ fn binding_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyDirective>()?;
     m.add_class::<PyDelay>()?;
 
-    m.add_function(wrap_pyfunction!(ir::py_qasm2_load, m)?)?;
-    m.add_function(wrap_pyfunction!(ir::py_qasm2_loads, m)?)?;
-    m.add_function(wrap_pyfunction!(ir::py_qasm2_dump, m)?)?;
-    m.add_function(wrap_pyfunction!(ir::py_qasm2_dumps, m)?)?;
-    m.add_function(wrap_pyfunction!(ir::py_qcis_load, m)?)?;
-    m.add_function(wrap_pyfunction!(ir::py_qcis_loads, m)?)?;
-    m.add_function(wrap_pyfunction!(ir::py_qcis_dump, m)?)?;
-    m.add_function(wrap_pyfunction!(ir::py_qcis_dumps, m)?)?;
+    // Register IR module with qasm2 and qcis submodules
+    ir::register_ir_module(m)?;
     m.add_function(wrap_pyfunction!(
         circuit_to_matrix::py_circuit_to_matrix,
         m
