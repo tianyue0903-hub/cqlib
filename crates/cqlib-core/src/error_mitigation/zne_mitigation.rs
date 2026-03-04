@@ -10,6 +10,9 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
+use ndarray::Array2;
+use num_complex::Complex64;
+
 use crate::circuit::{Circuit, CircuitError, Instruction, Operation, Parameter};
 use std::collections::HashSet;
 
@@ -65,14 +68,19 @@ impl ZNEMitigation {
         }
     }
 
+    /// Returns the original (unfolded) circuit.
     pub fn circuit(&self) -> &Circuit {
         &self.circuit
     }
 
+    /// Returns configured fold levels.
     pub fn fold_levels(&self) -> &[i32] {
         &self.fold_levels
     }
 
+    /// Returns noise factors corresponding to fold levels.
+    ///
+    /// Each factor is `2 * level + 1` due to unitary folding.
     pub fn noise_factors(&self) -> &[i32] {
         &self.noise_factors
     }
@@ -92,6 +100,71 @@ impl ZNEMitigation {
             .iter()
             .map(|level| self.fold_to_level(*level, gate_set))
             .collect()
+    }
+
+    /// Compute expectation value `<psi|h|psi>` from circuit matrix and Hamiltonian.
+    ///
+    /// `psi` is taken as the first column of the circuit unitary matrix.
+    fn hexp_by_circ_matrix(circuit: &Circuit, hamiltonian: &Array2<Complex64>) -> f64 {
+        let c_mat = circuit.to_matrix(None);
+        let dim = c_mat.nrows();
+
+        assert_eq!(
+            c_mat.ncols(),
+            dim,
+            "circuit matrix must be square, got {}x{}",
+            dim,
+            c_mat.ncols()
+        );
+        assert_eq!(
+            hamiltonian.nrows(),
+            dim,
+            "hamiltonian row dimension mismatch: expected {}, got {}",
+            dim,
+            hamiltonian.nrows()
+        );
+        assert_eq!(
+            hamiltonian.ncols(),
+            dim,
+            "hamiltonian column dimension mismatch: expected {}, got {}",
+            dim,
+            hamiltonian.ncols()
+        );
+
+        let psi = c_mat.column(0).to_owned();
+        let mut expectation = Complex64::new(0.0, 0.0);
+        for i in 0..dim {
+            for j in 0..dim {
+                expectation += psi[i].conj() * hamiltonian[(i, j)] * psi[j];
+            }
+        }
+
+        expectation.re
+    }
+
+    /// Run the error-mitigation sequence and return expectation values.
+    ///
+    /// This method folds the circuit at each configured level and computes one
+    /// expectation value per folded circuit.
+    ///
+    /// - `gate_set`: optional selective gate set for folding. `None` means global folding.
+    /// - `hamiltonian`: complex Hamiltonian matrix with dimensions matching circuit matrix size.
+    /// - `hexp_calc`: optional custom expectation calculator. If `None`, defaults to
+    ///   the internal matrix-based implementation.
+    pub fn run_em_sequence(
+        &self,
+        gate_set: Option<&[Instruction]>,
+        hamiltonian: &Array2<Complex64>,
+        hexp_calc: Option<fn(&Circuit, &Array2<Complex64>) -> f64>,
+    ) -> Vec<f64> {
+        let hexp_calc_fn = hexp_calc.unwrap_or(Self::hexp_by_circ_matrix);
+        let mut hexp_seq = Vec::new();
+        for level in self.fold_levels() {
+            let circuit = self.fold_to_level(*level, gate_set).unwrap();
+            let hexp = hexp_calc_fn(&circuit, hamiltonian);
+            hexp_seq.push(hexp);
+        }
+        hexp_seq
     }
 
     fn fold_to_level(

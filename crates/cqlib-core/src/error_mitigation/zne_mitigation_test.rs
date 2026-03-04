@@ -15,6 +15,8 @@ use crate::circuit::Qubit;
 use crate::circuit::circuit_impl::Circuit;
 use crate::circuit::CircuitError;
 use crate::circuit::gate::{Instruction, StandardGate};
+use ndarray::Array2;
+use num_complex::Complex64;
 
 #[test]
 fn test_zne_new_sets_noise_factors() {
@@ -93,4 +95,53 @@ fn test_fold_circuits_negative_level_returns_error() {
         result,
         Err(CircuitError::InvalidControlOperation(_))
     ));
+}
+
+#[test]
+fn test_run_em_sequence_uses_default_hexp_calc() {
+    let q0 = Qubit::new(0);
+    let mut circuit = Circuit::new(1);
+    circuit.x(q0).unwrap();
+
+    let zne = ZNEMitigation::new(circuit, vec![0]);
+    let h = Array2::from_shape_vec(
+        (2, 2),
+        vec![
+            Complex64::new(1.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(-1.0, 0.0),
+        ],
+    )
+    .unwrap();
+
+    let values = zne.run_em_sequence(None, &h, None);
+    assert_eq!(values.len(), 1);
+    assert!((values[0] + 1.0).abs() < 1e-10);
+}
+
+#[test]
+fn test_run_em_sequence_with_custom_hexp_calc() {
+    fn custom_hexp(_circuit: &Circuit, _hamiltonian: &Array2<Complex64>) -> f64 {
+        42.0
+    }
+
+    let q0 = Qubit::new(0);
+    let mut circuit = Circuit::new(1);
+    circuit.h(q0).unwrap();
+
+    let zne = ZNEMitigation::new(circuit, vec![0, 1]);
+    let h = Array2::from_shape_vec(
+        (2, 2),
+        vec![
+            Complex64::new(1.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(-1.0, 0.0),
+        ],
+    )
+    .unwrap();
+
+    let values = zne.run_em_sequence(None, &h, Some(custom_hexp));
+    assert_eq!(values, vec![42.0, 42.0]);
 }
