@@ -114,6 +114,7 @@ dependencies = [
  "num-complex",
  "numpy",
  "pyo3",
+ "smallvec",
 ]
 
 [[package]]

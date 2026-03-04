@@ -10,13 +10,20 @@
 # copyright notice, and modified files need to carry a notice indicating
 # that they have been altered from the originals.
 
-"""Type hints for IR module.
+from typing_extensions import final
 
-This module provides type hints for parsing and serializing quantum circuits
-in various formats including OpenQASM 2.0 and QCIS.
-"""
+@final
+class Delay:
+    """A delay operation in a quantum circuit.
 
-from . import qasm2 as qasm2
-from . import qcis as qcis
+    Represents an idle period, often used for timing control in pulse-level scheduling.
+    The delay unit is 0.5 nanoseconds (aligned with common quantum control hardware
+    timing resolutions).
+    """
 
-__all__ = ["qasm2", "qcis"]
+    def __init__(self) -> None:
+        """Creates a new delay operation."""
+        ...
+
+    def __repr__(self) -> str: ...
+    def __str__(self) -> str: ...
