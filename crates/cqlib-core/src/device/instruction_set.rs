@@ -110,8 +110,8 @@ fn make_rule_name(source: &StandardGate, target: &StandardGate) -> String {
 
 #[derive(Debug, Default, Clone)]
 pub struct InstructionSet {
-    single_qubit_gates: Vec<StandardGate>,
-    double_qubit_gate: Vec<StandardGate>,
+    pub single_qubit_gates: Vec<StandardGate>,
+    pub double_qubit_gate: Vec<StandardGate>,
     single_qubit_decomposition_rule: String,
     /// Cache of two-qubit transform rules: source gate -> list of transform steps
     two_qubit_rule_map: HashMap<StandardGate, Vec<TransformStep>>,
