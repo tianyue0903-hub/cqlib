@@ -16,6 +16,13 @@ use num_complex::Complex64;
 use crate::circuit::{Circuit, CircuitError, Instruction, Operation, Parameter};
 use std::collections::HashSet;
 
+/// Extrapolation methods supported by [`ZNEMitigation::extrapolate`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExtrapolateMethod {
+    Polynomial,
+    Exponential,
+}
+
 /// Zero-noise extrapolation (ZNE) mitigation helper.
 ///
 /// This mirrors the Python `ZNEMitigation` data model and currently implements
@@ -167,6 +174,24 @@ impl ZNEMitigation {
         hexp_seq
     }
 
+    /// Unified extrapolation API.
+    ///
+    /// - `method = ExtrapolateMethod::Polynomial`: uses `degree` and delegates
+    ///   to [`ZNEMitigation::poly_extrapolate`].
+    /// - `method = ExtrapolateMethod::Exponential`: ignores `degree` and
+    ///   delegates to [`ZNEMitigation::exp_extrapolate`].
+    pub fn extrapolate(
+        &self,
+        noisy_results: &Vec<f64>,
+        method: ExtrapolateMethod,
+        degree: usize,
+    ) -> f64 {
+        match method {
+            ExtrapolateMethod::Polynomial => self.poly_extrapolate(noisy_results, degree),
+            ExtrapolateMethod::Exponential => self.exp_extrapolate(noisy_results),
+        }
+    }
+
 
     /// Given the noisy results, extrapolate the expectation value using a polynomial fit.
     ///
@@ -218,6 +243,52 @@ impl ZNEMitigation {
 
         let coeffs = Self::solve_linear_system(a, b);
         coeffs[0]
+    }
+
+    /// Given the noisy results, extrapolate the expectation value using an
+    /// exponential-decay model:
+    ///
+    /// `y(x) = A * exp(-x / tau)`.
+    ///
+    /// The fit is performed in log-space by linear regression on:
+    ///
+    /// `ln(y) = ln(A) + m * x`, where `m = -1 / tau`.
+    ///
+    /// Returns `A`, which is the extrapolated value at `x = 0`.
+    pub fn exp_extrapolate(&self, noisy_results: &Vec<f64>) -> f64 {
+        let n = self.noise_factors.len();
+        assert!(
+            !noisy_results.is_empty(),
+            "Noisy results must not be empty."
+        );
+        assert_eq!(
+            noisy_results.len(),
+            n,
+            "Noisy results must have the same length as noise factors."
+        );
+        assert!(
+            noisy_results.iter().all(|&v| v > 0.0),
+            "All noisy results must be positive for exponential extrapolation."
+        );
+
+        let x: Vec<f64> = self.noise_factors.iter().map(|&v| v as f64).collect();
+        let y_log: Vec<f64> = noisy_results.iter().map(|&v| v.ln()).collect();
+
+        let n_f = n as f64;
+        let sum_x: f64 = x.iter().sum();
+        let sum_y: f64 = y_log.iter().sum();
+        let sum_xx: f64 = x.iter().map(|v| v * v).sum();
+        let sum_xy: f64 = x.iter().zip(y_log.iter()).map(|(xi, yi)| xi * yi).sum();
+
+        let denom = n_f * sum_xx - sum_x * sum_x;
+        assert!(
+            denom.abs() > 1e-14,
+            "Exponential fit failed: singular linear-regression system."
+        );
+
+        let slope = (n_f * sum_xy - sum_x * sum_y) / denom;
+        let intercept = (sum_y - slope * sum_x) / n_f;
+        intercept.exp()
     }
 
     fn solve_linear_system(mut a: Vec<Vec<f64>>, mut b: Vec<f64>) -> Vec<f64> {

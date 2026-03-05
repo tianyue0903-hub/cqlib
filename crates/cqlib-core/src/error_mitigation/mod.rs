@@ -12,4 +12,4 @@
 
 pub mod zne_mitigation;
 
-pub use zne_mitigation::ZNEMitigation;
+pub use zne_mitigation::{ExtrapolateMethod, ZNEMitigation};
