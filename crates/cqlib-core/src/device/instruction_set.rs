@@ -1,6 +1,5 @@
 use crate::circuit::gate::StandardGate;
 use std::collections::HashMap;
-use rand::Rng;
 
 /// Represents a step in the two-qubit gate transformation chain.
 /// Each step transforms from `source_gate` using `rule_name`.
@@ -29,7 +28,10 @@ impl TransformStep {
 /// - FSIM category (key: FSIM): FSIM
 fn get_two_qubit_categories() -> HashMap<StandardGate, Vec<StandardGate>> {
     let mut categories = HashMap::new();
-    categories.insert(StandardGate::CX, vec![StandardGate::CX, StandardGate::CY, StandardGate::CZ]);
+    categories.insert(
+        StandardGate::CX,
+        vec![StandardGate::CX, StandardGate::CY, StandardGate::CZ],
+    );
     categories.insert(
         StandardGate::RZZ,
         vec![
@@ -103,11 +105,7 @@ fn gate_to_string(gate: &StandardGate) -> String {
 
 /// Generate the rule name for transforming from source to target gate.
 fn make_rule_name(source: &StandardGate, target: &StandardGate) -> String {
-    format!(
-        "{}2{}_rule",
-        gate_to_string(source),
-        gate_to_string(target)
-    )
+    format!("{}2{}_rule", gate_to_string(source), gate_to_string(target))
 }
 
 #[derive(Debug, Default, Clone)]
@@ -229,10 +227,10 @@ impl InstructionSet {
         for dg in &self.double_qubit_gate {
             let target_cate = get_category_key(dg);
             let target_cate = target_cate.ok_or_else(|| {
-            format!(
-                "Transform rule not found: target gate {:?} is not in any known category",
-                dg
-            )
+                format!(
+                    "Transform rule not found: target gate {:?} is not in any known category",
+                    dg
+                )
             })?;
 
             let mut curr_rules: Vec<TransformStep> = Vec::new();
@@ -282,7 +280,7 @@ impl InstructionSet {
                     ));
                 }
             }
-        
+
             if rules.is_empty() || curr_rules.len() < rules.len() {
                 rules = curr_rules;
             }
@@ -309,9 +307,9 @@ mod tests {
     fn test_select_transform_rule_same_category_key_to_member() {
         // CX -> CY (both in CX category, CX is the key)
         let mut iset = InstructionSet::new(
-            vec![StandardGate::RZ, StandardGate::RX], 
-            vec![StandardGate::CY], 
-            None
+            vec![StandardGate::RZ, StandardGate::RX],
+            vec![StandardGate::CY],
+            None,
         );
         let rules = iset.select_transform_rule(StandardGate::CX).unwrap();
         assert_eq!(rules.len(), 1);
@@ -323,9 +321,9 @@ mod tests {
     fn test_select_transform_rule_same_category_member_to_key() {
         // CY -> CX (both in CX category, CX is the key)
         let mut iset = InstructionSet::new(
-            vec![StandardGate::RZ, StandardGate::RX], 
-            vec![StandardGate::CX], 
-            None
+            vec![StandardGate::RZ, StandardGate::RX],
+            vec![StandardGate::CX],
+            None,
         );
         let rules = iset.select_transform_rule(StandardGate::CY).unwrap();
         assert_eq!(rules.len(), 1);
@@ -337,9 +335,9 @@ mod tests {
     fn test_select_transform_rule_same_category_member_to_member() {
         // CY -> CZ (both in CX category, neither is the key)
         let mut iset = InstructionSet::new(
-            vec![StandardGate::RZ, StandardGate::RX], 
-            vec![StandardGate::CZ], 
-            None
+            vec![StandardGate::RZ, StandardGate::RX],
+            vec![StandardGate::CZ],
+            None,
         );
         let rules = iset.select_transform_rule(StandardGate::CY).unwrap();
         assert_eq!(rules.len(), 2);
@@ -353,9 +351,9 @@ mod tests {
     fn test_select_transform_rule_different_category_key_to_key() {
         // CX -> RZZ (different categories, both are keys)
         let mut iset = InstructionSet::new(
-            vec![StandardGate::RZ, StandardGate::RX], 
-            vec![StandardGate::RZZ], 
-            None
+            vec![StandardGate::RZ, StandardGate::RX],
+            vec![StandardGate::RZZ],
+            None,
         );
         let rules = iset.select_transform_rule(StandardGate::CX).unwrap();
         assert_eq!(rules.len(), 1);
@@ -369,7 +367,7 @@ mod tests {
         let mut iset = InstructionSet::new(
             vec![StandardGate::RZ, StandardGate::RX],
             vec![StandardGate::FSIM],
-            None
+            None,
         );
         let rules = iset.select_transform_rule(StandardGate::CX).unwrap();
         assert_eq!(rules.len(), 1);
@@ -383,7 +381,7 @@ mod tests {
         let mut iset = InstructionSet::new(
             vec![StandardGate::RZ, StandardGate::RX],
             vec![StandardGate::CX],
-            None
+            None,
         );
         let rules = iset.select_transform_rule(StandardGate::FSIM).unwrap();
         assert_eq!(rules.len(), 1);
@@ -397,7 +395,7 @@ mod tests {
         let mut iset = InstructionSet::new(
             vec![StandardGate::RZ, StandardGate::RX],
             vec![StandardGate::RXX],
-            None
+            None,
         );
         let rules = iset.select_transform_rule(StandardGate::FSIM).unwrap();
         assert_eq!(rules.len(), 2);
@@ -411,9 +409,9 @@ mod tests {
     fn test_select_transform_rule_different_category_member_to_key() {
         // CY -> RZZ (different categories, CY is member, RZZ is key)
         let mut iset = InstructionSet::new(
-            vec![StandardGate::RZ, StandardGate::RX], 
-            vec![StandardGate::RZZ], 
-            None
+            vec![StandardGate::RZ, StandardGate::RX],
+            vec![StandardGate::RZZ],
+            None,
         );
         let rules = iset.select_transform_rule(StandardGate::CY).unwrap();
         assert_eq!(rules.len(), 2);
@@ -427,9 +425,9 @@ mod tests {
     fn test_select_transform_rule_different_category_key_to_member() {
         // CX -> RXX (different categories, CX is key, RXX is member)
         let mut iset = InstructionSet::new(
-            vec![StandardGate::RZ, StandardGate::RX], 
-            vec![StandardGate::RXX], 
-            None
+            vec![StandardGate::RZ, StandardGate::RX],
+            vec![StandardGate::RXX],
+            None,
         );
         let rules = iset.select_transform_rule(StandardGate::CX).unwrap();
         assert_eq!(rules.len(), 2);
@@ -443,9 +441,9 @@ mod tests {
     fn test_select_transform_rule_different_category_member_to_member() {
         // CY -> RXX (different categories, both are members)
         let mut iset = InstructionSet::new(
-            vec![StandardGate::RZ, StandardGate::RX], 
-            vec![StandardGate::RXX], 
-            None
+            vec![StandardGate::RZ, StandardGate::RX],
+            vec![StandardGate::RXX],
+            None,
         );
         let rules = iset.select_transform_rule(StandardGate::CY).unwrap();
         assert_eq!(rules.len(), 3);
@@ -461,9 +459,9 @@ mod tests {
     fn test_select_transform_rule_same_gate() {
         // CX -> CX (no transformation needed)
         let mut iset = InstructionSet::new(
-            vec![StandardGate::RZ, StandardGate::RX], 
-            vec![StandardGate::CX], 
-            None
+            vec![StandardGate::RZ, StandardGate::RX],
+            vec![StandardGate::CX],
+            None,
         );
         let rules = iset.select_transform_rule(StandardGate::CX).unwrap();
         assert_eq!(rules.len(), 0);
@@ -472,14 +470,17 @@ mod tests {
     #[test]
     fn test_select_transform_rule_caching() {
         let mut iset = InstructionSet::new(
-            vec![StandardGate::RZ, StandardGate::RX], 
-            vec![StandardGate::CY], 
-            None
+            vec![StandardGate::RZ, StandardGate::RX],
+            vec![StandardGate::CY],
+            None,
         );
 
         // First call calculates and caches
         let rules1 = iset.select_transform_rule(StandardGate::CX).unwrap();
-        assert!(iset.get_two_qubit_rule_map().contains_key(&StandardGate::CX));
+        assert!(
+            iset.get_two_qubit_rule_map()
+                .contains_key(&StandardGate::CX)
+        );
 
         // Second call returns cached result
         let rules2 = iset.select_transform_rule(StandardGate::CX).unwrap();
@@ -491,9 +492,9 @@ mod tests {
     fn test_unknown_gate_returns_error() {
         // SWAP is not in any category, should return error
         let mut iset = InstructionSet::new(
-            vec![StandardGate::RZ, StandardGate::RX], 
-            vec![StandardGate::CX], 
-            None
+            vec![StandardGate::RZ, StandardGate::RX],
+            vec![StandardGate::CX],
+            None,
         );
         let result = iset.select_transform_rule(StandardGate::SWAP);
         assert!(result.is_err());
@@ -503,9 +504,9 @@ mod tests {
     fn test_multi_double_qubit_gate_support() {
         // Test with multiple double qubit gates in instruction set
         let mut iset = InstructionSet::new(
-            vec![StandardGate::RZ, StandardGate::RX], 
-            vec![StandardGate::CZ, StandardGate::RZZ], 
-            None
+            vec![StandardGate::RZ, StandardGate::RX],
+            vec![StandardGate::CZ, StandardGate::RZZ],
+            None,
         );
 
         // Test that transformation rules can be generated for various source gates
@@ -516,7 +517,7 @@ mod tests {
             StandardGate::RXX,
             StandardGate::RYY,
             StandardGate::RZZ,
-            StandardGate::RZX
+            StandardGate::RZX,
         ];
 
         for source in &source_gates {
@@ -535,9 +536,9 @@ mod tests {
     fn test_multi_double_qubit_gate_random_selection() {
         // Test that different target gates can be selected randomly
         let mut iset = InstructionSet::new(
-            vec![StandardGate::RZ, StandardGate::RX], 
-            vec![StandardGate::CX, StandardGate::RZZ, StandardGate::CZ], 
-            None
+            vec![StandardGate::RZ, StandardGate::RX],
+            vec![StandardGate::CX, StandardGate::RZZ, StandardGate::CZ],
+            None,
         );
 
         // Test multiple times to ensure random selection works
@@ -561,9 +562,9 @@ mod tests {
     fn test_multi_double_qubit_gate_category_handling() {
         // Test with multiple gates from different categories
         let mut iset = InstructionSet::new(
-            vec![StandardGate::RZ, StandardGate::RX], 
+            vec![StandardGate::RZ, StandardGate::RX],
             vec![StandardGate::CX, StandardGate::RZZ], // From different categories
-            None
+            None,
         );
 
         // Test transformation from CX category to any target

@@ -1,18 +1,21 @@
+use indexmap::IndexSet;
 use std::collections::HashMap;
 
 use ndarray::prelude::*;
 use num::complex::Complex;
 use smallvec::{SmallVec, smallvec};
 
+use crate::circuit::circuit_impl::Circuit;
+use crate::circuit::gate::instruction::Instruction;
+use crate::circuit::gate::{ControlFlow, StandardGate};
+use crate::circuit::dag::CircuitDag;
+use crate::circuit::param::{CircuitParam, ParameterValue};
+use crate::circuit::parameter::Parameter;
+use crate::circuit::{Operation, Qubit};
 use crate::compile::gate_transform::transform_rules::double_qubit_rule::{
     DecomposedTwoQubitGate, DoubleQubitRule,
 };
 use crate::compile::gate_transform::transform_rules::single_qubit_rule::SingleQubitRule;
-use crate::circuit::circuit_impl::Circuit;
-use crate::circuit::param::{CircuitParam, ParameterValue};
-use crate::circuit::Qubit;
-use crate::circuit::gate::instruction::Instruction;
-use crate::circuit::gate::StandardGate;
 use crate::device::InstructionSet;
 
 pub struct GateTransform {
@@ -27,8 +30,24 @@ impl GateTransform {
     /// Execute the gate transform on the input circuit.
     /// Returns a new circuit expressed entirely in the instruction set's gates.
     pub fn execute(&mut self, circuit: &Circuit) -> Circuit {
-        let decomposed = self.multi_qubit_decompose(circuit);
-        self.oneq_transform(&decomposed)
+        let mut new_circuit = Circuit::new(circuit.width());
+        let dg_decomposed = self.multi_qubit_decompose(circuit.operations(), circuit.parameters());
+        let final_decomposed = self.oneq_transform(&dg_decomposed, circuit.parameters());
+
+        for op in final_decomposed {
+            let params: SmallVec<[ParameterValue; 3]> = op
+                .params
+                .into_iter()
+                .map(|p| match p {
+                    CircuitParam::Fixed(v) => ParameterValue::Fixed(v),
+                    CircuitParam::Index(index) => ParameterValue::Param(circuit.parameters()[index as usize].clone()),
+                })
+                .collect();
+            new_circuit
+                .append(op.instruction, op.qubits.clone(), params, None)
+                .unwrap();
+        }
+        new_circuit
     }
 }
 
@@ -62,7 +81,7 @@ impl GateTransform {
                 decomp_gates.push((StandardGate::CX, smallvec![1, 0]));
                 decomp_gates.push((StandardGate::CX, smallvec![0, 1]));
             }
-            _ => panic!("Invalid single qubit rule name")
+            _ => panic!("Invalid single qubit rule name"),
         };
 
         decomp_gates
@@ -70,11 +89,14 @@ impl GateTransform {
 
     /// Decompose multi-qubit gates into the instruction set's target two-qubit gate.
     /// Also handles CCX, SWAP via build_gate decomposition.
-    fn multi_qubit_decompose(&mut self, circuit: &Circuit) -> Circuit {
-        let width = circuit.width();
-        let mut new_circuit = Circuit::new(width);
+    fn multi_qubit_decompose(
+        &mut self,
+        ops: &[Operation],
+        parameters: &IndexSet<Parameter>,
+    ) -> Vec<Operation> {
+        let mut new_operations: Vec<Operation> = Vec::new();
 
-        for op in circuit.operations() {
+        for op in ops {
             let instruction = &op.instruction;
             let qubits = &op.qubits;
             let params = &op.params;
@@ -82,13 +104,23 @@ impl GateTransform {
             match instruction {
                 // Pass through special gates unchanged
                 Instruction::Directive(_) => {
-                    new_circuit.append(instruction.clone(), qubits.clone(), std::iter::empty(), None).unwrap();
+                    new_operations.push(op.clone());
                 }
 
                 // UNITARY: 1-qubit ok (handle in oneq_transform), >1 qubit unsupported
+                // Also supports UnitaryGate with internal circuit
                 Instruction::UnitaryGate(ugate) => {
-                    if ugate.num_qubits() == 1 {
-                        new_circuit.append(instruction.clone(), qubits.clone(), std::iter::empty(), None).unwrap();
+                    if let Some(circuit_ref) = ugate.circuit() {
+                        let subcircuit = circuit_ref.circuit();
+                        let transformed_subcircuit = self.multi_qubit_decompose(
+                            subcircuit.operations(),
+                            subcircuit.parameters(),
+                        );
+                        // Decompose the transformed subcircuit operations directly
+                        // instead of wrapping them in a new UnitaryGate
+                        new_operations.extend(transformed_subcircuit);
+                    } else if ugate.num_qubits() == 1 {
+                        new_operations.push(op.clone());
                     } else {
                         panic!(
                             "Unsupported: UNITARY gate acting on {} qubits. Only 1-qubit UNITARY is supported.",
@@ -104,35 +136,118 @@ impl GateTransform {
                         // Iterate over the decomposed gate instructions
                         for (gate_inst, qubit_inst) in &decomposed {
                             // Recursively handle the decomposed gate
-                            let decomp_qubits = qubit_inst.iter().map(|&q| qubits[q]).collect::<SmallVec<[Qubit; 2]>>();
+                            let decomp_qubits = qubit_inst
+                                .iter()
+                                .map(|&q| qubits[q])
+                                .collect::<SmallVec<[Qubit; 3]>>();
                             if qubit_inst.len() == 2 {
-                                self.append_two_qubit_transformed(&mut new_circuit, gate_inst, Vec::new(), &decomp_qubits);
+                                let transformed_ops = self.append_two_qubit_transformed(
+                                    gate_inst,
+                                    &smallvec![],
+                                    &decomp_qubits,
+                                );
+                                if let Some(ops) = transformed_ops {
+                                    new_operations.extend(ops);
+                                } else {
+                                    new_operations.push(Operation {
+                                        instruction: Instruction::Standard(*gate_inst),
+                                        qubits: decomp_qubits.clone(),
+                                        params: smallvec![],
+                                        label: None,
+                                    });
+                                }
                             } else {
-                                new_circuit.append(Instruction::Standard(*gate_inst), decomp_qubits.clone(), std::iter::empty(), None).unwrap();
+                                new_operations.push(Operation {
+                                    instruction: Instruction::Standard(*gate_inst),
+                                    qubits: decomp_qubits.clone(),
+                                    params: smallvec![],
+                                    label: None,
+                                });
                             }
                         }
                         continue;
                     }
 
-                    let param_values: Vec<_> = params.iter().map(|p| {
-                        match p {
-                            crate::circuit::param::CircuitParam::Fixed(val) => crate::circuit::param::ParameterValue::Fixed(*val),
-                            crate::circuit::param::CircuitParam::Index(idx) => {
-                                let param = circuit.parameters()[*idx as usize].clone();
-                                crate::circuit::param::ParameterValue::Param(param)
-                            }
-                        }
-                    }).collect();
                     if sgate.num_qubits() == 1 {
                         // Single-qubit gates: pass through (handled in oneq_transform)
                         // Convert CircuitParam to ParameterValue for append
-                        new_circuit.append(instruction.clone(), qubits.clone(), param_values, None).unwrap();
+                        new_operations.push(Operation {
+                            instruction: instruction.clone(),
+                            qubits: qubits.clone(),
+                            params: params.clone(),
+                            label: None,
+                        });
                     } else if sgate.num_qubits() == 2 {
+                        let param_values: SmallVec<[f64; 3]> = params
+                            .iter()
+                            .map(|p| match p {
+                                CircuitParam::Fixed(val) => *val,
+                                CircuitParam::Index(idx) => {
+                                    let param = parameters[*idx as usize].clone();
+                                    if let Ok(val) = param.evaluate(&None) {
+                                        val
+                                    } else {
+                                        // If evaluation fails, use 0.0 as default
+                                        0.0
+                                    }
+                                }
+                            })
+                            .collect::<SmallVec<[f64; 3]>>();
                         // Two-qubit gates: transform to target gate
-                        self.append_two_qubit_transformed(&mut new_circuit, sgate, param_values, qubits);
+                        let transformed_ops =
+                            self.append_two_qubit_transformed(sgate, &param_values, &qubits);
+                        if let Some(ops) = transformed_ops {
+                            new_operations.extend(ops);
+                        } else {
+                            new_operations.push(Operation {
+                                instruction: Instruction::Standard(*sgate),
+                                qubits: qubits.clone(),
+                                params: params.clone(),
+                                label: None,
+                            });
+                        }
                     }
                 }
 
+                Instruction::ControlFlowGate(cflow) => {
+                    match cflow {
+                        ControlFlow::IfElse(if_else_gate) => {
+                            // Process true body
+                            let true_body = if_else_gate.true_body();
+                            let transformed_true =
+                                self.multi_qubit_decompose(&true_body, parameters);
+
+                            // Process false body if present
+                            let false_body = if_else_gate.false_body();
+                            let transformed_false = if false_body.is_none() {
+                                None
+                            } else {
+                                Some(self.multi_qubit_decompose(&false_body.unwrap(), parameters))
+                            };
+                        }
+                        ControlFlow::WhileLoop(while_gate) => {
+                            // Process loop body
+                            let body = while_gate.body();
+                            let transformed_while = self.multi_qubit_decompose(&body, parameters);
+                        }
+                    }
+                }
+
+                Instruction::CircuitGate(cgate) => {
+                    let frozen_circuit = cgate.circuit();
+                    let subcircuit = frozen_circuit.circuit();
+                    let transformed_subcircuit = self
+                        .multi_qubit_decompose(subcircuit.operations(), subcircuit.parameters());
+                    for sub_cir_op in &transformed_subcircuit {
+                        let mapped_qubits = sub_cir_op.qubits.iter().map(|q| qubits[q.id() as usize]).collect::<SmallVec<[Qubit; 3]>>();
+                        new_operations.push(Operation {
+                            instruction: sub_cir_op.instruction.clone(),
+                            qubits: mapped_qubits,
+                            params: sub_cir_op.params.clone(),
+                            label: None,
+                        });
+                    }
+                }
                 // Anything else with >2 qubits that's not CCX/SWAP
                 _ => {
                     panic!(
@@ -144,31 +259,18 @@ impl GateTransform {
             }
         }
 
-        new_circuit
-    }
-
-    fn parameter_values(&self, params: Vec<ParameterValue>) -> SmallVec<[f64; 3]> {
-        let mut smallvec_params: SmallVec<[f64; 3]> = smallvec![];
-        for param in params {
-            match param {
-                ParameterValue::Fixed(val) => smallvec_params.push(val),
-                ParameterValue::Param(param) => {
-                    // Try to evaluate the parameter to a float value
-                    if let Ok(val) = param.evaluate(&None) {
-                        smallvec_params.push(val);
-                    } else {
-                        // If evaluation fails, use 0.0 as default
-                        smallvec_params.push(0.0);
-                    }
-                }
-            }
-        };
-        smallvec_params
+        new_operations
     }
 
     /// Transform a two-qubit gate using the instruction set's rule chain
     /// and append the resulting gates to the circuit.
-    fn append_two_qubit_transformed(&mut self, circuit: &mut Circuit, gate: &StandardGate, params: Vec<ParameterValue>, qubits: &[Qubit]) {
+    fn append_two_qubit_transformed(
+        &mut self,
+        gate: &StandardGate,
+        params: &SmallVec<[f64; 3]>,
+        qubits: &[Qubit],
+    ) -> Option<Vec<Operation>> {
+        let mut new_dg_operations: Vec<Operation> = Vec::new();
         let steps = self
             .instruction_set
             .select_transform_rule(gate.clone())
@@ -176,15 +278,13 @@ impl GateTransform {
 
         if steps.is_empty() {
             // Gate is already the target gate
-            circuit.append(Instruction::Standard(*gate), qubits.to_vec(), params, None).unwrap();
-            return;
+            return None;
         }
 
         // Apply the transformation chain
         // We need to track current gates, their parameters, and qubits
-        let smallvec_params: SmallVec<[f64; 3]> = self.parameter_values(params);
         let mut current_gates: Vec<(StandardGate, SmallVec<[f64; 3]>, Vec<i32>)> = Vec::new();
-        current_gates.push((gate.clone(), smallvec_params.clone(), Vec::from([0, 1])));
+        current_gates.push((gate.clone(), params.clone(), Vec::from([0, 1])));
 
         for step in &steps {
             let mut next_gates: Vec<(StandardGate, SmallVec<[f64; 3]>, Vec<i32>)> = Vec::new();
@@ -194,12 +294,17 @@ impl GateTransform {
                     let decomposed = Self::apply_rule(&step.rule_name, g, gate_params);
 
                     // Map decomposed qubits to actual circuit qubits
-                    for ((decomp_gate, decomp_params), decomp_qubits)
-                        in decomposed.gates.iter().zip(decomposed.qubits.iter())
+                    for ((decomp_gate, decomp_params), decomp_qubits) in
+                        decomposed.gates.iter().zip(decomposed.qubits.iter())
                     {
                         // Map decomp_qubits to actual circuit qubits
-                        let mapped_qubits: Vec<i32> = decomp_qubits.iter().map(|&q| qs[q as usize]).collect();
-                        next_gates.push((decomp_gate.clone(), decomp_params.clone(), mapped_qubits));
+                        let mapped_qubits: Vec<i32> =
+                            decomp_qubits.iter().map(|&q| qs[q as usize]).collect();
+                        next_gates.push((
+                            decomp_gate.clone(),
+                            decomp_params.clone(),
+                            mapped_qubits,
+                        ));
                     }
                 } else {
                     // Gate doesn't match this step, keep as-is
@@ -211,22 +316,32 @@ impl GateTransform {
         }
 
         // Append all resulting gates to the circuit
-        
+
         for (g, gate_params, qs) in current_gates {
-            let mut mapped_params: Vec<ParameterValue> = Vec::new();
+            let mut circuit_params: SmallVec<[CircuitParam; 1]> = SmallVec::new();
             for param in gate_params {
-                mapped_params.push(ParameterValue::Fixed(param));
+                circuit_params.push(CircuitParam::Fixed(param));
             }
-            let mut mapped_qs: Vec<Qubit> = Vec::new();
+            let mut mapped_qs: SmallVec<[Qubit; 3]> = SmallVec::new();
             for q in qs {
                 mapped_qs.push(qubits[q as usize]);
             }
-            circuit.append(Instruction::Standard(g), mapped_qs, mapped_params, None).unwrap();
+            new_dg_operations.push(Operation {
+                instruction: Instruction::Standard(g),
+                qubits: mapped_qs,
+                params: circuit_params,
+                label: None,
+            });
         }
+        Some(new_dg_operations)
     }
 
     /// Apply a named double-qubit rule to a gate.
-    fn apply_rule(rule_name: &str, gate: &StandardGate, params: &SmallVec<[f64; 3]>) -> DecomposedTwoQubitGate {
+    fn apply_rule(
+        rule_name: &str,
+        gate: &StandardGate,
+        params: &SmallVec<[f64; 3]>,
+    ) -> DecomposedTwoQubitGate {
         // Convert ParameterValue to SmallVec<[f64; 3]>
         match rule_name {
             // Between categories
@@ -266,9 +381,12 @@ impl GateTransform {
     /// Transform single-qubit gates using front-layer accumulation.
     /// Consecutive single-qubit gates on the same qubit are multiplied together,
     /// then decomposed using the instruction set's single-qubit rule.
-    fn oneq_transform(&self, circuit: &Circuit) -> Circuit {
-        let width = circuit.width();
-        let mut new_circuit = Circuit::new(width);
+    fn oneq_transform(
+        &self,
+        operations: &Vec<Operation>,
+        parameters: &IndexSet<Parameter>,
+    ) -> Vec<Operation> {
+        let mut new_operations = Vec::new();
 
         // Front layer: accumulated unitary per qubit
         let mut front_layer: HashMap<u32, Array2<Complex<f64>>> = HashMap::new();
@@ -278,40 +396,46 @@ impl GateTransform {
                 .to_string(),
         );
 
-        for op in circuit.operations() {
+        for op in operations {
             let instruction = &op.instruction;
             let qubits = &op.qubits;
             let params = &op.params;
-            let param_values: Vec<_> = params.iter().map(|p| {
-                match p {
-                    crate::circuit::param::CircuitParam::Fixed(val) => crate::circuit::param::ParameterValue::Fixed(*val),
-                    crate::circuit::param::CircuitParam::Index(idx) => {
-                        let param = circuit.parameters()[*idx as usize].clone();
-                        crate::circuit::param::ParameterValue::Param(param)
+            let param_values: Vec<_> = params
+                .iter()
+                .map(|p| match p {
+                    CircuitParam::Fixed(val) => *val,
+                    CircuitParam::Index(idx) => {
+                        let param = parameters[*idx as usize].clone();
+                        if let Ok(val) = param.evaluate(&None) {
+                            val
+                        } else {
+                            // If evaluation fails, use 0.0 as default
+                            0.0
+                        }
                     }
-                }
-            }).collect();
+                })
+                .collect();
 
             match instruction {
-                Instruction::Directive(directive) => {
+                Instruction::Directive(_) => {
                     // Flush any accumulated ops on affected qubits
                     for q in qubits {
-                        self.flush_front_layer(
-                            &mut new_circuit,
-                            &mut front_layer,
-                            q.id(),
-                            &single_qubit_rule,
-                        );
+                        let front_layer_operator =
+                            self.flush_front_layer(&mut front_layer, q.id(), &single_qubit_rule);
+                        if !front_layer_operator.is_empty() {
+                            new_operations.extend(front_layer_operator);
+                        }
                     }
-                    new_circuit.append(instruction.clone(), qubits.clone(), std::iter::empty(), None).unwrap();
+                    new_operations.push(op.clone());
                 }
+
                 Instruction::Standard(sgate) => {
                     if sgate.num_qubits() == 1 {
                         // Single-qubit gate: accumulate into front layer
                         let q = qubits[0];
-                        let params_float_value = self.parameter_values(param_values);
-                        let gate_matrix: Array2<Complex<f64>> = sgate.matrix(&params_float_value).into_owned();
-                        
+                        let gate_matrix: Array2<Complex<f64>> =
+                            sgate.matrix(&param_values).into_owned();
+
                         if let Some(existing) = front_layer.get(&q.id()) {
                             front_layer.insert(q.id(), gate_matrix.dot(existing));
                         } else {
@@ -320,27 +444,28 @@ impl GateTransform {
                     } else {
                         // Multi-qubit gate: flush affected qubits first
                         for q in qubits {
-                            self.flush_front_layer(
-                                &mut new_circuit,
+                            let front_layer_operator = self.flush_front_layer(
                                 &mut front_layer,
                                 q.id(),
                                 &single_qubit_rule,
                             );
+                            if !front_layer_operator.is_empty() {
+                                new_operations.extend(front_layer_operator);
+                            }
                         }
-                        new_circuit.append(instruction.clone(), qubits.clone(), param_values, None).unwrap();
+                        new_operations.push(op.clone());
                     }
                 }
                 _ => {
                     // Other instruction types: just append as-is
                     for q in qubits {
-                        self.flush_front_layer(
-                            &mut new_circuit,
+                        new_operations.extend(self.flush_front_layer(
                             &mut front_layer,
                             q.id(),
                             &single_qubit_rule,
-                        );
+                        ));
                     }
-                    new_circuit.append(instruction.clone(), qubits.clone(), std::iter::empty(), None).unwrap();
+                    new_operations.push(op.clone());
                 }
             }
         }
@@ -348,21 +473,21 @@ impl GateTransform {
         // Flush remaining front layer entries
         let remaining_qubits: Vec<u32> = front_layer.keys().cloned().collect();
         for q in remaining_qubits {
-            self.flush_front_layer(&mut new_circuit, &mut front_layer, q, &single_qubit_rule);
+            new_operations.extend(self.flush_front_layer(&mut front_layer, q, &single_qubit_rule));
         }
 
-        new_circuit
+        new_operations
     }
 
     /// Flush the front layer for a specific qubit by decomposing its accumulated
     /// unitary and appending the resulting gates to the circuit.
     fn flush_front_layer(
         &self,
-        circuit: &mut Circuit,
         front_layer: &mut HashMap<u32, Array2<Complex<f64>>>,
         qubit: u32,
         rule: &SingleQubitRule,
-    ) {
+    ) -> Vec<Operation> {
+        let mut new_operations = Vec::new();
         if let Some(mat) = front_layer.remove(&qubit) {
             // Check if it's close to identity
             let identity: Array2<Complex<f64>> = Array2::eye(2);
@@ -371,7 +496,7 @@ impl GateTransform {
 
             if norm_sq < 1e-12 {
                 // Matrix is essentially identity, no gates needed
-                return;
+                return new_operations;
             }
 
             // Decompose the accumulated unitary
@@ -381,22 +506,34 @@ impl GateTransform {
             for (g, params) in decomposed_gates {
                 // For now, we'll skip this part as we're not using matrix accumulation
                 // In a full implementation, we would convert g to an Instruction and append it
-                let mut mapped_params: Vec<ParameterValue> = Vec::new();
+                let mut mapped_params: SmallVec<[CircuitParam; 1]> = smallvec![];
                 for param in params {
-                    mapped_params.push(ParameterValue::Fixed(param));
+                    mapped_params.push(CircuitParam::Fixed(param));
                 }
-                circuit.append(Instruction::Standard(g), vec![qubit], mapped_params, None).unwrap();
+                let mut mapped_qubits: SmallVec<[Qubit; 3]> = smallvec![];
+                mapped_qubits.push(Qubit::new(qubit));
+
+                new_operations.push(Operation {
+                    instruction: Instruction::Standard(g),
+                    qubits: mapped_qubits,
+                    params: mapped_params,
+                    label: None,
+                });
             }
         }
+
+        new_operations
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::circuit::Qubit;
+    use crate::circuit::gate::{CircuitGate, FrozenCircuit, UnitaryGate};
     use num::complex::Complex;
     use num::complex::ComplexFloat;
-    use crate::circuit::Qubit;
+    use std::sync::Arc;
 
     #[test]
     fn test_gate_transform_basic() {
@@ -409,9 +546,9 @@ mod tests {
 
         // Create instruction set targeting CX
         let iset = InstructionSet::new(
-            vec![StandardGate::RZ, StandardGate::RX], 
-            vec![StandardGate::CX], 
-            None
+            vec![StandardGate::RZ, StandardGate::RX],
+            vec![StandardGate::CX],
+            None,
         );
 
         let mut gt = GateTransform::new(iset);
@@ -514,7 +651,10 @@ mod tests {
     }
 
     /// Check if all gates in the circuit are in the instruction set or are directives
-    fn check_all_gates_in_instruction_set(circuit: &Circuit, instruction_set: &InstructionSet) -> bool {
+    fn check_all_gates_in_instruction_set(
+        circuit: &Circuit,
+        instruction_set: &InstructionSet,
+    ) -> bool {
         for op in circuit.operations() {
             match &op.instruction {
                 Instruction::Standard(sgate) => {
@@ -535,7 +675,7 @@ mod tests {
                         // CCX is a special case
                         return false;
                     }
-                },
+                }
                 Instruction::UnitaryGate(_) => {
                     // Unitary gates are not allowed
                     return false;
@@ -557,9 +697,9 @@ mod tests {
         circuit.h(q0).unwrap();
 
         let iset = InstructionSet::new(
-            vec![StandardGate::RZ, StandardGate::RX], 
-            vec![StandardGate::CX], 
-            None
+            vec![StandardGate::RZ, StandardGate::RX],
+            vec![StandardGate::CX],
+            None,
         );
 
         let mut gt = GateTransform::new(iset);
@@ -568,7 +708,11 @@ mod tests {
         // H·H = I, so no gates should remain
         // Note: Current implementation doesn't perform identity elimination
         // This test is kept for future implementation
-        assert_eq!(result.operations().len(), 0, "H·H should cancel to identity");
+        assert_eq!(
+            result.operations().len(),
+            0,
+            "H·H should cancel to identity"
+        );
     }
 
     fn complex_inner_product(vec1: &[Complex<f64>], vec2: &[Complex<f64>]) -> Complex<f64> {
@@ -593,19 +737,25 @@ mod tests {
         (cos_vec - 1.0).abs() < 1e-10
     }
 
-    fn gate_transfer_circuit_test(iset: &InstructionSet) {
-        let circuit = generate_full_circuit();
+    fn gate_transfer_circuit_test(iset: &InstructionSet, circuit: &Circuit) {
+        // let circuit = generate_full_circuit();
         let mut gt = GateTransform::new(iset.clone());
         let result = gt.execute(&circuit);
-        assert!(check_all_gates_in_instruction_set(&result, &mut iset.clone()), "Gate transfer contains other Standard Gate not in iset.");
-        
+        assert!(
+            check_all_gates_in_instruction_set(&result, &mut iset.clone()),
+            "Gate transfer contains other Standard Gate not in iset."
+        );
+
         let result_matrix = result.to_matrix(None);
         let circuit_matrix = circuit.to_matrix(None);
 
         if !is_matrix_differ_by_phase(&result_matrix, &circuit_matrix) {
             eprintln!("Assertion failed! Result circuit operations:");
             for (i, op) in result.operations().iter().enumerate() {
-                eprintln!("  [{}] {:?} on qubits {:?}, with parameter {:?}", i, op.instruction, op.qubits, op.params);
+                eprintln!(
+                    "  [{}] {:?} on qubits {:?}, with parameter {:?}",
+                    i, op.instruction, op.qubits, op.params
+                );
             }
             eprintln!("Original circuit operations:");
             for (i, op) in circuit.operations().iter().enumerate() {
@@ -613,76 +763,182 @@ mod tests {
             }
         }
 
-        assert!(is_matrix_differ_by_phase(&result_matrix, &circuit_matrix), "Gate transfer should not change circuit size {}", result.operations().len());
+        assert!(
+            is_matrix_differ_by_phase(&result_matrix, &circuit_matrix),
+            "Gate transfer should not change circuit size {}",
+            result.operations().len()
+        );
     }
 
     #[test]
     fn test_gate_transfer_full_circuit_with_cx() {
         let iset = InstructionSet::new(
-            vec![StandardGate::RZ, StandardGate::RX], 
-            vec![StandardGate::CX], 
-            None
+            vec![StandardGate::RZ, StandardGate::RX],
+            vec![StandardGate::CX],
+            None,
         );
-        gate_transfer_circuit_test(&iset);
+        gate_transfer_circuit_test(&iset, &generate_full_circuit());
     }
 
     #[test]
     fn test_gate_transfer_full_circuit_with_cz() {
         let iset = InstructionSet::new(
-            vec![StandardGate::X2M, StandardGate::X2P, StandardGate::Y2P, StandardGate::Y2M, StandardGate::RZ], 
-            vec![StandardGate::CZ, StandardGate::CX], 
-            None
+            vec![
+                StandardGate::X2M,
+                StandardGate::X2P,
+                StandardGate::Y2P,
+                StandardGate::Y2M,
+                StandardGate::RZ,
+            ],
+            vec![StandardGate::CZ, StandardGate::CX],
+            None,
         );
-        gate_transfer_circuit_test(&iset);
+        gate_transfer_circuit_test(&iset, &generate_full_circuit());
+    }
+
+    #[test]
+    fn test_gate_transfer_full_circuit_with_cy() {
+        let iset = InstructionSet::new(
+            vec![StandardGate::RZ, StandardGate::RX, StandardGate::RY],
+            vec![StandardGate::CY],
+            None,
+        );
+        gate_transfer_circuit_test(&iset, &generate_full_circuit());
     }
 
     #[test]
     fn test_gate_transfer_full_circuit_with_rxx() {
         let iset = InstructionSet::new(
-            vec![StandardGate::RZ, StandardGate::RX, StandardGate::RY], 
-            vec![StandardGate::RXX], 
-            None
+            vec![StandardGate::RZ, StandardGate::RX, StandardGate::RY],
+            vec![StandardGate::RXX],
+            None,
         );
-        gate_transfer_circuit_test(&iset);
+        gate_transfer_circuit_test(&iset, &generate_full_circuit());
+    }
+
+    #[test]
+    fn test_gate_transfer_full_circuit_with_ryy() {
+        let iset = InstructionSet::new(
+            vec![StandardGate::RZ, StandardGate::RX, StandardGate::RY],
+            vec![StandardGate::RYY],
+            None,
+        );
+        gate_transfer_circuit_test(&iset, &generate_full_circuit());
+    }
+
+    #[test]
+    fn test_gate_transfer_full_circuit_with_rzz() {
+        let iset = InstructionSet::new(
+            vec![StandardGate::RZ, StandardGate::RX, StandardGate::RY],
+            vec![StandardGate::RZZ],
+            None,
+        );
+        gate_transfer_circuit_test(&iset, &generate_full_circuit());
+    }
+
+    #[test]
+    fn test_gate_transfer_full_circuit_with_rzx() {
+        let iset = InstructionSet::new(
+            vec![StandardGate::RZ, StandardGate::RX, StandardGate::RY],
+            vec![StandardGate::RZX],
+            None,
+        );
+        gate_transfer_circuit_test(&iset, &generate_full_circuit());
     }
 
     #[test]
     fn test_gate_transfer_full_circuit_with_cx_hrz() {
         let iset = InstructionSet::new(
-            vec![StandardGate::H, StandardGate::RZ], 
-            vec![StandardGate::CX], 
-            None
+            vec![StandardGate::H, StandardGate::RZ],
+            vec![StandardGate::CX],
+            None,
         );
-        gate_transfer_circuit_test(&iset);
+        gate_transfer_circuit_test(&iset, &generate_full_circuit());
+    }
+
+    #[test]
+    fn test_gate_transfer_full_circuit_with_fsim() {
+        let iset = InstructionSet::new(
+            vec![
+                StandardGate::RX,
+                StandardGate::RZ,
+                StandardGate::RY,
+                StandardGate::H,
+            ],
+            vec![StandardGate::FSIM],
+            None,
+        );
+        gate_transfer_circuit_test(&iset, &generate_full_circuit());
     }
 
     #[test]
     fn test_gate_transfer_full_circuit_with_cz_u() {
-        let iset = InstructionSet::new(
-            vec![StandardGate::U], 
-            vec![StandardGate::CZ], 
-            None
-        );
-        gate_transfer_circuit_test(&iset);
+        let iset = InstructionSet::new(vec![StandardGate::U], vec![StandardGate::CZ], None);
+        gate_transfer_circuit_test(&iset, &generate_full_circuit());
     }
 
     #[test]
     fn test_gate_transfer_full_circuit_with_cx_rxx() {
         let iset = InstructionSet::new(
-            vec![StandardGate::RX, StandardGate::RZ, StandardGate::RY, StandardGate::H], 
-            vec![StandardGate::CZ, StandardGate::RZZ], 
-            None
+            vec![
+                StandardGate::RX,
+                StandardGate::RZ,
+                StandardGate::RY,
+                StandardGate::H,
+            ],
+            vec![StandardGate::CZ, StandardGate::RZZ],
+            None,
         );
-        gate_transfer_circuit_test(&iset);
+        gate_transfer_circuit_test(&iset, &generate_full_circuit());
+    }
+
+    fn generate_circuit_with_unitary_and_circuit_gate() -> Circuit {
+        let q0 = Qubit::new(0);
+        let q1 = Qubit::new(1);
+        let q2 = Qubit::new(2);
+
+        let mut sub_circuit = Circuit::new(2);
+        // sub_circuit.h(q0).unwrap();
+        sub_circuit.cx(q0, q1).unwrap();
+
+        let frozen_sub_circuit = FrozenCircuit::new(sub_circuit);
+        let mut ugate = UnitaryGate::new("TestUnitary", 2);
+        ugate = ugate.with_matrix(StandardGate::CX.matrix(&[]).into_owned()).unwrap();
+        ugate = ugate.with_circuit(Arc::new(frozen_sub_circuit));
+
+        let cgate = CircuitGate::new("TestCircuit", FrozenCircuit::new({
+            generate_full_circuit()
+        })).unwrap();
+
+        let mut circuit = generate_full_circuit();
+        circuit.append(
+            Instruction::UnitaryGate(Box::new(ugate)),
+            vec![q0, q1],
+            std::iter::empty(),
+            None,
+        ).unwrap();
+        circuit.append(
+            Instruction::CircuitGate(Box::new(cgate)),
+            vec![q0, q2, q1],
+            std::iter::empty(),
+            None,
+        ).unwrap();
+
+        circuit
     }
 
     #[test]
-    fn test_gate_transfer_full_circuit_with_cx_fsim() {
+    fn test_gate_transfer_full_circuit_with_unitary_and_circuit_gate() {
         let iset = InstructionSet::new(
-            vec![StandardGate::RX, StandardGate::RZ, StandardGate::RY, StandardGate::H], 
-            vec![StandardGate::FSIM], 
-            None
+            vec![
+                StandardGate::RX,
+                StandardGate::RZ,
+                StandardGate::RY,
+                StandardGate::H,
+            ],
+            vec![StandardGate::CX, StandardGate::RZZ],
+            None,
         );
-        gate_transfer_circuit_test(&iset);
+        gate_transfer_circuit_test(&iset, &generate_circuit_with_unitary_and_circuit_gate());
     }
 }
