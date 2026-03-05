@@ -6,9 +6,9 @@ use num::complex::Complex;
 use smallvec::{SmallVec, smallvec};
 
 use crate::circuit::circuit_impl::Circuit;
+use crate::circuit::dag::CircuitDag;
 use crate::circuit::gate::instruction::Instruction;
 use crate::circuit::gate::{ControlFlow, StandardGate};
-use crate::circuit::dag::CircuitDag;
 use crate::circuit::param::{CircuitParam, ParameterValue};
 use crate::circuit::parameter::Parameter;
 use crate::circuit::{Operation, Qubit};
@@ -40,7 +40,9 @@ impl GateTransform {
                 .into_iter()
                 .map(|p| match p {
                     CircuitParam::Fixed(v) => ParameterValue::Fixed(v),
-                    CircuitParam::Index(index) => ParameterValue::Param(circuit.parameters()[index as usize].clone()),
+                    CircuitParam::Index(index) => {
+                        ParameterValue::Param(circuit.parameters()[index as usize].clone())
+                    }
                 })
                 .collect();
             new_circuit
@@ -239,7 +241,11 @@ impl GateTransform {
                     let transformed_subcircuit = self
                         .multi_qubit_decompose(subcircuit.operations(), subcircuit.parameters());
                     for sub_cir_op in &transformed_subcircuit {
-                        let mapped_qubits = sub_cir_op.qubits.iter().map(|q| qubits[q.id() as usize]).collect::<SmallVec<[Qubit; 3]>>();
+                        let mapped_qubits = sub_cir_op
+                            .qubits
+                            .iter()
+                            .map(|q| qubits[q.id() as usize])
+                            .collect::<SmallVec<[Qubit; 3]>>();
                         new_operations.push(Operation {
                             instruction: sub_cir_op.instruction.clone(),
                             qubits: mapped_qubits,
@@ -248,6 +254,7 @@ impl GateTransform {
                         });
                     }
                 }
+
                 // Anything else with >2 qubits that's not CCX/SWAP
                 _ => {
                     panic!(
@@ -903,26 +910,34 @@ mod tests {
 
         let frozen_sub_circuit = FrozenCircuit::new(sub_circuit);
         let mut ugate = UnitaryGate::new("TestUnitary", 2);
-        ugate = ugate.with_matrix(StandardGate::CX.matrix(&[]).into_owned()).unwrap();
+        ugate = ugate
+            .with_matrix(StandardGate::CX.matrix(&[]).into_owned())
+            .unwrap();
         ugate = ugate.with_circuit(Arc::new(frozen_sub_circuit));
 
-        let cgate = CircuitGate::new("TestCircuit", FrozenCircuit::new({
-            generate_full_circuit()
-        })).unwrap();
+        let cgate = CircuitGate::new(
+            "TestCircuit",
+            FrozenCircuit::new({ generate_full_circuit() }),
+        )
+        .unwrap();
 
         let mut circuit = generate_full_circuit();
-        circuit.append(
-            Instruction::UnitaryGate(Box::new(ugate)),
-            vec![q0, q1],
-            std::iter::empty(),
-            None,
-        ).unwrap();
-        circuit.append(
-            Instruction::CircuitGate(Box::new(cgate)),
-            vec![q0, q2, q1],
-            std::iter::empty(),
-            None,
-        ).unwrap();
+        circuit
+            .append(
+                Instruction::UnitaryGate(Box::new(ugate)),
+                vec![q0, q1],
+                std::iter::empty(),
+                None,
+            )
+            .unwrap();
+        circuit
+            .append(
+                Instruction::CircuitGate(Box::new(cgate)),
+                vec![q0, q2, q1],
+                std::iter::empty(),
+                None,
+            )
+            .unwrap();
 
         circuit
     }
