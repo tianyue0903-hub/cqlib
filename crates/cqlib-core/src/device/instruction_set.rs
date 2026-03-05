@@ -217,76 +217,74 @@ impl InstructionSet {
 
         // Find categories for source and target
         let source_cate = get_category_key(&source);
-        let mut target_cates: Vec<(StandardGate, StandardGate)> = Vec::new();
-        for dg in &self.double_qubit_gate {
-            let temp_tgate = get_category_key(dg);
-            if temp_tgate.is_some() {
-                target_cates.push((temp_tgate.unwrap(), dg.clone()));
-            }
-        }
-
         let source_cate = source_cate.ok_or_else(|| {
             format!(
                 "Transform rule not found: source gate {:?} is not in any known category",
                 source
             )
         })?;
-        if target_cates.is_empty() {
-            return Err(format!(
-                "Transform rule not found: target gate {:?} is not in any known category",
-                source
-            ));
-        };
 
-        let rand_idx = rand::thread_rng().gen_range(0..target_cates.len());
-        let target_cate = target_cates[rand_idx].0;
-        let target_double_gate = target_cates[rand_idx].1;
-
+        // Find shortest path for source to target
         let mut rules: Vec<TransformStep> = Vec::new();
-        if source_cate == target_cate {
-            // Source and target are in the same category
-            if source == source_cate || target_double_gate == target_cate {
-                // Direct transform if either is the key gate
-                rules.push(TransformStep::new(
-                    source.clone(),
-                    make_rule_name(&source, &target_double_gate),
-                ));
+        for dg in &self.double_qubit_gate {
+            let target_cate = get_category_key(dg);
+            let target_cate = target_cate.ok_or_else(|| {
+            format!(
+                "Transform rule not found: target gate {:?} is not in any known category",
+                dg
+            )
+            })?;
+
+            let mut curr_rules: Vec<TransformStep> = Vec::new();
+            if source_cate == target_cate {
+                // Source and target are in the same category
+                if source == source_cate || *dg == target_cate {
+                    // Direct transform if either is the key gate
+                    curr_rules.push(TransformStep::new(
+                        source.clone(),
+                        make_rule_name(&source, dg),
+                    ));
+                } else {
+                    // Need to go through the key gate
+                    // source -> key -> target
+                    curr_rules.push(TransformStep::new(
+                        source.clone(),
+                        make_rule_name(&source, &source_cate),
+                    ));
+                    curr_rules.push(TransformStep::new(
+                        target_cate.clone(),
+                        make_rule_name(&target_cate, dg),
+                    ));
+                }
             } else {
-                // Need to go through the key gate
-                // source -> key -> target
-                rules.push(TransformStep::new(
-                    source.clone(),
-                    make_rule_name(&source, &source_cate),
+                // Source and target are in different categories
+                // Need to use key gates as transfer points
+
+                // Step 1: source -> source_key (if source is not already the key)
+                if source != source_cate {
+                    curr_rules.push(TransformStep::new(
+                        source.clone(),
+                        make_rule_name(&source, &source_cate),
+                    ));
+                }
+
+                // Step 2: source_key -> target_key
+                curr_rules.push(TransformStep::new(
+                    source_cate.clone(),
+                    make_rule_name(&source_cate, &target_cate),
                 ));
-                rules.push(TransformStep::new(
-                    target_cate.clone(),
-                    make_rule_name(&target_cate, &target_double_gate),
-                ));
+
+                // Step 3: target_key -> target (if target is not the key)
+                if *dg != target_cate {
+                    curr_rules.push(TransformStep::new(
+                        target_cate.clone(),
+                        make_rule_name(&target_cate, dg),
+                    ));
+                }
             }
-        } else {
-            // Source and target are in different categories
-            // Need to use key gates as transfer points
-
-            // Step 1: source -> source_key (if source is not already the key)
-            if source != source_cate {
-                rules.push(TransformStep::new(
-                    source.clone(),
-                    make_rule_name(&source, &source_cate),
-                ));
-            }
-
-            // Step 2: source_key -> target_key
-            rules.push(TransformStep::new(
-                source_cate.clone(),
-                make_rule_name(&source_cate, &target_cate),
-            ));
-
-            // Step 3: target_key -> target (if target is not the key)
-            if target_double_gate != target_cate {
-                rules.push(TransformStep::new(
-                    target_cate.clone(),
-                    make_rule_name(&target_cate, &target_double_gate),
-                ));
+        
+            if rules.is_empty() || curr_rules.len() < rules.len() {
+                rules = curr_rules;
             }
         }
 
@@ -506,7 +504,7 @@ mod tests {
         // Test with multiple double qubit gates in instruction set
         let mut iset = InstructionSet::new(
             vec![StandardGate::RZ, StandardGate::RX], 
-            vec![StandardGate::CX, StandardGate::RZZ, StandardGate::CZ], 
+            vec![StandardGate::CZ, StandardGate::RZZ], 
             None
         );
 
@@ -526,7 +524,7 @@ mod tests {
             assert!(result.is_ok(), "Failed for source gate: {:?}", source);
             let rules = result.unwrap();
             // Rules should be generated for all source gates
-            assert!(rules.len() >= 0);
+            assert!(rules.len() <= 2);
         }
 
         // Test caching for multiple source gates
@@ -573,13 +571,13 @@ mod tests {
         assert!(result.is_ok());
         let rules = result.unwrap();
         // Rules should be generated (length depends on random target selection)
-        assert!(rules.len() >= 0);
+        assert!(rules.len() == 1);
 
         // Test transformation from RZZ category to any target
         let result = iset.select_transform_rule(StandardGate::RXX);
         assert!(result.is_ok());
         let rules = result.unwrap();
         // Rules should be generated (length depends on random target selection)
-        assert!(rules.len() >= 0);
+        assert!(rules.len() == 1);
     }
 }
