@@ -145,3 +145,47 @@ fn test_run_em_sequence_with_custom_hexp_calc() {
     let values = zne.run_em_sequence(None, &h, Some(custom_hexp));
     assert_eq!(values, vec![42.0, 42.0]);
 }
+
+#[test]
+fn test_poly_extrapolate_linear_intercept() {
+    let circuit = Circuit::new(1);
+    let zne = ZNEMitigation::new(circuit, vec![0, 1, 2]); // noise factors: [1, 3, 5]
+
+    // y = 0.75 + 2x
+    let noisy_results = vec![2.75, 6.75, 10.75];
+    let extrapolated = zne.poly_extrapolate(&noisy_results, 1);
+
+    assert!((extrapolated - 0.75).abs() < 1e-10);
+}
+
+#[test]
+fn test_poly_extrapolate_quadratic_intercept() {
+    let circuit = Circuit::new(1);
+    let zne = ZNEMitigation::new(circuit, vec![0, 1, 2]); // noise factors: [1, 3, 5]
+
+    // y = 1.25 - 0.5x + 0.2x^2
+    let noisy_results = vec![0.95, 1.55, 3.75];
+    let extrapolated = zne.poly_extrapolate(&noisy_results, 2);
+
+    assert!((extrapolated - 1.25).abs() < 1e-10);
+}
+
+#[test]
+#[should_panic(expected = "same length as noise factors")]
+fn test_poly_extrapolate_panics_on_length_mismatch() {
+    let circuit = Circuit::new(1);
+    let zne = ZNEMitigation::new(circuit, vec![0, 1, 2]);
+
+    let noisy_results = vec![1.0, 2.0];
+    let _ = zne.poly_extrapolate(&noisy_results, 1);
+}
+
+#[test]
+#[should_panic(expected = "degree must be smaller than number of data points")]
+fn test_poly_extrapolate_panics_on_invalid_degree() {
+    let circuit = Circuit::new(1);
+    let zne = ZNEMitigation::new(circuit, vec![0, 1]);
+
+    let noisy_results = vec![1.0, 2.0];
+    let _ = zne.poly_extrapolate(&noisy_results, 2);
+}

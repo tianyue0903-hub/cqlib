@@ -167,6 +167,117 @@ impl ZNEMitigation {
         hexp_seq
     }
 
+
+    /// Given the noisy results, extrapolate the expectation value using a polynomial fit.
+    ///
+    /// - `noisy_results`: the noisy results to extrapolate.
+    /// - `degree`: the degree of the polynomial to use for extrapolation.
+    ///
+    /// Returns the extrapolated expectation value.
+    pub fn poly_extrapolate(
+        &self,
+        noisy_results: &Vec<f64>,
+        degree: usize,
+    ) -> f64 {
+        let n = self.noise_factors.len();
+        assert!(
+            !noisy_results.is_empty(),
+            "Noisy results must not be empty."
+        );
+        assert_eq!(
+            noisy_results.len(),
+            n,
+            "Noisy results must have the same length as noise factors."
+        );
+        assert!(
+            degree < n,
+            "Polynomial degree must be smaller than number of data points."
+        );
+
+        let d = degree + 1;
+        let x: Vec<f64> = self.noise_factors.iter().map(|&v| v as f64).collect();
+        let y = noisy_results;
+
+        // Build normal equations: (V^T V) c = V^T y, where
+        // V[i, j] = x_i^j and c stores coefficients in ascending order.
+        let mut a = vec![vec![0.0; d]; d];
+        let mut b = vec![0.0; d];
+        for row in 0..n {
+            let mut x_pows = vec![1.0; d];
+            for j in 1..d {
+                x_pows[j] = x_pows[j - 1] * x[row];
+            }
+
+            for j in 0..d {
+                b[j] += y[row] * x_pows[j];
+                for k in 0..d {
+                    a[j][k] += x_pows[j] * x_pows[k];
+                }
+            }
+        }
+
+        let coeffs = Self::solve_linear_system(a, b);
+        coeffs[0]
+    }
+
+    fn solve_linear_system(mut a: Vec<Vec<f64>>, mut b: Vec<f64>) -> Vec<f64> {
+        let n = a.len();
+        assert!(n > 0, "Coefficient matrix must not be empty.");
+        assert_eq!(
+            b.len(),
+            n,
+            "Right-hand side length must match matrix size."
+        );
+        for row in &a {
+            assert_eq!(row.len(), n, "Coefficient matrix must be square.");
+        }
+
+        let eps = 1e-14_f64;
+
+        for i in 0..n {
+            // Partial pivoting for numerical stability.
+            let mut pivot_row = i;
+            let mut pivot_abs = a[i][i].abs();
+            for r in (i + 1)..n {
+                let cand = a[r][i].abs();
+                if cand > pivot_abs {
+                    pivot_abs = cand;
+                    pivot_row = r;
+                }
+            }
+
+            assert!(
+                pivot_abs > eps,
+                "Polynomial fit failed: singular normal-equation matrix."
+            );
+
+            if pivot_row != i {
+                a.swap(i, pivot_row);
+                b.swap(i, pivot_row);
+            }
+
+            for r in (i + 1)..n {
+                let factor = a[r][i] / a[i][i];
+                a[r][i] = 0.0;
+                for c in (i + 1)..n {
+                    a[r][c] -= factor * a[i][c];
+                }
+                b[r] -= factor * b[i];
+            }
+        }
+
+        let mut x = vec![0.0; n];
+        for i in (0..n).rev() {
+            let mut sum = b[i];
+            for (j, xj) in x.iter().enumerate().skip(i + 1) {
+                sum -= a[i][j] * *xj;
+            }
+            x[i] = sum / a[i][i];
+        }
+
+        x
+    }
+
     fn fold_to_level(
         &self,
         level: i32,
