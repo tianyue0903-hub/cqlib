@@ -142,6 +142,102 @@ class SabreConfig:
         ...
 
 
+class TemplateMatching:
+    """Template-matching engine for compile-ready circuits."""
+
+    def __init__(self) -> None:
+        """Creates a new matcher instance."""
+        ...
+
+    def run(
+        self,
+        circuit: Circuit,
+        template: Circuit,
+        qubit_fixing_cnt: Optional[int] = None,
+        prune_depth: Optional[int] = None,
+        prune_width: Optional[int] = None,
+    ) -> List[Tuple[List[Tuple[int, int]], List[int]]]:
+        """Runs template matching.
+
+        Args:
+            circuit: Circuit to match.
+            template: Template circuit.
+            qubit_fixing_cnt: Optional matching heuristic parameter.
+            prune_depth: Optional prune depth.
+            prune_width: Optional prune width.
+
+        Returns:
+            List[Tuple[List[Tuple[int, int]], List[int]]]: Match pairs and qubit mapping.
+
+        Raises:
+            ValueError: If preprocessing or matching fails.
+        """
+        ...
+
+
+class TemplateOptimization:
+    """Template-based optimizer for compile-ready circuits."""
+
+    def __init__(
+        self,
+        template_list: Optional[List[Circuit]] = None,
+        qubit_fixing_cnt: Optional[int] = None,
+        prune_depth: Optional[int] = None,
+        prune_width: Optional[int] = None,
+        template_file: Optional[str] = None,
+    ) -> None:
+        """Creates an optimizer.
+
+        Args:
+            template_list: Optional explicit template list.
+            qubit_fixing_cnt: Optional matching heuristic parameter.
+            prune_depth: Optional prune depth.
+            prune_width: Optional prune width.
+            template_file: Optional `.json` or `.qcis` template file path.
+
+        Raises:
+            ValueError: If template inputs are invalid or loading fails.
+        """
+        ...
+
+    def execute(self, circuit: Circuit) -> Circuit:
+        """Runs one optimization pass.
+
+        Args:
+            circuit: Input circuit.
+
+        Returns:
+            Circuit: Optimized circuit.
+
+        Raises:
+            ValueError: If optimization fails.
+        """
+        ...
+
+    def execute_iterative(
+        self,
+        circuit: Circuit,
+        max_iterations: Optional[int] = None,
+    ) -> Circuit:
+        """Runs optimization iteratively.
+
+        Args:
+            circuit: Input circuit.
+            max_iterations: Optional max iteration count.
+
+        Returns:
+            Circuit: Optimized circuit.
+
+        Raises:
+            ValueError: If optimization fails.
+        """
+        ...
+
+    def template_count(self) -> int:
+        """Returns loaded template count."""
+        ...
+
+
 def vf2_is_subgraph_isomorphic(
     circuit: Circuit,
     topology: Topology,

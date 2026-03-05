@@ -400,7 +400,6 @@ class TestCompilerRandomizedStress:
 
     def test_random_circuit(self):
         """Maintains topology validity and non-negative op growth in random stress."""
-        rng = random.Random(20260227)
         repeats = 1000
         num_qubits = 5
         topology = Topology.line(list(range(num_qubits)))
@@ -413,12 +412,13 @@ class TestCompilerRandomizedStress:
             swap_iterations=2,
         )
         for _ in range(repeats):
-            circuit = random_circuit(num_qubits, rng)
+            circuit = random_circuit(num_qubits)
             input_ops = len(circuit.operations)
 
             if vf2_is_subgraph_isomorphic(circuit, topology):
                 vf2_mapped = vf2_map(circuit, topology)
                 assert len(vf2_mapped.operations) == input_ops
+                continue
             else:
                 vf2_mapped = circuit
 

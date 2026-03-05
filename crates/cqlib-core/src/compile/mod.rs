@@ -26,11 +26,16 @@
 
 /// Error types emitted by compile and mapping workflows.
 pub mod error;
+/// Shared gate-graph construction utilities for compile passes.
+pub(crate) mod graph;
 /// Mapping/routing algorithms and related data structures.
 pub mod mapping;
+/// Template-matching based optimization utilities.
+pub mod optimization;
 
 pub use error::CompileError;
 pub use mapping::{
     FidelityMap, SabreConfig, SabreMapping, Vf2CandidateOptions, Vf2CandidateScore,
     Vf2LayoutCandidate, Vf2Mapping, Vf2Policy, Vf2ScoreWeights, map_with_vf2_sabre,
 };
+pub use optimization::{TemplateMatch, TemplateMatching, TemplateOptimization};

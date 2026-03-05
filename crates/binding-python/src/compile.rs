@@ -25,12 +25,13 @@ use crate::circuit::PyCircuit;
 use cqlib_core::circuit::Qubit;
 use cqlib_core::compile::{
     FidelityMap, SabreConfig, Vf2CandidateOptions, Vf2Mapping, Vf2Policy, Vf2ScoreWeights,
-    map_with_vf2_sabre,
+    map_with_vf2_sabre, TemplateMatching as CoreTemplateMatching,
+    TemplateOptimization as CoreTemplateOptimization,
 };
 use cqlib_core::device::Topology;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::types::{PyDict, PyList};
 use std::collections::HashMap;
 
 /// Python-side coupling tuple accepted by `Topology(...)`.
@@ -276,6 +277,180 @@ impl PySabreConfig {
     }
 }
 
+/// Python wrapper for template-matching API.
+#[pyclass(name = "TemplateMatching", module = "cqlib.compiler")]
+#[derive(Clone, Debug, Default)]
+pub struct PyTemplateMatching;
+
+#[pymethods]
+impl PyTemplateMatching {
+    /// Creates a new template matcher.
+    #[new]
+    fn new() -> Self {
+        Self
+    }
+
+    /// Executes template matching and returns match pairs and qubit mapping.
+    ///
+    /// Args:
+    ///     circuit (Circuit): Circuit to match.
+    ///     template (Circuit): Template pattern circuit.
+    ///     qubit_fixing_cnt (Optional[int]): Optional matching heuristic knob.
+    ///     prune_depth (Optional[int]): Optional prune depth.
+    ///     prune_width (Optional[int]): Optional prune width.
+    ///
+    /// Returns:
+    ///     List[Tuple[List[Tuple[int, int]], List[int]]]: Match list.
+    ///
+    /// Raises:
+    ///     ValueError: If compile constraints or matching fails.
+    #[pyo3(signature = (circuit, template, qubit_fixing_cnt = None, prune_depth = None, prune_width = None))]
+    fn run(
+        &self,
+        circuit: &PyCircuit,
+        template: &PyCircuit,
+        qubit_fixing_cnt: Option<usize>,
+        prune_depth: Option<usize>,
+        prune_width: Option<usize>,
+    ) -> PyResult<Vec<(Vec<(usize, usize)>, Vec<usize>)>> {
+        let prune_param = parse_prune_params(prune_depth, prune_width);
+        let matches = CoreTemplateMatching::run(
+            &circuit.inner,
+            &template.inner,
+            qubit_fixing_cnt,
+            prune_param,
+        )
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+
+        Ok(matches
+            .into_iter()
+            .map(|m| (m.match_pairs, m.qubit_mapping))
+            .collect())
+    }
+
+    /// Returns a compact debug representation.
+    fn __repr__(&self) -> String {
+        "TemplateMatching()".to_string()
+    }
+}
+
+/// Python wrapper for template optimization API.
+#[pyclass(name = "TemplateOptimization", module = "cqlib.compiler")]
+#[derive(Clone, Debug)]
+pub struct PyTemplateOptimization {
+    /// Internal optimizer object.
+    pub(crate) inner: CoreTemplateOptimization,
+}
+
+#[pymethods]
+impl PyTemplateOptimization {
+    /// Creates a template optimizer.
+    ///
+    /// Args:
+    ///     template_list (Optional[List[Circuit]]): Explicit template circuits.
+    ///     qubit_fixing_cnt (Optional[int]): Optional matching heuristic knob.
+    ///     prune_depth (Optional[int]): Optional prune depth.
+    ///     prune_width (Optional[int]): Optional prune width.
+    ///     template_file (Optional[str]): Optional template file path (.json or .qcis).
+    ///
+    /// Raises:
+    ///     ValueError: If both template_list and template_file are set, or template loading fails.
+    #[new]
+    #[pyo3(signature = (template_list = None, qubit_fixing_cnt = None, prune_depth = None, prune_width = None, template_file = None))]
+    fn new(
+        py: Python<'_>,
+        template_list: Option<&Bound<'_, PyList>>,
+        qubit_fixing_cnt: Option<usize>,
+        prune_depth: Option<usize>,
+        prune_width: Option<usize>,
+        template_file: Option<String>,
+    ) -> PyResult<Self> {
+        if template_list.is_some() && template_file.is_some() {
+            return Err(PyValueError::new_err(
+                "provide either template_list or template_file, not both",
+            ));
+        }
+
+        let prune_param = parse_prune_params(prune_depth, prune_width);
+        let inner = match (template_list, template_file) {
+            (Some(list), None) => {
+                let mut templates = Vec::with_capacity(list.len());
+                for item in list.iter() {
+                    let circuit_obj: Py<PyCircuit> = item.extract()?;
+                    let circuit = circuit_obj.bind(py).borrow().inner.clone();
+                    templates.push(circuit);
+                }
+                CoreTemplateOptimization::new(templates, qubit_fixing_cnt, prune_param)
+            }
+            (None, Some(path)) => {
+                CoreTemplateOptimization::from_template_file(&path, qubit_fixing_cnt, prune_param)
+                    .map_err(|e| PyValueError::new_err(e.to_string()))?
+            }
+            (None, None) => CoreTemplateOptimization::with_default_templates(
+                qubit_fixing_cnt,
+                prune_param,
+            )
+            .map_err(|e| PyValueError::new_err(e.to_string()))?,
+            (Some(_), Some(_)) => unreachable!(),
+        };
+
+        Ok(Self { inner })
+    }
+
+    /// Executes one optimization pass.
+    ///
+    /// Args:
+    ///     circuit (Circuit): Circuit to optimize.
+    ///
+    /// Returns:
+    ///     Circuit: Optimized circuit.
+    ///
+    /// Raises:
+    ///     ValueError: If optimization fails.
+    fn execute(&self, circuit: &PyCircuit) -> PyResult<PyCircuit> {
+        self.inner
+            .execute(&circuit.inner)
+            .map(PyCircuit::from)
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    /// Executes optimization iteratively.
+    ///
+    /// Args:
+    ///     circuit (Circuit): Circuit to optimize.
+    ///     max_iterations (Optional[int]): Max iteration count.
+    ///
+    /// Returns:
+    ///     Circuit: Optimized circuit.
+    ///
+    /// Raises:
+    ///     ValueError: If optimization fails.
+    #[pyo3(signature = (circuit, max_iterations = None))]
+    fn execute_iterative(
+        &self,
+        circuit: &PyCircuit,
+        max_iterations: Option<usize>,
+    ) -> PyResult<PyCircuit> {
+        self.inner
+            .execute_iterative(&circuit.inner, max_iterations)
+            .map(PyCircuit::from)
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    /// Returns the number of templates in this optimizer.
+    fn template_count(&self) -> usize {
+        self.inner.template_count()
+    }
+
+    /// Returns a compact debug representation.
+    fn __repr__(&self) -> String {
+        format!(
+            "TemplateOptimization(templates={})",
+            self.inner.template_count()
+        )
+    }
+}
+
 /// Returns whether strict VF2 subgraph mapping exists for the circuit.
 ///
 /// Args:
@@ -505,5 +680,13 @@ fn parse_vf2_policy(policy: &str) -> PyResult<Vf2Policy> {
             "unknown vf2_policy '{}'; expected one of: direct_then_sabre, initial_only, disabled",
             policy
         ))),
+    }
+}
+
+/// Converts optional prune depth/width into compile prune parameters.
+fn parse_prune_params(depth: Option<usize>, width: Option<usize>) -> Option<(usize, usize)> {
+    match (depth, width) {
+        (Some(d), Some(w)) => Some((d, w)),
+        _ => None,
     }
 }
