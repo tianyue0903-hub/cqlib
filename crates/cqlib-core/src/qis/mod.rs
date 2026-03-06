@@ -11,9 +11,11 @@
 // that they have been altered from the originals.
 
 pub mod density_matrix;
+pub mod density_matrix_noise;
 pub mod pauli;
 pub mod statevector;
 
 pub use density_matrix::DensityMatrix;
+pub use density_matrix_noise::DensityMatrixNoise;
 pub use pauli::Pauli;
 pub use statevector::Statevector;

@@ -66,8 +66,8 @@ fn test_rz_phase_correction() {
 #[test]
 fn test_from_circuit_bell_state() {
     let mut circuit = Circuit::new(2);
-    circuit.h(0.into());
-    circuit.cx(0.into(), 1.into());
+    circuit.h(0.into()).unwrap();
+    circuit.cx(0.into(), 1.into()).unwrap();
 
     let dm = DensityMatrix::from_circuit(&circuit).unwrap();
 

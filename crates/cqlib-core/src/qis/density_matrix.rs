@@ -358,7 +358,7 @@ impl DensityMatrix {
             StandardGate::Y2P => self.apply_y2p(qubits[0]),
             StandardGate::Y2M => self.apply_y2m(qubits[0]),
             StandardGate::RXY => self.apply_rxy(qubits[0], params[0], params[1]),
-            StandardGate::XY => self.apply_xy(qubits[0], qubits[1], params[0]),
+            StandardGate::XY => self.apply_xy(qubits[0], params[0]),
             StandardGate::XY2P => self.apply_xy2p(qubits[0], params[0]),
             StandardGate::XY2M => self.apply_xy2m(qubits[0], params[0]),
             StandardGate::U => self.apply_u(qubits[0], params[0], params[1], params[2]),
@@ -746,9 +746,9 @@ impl DensityMatrix {
     }
 
     /// Applies the XY gate.
-    pub fn apply_xy(&mut self, q0: usize, q1: usize, theta: f64) {
+    pub fn apply_xy(&mut self, q: usize, theta: f64) {
         let mat = StandardGate::XY.matrix(&[theta]).unwrap();
-        self.apply_unitary_gate(&[q0, q1], &mat);
+        self.apply_unitary_gate(&[q], &mat);
     }
 
     /// Applies the Controlled-RX gate.
@@ -789,6 +789,17 @@ impl DensityMatrix {
     }
 
     fn apply_matrix_kernel(&mut self, qs: &[usize], off: usize, mat: &[Complex64], conj: bool) {
+        Self::apply_matrix_kernel_impl(&mut self.data, self.num_qubits, qs, off, mat, conj);
+    }
+
+    fn apply_matrix_kernel_impl(
+        data: &mut [Complex64],
+        num_qubits: usize,
+        qs: &[usize],
+        off: usize,
+        mat: &[Complex64],
+        conj: bool,
+    ) {
         let n = qs.len();
         let dim = 1 << n;
         let mut offsets: SmallVec<[usize; 16]> = smallvec![0; dim];
@@ -829,7 +840,7 @@ impl DensityMatrix {
                 }
             }
         };
-        with_maybe_par!(self.num_qubits, self.data, chunk_size, kernel);
+        with_maybe_par!(num_qubits, data, chunk_size, kernel);
     }
 
     /// Applies a general quantum channel specified by Kraus operators.
@@ -841,14 +852,42 @@ impl DensityMatrix {
     /// * `ops` - A slice of Kraus operators, where each operator is represented as a flattened vector of `Complex64`.
     /// * `qs` - The target qubit indices the channel acts upon.
     pub fn apply_kraus(&mut self, ops: &[Vec<Complex64>], qs: &[usize]) {
-        let mut res = Self::zeros(self.num_qubits);
-        for op in ops {
-            let mut tmp = self.clone();
-            tmp.apply_matrix_kernel(qs, self.num_qubits, op, false);
-            tmp.apply_matrix_kernel(qs, 0, op, true);
-            res += tmp;
+        let source_data = self.data.clone();
+
+        for val in self.data.iter_mut() {
+            *val = Complex64::default();
         }
-        self.data = res.data;
+
+        let mut work_buffer = vec![Complex64::default(); self.data.len()];
+
+        for op in ops {
+            work_buffer.copy_from_slice(&source_data);
+
+            Self::apply_matrix_kernel_impl(
+                &mut work_buffer,
+                self.num_qubits,
+                qs,
+                self.num_qubits,
+                op,
+                false,
+            );
+            Self::apply_matrix_kernel_impl(&mut work_buffer, self.num_qubits, qs, 0, op, true);
+
+            if self.num_qubits < PARALLEL_THRESHOLD {
+                for (acc, val) in self.data.iter_mut().zip(&work_buffer) {
+                    *acc += val;
+                }
+            } else {
+                use rayon::prelude::*;
+                self.data
+                    .par_iter_mut()
+                    .zip(work_buffer.par_iter())
+                    .for_each(|(acc, val)| {
+                        *acc += val;
+                    });
+            }
+        }
+
         #[cfg(debug_assertions)]
         {
             let tr = self.trace();

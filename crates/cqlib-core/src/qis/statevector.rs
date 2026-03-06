@@ -164,10 +164,10 @@ impl Statevector {
     ///
     /// // Create |+0⟩ = (|00⟩ + |10⟩)/√2
     /// let amps = vec![
-    ///     Complex64::new(0.70710678, 0.0), // |00⟩
-    ///     Complex64::new(0.0, 0.0),        // |01⟩
-    ///     Complex64::new(0.70710678, 0.0), // |10⟩
-    ///     Complex64::new(0.0, 0.0),        // |11⟩
+    ///     Complex64::new(std::f64::consts::FRAC_1_SQRT_2, 0.0), // |00⟩
+    ///     Complex64::new(0.0, 0.0),                             // |01⟩
+    ///     Complex64::new(std::f64::consts::FRAC_1_SQRT_2, 0.0), // |10⟩
+    ///     Complex64::new(0.0, 0.0),                             // |11⟩
     /// ];
     /// let sv = Statevector::from_state(2, amps);
     /// ```

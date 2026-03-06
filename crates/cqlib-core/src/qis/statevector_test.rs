@@ -2,10 +2,15 @@
 //
 // (C) Copyright China Telecom Quantum Group 2025-2026
 //
-// This code is licensed under the Apache License, Version 2.0.
+// This code is licensed under the Apache License, Version 2.0. You may
+// obtain a copy of this license in the LICENSE.txt file in the root directory
+// of this source tree or at http://www.apache.org/licenses/LICENSE-2.0.
+//
+// Any modifications or derivative works of this code must retain this
+// copyright notice, and modified files need to carry a notice indicating
+// that they have been altered from the originals.
 
 use super::*;
-use ndarray::Array2;
 use num_complex::Complex64;
 use std::f64::consts::{FRAC_1_SQRT_2, PI};
 
@@ -1517,7 +1522,7 @@ fn test_from_circuit() {
 
     // Test from_circuit with a simple H gate
     let mut circuit = Circuit::new(1);
-    circuit.h(0.into());
+    circuit.h(0.into()).unwrap();
 
     let sv = Statevector::from_circuit(&circuit).unwrap();
     assert_eq!(sv.num_qubits, 1);
@@ -1526,8 +1531,8 @@ fn test_from_circuit() {
 
     // Test from_circuit with Bell state
     let mut circuit2 = Circuit::new(2);
-    circuit2.h(0.into());
-    circuit2.cx(0.into(), 1.into());
+    circuit2.h(0.into()).unwrap();
+    circuit2.cx(0.into(), 1.into()).unwrap();
 
     let sv2 = Statevector::from_circuit(&circuit2).unwrap();
     assert_eq!(sv2.num_qubits, 2);
@@ -1538,7 +1543,7 @@ fn test_from_circuit() {
 
     // Test from_circuit with parameterized gates
     let mut circuit3 = Circuit::new(1);
-    circuit3.rx(0.into(), PI);
+    circuit3.rx(0.into(), PI).unwrap();
 
     let sv3 = Statevector::from_circuit(&circuit3).unwrap();
     assert_complex_eq(sv3.data[0], c(0.0, 0.0), "RX(π)|0⟩[0] should be 0");
@@ -1551,9 +1556,9 @@ fn test_from_circuit_3qubit_ghz() {
 
     // Create GHZ state via circuit
     let mut circuit = Circuit::new(3);
-    circuit.h(0.into());
-    circuit.cx(0.into(), 1.into());
-    circuit.cx(0.into(), 2.into());
+    circuit.h(0.into()).unwrap();
+    circuit.cx(0.into(), 1.into()).unwrap();
+    circuit.cx(0.into(), 2.into()).unwrap();
 
     let sv = Statevector::from_circuit(&circuit).unwrap();
     assert_eq!(sv.num_qubits, 3);
