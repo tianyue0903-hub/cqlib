@@ -10,7 +10,7 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
-use ndarray::{Array1, Array2, arr2};
+use ndarray::{Array2, arr2};
 use num_complex::Complex64;
 use std::fmt;
 
