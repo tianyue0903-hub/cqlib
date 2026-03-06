@@ -1,15 +1,16 @@
-use indexmap::IndexSet;
 use std::collections::HashMap;
 
+use indexmap::IndexSet;
 use ndarray::prelude::*;
 use num::complex::Complex;
+use rayon::prelude::*;
 use smallvec::{SmallVec, smallvec};
 
 use crate::circuit::circuit_impl::Circuit;
 use crate::circuit::dag::CircuitDag;
+use crate::circuit::gate::StandardGate;
 use crate::circuit::gate::instruction::Instruction;
-use crate::circuit::gate::{ControlFlow, StandardGate};
-use crate::circuit::param::{CircuitParam, ParameterValue};
+use crate::circuit::param::CircuitParam;
 use crate::circuit::parameter::Parameter;
 use crate::circuit::{Operation, Qubit};
 use crate::compile::gate_transform::transform_rules::double_qubit_rule::{
@@ -27,36 +28,47 @@ impl GateTransform {
         Self { instruction_set }
     }
 
+    /// Set the instruction set for gate transformation.
+    /// This allows for changing the target gate set dynamically.
+    pub fn set_instruction_set(&mut self, instruction_set: InstructionSet) {
+        self.instruction_set = instruction_set;
+    }
+
     /// Execute the gate transform on the input circuit.
     /// Returns a new circuit expressed entirely in the instruction set's gates.
+    /// Uses CircuitDag and parallel processing for improved performance.
     pub fn execute(&mut self, circuit: &Circuit) -> Circuit {
-        let mut new_circuit = Circuit::new(circuit.width());
-        let dg_decomposed = self.multi_qubit_decompose(circuit.operations(), circuit.parameters());
-        let final_decomposed = self.oneq_transform(&dg_decomposed, circuit.parameters());
+        let mut dag = CircuitDag::from_circuit(circuit).expect("Failed to create CircuitDag");
 
-        for op in final_decomposed {
-            let params: SmallVec<[ParameterValue; 3]> = op
-                .params
-                .into_iter()
-                .map(|p| match p {
-                    CircuitParam::Fixed(v) => ParameterValue::Fixed(v),
-                    CircuitParam::Index(index) => {
-                        ParameterValue::Param(circuit.parameters()[index as usize].clone())
-                    }
-                })
-                .collect();
-            new_circuit
-                .append(op.instruction, op.qubits.clone(), params, None)
-                .unwrap();
+        let block_indices: Vec<_> = dag.blocks().map(|(idx, _)| idx).collect();
+        let instruction_set = self.instruction_set.clone();
+        let parameters = circuit.parameters().clone();
+        let processed_results: Vec<_> = block_indices
+            .par_iter()
+            .map(|&idx| {
+                let operations = dag.data[idx].operations.clone();
+
+                let mut gt = GateTransform::new(instruction_set.clone());
+                let decomposed = gt.multi_qubit_decompose(&operations, &parameters);
+                let transformed = gt.oneq_transform(&decomposed, &parameters);
+
+                (idx, transformed)
+            })
+            .collect();
+
+        for (idx, new_operations) in processed_results {
+            dag.data[idx].operations = new_operations;
         }
-        new_circuit
+
+        dag.to_circuit()
+            .expect("Failed to convert CircuitDag to Circuit")
     }
 }
 
 impl GateTransform {
     /// Decompose a gate into the instruction set's target gates.
     /// Handles CCX, SWAP.
-    fn gate_decompose(&mut self, gate: &StandardGate) -> Vec<(StandardGate, SmallVec<[usize; 2]>)> {
+    fn gate_decompose(&self, gate: &StandardGate) -> Vec<(StandardGate, SmallVec<[usize; 2]>)> {
         let mut decomp_gates: Vec<(StandardGate, SmallVec<[usize; 2]>)> = Vec::new();
         match gate {
             StandardGate::CCX => {
@@ -105,7 +117,7 @@ impl GateTransform {
 
             match instruction {
                 // Pass through special gates unchanged
-                Instruction::Directive(_) => {
+                Instruction::Directive(_) | Instruction::McGate(_) => {
                     new_operations.push(op.clone());
                 }
 
@@ -173,12 +185,7 @@ impl GateTransform {
                     if sgate.num_qubits() == 1 {
                         // Single-qubit gates: pass through (handled in oneq_transform)
                         // Convert CircuitParam to ParameterValue for append
-                        new_operations.push(Operation {
-                            instruction: instruction.clone(),
-                            qubits: qubits.clone(),
-                            params: params.clone(),
-                            label: None,
-                        });
+                        new_operations.push(op.clone());
                     } else if sgate.num_qubits() == 2 {
                         let param_values: SmallVec<[f64; 3]> = params
                             .iter()
@@ -207,30 +214,6 @@ impl GateTransform {
                                 params: params.clone(),
                                 label: None,
                             });
-                        }
-                    }
-                }
-
-                Instruction::ControlFlowGate(cflow) => {
-                    match cflow {
-                        ControlFlow::IfElse(if_else_gate) => {
-                            // Process true body
-                            let true_body = if_else_gate.true_body();
-                            let transformed_true =
-                                self.multi_qubit_decompose(&true_body, parameters);
-
-                            // Process false body if present
-                            let false_body = if_else_gate.false_body();
-                            let transformed_false = if false_body.is_none() {
-                                None
-                            } else {
-                                Some(self.multi_qubit_decompose(&false_body.unwrap(), parameters))
-                            };
-                        }
-                        ControlFlow::WhileLoop(while_gate) => {
-                            // Process loop body
-                            let body = while_gate.body();
-                            let transformed_while = self.multi_qubit_decompose(&body, parameters);
                         }
                     }
                 }
@@ -424,18 +407,6 @@ impl GateTransform {
                 .collect();
 
             match instruction {
-                Instruction::Directive(_) => {
-                    // Flush any accumulated ops on affected qubits
-                    for q in qubits {
-                        let front_layer_operator =
-                            self.flush_front_layer(&mut front_layer, q.id(), &single_qubit_rule);
-                        if !front_layer_operator.is_empty() {
-                            new_operations.extend(front_layer_operator);
-                        }
-                    }
-                    new_operations.push(op.clone());
-                }
-
                 Instruction::Standard(sgate) => {
                     if sgate.num_qubits() == 1 {
                         // Single-qubit gate: accumulate into front layer
@@ -537,7 +508,11 @@ impl GateTransform {
 mod tests {
     use super::*;
     use crate::circuit::Qubit;
+    use crate::circuit::dag::{BasicBlock, FlowEdge, Terminator};
+    use crate::circuit::gate::MCGate;
+    use crate::circuit::gate::control_flow::{ConditionView, IfElseGate, WhileLoopGate};
     use crate::circuit::gate::{CircuitGate, FrozenCircuit, UnitaryGate};
+    use crate::circuit::param::ParameterValue;
     use num::complex::Complex;
     use num::complex::ComplexFloat;
     use std::sync::Arc;
@@ -814,6 +789,52 @@ mod tests {
     }
 
     #[test]
+    fn test_gate_transfer_full_circuit_with_dynamic_iset() {
+        let iset = InstructionSet::new(
+            vec![StandardGate::RZ, StandardGate::RX, StandardGate::RY],
+            vec![StandardGate::CY],
+            None,
+        );
+        let new_iset = InstructionSet::new(
+            vec![StandardGate::RZ, StandardGate::RX, StandardGate::RY],
+            vec![StandardGate::CX],
+            None,
+        );
+        let mut gt = GateTransform::new(iset.clone());
+        gt.set_instruction_set(new_iset.clone());
+
+        let circuit = generate_full_circuit();
+        let result = gt.execute(&circuit);
+        assert!(
+            check_all_gates_in_instruction_set(&result, &mut new_iset.clone()),
+            "Gate transfer contains other Standard Gate not in iset."
+        );
+
+        let result_matrix = result.to_matrix(None);
+        let circuit_matrix = circuit.to_matrix(None);
+
+        if !is_matrix_differ_by_phase(&result_matrix, &circuit_matrix) {
+            eprintln!("Assertion failed! Result circuit operations:");
+            for (i, op) in result.operations().iter().enumerate() {
+                eprintln!(
+                    "  [{}] {:?} on qubits {:?}, with parameter {:?}",
+                    i, op.instruction, op.qubits, op.params
+                );
+            }
+            eprintln!("Original circuit operations:");
+            for (i, op) in circuit.operations().iter().enumerate() {
+                eprintln!("  [{}] {:?} on qubits {:?}", i, op.instruction, op.qubits);
+            }
+        }
+
+        assert!(
+            is_matrix_differ_by_phase(&result_matrix, &circuit_matrix),
+            "Gate transfer should not change circuit size {}",
+            result.operations().len()
+        );
+    }
+
+    #[test]
     fn test_gate_transfer_full_circuit_with_rxx() {
         let iset = InstructionSet::new(
             vec![StandardGate::RZ, StandardGate::RX, StandardGate::RY],
@@ -899,13 +920,12 @@ mod tests {
         gate_transfer_circuit_test(&iset, &generate_full_circuit());
     }
 
-    fn generate_circuit_with_unitary_and_circuit_gate() -> Circuit {
+    fn generate_circuit_with_special_operation() -> Circuit {
         let q0 = Qubit::new(0);
         let q1 = Qubit::new(1);
         let q2 = Qubit::new(2);
 
         let mut sub_circuit = Circuit::new(2);
-        // sub_circuit.h(q0).unwrap();
         sub_circuit.cx(q0, q1).unwrap();
 
         let frozen_sub_circuit = FrozenCircuit::new(sub_circuit);
@@ -938,6 +958,84 @@ mod tests {
                 None,
             )
             .unwrap();
+        let mc_gate = MCGate::new(2, StandardGate::X);
+        circuit
+            .append(
+                Instruction::McGate(Box::new(mc_gate)),
+                vec![q0, q1, q2],
+                std::iter::empty(),
+                None,
+            )
+            .unwrap();
+
+        circuit
+    }
+
+    fn generate_circuit_with_control_flow() -> Circuit {
+        let mut circuit = generate_full_circuit();
+        let q0 = Qubit::new(0);
+        let q1 = Qubit::new(1);
+        let q2 = Qubit::new(2);
+
+        circuit.h(q0).unwrap();
+        circuit.h(q1).unwrap();
+
+        circuit.measure(q0).unwrap();
+        circuit.measure(q1).unwrap();
+
+        let condition1 = ConditionView::new(q0, 1);
+
+        let if1_true_body = vec![
+            Operation {
+                instruction: Instruction::Standard(StandardGate::H),
+                qubits: smallvec![q1],
+                params: smallvec![],
+                label: None,
+            },
+            Operation {
+                instruction: Instruction::Standard(StandardGate::CX),
+                qubits: smallvec![q1, q2],
+                params: smallvec![],
+                label: None,
+            },
+        ];
+
+        let if1_false_body = vec![
+            Operation {
+                instruction: Instruction::Standard(StandardGate::X),
+                qubits: smallvec![q1],
+                params: smallvec![],
+                label: None,
+            },
+            Operation {
+                instruction: Instruction::Standard(StandardGate::Z),
+                qubits: smallvec![q2],
+                params: smallvec![],
+                label: None,
+            },
+        ];
+
+        circuit
+            .if_else(condition1, if1_true_body, Some(if1_false_body))
+            .unwrap();
+
+        let condition2 = ConditionView::new(q0, 1);
+        let while_body = vec![
+            Operation {
+                instruction: Instruction::Standard(StandardGate::H),
+                qubits: smallvec![q1],
+                params: smallvec![],
+                label: None,
+            },
+            Operation {
+                instruction: Instruction::Standard(StandardGate::CX),
+                qubits: smallvec![q2, q1],
+                params: smallvec![],
+                label: None,
+            },
+        ];
+
+        circuit.while_loop(condition2, while_body).unwrap();
 
         circuit
     }
@@ -954,6 +1052,101 @@ mod tests {
             vec![StandardGate::CX, StandardGate::RZZ],
             None,
         );
-        gate_transfer_circuit_test(&iset, &generate_circuit_with_unitary_and_circuit_gate());
+        gate_transfer_circuit_test(&iset, &generate_circuit_with_special_operation());
+    }
+
+    #[test]
+    fn test_gate_transform_with_control_flow() {
+        let iset = InstructionSet::new(
+            vec![
+                StandardGate::RX,
+                StandardGate::RZ,
+                StandardGate::RY,
+                StandardGate::H,
+            ],
+            vec![StandardGate::CX, StandardGate::RZZ],
+            None,
+        );
+
+        let circuit = generate_circuit_with_control_flow();
+        let dag = CircuitDag::from_circuit(&circuit).expect("Failed to create CircuitDag");
+        assert!(
+            dag.num_blocks() > 1,
+            "Control flow circuit should have multiple blocks"
+        );
+
+        let mut gt = GateTransform::new(iset.clone());
+        let result = gt.execute(&circuit);
+
+        let result_matrix = result.to_matrix(None);
+        let circuit_matrix = circuit.to_matrix(None);
+        assert!(
+            is_matrix_differ_by_phase(&result_matrix, &circuit_matrix),
+            "Gate transfer should not change circuit size {}",
+            result.operations().len()
+        );
+
+        let result_dag = CircuitDag::from_circuit(&result).expect("Failed to create CircuitDag");
+        assert_eq!(
+            dag.num_blocks(),
+            result_dag.num_blocks(),
+            "Gate transfer should not change circuit block number"
+        );
+
+        for (_idx, block) in result_dag.blocks() {
+            let mut old_subc = Circuit::new(3);
+            let mut new_subc = Circuit::new(3);
+            let operations = block.operations.clone();
+            for op in &operations {
+                if let Instruction::Standard(gate) = &op.instruction {
+                    if gate.num_qubits() == 1 {
+                        assert!(
+                            iset.single_qubit_gates.contains(gate),
+                            "Single qubit gate {} do not in instruction set",
+                            gate
+                        );
+                    } else if gate.num_qubits() == 2 {
+                        assert!(
+                            iset.double_qubit_gate.contains(gate),
+                            "Double qubit gate {} do not in instruction set",
+                            gate
+                        );
+                    }
+                }
+                let params = op
+                    .params
+                    .iter()
+                    .map(|x| match x {
+                        CircuitParam::Fixed(f) => ParameterValue::Fixed(*f),
+                        _ => ParameterValue::Fixed(0.0),
+                    })
+                    .collect::<Vec<_>>();
+                new_subc
+                    .append(op.instruction.clone(), op.qubits.clone(), params, None)
+                    .unwrap();
+            }
+
+            for op in dag.data[_idx].operations.iter() {
+                let params = op
+                    .params
+                    .iter()
+                    .map(|x| match x {
+                        CircuitParam::Fixed(f) => ParameterValue::Fixed(*f),
+                        _ => ParameterValue::Fixed(0.0),
+                    })
+                    .collect::<Vec<_>>();
+                old_subc
+                    .append(op.instruction.clone(), op.qubits.clone(), params, None)
+                    .unwrap();
+            }
+
+            let result_matrix = old_subc.to_matrix(None);
+            let circuit_matrix = new_subc.to_matrix(None);
+            assert!(
+                is_matrix_differ_by_phase(&result_matrix, &circuit_matrix),
+                "Gate transfer should not change circuit size {}",
+                result.operations().len()
+            );
+        }
     }
 }

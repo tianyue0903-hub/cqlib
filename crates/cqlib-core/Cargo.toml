@@ -39,7 +39,7 @@ smallvec.workspace = true
 thiserror.workspace = true
 time.workspace = true
 uuid.workspace = true
-rand.workspace = true
+rayon = "1.11.0"
 
 [build-dependencies]
 lalrpop.workspace = true
