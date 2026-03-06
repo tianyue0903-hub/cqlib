@@ -10,12 +10,11 @@
 # copyright notice, and modified files need to carry a notice indicating
 # that they have been altered from the originals.
 
-from typing import Union, List, Optional
+from typing import Optional
 import numpy as np
 import numpy.typing as npt
 from typing_extensions import final
 from ..circuit import Circuit
-
 
 @final
 class UnitaryGate:
@@ -35,7 +34,7 @@ class UnitaryGate:
         ...
 
     def with_matrix(
-            self, mat: Union[npt.NDArray[np.complex128], List[List[complex]]]
+        self, mat: npt.NDArray[np.complex128] | list[list[complex]]
     ) -> "UnitaryGate":
         """Attaches a matrix to the unitary definition.
 
@@ -52,10 +51,10 @@ class UnitaryGate:
 
     def with_circuit(self, circuit: Circuit) -> "UnitaryGate":
         """Attaches a circuit to the unitary definition.
-        
+
         Args:
             circuit: A quantum circuit definition.
-            
+
         Returns:
             A new UnitaryGate with the circuit attached.
         """
@@ -80,7 +79,7 @@ class UnitaryGate:
         ...
 
     def __array__(
-            self, dtype: Optional[np.dtype] = None, copy: Optional[bool] = None
+        self, dtype: Optional[np.dtype] = None, copy: Optional[bool] = None
     ) -> npt.NDArray[np.complex128]:
         """Returns the matrix as a numpy array (for numpy interoperability).
 

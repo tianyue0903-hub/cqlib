@@ -101,9 +101,19 @@ impl PyOperation {
 
     /// Returns the parameters of this operation.
     ///
-    /// Parameters can be either:
-    /// - Fixed float values (e.g., `0.5` for rotation angle)
-    /// - Symbolic parameter indices (returned as tuple `("param", index)`)
+    /// Note: The return type is heterogeneous. Each element can be either:
+    /// - A fixed float value (e.g., `0.5` for a concrete rotation angle)
+    /// - A tuple `("param", index)` representing a reference to a symbolic parameter
+    ///   stored in the parent circuit's parameter table. To resolve such references,
+    ///   use `circuit.parameters[index]`.
+    ///
+    /// Example:
+    ///     >>> for op in circuit.operations:
+    ///     ...     for p in op.params:
+    ///     ...         if isinstance(p, tuple) and p[0] == "param":
+    ///     ...             param = circuit.parameters[p[1]]  # Resolve symbolic param
+    ///     ...         else:
+    ///     ...             value = p  # Fixed float value
     #[getter]
     fn params(&self, py: Python<'_>) -> PyResult<Vec<Py<PyAny>>> {
         let mut result = Vec::with_capacity(self.operation.params.len());
@@ -113,8 +123,8 @@ impl PyOperation {
                     result.push(val.into_pyobject(py)?.into_any().unbind());
                 }
                 CircuitParam::Index(idx) => {
-                    // For now, return the index as a tuple ("param", idx)
-                    // In a full implementation, we'd need access to the circuit's parameter table
+                    // Return the index as a tuple ("param", idx).
+                    // The user can resolve this using circuit.parameters[idx].
                     let tuple = ("param", *idx).into_pyobject(py)?;
                     result.push(tuple.into_any().unbind());
                 }

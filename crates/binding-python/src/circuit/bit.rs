@@ -61,6 +61,15 @@ impl PyQubit {
         self.inner.index()
     }
 
+    /// Returns the raw identifier of this qubit as a u32.
+    ///
+    /// This is the underlying storage type used by the qubit.
+    /// Use this when you need the compact 4-byte representation.
+    #[getter]
+    fn id(&self) -> u32 {
+        self.inner.id()
+    }
+
     fn __repr__(&self) -> String {
         format!("Qubit({})", self.inner.index())
     }

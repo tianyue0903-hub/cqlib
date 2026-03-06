@@ -323,6 +323,8 @@ fn test_nested_gate() {
 
 #[test]
 fn test_recursion_limit() {
+    // This test checks for circular gate dependency detection
+    // gate recursive a { recursive a; } is a self-referential gate (circular dependency)
     let qasm = r#"
         OPENQASM 2.0;
         qreg q[1];
@@ -333,9 +335,31 @@ fn test_recursion_limit() {
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
     assert!(
-        err.contains("Recursion limit exceeded")
-            || err.contains("stack overflow")
-            || err.contains("recursion"),
+        err.contains("Circular gate dependency") || err.contains("recursion"),
+        "Got error: {}",
+        err
+    );
+}
+
+#[test]
+fn test_circular_gate_dependency() {
+    // Test A calls B, B calls A (circular dependency)
+    let qasm = r#"
+        OPENQASM 2.0;
+        qreg q[1];
+        gate a q {
+            b q;
+        }
+        gate b q {
+            a q;
+        }
+        a q[0];
+    "#;
+    let result = loads(qasm);
+    assert!(result.is_err());
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("Circular gate dependency"),
         "Got error: {}",
         err
     );
