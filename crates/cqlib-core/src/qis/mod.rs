@@ -10,6 +10,8 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
+pub mod density_matrix;
 pub mod statevector;
 
+pub use density_matrix::DensityMatrix;
 pub use statevector::Statevector;
