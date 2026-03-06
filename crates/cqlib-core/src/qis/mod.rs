@@ -11,7 +11,9 @@
 // that they have been altered from the originals.
 
 pub mod density_matrix;
+pub mod pauli;
 pub mod statevector;
 
 pub use density_matrix::DensityMatrix;
+pub use pauli::Pauli;
 pub use statevector::Statevector;
