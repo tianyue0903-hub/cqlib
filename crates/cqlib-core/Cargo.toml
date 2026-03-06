@@ -32,6 +32,7 @@ indexmap.workspace = true
 ndarray.workspace = true
 num.workspace = true
 num-complex.workspace = true
+rayon.workspace = true
 regex.workspace = true
 rustworkx-core.workspace = true
 smallvec.workspace = true

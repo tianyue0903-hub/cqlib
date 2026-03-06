@@ -13,7 +13,7 @@ pub mod bit;
 pub mod circuit_impl;
 mod circuit_to_matrix;
 pub mod dag;
-mod error;
+pub mod error;
 pub mod gate;
 pub mod operation;
 pub mod param;

@@ -10,10 +10,6 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
-extern crate alloc;
-extern crate core;
+pub mod statevector;
 
-pub mod circuit;
-pub mod device;
-pub mod ir;
-pub mod qis;
+pub use statevector::Statevector;

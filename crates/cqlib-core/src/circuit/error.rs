@@ -143,6 +143,9 @@ pub enum CircuitError {
     /// if the DAG structure was manually modified and left in an inconsistent state.
     #[error("Invalid control flow graph structure: {0}")]
     InvalidControlFlow(String),
+
+    #[error("Invalid Operation: {0}")]
+    InvalidOperation(String),
 }
 
 #[derive(Debug, Error)]
