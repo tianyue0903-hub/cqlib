@@ -12,10 +12,12 @@
 
 pub mod density_matrix;
 pub mod density_matrix_noise;
+pub mod hamiltonian;
 pub mod pauli;
 pub mod statevector;
 
 pub use density_matrix::DensityMatrix;
 pub use density_matrix_noise::DensityMatrixNoise;
+pub use hamiltonian::Hamiltonian;
 pub use pauli::{Pauli, PauliString, Phase};
 pub use statevector::Statevector;
