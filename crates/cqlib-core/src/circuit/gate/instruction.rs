@@ -79,8 +79,8 @@ impl Instruction {
     /// - `None`: If the instruction is non-unitary (e.g., `Measure`, `Barrier`, `Reset`).
     pub fn matrix(&self, params: &[f64]) -> Option<Cow<'_, Array2<Complex64>>> {
         match self {
-            Instruction::Standard(g) => Some(g.matrix(params)),
-            Instruction::McGate(g) => Some(g.matrix(params)),
+            Instruction::Standard(g) => g.matrix(params).ok(),
+            Instruction::McGate(g) => g.matrix(params).ok(),
             Instruction::UnitaryGate(g) => g.matrix().map(Cow::Borrowed),
             Instruction::CircuitGate(g) => circuit_to_matrix(&g.circuit.circuit, None)
                 .ok()

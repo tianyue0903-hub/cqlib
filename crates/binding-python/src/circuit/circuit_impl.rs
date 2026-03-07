@@ -1014,10 +1014,11 @@ impl PyCircuit {
     /// Raises:
     ///     ValueError: If the circuit contains non-unitary operations (Measure, Reset)
     ///                  or gates that cannot be symbolically inverted.
-    fn inverse(&self) -> PyResult<Self> {
-        let new_inner = self
-            .inner
-            .inverse()
+    fn inverse(&self, py: Python<'_>) -> PyResult<Self> {
+        // Clone circuit data for thread-safe access without holding GIL
+        let circuit = self.inner.clone();
+        let new_inner = py
+            .detach(move || circuit.inverse())
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
         Ok(PyCircuit { inner: new_inner })
     }
@@ -1037,10 +1038,15 @@ impl PyCircuit {
     ///     >>> circuit.rx(0, theta)
     ///     >>> assigned = circuit.assign_parameters({"theta": 3.14159})
     #[pyo3(signature = (bindings=None))]
-    fn assign_parameters(&self, bindings: Option<HashMap<String, f64>>) -> PyResult<Self> {
-        let new_inner = self
-            .inner
-            .assign_parameters(&bindings)
+    fn assign_parameters(
+        &self,
+        py: Python<'_>,
+        bindings: Option<HashMap<String, f64>>,
+    ) -> PyResult<Self> {
+        // Clone circuit data for thread-safe access without holding GIL
+        let circuit = self.inner.clone();
+        let new_inner = py
+            .detach(move || circuit.assign_parameters(&bindings))
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
         Ok(PyCircuit { inner: new_inner })
     }
@@ -1114,7 +1120,12 @@ impl PyCircuit {
         py: Python<'py>,
         qubits_order: Option<Vec<usize>>,
     ) -> PyResult<Bound<'py, PyArray2<Complex64>>> {
-        Ok(self.inner.to_matrix(qubits_order.as_ref()).to_pyarray(py))
+        // Clone circuit data for thread-safe access without holding GIL
+        let circuit = self.inner.clone();
+        let order = qubits_order.clone();
+        // Release GIL during potentially expensive matrix computation
+        let result = py.detach(move || circuit.to_matrix(order.as_ref()));
+        Ok(result.to_pyarray(py))
     }
 
     /// Decomposes the circuit by expanding all sub-circuit gates.
@@ -1124,9 +1135,19 @@ impl PyCircuit {
     ///
     /// Returns:
     ///     A new flattened circuit with only base instructions.
-    fn decompose(&self) -> Self {
-        Self {
-            inner: self.inner.decompose(),
+    ///
+    /// Raises:
+    ///     ValueError: If a symbolic parameter cannot be resolved during decomposition.
+    fn decompose(&self, py: Python<'_>) -> PyResult<Self> {
+        // Clone circuit data for thread-safe access without holding GIL
+        let circuit = self.inner.clone();
+        // Release GIL during potentially expensive decomposition
+        match py.detach(move || circuit.decompose()) {
+            Ok(circuit) => Ok(Self { inner: circuit }),
+            Err(e) => Err(PyValueError::new_err(format!(
+                "Circuit decomposition failed: {}",
+                e
+            ))),
         }
     }
 

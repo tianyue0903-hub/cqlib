@@ -14,9 +14,9 @@
 //!
 //! This module provides [`MCGate`], a type representing gates with multiple
 //! control qubits applied to a base [`StandardGate`]. For example, a
-/// multi-controlled X gate with 2 controls is the CCX (Toffoli) gate.
-use crate::circuit::Parameter;
 use crate::circuit::gate::{StandardGate, gate_matrix};
+/// multi-controlled X gate with 2 controls is the CCX (Toffoli) gate.
+use crate::circuit::{CircuitError, Parameter};
 use alloc::borrow::Cow;
 use ndarray::Array2;
 use num_complex::Complex;
@@ -88,14 +88,14 @@ impl MCGate {
     /// # Returns
     ///
     /// A `Cow` containing the matrix, borrowed if no controls are present.
-    pub fn matrix(&self, params: &[f64]) -> Cow<'_, Array2<Complex<f64>>> {
-        let base_matrix = self.gate.matrix(params);
+    pub fn matrix(&self, params: &[f64]) -> Result<Cow<'_, Array2<Complex<f64>>>, CircuitError> {
+        let base_matrix = self.gate.matrix(params)?;
         if self.num_controls == 0 {
-            return base_matrix;
+            return Ok(base_matrix);
         }
         // Construct controlled matrix
         let controlled = gate_matrix::control_matrix(&base_matrix, self.num_controls as usize);
-        Cow::Owned(controlled)
+        Ok(Cow::Owned(controlled))
     }
 
     /// Computes the inverse of the multi-controlled gate.

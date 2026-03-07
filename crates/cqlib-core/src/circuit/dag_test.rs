@@ -587,3 +587,134 @@ fn test_to_circuit_nested_if_in_while() {
         _ => panic!("Expected WhileLoop control flow"),
     }
 }
+
+use crate::circuit::CircuitError;
+
+#[test]
+fn test_invalid_dag_missing_true_branch() {
+    // Manually construct an invalid DAG with a Branch terminator but no TrueBranch edge
+    let mut dag = CircuitDag::new(1);
+    let q0 = Qubit::new(0);
+    let condition = ConditionView::new(q0, 1);
+
+    // Create entry block with Branch terminator
+    let entry_block = dag.add_block(BasicBlock::new().with_label("entry"));
+    dag.set_entry_block(entry_block);
+    dag.data[entry_block].set_terminator(Terminator::Branch(condition));
+
+    // Only add FalseBranch edge, intentionally omit TrueBranch
+    let false_target = dag.add_block(BasicBlock::new().with_label("false_target"));
+    dag.data[false_target].set_terminator(Terminator::Return);
+    dag.add_edge(entry_block, false_target, FlowEdge::FalseBranch);
+
+    // to_circuit should return InvalidControlFlow error
+    let result = dag.to_circuit();
+    match result {
+        Err(CircuitError::InvalidControlFlow(msg)) => {
+            assert!(
+                msg.contains("missing a TrueBranch"),
+                "Error message should indicate missing TrueBranch, got: {}",
+                msg
+            );
+        }
+        _ => panic!(
+            "Expected InvalidControlFlow error for missing TrueBranch edge, got {:?}",
+            result
+        ),
+    }
+}
+
+#[test]
+fn test_invalid_dag_missing_false_branch() {
+    // Manually construct an invalid DAG with a Branch terminator but no FalseBranch edge
+    let mut dag = CircuitDag::new(1);
+    let q0 = Qubit::new(0);
+    let condition = ConditionView::new(q0, 1);
+
+    // Create entry block with Branch terminator
+    let entry_block = dag.add_block(BasicBlock::new().with_label("entry"));
+    dag.set_entry_block(entry_block);
+    dag.data[entry_block].set_terminator(Terminator::Branch(condition));
+
+    // Only add TrueBranch edge, intentionally omit FalseBranch
+    let true_target = dag.add_block(BasicBlock::new().with_label("true_target"));
+    dag.data[true_target].set_terminator(Terminator::Return);
+    dag.add_edge(entry_block, true_target, FlowEdge::TrueBranch);
+
+    // to_circuit should return InvalidControlFlow error
+    let result = dag.to_circuit();
+    match result {
+        Err(CircuitError::InvalidControlFlow(msg)) => {
+            assert!(
+                msg.contains("missing a FalseBranch"),
+                "Error message should indicate missing FalseBranch, got: {}",
+                msg
+            );
+        }
+        _ => panic!(
+            "Expected InvalidControlFlow error for missing FalseBranch edge, got {:?}",
+            result
+        ),
+    }
+}
+
+#[test]
+fn test_invalid_dag_error_includes_block_info() {
+    // Verify that error messages include the block label and index
+    let mut dag = CircuitDag::new(1);
+    let q0 = Qubit::new(0);
+    let condition = ConditionView::new(q0, 1);
+
+    // Create a labeled entry block with Branch terminator but no edges
+    let entry_block = dag.add_block(BasicBlock::new().with_label("my_test_block"));
+    dag.set_entry_block(entry_block);
+    dag.data[entry_block].set_terminator(Terminator::Branch(condition));
+
+    let result = dag.to_circuit();
+    match result {
+        Err(CircuitError::InvalidControlFlow(msg)) => {
+            assert!(
+                msg.contains("my_test_block"),
+                "Error message should include block label, got: {}",
+                msg
+            );
+            assert!(
+                msg.contains("TrueBranch"),
+                "Error message should indicate missing TrueBranch, got: {}",
+                msg
+            );
+        }
+        _ => panic!(
+            "Expected InvalidControlFlow error with block details, got {:?}",
+            result
+        ),
+    }
+}
+
+#[test]
+fn test_invalid_dag_unlabeled_block() {
+    // Verify error handling for unlabeled blocks
+    let mut dag = CircuitDag::new(1);
+    let q0 = Qubit::new(0);
+    let condition = ConditionView::new(q0, 1);
+
+    // Create unlabeled entry block with Branch terminator
+    let entry_block = dag.add_block(BasicBlock::new()); // No label
+    dag.set_entry_block(entry_block);
+    dag.data[entry_block].set_terminator(Terminator::Branch(condition));
+
+    let result = dag.to_circuit();
+    match result {
+        Err(CircuitError::InvalidControlFlow(msg)) => {
+            assert!(
+                msg.contains("<unlabeled>"),
+                "Error message should indicate unlabeled block, got: {}",
+                msg
+            );
+        }
+        _ => panic!(
+            "Expected InvalidControlFlow error for unlabeled block, got {:?}",
+            result
+        ),
+    }
+}

@@ -11,9 +11,9 @@
 // that they have been altered from the originals.
 
 use super::ZNEMitigation;
+use crate::circuit::CircuitError;
 use crate::circuit::Qubit;
 use crate::circuit::circuit_impl::Circuit;
-use crate::circuit::CircuitError;
 use crate::circuit::gate::{Instruction, StandardGate};
 use ndarray::Array2;
 use num_complex::Complex64;
