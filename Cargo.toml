@@ -21,6 +21,7 @@ strip = true
 
 [workspace.dependencies]
 approx = "0.5"
+bitvec = "1.0.1"
 cbindgen = "0.29.2"
 lalrpop = "0.22"
 lalrpop-util = "0.22"

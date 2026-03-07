@@ -1,6 +1,6 @@
 // This code is part of Cqlib.
 //
-// (C) Copyright China Telecom Quantum Group 2025-2026
+// (C) Copyright China Telecom Quantum Group 2026
 //
 // This code is licensed under the Apache License, Version 2.0. You may
 // obtain a copy of this license in the LICENSE.txt file in the root directory
@@ -17,5 +17,5 @@ pub mod statevector;
 
 pub use density_matrix::DensityMatrix;
 pub use density_matrix_noise::DensityMatrixNoise;
-pub use pauli::Pauli;
+pub use pauli::{Pauli, PauliString, Phase};
 pub use statevector::Statevector;

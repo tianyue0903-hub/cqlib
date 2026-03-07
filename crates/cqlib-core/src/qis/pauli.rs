@@ -1,6 +1,6 @@
 // This code is part of Cqlib.
 //
-// (C) Copyright China Telecom Quantum Group 2025-2026
+// (C) Copyright China Telecom Quantum Group 2026
 //
 // This code is licensed under the Apache License, Version 2.0. You may
 // obtain a copy of this license in the LICENSE.txt file in the root directory
@@ -10,15 +10,212 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
+//! Single-qubit Pauli operators and arithmetic.
+//!
+//! This module provides the [`Pauli`] enum representing the four single-qubit
+//! Pauli matrices (I, X, Y, Z) and [`PauliString`] for multi-qubit Pauli operators.
+//!
+//! # Features
+//! - Matrix representation conversion
+//! - Symplectic encoding for efficient computation
+//! - Group multiplication with phase tracking
+//! - Commutator computation using bitwise operations
+//!
+//! # Examples
+//!
+//! ```
+//! use cqlib_core::qis::pauli::{Pauli, PauliString};
+//!
+//! // Create a single-qubit Pauli operator
+//! let x = Pauli::X;
+//! let z = Pauli::Z;
+//!
+//! // Pauli multiplication with phase tracking: X * Z = -iY
+//! let (p, phase) = x.mul_with_phase(z);
+//!
+//! // Create a multi-qubit Pauli string
+//! let mut ps = PauliString::new(3);
+//! ps.set_pauli(0, Pauli::X);
+//! ps.set_pauli(1, Pauli::Z);
+//! println!("{}", ps.to_string());
+//! // ps now represents X ⊗ Z ⊗ I
+//! ```
+
+use bitvec::prelude::*;
 use ndarray::{Array2, arr2};
 use num_complex::Complex64;
 use std::fmt;
+use std::ops::{Add, AddAssign, Mul, MulAssign};
 
+/// Phase factor in the Pauli group, isomorphic to Z4 (the cyclic group of order 4).
+///
+/// Represents powers of the imaginary unit: $i^n$ where $n \in \{0, 1, 2, 3\}$.
+///
+/// # Mathematical Mapping
+///
+/// | Variant | Value | Exponent |
+/// |---------|-------|----------|
+/// | `Plus`  | $1$   | 0        |
+/// | `I`     | $i$   | 1        |
+/// | `Minus` | $-1$  | 2        |
+/// | `MinusI`| $-i$  | 3        |
+///
+/// Arithmetic follows the exponent addition rule: $i^a \cdot i^b = i^{(a+b) \bmod 4}$.
+///
+/// # Examples
+///
+/// ```
+/// use cqlib_core::qis::pauli::Phase;
+///
+/// let p1 = Phase::I;      // i
+/// let p2 = Phase::I;      // i
+/// let p3 = p1 + p2;       // i * i = -1
+/// assert_eq!(p3, Phase::Minus);
+///
+/// // Convert to complex number
+/// let c = Phase::MinusI.to_complex();  // -i
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum Phase {
+    /// $i^0 = 1$
+    Plus = 0,
+    /// $i^1 = i$
+    I = 1,
+    /// $i^2 = -1$
+    Minus = 2,
+    /// $i^3 = -i$
+    MinusI = 3,
+}
+
+impl From<u8> for Phase {
+    /// Converts a `u8` to a `Phase` by taking modulo 4.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use cqlib_core::qis::pauli::Phase;
+    ///
+    /// assert_eq!(Phase::from(0), Phase::Plus);
+    /// assert_eq!(Phase::from(5), Phase::I);    // 5 % 4 = 1
+    /// assert_eq!(Phase::from(6), Phase::Minus);// 6 % 4 = 2
+    /// ```
+    fn from(val: u8) -> Self {
+        match val % 4 {
+            0 => Phase::Plus,
+            1 => Phase::I,
+            2 => Phase::Minus,
+            3 => Phase::MinusI,
+            _ => unreachable!(),
+        }
+    }
+}
+
+impl Add for Phase {
+    type Output = Phase;
+
+    /// Adds two phases (multiplication in the group).
+    ///
+    /// # Formula
+    ///
+    /// $i^a \cdot i^b = i^{(a+b) \bmod 4}$
+    fn add(self, other: Phase) -> Phase {
+        Phase::from(self as u8 + other as u8)
+    }
+}
+
+impl Add<u8> for Phase {
+    type Output = Phase;
+
+    fn add(self, rhs: u8) -> Phase {
+        Phase::from(self as u8 + rhs)
+    }
+}
+
+impl AddAssign for Phase {
+    fn add_assign(&mut self, other: Self) {
+        *self = *self + other;
+    }
+}
+
+impl AddAssign<u8> for Phase {
+    fn add_assign(&mut self, rhs: u8) {
+        *self = *self + rhs;
+    }
+}
+
+#[allow(clippy::suspicious_arithmetic_impl)]
+impl Mul for Phase {
+    type Output = Phase;
+
+    /// Multiplies two phases (same as addition in Z4).
+    fn mul(self, rhs: Self) -> Self::Output {
+        self + rhs
+    }
+}
+
+impl Phase {
+    /// Converts the phase to a complex number.
+    ///
+    /// # Returns
+    ///
+    /// The complex value of $i^n$.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use cqlib_core::qis::pauli::Phase;
+    /// use num_complex::Complex64;
+    ///
+    /// assert_eq!(Phase::Plus.to_complex(), Complex64::new(1.0, 0.0));
+    /// assert_eq!(Phase::I.to_complex(), Complex64::new(0.0, 1.0));
+    /// assert_eq!(Phase::Minus.to_complex(), Complex64::new(-1.0, 0.0));
+    /// assert_eq!(Phase::MinusI.to_complex(), Complex64::new(0.0, -1.0));
+    /// ```
+    pub fn to_complex(&self) -> Complex64 {
+        match self {
+            Phase::Plus => Complex64::new(1.0, 0.0),
+            Phase::I => Complex64::new(0.0, 1.0),
+            Phase::Minus => Complex64::new(-1.0, 0.0),
+            Phase::MinusI => Complex64::new(0.0, -1.0),
+        }
+    }
+}
+
+/// Single-qubit Pauli operators.
+///
+/// The four Pauli matrices form the basis of single-qubit quantum operations and
+/// are fundamental to quantum error correction and stabilizer formalism.
+///
+/// # Matrix Representations
+///
+/// | Operator | Matrix | Description |
+/// |----------|--------|-------------|
+/// | `I` | $\begin{pmatrix} 1 & 0 \\ 0 & 1 \end{pmatrix}$ | Identity |
+/// | `X` | $\begin{pmatrix} 0 & 1 \\ 1 & 0 \end{pmatrix}$ | Bit-flip (Pauli-X) |
+/// | `Y` | $\begin{pmatrix} 0 & -i \\ i & 0 \end{pmatrix}$ | Pauli-Y |
+/// | `Z` | $\begin{pmatrix} 1 & 0 \\ 0 & -1 \end{pmatrix}$ | Phase-flip (Pauli-Z) |
+///
+/// # Multiplication Rules
+///
+/// Pauli operators anticommute: $\sigma_a \sigma_b = -\sigma_b \sigma_a$ for $a \neq b$.
+///
+/// ```
+/// use cqlib_core::qis::pauli::Pauli;
+///
+/// // X * Z = -iY (phase is tracked separately)
+/// let (p, _) = Pauli::X.mul_with_phase(Pauli::Z);
+/// assert_eq!(p, Pauli::Y);
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Pauli {
+    /// Pauli-X (bit-flip) operator: $\sigma_x = |0\rangle\langle1| + |1\rangle\langle0|$.
     X,
+    /// Pauli-Y operator: $\sigma_y = -i|0\rangle\langle1| + i|1\rangle\langle0|$.
     Y,
+    /// Pauli-Z (phase-flip) operator: $\sigma_z = |0\rangle\langle0| - |1\rangle\langle1|$.
     Z,
+    /// Identity operator: $I = |0\rangle\langle0| + |1\rangle\langle1|$.
     I,
 }
 
@@ -35,17 +232,53 @@ impl fmt::Display for Pauli {
 }
 
 impl Pauli {
-    pub fn to_symplectic(&self) -> (bool, bool) {
+    /// Returns the symplectic representation `(x, z)` for efficient computation.
+    ///
+    /// The symplectic encoding maps Pauli operators to binary pairs:
+    ///
+    /// | Operator | x | z |
+    /// |----------|---|---|
+    /// | `I`      | 0 | 0 |
+    /// | `X`      | 1 | 0 |
+    /// | `Y`      | 1 | 1 |
+    /// | `Z`      | 0 | 1 |
+    ///
+    /// This encoding enables efficient multiplication via XOR and phase lookup.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use cqlib_core::qis::pauli::Pauli;
+    ///
+    /// assert_eq!(Pauli::I.to_symplectic(), (0, 0));
+    /// assert_eq!(Pauli::X.to_symplectic(), (1, 0));
+    /// assert_eq!(Pauli::Y.to_symplectic(), (1, 1));
+    /// assert_eq!(Pauli::Z.to_symplectic(), (0, 1));
+    /// ```
+    pub fn to_symplectic(&self) -> (u8, u8) {
         match self {
-            Pauli::I => (false, false),
-            Pauli::X => (true, false),
-            Pauli::Y => (true, true),
-            Pauli::Z => (false, true),
+            Pauli::I => (0, 0),
+            Pauli::X => (1, 0),
+            Pauli::Y => (1, 1),
+            Pauli::Z => (0, 1),
         }
     }
 
-    // 获取矩阵形式 (用于调试或小系统)
-    // 返回 2x2 复数矩阵
+    /// Returns the 2x2 complex matrix representation.
+    ///
+    /// Suitable for small system debugging and verification. For larger systems,
+    /// prefer the symplectic representation for performance.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use cqlib_core::qis::pauli::Pauli;
+    /// use num_complex::Complex64;
+    ///
+    /// let x_mat = Pauli::X.to_matrix();
+    /// // X = [[0, 1], [1, 0]]
+    /// assert_eq!(x_mat[[0, 1]], Complex64::new(1.0, 0.0));
+    /// ```
     pub fn to_matrix(&self) -> Array2<Complex64> {
         let zero = Complex64::new(0.0, 0.0);
         let one = Complex64::new(1.0, 0.0);
@@ -61,30 +294,318 @@ impl Pauli {
         }
     }
 
-    // 4. 核心功能：乘法逻辑 (单比特)
-    // 返回 (结果Pauli, 相位因子)
-    // 例如: X * Z = Y (相位 -i, 或者根据你的约定是 i)
-    pub fn multiply(&self, other: Pauli) -> (Pauli, Complex64) {
-        // 这里可以硬编码查表，速度最快
-        let i = Complex64::new(0.0, 1.0);
-        let one = Complex64::new(1.0, 0.0);
-        let neg_i = Complex64::new(0.0, -1.0);
-
+    /// Multiplies two Pauli operators, returning the result and phase factor.
+    ///
+    /// Implements the Pauli group multiplication rules:
+    /// - $XY = iZ$, $YX = -iZ$
+    /// - $YZ = iX$, $ZY = -iX$
+    /// - $ZX = iY$, $XZ = -iY$
+    ///
+    /// # Arguments
+    ///
+    /// * `other` - The right-hand side Pauli operator.
+    ///
+    /// # Returns
+    ///
+    /// A tuple `(result, phase)` where `result` is the resulting Pauli operator
+    /// and `phase` is the phase factor from the multiplication.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use cqlib_core::qis::pauli::{Pauli, Phase};
+    ///
+    /// // X * Y = iZ
+    /// let (p, ph) = Pauli::X.mul_with_phase(Pauli::Y);
+    /// assert_eq!(p, Pauli::Z);
+    /// assert_eq!(ph, Phase::I);
+    ///
+    /// // Y * X = -iZ (anticommutation)
+    /// let (p, ph) = Pauli::Y.mul_with_phase(Pauli::X);
+    /// assert_eq!(p, Pauli::Z);
+    /// assert_eq!(ph, Phase::MinusI);
+    /// ```
+    pub fn mul_with_phase(&self, other: Pauli) -> (Pauli, Phase) {
         match (self, other) {
-            (Pauli::I, p) => (p, one),
-            (p, Pauli::I) => (*p, one),
-            (Pauli::X, Pauli::X) => (Pauli::I, one),
-            (Pauli::Y, Pauli::Y) => (Pauli::I, one),
-            (Pauli::Z, Pauli::Z) => (Pauli::I, one),
-
-            (Pauli::X, Pauli::Y) => (Pauli::Z, i), // XY = iZ
-            (Pauli::X, Pauli::Z) => (Pauli::Y, neg_i), // XZ = -iY
-
-            (Pauli::Y, Pauli::X) => (Pauli::Z, neg_i), // YX = -iZ
-            (Pauli::Y, Pauli::Z) => (Pauli::X, i),     // YZ = iX
-
-            (Pauli::Z, Pauli::X) => (Pauli::Y, i), // ZX = iY
-            (Pauli::Z, Pauli::Y) => (Pauli::X, neg_i), // ZY = -iX
+            (Pauli::I, p) => (p, Phase::Plus),
+            (p, Pauli::I) => (*p, Phase::Plus),
+            (Pauli::X, Pauli::X) => (Pauli::I, Phase::Plus),
+            (Pauli::Y, Pauli::Y) => (Pauli::I, Phase::Plus),
+            (Pauli::Z, Pauli::Z) => (Pauli::I, Phase::Plus),
+            (Pauli::X, Pauli::Y) => (Pauli::Z, Phase::I), // XY = iZ
+            (Pauli::X, Pauli::Z) => (Pauli::Y, Phase::MinusI), // XZ = -iY
+            (Pauli::Y, Pauli::X) => (Pauli::Z, Phase::MinusI), // YX = -iZ
+            (Pauli::Y, Pauli::Z) => (Pauli::X, Phase::I), // YZ = iX
+            (Pauli::Z, Pauli::X) => (Pauli::Y, Phase::I), // ZX = iY
+            (Pauli::Z, Pauli::Y) => (Pauli::X, Phase::MinusI), // ZY = -iX
         }
     }
 }
+
+/// Multi-qubit Pauli string operator in symplectic representation.
+///
+/// A Pauli string is a tensor product of single-qubit Pauli operators across
+/// multiple qubits: $P = \bigotimes_{i=0}^{N-1} P_i$ where $P_i \in \{I, X, Y, Z\}$.
+///
+/// This representation uses the symplectic encoding for efficient storage
+/// and manipulation (complexity $O(N/64)$ for $N$ qubits).
+///
+/// # Memory Layout
+///
+/// - `x[i]` = 1 indicates an X component on qubit `i`
+/// - `z[i]` = 1 indicates a Z component on qubit `i`
+/// - `(x[i], z[i])` pairs encode: I=(0,0), X=(1,0), Y=(1,1), Z=(0,1)
+///
+/// # Examples
+///
+/// ```
+/// use cqlib_core::qis::pauli::{Pauli, PauliString};
+///
+/// // Create a 3-qubit Pauli string: X ⊗ Z ⊗ I
+/// let mut ps = PauliString::new(3);
+/// ps.set_pauli(0, Pauli::X);
+/// ps.set_pauli(1, Pauli::Z);
+///
+/// // Check commutation with another Pauli string
+/// let mut other = PauliString::new(3);
+/// other.set_pauli(0, Pauli::Z);
+/// other.set_pauli(1, Pauli::X);
+///
+/// assert!(!ps.commutes_with(&other)); // [X⊗Z, Z⊗X] ≠ 0
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PauliString {
+    /// Number of qubits ($N$) in the string.
+    pub num_qubits: usize,
+    /// Global phase factor ($\pm 1, \pm i$).
+    pub phase: Phase,
+    /// Z-component bit vector of length `num_qubits`.
+    ///
+    /// `z[i]` = 1 indicates the $i$-th qubit has a Z component.
+    pub z: BitVec,
+    /// X-component bit vector of length `num_qubits`.
+    ///
+    /// `x[i]` = 1 indicates the $i$-th qubit has an X component.
+    pub x: BitVec,
+}
+
+impl fmt::Display for PauliString {
+    /// Formats the Pauli string as “+XYZ” or “-iZIX”.
+    ///
+    /// Qubits are displayed in reverse index order (highest index first),
+    /// which is the conventional tensor product notation.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let phase_str = match self.phase {
+            Phase::Plus => "+",
+            Phase::I => "+i",
+            Phase::Minus => "-",
+            Phase::MinusI => "-i",
+        };
+        write!(f, "{}", phase_str)?;
+
+        // Iterate in reverse order for conventional tensor product notation
+        for i in (0..self.num_qubits).rev() {
+            let char_code = match (self.x[i], self.z[i]) {
+                (false, false) => 'I',
+                (true, false) => 'X',
+                (false, true) => 'Z',
+                (true, true) => 'Y',
+            };
+            write!(f, "{}", char_code)?;
+        }
+
+        Ok(())
+    }
+}
+
+impl PauliString {
+    /// Creates a new identity Pauli string.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use cqlib_core::qis::pauli::PauliString;
+    ///
+    /// let ps = PauliString::new(3);
+    /// assert_eq!(ps.to_string(), "+III");
+    /// ```
+    pub fn new(num_qubits: usize) -> Self {
+        Self {
+            num_qubits,
+            phase: Phase::Plus,
+            z: bitvec![0; num_qubits],
+            x: bitvec![0; num_qubits],
+        }
+    }
+
+    /// Sets the Pauli operator at the specified qubit index.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `idx >= num_qubits`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use cqlib_core::qis::pauli::{Pauli, PauliString};
+    ///
+    /// let mut ps = PauliString::new(2);
+    /// ps.set_pauli(0, Pauli::X);
+    /// ps.set_pauli(1, Pauli::Z);
+    /// assert_eq!(ps.to_string(), "+ZX");
+    /// ```
+    pub fn set_pauli(&mut self, idx: usize, p: Pauli) {
+        assert!(
+            idx < self.num_qubits,
+            "Index {} out of bounds for {} qubits",
+            idx,
+            self.num_qubits
+        );
+        let (x_val, z_val) = p.to_symplectic();
+        self.x.set(idx, x_val == 1);
+        self.z.set(idx, z_val == 1);
+    }
+
+    /// Checks if this Pauli string commutes with another.
+    ///
+    /// Two Pauli strings commute if their symplectic inner product is 0 (mod 2).
+    ///
+    /// # Complexity
+    ///
+    /// O(N/64) using bitwise operations.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use cqlib_core::qis::pauli::{Pauli, PauliString};
+    ///
+    /// let mut p1 = PauliString::new(2);
+    /// p1.set_pauli(0, Pauli::X);
+    ///
+    /// let mut p2 = PauliString::new(2);
+    /// p2.set_pauli(0, Pauli::X);
+    /// assert!(p1.commutes_with(&p2)); // Same operator commutes
+    ///
+    /// let mut p3 = PauliString::new(2);
+    /// p3.set_pauli(0, Pauli::Z);
+    /// assert!(!p1.commutes_with(&p3)); // X and Z anticommute
+    /// ```
+    pub fn commutes_with(&self, other: &Self) -> bool {
+        assert_eq!(self.num_qubits, other.num_qubits);
+
+        // Symplectic inner product (mod 2)
+        let term1 = self.x.clone() & &other.z;
+        let term2 = self.z.clone() & &other.x;
+        let anti_commutations = (term1 ^ term2).count_ones();
+
+        anti_commutations % 2 == 0
+    }
+
+    /// Computes the phase exponent for multiplying two Pauli operators.
+    ///
+    /// Returns the exponent `n` such that `P1 * P2 = i^n * P3`.
+    ///
+    /// # Phase table
+    ///
+    /// | Product | Phase | Exponent |
+    /// |---------|-------|----------|
+    /// | X * Z   | -i    | 3        |
+    /// | Z * X   | i     | 1        |
+    /// | X * Y   | i     | 1        |
+    /// | Y * X   | -i    | 3        |
+    /// | Z * Y   | -i    | 3        |
+    /// | Y * Z   | i     | 1        |
+    #[inline]
+    fn calculate_phase_step(x1: bool, z1: bool, x2: bool, z2: bool) -> u8 {
+        match (x1, z1, x2, z2) {
+            // Same operator or identity: no phase
+            (x1, z1, x2, z2) if x1 == x2 && z1 == z2 => 0,
+            (false, false, _, _) => 0, // self is I
+            (_, _, false, false) => 0, // other is I
+
+            // X * Z = -i (exponent 3)
+            (true, false, false, true) => 3,
+            // Z * X = i (exponent 1)
+            (false, true, true, false) => 1,
+
+            // X * Y = i (exponent 1)
+            (true, false, true, true) => 1,
+            // Y * X = -i (exponent 3)
+            (true, true, true, false) => 3,
+
+            // Z * Y = -i (exponent 3)
+            (false, true, true, true) => 3,
+            // Y * Z = i (exponent 1)
+            (true, true, false, true) => 1,
+
+            _ => 0,
+        }
+    }
+}
+
+/// Multiplies two Pauli strings, returning a new instance.
+///
+/// # Examples
+///
+/// ```
+/// use cqlib_core::qis::pauli::{Pauli, PauliString};
+///
+/// let mut p1 = PauliString::new(2);
+/// p1.set_pauli(0, Pauli::X);
+///
+/// let mut p2 = PauliString::new(2);
+/// p2.set_pauli(0, Pauli::Z);
+///
+/// let product = &p1 * &p2;
+/// assert_eq!(product.to_string(), "-iYI"); // XZ = -iY
+/// ```
+impl Mul for &PauliString {
+    type Output = PauliString;
+
+    fn mul(self, rhs: Self) -> PauliString {
+        let mut result = self.clone();
+        result *= rhs;
+        result
+    }
+}
+
+/// In-place multiplication of Pauli strings.
+///
+/// Updates `self` with the product `self * rhs`.
+///
+/// # Panics
+///
+/// Panics if qubit counts differ.
+///
+/// # Examples
+///
+/// ```
+/// use cqlib_core::qis::pauli::{Pauli, PauliString};
+///
+/// let mut p1 = PauliString::new(2);
+/// p1.set_pauli(0, Pauli::X);
+///
+/// let p2 = PauliString::new(2);
+/// p1 *= &p2; // Multiply by identity
+/// assert_eq!(p1.to_string(), "+XI");
+/// ```
+impl MulAssign<&PauliString> for PauliString {
+    fn mul_assign(&mut self, rhs: &PauliString) {
+        assert_eq!(self.num_qubits, rhs.num_qubits, "Qubit count mismatch");
+
+        // Calculate phase update before modifying bit vectors
+        for i in 0..self.num_qubits {
+            let step = PauliString::calculate_phase_step(self.x[i], self.z[i], rhs.x[i], rhs.z[i]);
+            self.phase += step;
+        }
+        self.phase += rhs.phase;
+
+        // Update bit vectors using XOR (symplectic addition)
+        self.x ^= &rhs.x;
+        self.z ^= &rhs.z;
+    }
+}
+
+#[cfg(test)]
+#[path = "./pauli_test.rs"]
+mod tests;
