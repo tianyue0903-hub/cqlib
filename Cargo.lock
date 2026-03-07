@@ -251,6 +251,7 @@ dependencies = [
  "ndarray 0.17.2",
  "num",
  "num-complex",
+ "rand",
  "rayon",
  "regex",
  "rustworkx-core",
