@@ -46,6 +46,13 @@ pub enum EvalError {
     /// This serves as a catch-all for undefined numerical behaviors not covered by other variants.
     #[error("Calculation resulted in NaN: {0}")]
     NaN(String),
+
+    /// Indicates that the expression tree exceeded the maximum allowed recursion depth during evaluation.
+    ///
+    /// This typically occurs with deeply nested expressions (e.g., `((((x+1)+1)+1)...)`).
+    /// Consider simplifying the expression or increasing the depth limit.
+    #[error("Maximum recursion depth exceeded during evaluation (depth limit: {0})")]
+    MaxRecursionDepthExceeded(usize),
 }
 
 /// A comprehensive error type for operations involving Quantum Circuits.
@@ -100,6 +107,45 @@ pub enum CircuitError {
 
     #[error("Symbolic parameter cannot be evaluated in this context")]
     SymbolicParameterError,
+
+    /// Thrown when a parameter cannot be resolved during circuit decomposition.
+    ///
+    /// This occurs when a sub-circuit or control flow body contains symbolic parameters
+    /// that are not bound to concrete values and cannot be evaluated.
+    #[error("Unresolved parameter in decomposition: {0}")]
+    UnresolvedParameter(String),
+
+    /// Thrown when a parameter index is out of range.
+    ///
+    /// This indicates internal data corruption or an inconsistency between the
+    /// circuit's parameter table and the indices stored in operations.
+    #[error("Parameter index {0} out of range")]
+    InvalidParameterIndex(u32),
+
+    /// Thrown when a gate parameter has an invalid value (NaN or Infinity).
+    ///
+    /// This occurs when evaluating gate matrices with non-finite parameter values.
+    #[error("Invalid parameter value at index {0}: {1}")]
+    InvalidParameterValue(usize, f64),
+
+    /// Thrown when the control flow graph (CFG) has an invalid or inconsistent structure.
+    ///
+    /// This error indicates that the DAG representation of the circuit is malformed,
+    /// which can occur when:
+    /// - A Branch terminator lacks required TrueBranch or FalseBranch edges
+    /// - A Jump terminator references a non-existent block
+    /// - The entry block is not set
+    /// - Edges reference nodes that don't exist in the graph
+    ///
+    /// # Examples
+    ///
+    /// This error is returned when converting an invalid `CircuitDag` back to a `Circuit`
+    /// if the DAG structure was manually modified and left in an inconsistent state.
+    #[error("Invalid control flow graph structure: {0}")]
+    InvalidControlFlow(String),
+
+    #[error("Invalid Operation: {0}")]
+    InvalidOperation(String),
 }
 
 #[derive(Debug, Error)]

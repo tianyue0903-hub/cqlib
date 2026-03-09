@@ -55,7 +55,7 @@ impl PyMcGate {
     /// ccx = McGate(2, StandardGate.X)
     ///
     /// # Create a multi-controlled Hadamard
-    /// mch = McGate(3, StandardGate.H)
+    /// much = McGate(3, StandardGate.H)
     /// ```
     #[new]
     pub fn new(num_controls: u8, gate: PyStandardGate) -> Self {
@@ -79,8 +79,12 @@ impl PyMcGate {
         py: Python<'py>,
         params: Option<Vec<f64>>,
     ) -> PyResult<Bound<'py, PyArray2<Complex64>>> {
+        use pyo3::exceptions::PyValueError;
         let params = params.unwrap_or_default();
-        let mat = self.inner.matrix(&params);
+        let mat = self
+            .inner
+            .matrix(&params)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
         Ok(mat.to_pyarray(py))
     }
 

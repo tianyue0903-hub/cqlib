@@ -39,11 +39,11 @@
 //! use cqlib_core::circuit::gate::StandardGate;
 //!
 //! // Get the Hadamard gate matrix
-//! let h_matrix = StandardGate::H.matrix(&[]);
+//! let h_matrix = StandardGate::H.matrix(&[]).unwrap();
 //! assert_eq!(h_matrix.shape(), &[2, 2]);
 //!
 //! // Get the parametric RX gate matrix
-//! let rx_matrix = StandardGate::RX.matrix(&[std::f64::consts::PI / 2.0]);
+//! let rx_matrix = StandardGate::RX.matrix(&[std::f64::consts::PI / 2.0]).unwrap();
 //! assert_eq!(rx_matrix.shape(), &[2, 2]);
 //!
 //! // Check gate properties

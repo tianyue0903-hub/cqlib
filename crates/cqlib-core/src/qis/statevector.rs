@@ -1,0 +1,2180 @@
+// This code is part of Cqlib.
+//
+// (C) Copyright China Telecom Quantum Group 2026
+//
+// This code is licensed under the Apache License, Version 2.0. You may
+// obtain a copy of this license in the LICENSE.txt file in the root directory
+// of this source tree or at http://www.apache.org/licenses/LICENSE-2.0.
+//
+// Any modifications or derivative works of this code must retain this
+// copyright notice, and modified files need to carry a notice indicating
+// that they have been altered from the originals.
+
+//! Statevector quantum simulation.
+//!
+//! This module provides a high-performance statevector simulator for quantum circuits.
+//! It supports:
+//! - Single-qubit and multi-qubit gate operations
+//! - Controlled and multi-controlled gates
+//! - Parameterized rotations (RX, RY, RZ, etc.)
+//! - Native gates for superconducting qubits (fSim, XY)
+//! - Parallel execution for large statevectors using Rayon
+//!
+//! # Performance Features
+//! - Automatic parallelization threshold (14+ qubits)
+//! - Specialized kernels for common gates (avoiding generic matrix multiplication)
+//! - Memory-efficient in-place operations
+//! - Contiguous memory layout compatible with C/NumPy
+//!
+//! # Example
+//! ```rust
+//! use cqlib_core::qis::Statevector;
+//!
+//! // Create Bell state |Φ+⟩ = (|00⟩ + |11⟩)/√2
+//! let mut sv = Statevector::new(2);
+//! sv.apply_h(0);
+//! sv.apply_cx(0, 1);
+//!
+//! let probs = sv.probabilities();
+//! assert!((probs[0] - 0.5).abs() < 1e-10);
+//! assert!((probs[3] - 0.5).abs() < 1e-10);
+//! ```
+
+use crate::circuit::circuit_impl::Circuit;
+use crate::circuit::error::CircuitError;
+use crate::circuit::gate::StandardGate;
+use crate::circuit::gate::instruction::Instruction;
+use crate::circuit::param::CircuitParam;
+use num_complex::Complex64;
+use rayon::prelude::*;
+use std::f64::consts::FRAC_1_SQRT_2;
+
+/// Threshold for parallel execution (in number of qubits).
+///
+/// For small systems, the overhead of thread pool scheduling exceeds
+/// the performance gains from parallelization. Systems with fewer than
+/// 2^14 = 16384 amplitudes use serial execution.
+const PARALLEL_THRESHOLD: usize = 14;
+
+/// Conditionally executes serial or parallel iteration based on qubit count.
+///
+/// Switches between Rayon parallel iteration and standard serial iteration
+/// to avoid thread pool overhead for small quantum states.
+///
+/// # Arguments
+/// * `$num_qubits` - Number of qubits (determines execution mode)
+/// * `$data` - Mutable slice to process
+/// * `$chunk_size` - Size of each chunk for processing
+/// * `$body` - Closure to apply to each chunk
+///
+/// # Example
+/// ```rust,ignore
+/// with_maybe_par!(num_qubits, data, chunk_size, |chunk| {
+///     for elem in chunk { *elem *= 2.0; }
+/// });
+/// ```
+macro_rules! with_maybe_par {
+    ($num_qubits:expr, $data:expr, $chunk_size:expr, $body:expr) => {{
+        use rayon::prelude::*;
+        use std::iter::Iterator;
+
+        if $num_qubits < PARALLEL_THRESHOLD {
+            $data.chunks_exact_mut($chunk_size).for_each($body);
+        } else {
+            $data.par_chunks_exact_mut($chunk_size).for_each($body);
+        }
+    }};
+}
+
+/// Quantum statevector representing a pure quantum state.
+///
+/// A statevector describes the quantum state of an N-qubit system as a vector
+/// of 2^N complex amplitudes. The state |ψ⟩ = Σᵢ αᵢ|i⟩ is stored with αᵢ
+/// as the amplitude for basis state |i⟩ (i in binary representation).
+///
+/// # Memory Layout
+/// The `data` vector uses contiguous memory layout (compatible with C/NumPy),
+/// where the amplitude at index `i` corresponds to basis state |i⟩ with
+/// qubit indices mapping to bits from least significant (qubit 0) to most.
+///
+/// # Example
+/// ```rust
+/// use cqlib_core::qis::Statevector;
+///
+/// // Create a 2-qubit state in |00⟩
+/// let sv = Statevector::new(2);
+/// assert_eq!(sv.num_qubits, 2);
+/// assert_eq!(sv.data.len(), 4); // 2^2 amplitudes
+///
+/// // |00⟩ state: amplitude 1.0 at index 0, 0.0 elsewhere
+/// assert_eq!(sv.data[0], num_complex::Complex64::new(1.0, 0.0));
+/// ```
+#[derive(Debug, Clone)]
+pub struct Statevector {
+    /// Complex amplitudes for each basis state. Length is 2^N where N = num_qubits.
+    /// Contiguous memory layout enables zero-copy transfer to C/Python.
+    pub data: Vec<Complex64>,
+    /// Number of qubits in the system.
+    pub num_qubits: usize,
+}
+
+impl Statevector {
+    /// Creates a new statevector initialized to the |0...0⟩ state.
+    ///
+    /// The statevector represents the quantum state as a vector of 2^N complex amplitudes,
+    /// where N is the number of qubits. All amplitudes are initialized to zero except
+    /// the first element (|0...0⟩) which is set to 1.0.
+    ///
+    /// # Arguments
+    /// * `num_qubits` - Number of qubits in the system
+    ///
+    /// # Returns
+    /// A new `Statevector` instance in the ground state
+    ///
+    /// # Example
+    /// ```rust
+    /// use cqlib_core::qis::Statevector;
+    ///
+    /// let sv = Statevector::new(2); // |00⟩ state
+    /// assert_eq!(sv.num_qubits, 2);
+    /// assert_eq!(sv.data.len(), 4); // 2^2 amplitudes
+    /// ```
+    pub fn new(num_qubits: usize) -> Self {
+        let size = 1 << num_qubits;
+        let mut data = vec![Complex64::new(0.0, 0.0); size];
+        data[0] = Complex64::new(1.0, 0.0);
+        Statevector { data, num_qubits }
+    }
+
+    /// Creates a statevector from initial amplitudes with normalization check.
+    ///
+    /// # Arguments
+    /// * `num_qubits` - Number of qubits in the system
+    /// * `initial_state` - Vector of 2^N complex amplitudes
+    ///
+    /// # Panics
+    /// Panics if:
+    /// - `initial_state` length doesn't match 2^num_qubits
+    /// - State is not normalized (sum of probabilities ≠ 1.0 within tolerance 1e-10)
+    ///
+    /// # Example
+    /// ```rust
+    /// use cqlib_core::qis::Statevector;
+    /// use num_complex::Complex64;
+    ///
+    /// // Create |+0⟩ = (|00⟩ + |10⟩)/√2
+    /// let amps = vec![
+    ///     Complex64::new(std::f64::consts::FRAC_1_SQRT_2, 0.0), // |00⟩
+    ///     Complex64::new(0.0, 0.0),                             // |01⟩
+    ///     Complex64::new(std::f64::consts::FRAC_1_SQRT_2, 0.0), // |10⟩
+    ///     Complex64::new(0.0, 0.0),                             // |11⟩
+    /// ];
+    /// let sv = Statevector::from_state(2, amps);
+    /// ```
+    pub fn from_state(num_qubits: usize, initial_state: Vec<Complex64>) -> Self {
+        let size = 1 << num_qubits;
+        assert_eq!(
+            initial_state.len(),
+            size,
+            "Initial state length {} does not match expected size {} for {} qubits",
+            initial_state.len(),
+            size,
+            num_qubits
+        );
+        // Verify normalization (probabilities should sum to ~1)
+        let norm: f64 = initial_state.iter().map(|c| c.norm_sqr()).sum();
+        assert!(
+            (norm - 1.0).abs() < 1e-10,
+            "Initial state is not normalized (norm = {})",
+            norm
+        );
+
+        Statevector {
+            data: initial_state,
+            num_qubits,
+        }
+    }
+
+    /// Constructs a statevector by simulating a quantum circuit.
+    ///
+    /// Executes the circuit gates sequentially to evolve the initial |0...0⟩ state.
+    /// Complex gates are decomposed before execution.
+    ///
+    /// # Arguments
+    /// * `circuit` - The quantum circuit to simulate
+    ///
+    /// # Returns
+    /// * `Ok(Statevector)` - The resulting state after circuit execution
+    /// * `Err(CircuitError)` - If the circuit contains unsupported operations
+    ///   (control flow gates, symbolic parameters) or decomposition fails
+    ///
+    /// # Supported Instructions
+    /// - Standard single and multi-qubit gates
+    /// - Controlled gates (CX, CY, CZ, CRX, CRY, CRZ)
+    /// - Multi-controlled gates (CCX/Toffoli)
+    /// - Unitary gates with matrix representation
+    /// - Barriers and delays (ignored)
+    ///
+    /// # Example
+    /// ```rust
+    /// use cqlib_core::circuit::Circuit;
+    /// use cqlib_core::qis::Statevector;
+    ///
+    /// // Create Bell state: |Φ+⟩ = (|00⟩ + |11⟩)/√2
+    /// let mut circuit = Circuit::new(2);
+    /// circuit.h(0.into());
+    /// circuit.cx(0.into(), 1.into());
+    ///
+    /// let sv = Statevector::from_circuit(&circuit).unwrap();
+    /// ```
+    pub fn from_circuit(circuit: &Circuit) -> Result<Self, CircuitError> {
+        // Decompose circuit to basic gates
+        let circuit = circuit.decompose()?;
+        let mut sv = Statevector::new(circuit.num_qubits());
+
+        // Build qubit index mapping: Qubit -> physical index
+        let qubits = circuit.qubits();
+        let qubit_map: std::collections::HashMap<_, _> = qubits
+            .iter()
+            .enumerate()
+            .map(|(idx, q)| (*q, idx))
+            .collect();
+
+        // Precompute all parameter values
+        let parameter_values: Vec<Option<f64>> = circuit
+            .parameters()
+            .iter()
+            .map(|p| p.evaluate(&None).ok())
+            .collect();
+
+        for op in circuit.operations() {
+            // Resolve parameters using precomputed values
+            let params: Vec<f64> = op
+                .params
+                .iter()
+                .map(|p| match p {
+                    CircuitParam::Fixed(v) => Ok(*v),
+                    CircuitParam::Index(idx) => parameter_values
+                        .get(*idx as usize)
+                        .copied()
+                        .flatten()
+                        .ok_or(CircuitError::SymbolicParameterError),
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+
+            // Get physical qubit indices
+            let qubit_indices: Vec<usize> = op
+                .qubits
+                .iter()
+                .map(|q| {
+                    qubit_map
+                        .get(q)
+                        .copied()
+                        .expect("Qubit not found in circuit")
+                })
+                .collect();
+
+            match &op.instruction {
+                Instruction::Standard(gate) => {
+                    sv.apply_standard_gate(*gate, &qubit_indices, &params)?;
+                }
+                Instruction::McGate(mc_gate) => {
+                    let num_controls = mc_gate.num_ctrl_qubits();
+                    let base_gate = mc_gate.base_gate();
+
+                    if num_controls == 1 {
+                        // Single-controlled gate
+                        let control = qubit_indices[0];
+                        let target = qubit_indices[1];
+                        match base_gate {
+                            StandardGate::X => sv.apply_cx(control, target),
+                            StandardGate::Y => sv.apply_cy(control, target),
+                            StandardGate::Z => sv.apply_cz(control, target),
+                            StandardGate::RX => {
+                                let theta = params[0];
+                                sv.apply_crx(control, target, theta);
+                            }
+                            StandardGate::RY => {
+                                let theta = params[0];
+                                sv.apply_cry(control, target, theta);
+                            }
+                            StandardGate::RZ => {
+                                let theta = params[0];
+                                sv.apply_crz(control, target, theta);
+                            }
+                            _ => {
+                                let matrix = mc_gate
+                                    .matrix(&params)
+                                    .map_err(|_| CircuitError::NoMatrixRepresentation)?;
+                                sv.apply_unitary_gate(&qubit_indices, &matrix);
+                            }
+                        }
+                    } else if num_controls == 2 && *base_gate == StandardGate::X {
+                        // Toffoli gate
+                        let c0 = qubit_indices[0];
+                        let c1 = qubit_indices[1];
+                        let target = qubit_indices[2];
+                        sv.apply_ccx(c0, c1, target);
+                    } else {
+                        let matrix = mc_gate
+                            .matrix(&params)
+                            .map_err(|_| CircuitError::NoMatrixRepresentation)?;
+                        sv.apply_unitary_gate(&qubit_indices, &matrix);
+                    }
+                }
+                Instruction::UnitaryGate(u_gate) => {
+                    if let Some(matrix) = u_gate.matrix() {
+                        sv.apply_unitary_gate(&qubit_indices, matrix);
+                    } else {
+                        return Err(CircuitError::NoMatrixRepresentation);
+                    }
+                }
+                Instruction::CircuitGate(_) => {
+                    return Err(CircuitError::InvalidOperation(
+                        "CircuitGate should have been decomposed".to_string(),
+                    ));
+                }
+                Instruction::Directive(_) => {
+                    // Ignore barriers
+                    continue;
+                }
+                Instruction::Delay => {
+                    // Ignore delays
+                    continue;
+                }
+                Instruction::ControlFlowGate(_) => {
+                    return Err(CircuitError::InvalidControlOperation(
+                        "Control flow gates not supported in statevector simulation".to_string(),
+                    ));
+                }
+            }
+        }
+
+        Ok(sv)
+    }
+
+    /// Applies a standard gate to the statevector.
+    ///
+    /// Internal dispatcher that routes to specialized implementations
+    /// based on gate type.
+    ///
+    /// # Arguments
+    /// * `gate` - The standard gate to apply
+    /// * `qubits` - Target qubit indices
+    /// * `params` - Gate parameters (for parameterized gates)
+    fn apply_standard_gate(
+        &mut self,
+        gate: StandardGate,
+        qubits: &[usize],
+        params: &[f64],
+    ) -> Result<(), CircuitError> {
+        match gate {
+            // Single-qubit gates
+            StandardGate::I => { /* no-op */ }
+            StandardGate::X => self.apply_x(qubits[0]),
+            StandardGate::Y => self.apply_y(qubits[0]),
+            StandardGate::Z => self.apply_z(qubits[0]),
+            StandardGate::H => self.apply_h(qubits[0]),
+            StandardGate::S => self.apply_s(qubits[0]),
+            StandardGate::SDG => self.apply_sdg(qubits[0]),
+            StandardGate::T => self.apply_t(qubits[0]),
+            StandardGate::TDG => self.apply_tdg(qubits[0]),
+            StandardGate::RX => self.apply_rx(qubits[0], params[0]),
+            StandardGate::RY => self.apply_ry(qubits[0], params[0]),
+            StandardGate::RZ => self.apply_rz(qubits[0], params[0]),
+            StandardGate::Phase => self.apply_p(qubits[0], params[0]),
+            StandardGate::X2P => self.apply_x2p(qubits[0]),
+            StandardGate::X2M => self.apply_x2m(qubits[0]),
+            StandardGate::Y2P => self.apply_y2p(qubits[0]),
+            StandardGate::Y2M => self.apply_y2m(qubits[0]),
+            StandardGate::RXY => self.apply_rxy(qubits[0], params[0], params[1]),
+            StandardGate::XY => self.apply_xy2p(qubits[0], params[0]),
+            StandardGate::XY2P => self.apply_xy2p(qubits[0], params[0]),
+            StandardGate::XY2M => self.apply_xy2m(qubits[0], params[0]),
+            StandardGate::U => {
+                self.apply_u(qubits[0], params[0], params[1], params[2]);
+            }
+            StandardGate::GPhase => self.apply_gphase(params[0]),
+
+            // Two-qubit gates
+            StandardGate::CX => self.apply_cx(qubits[0], qubits[1]),
+            StandardGate::CY => self.apply_cy(qubits[0], qubits[1]),
+            StandardGate::CZ => self.apply_cz(qubits[0], qubits[1]),
+            StandardGate::SWAP => self.apply_swap(qubits[0], qubits[1]),
+            StandardGate::RXX => self.apply_rxx(qubits[0], qubits[1], params[0]),
+            StandardGate::RYY => self.apply_ryy(qubits[0], qubits[1], params[0]),
+            StandardGate::RZZ => self.apply_rzz(qubits[0], qubits[1], params[0]),
+            StandardGate::RZX => self.apply_rzx(qubits[0], qubits[1], params[0]),
+
+            // Controlled rotation gates
+            StandardGate::CRX => self.apply_crx(qubits[0], qubits[1], params[0]),
+            StandardGate::CRY => self.apply_cry(qubits[0], qubits[1], params[0]),
+            StandardGate::CRZ => self.apply_crz(qubits[0], qubits[1], params[0]),
+
+            // Three-qubit gates
+            StandardGate::CCX => self.apply_ccx(qubits[0], qubits[1], qubits[2]),
+
+            // Simulator gates
+            StandardGate::FSIM => self.apply_fsim(qubits[0], qubits[1], params[0], params[1]),
+        }
+        Ok(())
+    }
+
+    /// Computes the measurement probability distribution over all basis states.
+    ///
+    /// Returns P(|i⟩) = |αᵢ|² for each basis state |i⟩.
+    /// Uses parallel iteration for large statevectors.
+    ///
+    /// # Returns
+    /// Vector of probabilities summing to 1.0 (within floating-point precision).
+    ///
+    /// # Example
+    /// ```rust
+    /// use cqlib_core::qis::Statevector;
+    ///
+    /// let mut sv = Statevector::new(1);
+    /// sv.apply_h(0);
+    /// let probs = sv.probabilities();
+    /// // |+⟩ state: P(|0⟩) = P(|1⟩) = 0.5
+    /// assert!((probs[0] - 0.5).abs() < 1e-10);
+    /// assert!((probs[1] - 0.5).abs() < 1e-10);
+    /// ```
+    pub fn probabilities(&self) -> Vec<f64> {
+        self.data.par_iter().map(|c| c.norm_sqr()).collect()
+    }
+
+    /// Applies an arbitrary single-qubit gate.
+    ///
+    /// General-purpose method for applying any 2x2 unitary matrix.
+    /// For standard gates, prefer specialized methods (apply_h, apply_x, etc.)
+    /// which have optimized implementations.
+    ///
+    /// # Arguments
+    /// * `qubit` - Target qubit index
+    /// * `matrix` - 2x2 unitary matrix [[u00, u01], [u10, u11]]
+    ///
+    /// # Panics
+    /// Panics if qubit index is out of bounds.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// use cqlib_core::qis::Statevector;
+    /// use num_complex::Complex64;
+    ///
+    /// let mut sv = Statevector::new(1);
+    /// // Apply a custom rotation
+    /// let matrix = [
+    ///     [Complex64::new(0.0, 0.0), Complex64::new(1.0, 0.0)],
+    ///     [Complex64::new(1.0, 0.0), Complex64::new(0.0, 0.0)],
+    /// ];
+    /// sv.apply_single_qubit_gate(0, matrix); // Equivalent to X gate
+    /// ```
+    pub fn apply_single_qubit_gate(&mut self, qubit: usize, matrix: [[Complex64; 2]; 2]) {
+        assert!(
+            qubit < self.num_qubits,
+            "Qubit index {} out of bounds",
+            qubit
+        );
+        let dist = 1 << qubit;
+
+        // Preload matrix elements to registers, reducing memory access in loop
+        let u00 = matrix[0][0];
+        let u01 = matrix[0][1];
+        let u10 = matrix[1][0];
+        let u11 = matrix[1][1];
+
+        // Choose serial or parallel based on qubit count
+        let kernel = |chunk: &mut [Complex64]| {
+            let (lower, upper) = chunk.split_at_mut(dist);
+            lower
+                .iter_mut()
+                .zip(upper.iter_mut())
+                .for_each(|(alpha, beta)| {
+                    let a = *alpha;
+                    let b = *beta;
+                    *alpha = u00 * a + u01 * b;
+                    *beta = u10 * a + u11 * b;
+                });
+        };
+
+        with_maybe_par!(self.num_qubits, self.data, 2 * dist, kernel);
+    }
+
+    /// Apply a general two-qubit gate.
+    ///
+    /// # Arguments
+    /// * `q0` - First qubit index (logical)
+    /// * `q1` - Second qubit index (logical)
+    /// * `matrix` - 4x4 unitary matrix in the standard computational basis
+    ///   ordered as |00⟩, |01⟩, |10⟩, |11⟩ where the bits are (q0, q1).
+    ///   That is, matrix[i][j] is the amplitude of |i⟩ when input is |j⟩,
+    ///   with i = q0*2 + q1 (binary: q0 is MSB, q1 is LSB).
+    ///
+    /// # Example - CNOT with q0 as control and q1 as target:
+    /// The CNOT gate flips the target when control is |1⟩:
+    /// |00⟩ -> |00⟩, |01⟩ -> |01⟩, |10⟩ -> |11⟩, |11⟩ -> |10⟩
+    ///
+    /// This corresponds to the matrix (rows/cols ordered as |00⟩, |01⟩, |10⟩, |11⟩):
+    /// ```text
+    /// [[1, 0, 0, 0],
+    ///  [0, 1, 0, 0],
+    ///  [0, 0, 0, 1],
+    ///  [0, 0, 1, 0]]
+    /// ```
+    pub fn apply_double_qubits_gate(&mut self, q0: usize, q1: usize, matrix: [[Complex64; 4]; 4]) {
+        assert!(
+            q0 < self.num_qubits && q1 < self.num_qubits,
+            "Qubit index out of bounds"
+        );
+        assert_ne!(q0, q1, "Control and target qubits must be different");
+
+        // 1. Identify physical high/low bit positions in memory
+        // q_max determines the outer parallel chunk size
+        // q_min determines the inner serial stride
+        let (q_min, q_max) = if q0 < q1 { (q0, q1) } else { (q1, q0) };
+        let dist_max = 1 << q_max;
+        let dist_min = 1 << q_min;
+
+        // 2. Preload matrix elements to registers, avoiding array access in hot loop
+        // Naming: m_row_col corresponds to logical state |q0 q1>
+        let m00 = matrix[0][0];
+        let m01 = matrix[0][1];
+        let m02 = matrix[0][2];
+        let m03 = matrix[0][3];
+        let m10 = matrix[1][0];
+        let m11 = matrix[1][1];
+        let m12 = matrix[1][2];
+        let m13 = matrix[1][3];
+        let m20 = matrix[2][0];
+        let m21 = matrix[2][1];
+        let m22 = matrix[2][2];
+        let m23 = matrix[2][3];
+        let m30 = matrix[3][0];
+        let m31 = matrix[3][1];
+        let m32 = matrix[3][2];
+        let m33 = matrix[3][3];
+
+        // 3. Choose serial or parallel based on qubit count
+        // Split statevector into chunks by max_qubit
+        // Each chunk contains 2 * dist_max elements
+        // Layout: [ ...dist_max (q_max=0)... | ...dist_max (q_max=1)... ]
+        let kernel = |chunk: &mut [Complex64]| {
+            // Split chunk into q_max=0 and q_max=1 parts
+            let (part0, part1) = chunk.split_at_mut(dist_max);
+
+            // 4. Inner serial traversal
+            // Further split by q_min within each part
+            // Use zip to traverse both parts simultaneously for optimal bounds check elision
+            part0
+                .chunks_exact_mut(2 * dist_min)
+                .zip(part1.chunks_exact_mut(2 * dist_min))
+                .for_each(|(sub_chunk0, sub_chunk1)| {
+                    // sub_chunk0: q_max=0 region
+                    // sub_chunk1: q_max=1 region
+
+                    // Further split by q_min
+                    let (v00_slice, v01_slice) = sub_chunk0.split_at_mut(dist_min);
+                    let (v10_slice, v11_slice) = sub_chunk1.split_at_mut(dist_min);
+
+                    // Now we have four slices corresponding to physical bit states:
+                    // v00_slice: q_max=0, q_min=0
+                    // v01_slice: q_max=0, q_min=1
+                    // v10_slice: q_max=1, q_min=0
+                    // v11_slice: q_max=1, q_min=1
+
+                    // 5. Core computation loop
+                    // Use iterator zip to avoid index calculations, enabling SIMD
+                    for (((c00, c01), c10), c11) in v00_slice
+                        .iter_mut()
+                        .zip(v01_slice.iter_mut())
+                        .zip(v10_slice.iter_mut())
+                        .zip(v11_slice.iter_mut())
+                    {
+                        let a = *c00; // Phys: 00
+                        let b = *c01; // Phys: 01
+                        let c = *c10; // Phys: 10
+                        let d = *c11; // Phys: 11
+
+                        // 6. Logical mapping: determine input vector positions based on q0 vs q1
+                        // logical_amp_00 corresponds to |q0=0, q1=0>
+                        // logical_amp_01 corresponds to |q0=0, q1=1> ...
+                        let (in0, in1, in2, in3) = if q0 < q1 {
+                            // q0=min, q1=max
+                            // Phys 00 (min=0, max=0) -> Log 00
+                            // Phys 01 (min=1, max=0) -> Log 10 (q0=1, q1=0)
+                            // Phys 10 (min=0, max=1) -> Log 01 (q0=0, q1=1)
+                            // Phys 11 (min=1, max=1) -> Log 11
+                            (a, c, b, d)
+                        } else {
+                            // q0=max, q1=min
+                            // Phys 00 (min=0, max=0) -> Log 00
+                            // Phys 01 (min=1, max=0) -> Log 01 (q0=0, q1=1)
+                            // Phys 10 (min=0, max=1) -> Log 10 (q0=1, q1=0)
+                            // Phys 11 (min=1, max=1) -> Log 11
+                            (a, b, c, d)
+                        };
+
+                        // Matrix multiplication
+                        let out0 = m00 * in0 + m01 * in1 + m02 * in2 + m03 * in3;
+                        let out1 = m10 * in0 + m11 * in1 + m12 * in2 + m13 * in3;
+                        let out2 = m20 * in0 + m21 * in1 + m22 * in2 + m23 * in3;
+                        let out3 = m30 * in0 + m31 * in1 + m32 * in2 + m33 * in3;
+
+                        // Write results (inverse mapping)
+                        if q0 < q1 {
+                            *c00 = out0;
+                            *c10 = out1; // Map Log 01 to Phys 10 (Log 01: q0=0, q1=1 => min=0, max=1 => Phys 10)
+                            *c01 = out2; // Map Log 10 to Phys 01 (q0=1, q1=0 => min=1, max=0 => Phys 01)
+                            *c11 = out3;
+                        } else {
+                            *c00 = out0;
+                            *c01 = out1;
+                            *c10 = out2;
+                            *c11 = out3;
+                        }
+                    }
+                });
+        };
+        with_maybe_par!(self.num_qubits, self.data, 2 * dist_max, kernel);
+    }
+
+    /// Applies an arbitrary n-qubit unitary gate.
+    ///
+    /// General-purpose method for applying any 2^n × 2^n unitary matrix.
+    /// Uses block-iteration with bit-manipulation for efficient index calculation.
+    /// Supports parallel execution for large statevectors.
+    ///
+    /// For standard gates, prefer specialized methods which are more optimized.
+    ///
+    /// # Arguments
+    /// * `qubits` - Slice of qubit indices the gate acts on (logical order)
+    /// * `matrix` - The unitary matrix as a 2^n × 2^n ndarray
+    ///
+    /// # Panics
+    /// Panics if:
+    /// - Qubit indices are out of bounds
+    /// - Qubit indices contain duplicates
+    /// - Matrix dimensions don't match 2^n × 2^n
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// use cqlib_core::qis::Statevector;
+    /// use ndarray::Array2;
+    /// use num_complex::Complex64;
+    ///
+    /// let mut sv = Statevector::new(2);
+    /// // Create SWAP gate matrix
+    /// let swap = Array2::from_shape_vec(
+    ///     (4, 4),
+    ///     vec![
+    ///         Complex64::new(1.0, 0.0), Complex64::new(0.0, 0.0),
+    ///         Complex64::new(0.0, 0.0), Complex64::new(0.0, 0.0),
+    ///         Complex64::new(0.0, 0.0), Complex64::new(0.0, 0.0),
+    ///         Complex64::new(1.0, 0.0), Complex64::new(0.0, 0.0),
+    ///         Complex64::new(0.0, 0.0), Complex64::new(1.0, 0.0),
+    ///         Complex64::new(0.0, 0.0), Complex64::new(0.0, 0.0),
+    ///         Complex64::new(0.0, 0.0), Complex64::new(0.0, 0.0),
+    ///         Complex64::new(0.0, 0.0), Complex64::new(1.0, 0.0),
+    ///     ]
+    /// ).unwrap();
+    /// sv.apply_unitary_gate(&[0, 1], &swap);
+    /// ```
+    pub fn apply_unitary_gate(&mut self, qubits: &[usize], matrix: &ndarray::Array2<Complex64>) {
+        let num_target_qubits = qubits.len();
+        let gate_dim = 1 << num_target_qubits;
+
+        // Validate inputs
+        assert!(
+            num_target_qubits > 0 && num_target_qubits <= self.num_qubits,
+            "Invalid number of target qubits: {} (must be 1 to {})",
+            num_target_qubits,
+            self.num_qubits
+        );
+
+        for (i, &q) in qubits.iter().enumerate() {
+            assert!(q < self.num_qubits, "Qubit index {} out of bounds", q);
+            for &other in &qubits[..i] {
+                assert_ne!(q, other, "Duplicate qubit index {} in apply_unitary", q);
+            }
+        }
+
+        assert_eq!(
+            matrix.shape(),
+            &[gate_dim, gate_dim],
+            "Matrix dimensions {}x{} don't match expected {}x{} for {} qubits",
+            matrix.nrows(),
+            matrix.ncols(),
+            gate_dim,
+            gate_dim,
+            num_target_qubits
+        );
+
+        // Precompute gate offset mapping: gate_index -> physical_offset
+        let mut gate_offsets: Vec<usize> = vec![0; gate_dim];
+        #[allow(clippy::needless_range_loop)]
+        for gate_idx in 0..gate_dim {
+            let mut offset = 0;
+            for (i, &qubit) in qubits.iter().enumerate() {
+                // Big-endian mapping: qubits[0] corresponds to the MSB of the gate index,
+                // qubits[last] corresponds to the LSB. This aligns with standard tensor
+                // product order where the first qubit in the list is the most significant.
+                let bit_pos = num_target_qubits - 1 - i;
+                if (gate_idx >> bit_pos) & 1 == 1 {
+                    offset |= 1 << qubit;
+                }
+            }
+            gate_offsets[gate_idx] = offset;
+        }
+
+        // Sort qubits for efficient index calculation
+        let mut sorted_qubits: Vec<usize> = qubits.to_vec();
+        sorted_qubits.sort_unstable();
+
+        // Calculate chunk size based on max qubit
+        let max_qubit = *sorted_qubits.last().unwrap();
+        let chunk_size = 1 << (max_qubit + 1);
+
+        // Create matrix view for cache efficiency
+        let matrix_rows: Vec<Vec<Complex64>> = (0..gate_dim)
+            .map(|r| (0..gate_dim).map(|c| matrix[[r, c]]).collect())
+            .collect();
+
+        // Process chunks
+        let kernel = |chunk: &mut [Complex64]| {
+            let mut input_buf = vec![Complex64::default(); gate_dim];
+            let mut output_buf = vec![Complex64::default(); gate_dim];
+
+            // Number of blocks in this chunk
+            let num_blocks = chunk.len() >> num_target_qubits;
+
+            for block_idx in 0..num_blocks {
+                // Expand compressed index to physical address
+                let mut base = block_idx;
+                for &q in &sorted_qubits {
+                    let mask = (1 << q) - 1;
+                    let left = (base & !mask) << 1;
+                    let right = base & mask;
+                    base = left | right;
+                }
+
+                // Load input amplitudes
+                for (gate_idx, &offset) in gate_offsets.iter().enumerate() {
+                    input_buf[gate_idx] = chunk[base + offset];
+                }
+
+                // Apply matrix multiplication
+                for row in 0..gate_dim {
+                    let mut sum = Complex64::default();
+                    for col in 0..gate_dim {
+                        sum += matrix_rows[row][col] * input_buf[col];
+                    }
+                    output_buf[row] = sum;
+                }
+
+                // Store output amplitudes
+                for (gate_idx, &offset) in gate_offsets.iter().enumerate() {
+                    chunk[base + offset] = output_buf[gate_idx];
+                }
+            }
+        };
+
+        with_maybe_par!(self.num_qubits, self.data, chunk_size, kernel);
+    }
+
+    /// Apply Pauli-X gate: bit flip
+    /// Matrix: [[0, 1], [1, 0]]
+    /// Cost: 0 muls, 0 adds, just memory swap.
+    pub fn apply_x(&mut self, qubit: usize) {
+        let dist = 1 << qubit;
+        let kernel = |chunk: &mut [Complex64]| {
+            let (lower, upper) = chunk.split_at_mut(dist);
+            lower.iter_mut().zip(upper.iter_mut()).for_each(|(a, b)| {
+                std::mem::swap(a, b);
+            });
+        };
+        with_maybe_par!(self.num_qubits, self.data, 2 * dist, kernel);
+    }
+
+    /// Apply Pauli-Y gate
+    /// Matrix: [[0, -i], [i, 0]]
+    /// Cost: Manual component swapping (faster than complex mul).
+    pub fn apply_y(&mut self, qubit: usize) {
+        let dist = 1 << qubit;
+        let kernel = |chunk: &mut [Complex64]| {
+            let (lower, upper) = chunk.split_at_mut(dist);
+            lower
+                .iter_mut()
+                .zip(upper.iter_mut())
+                .for_each(|(alpha, beta)| {
+                    let a = *alpha;
+                    let b = *beta;
+                    *alpha = Complex64::new(b.im, -b.re);
+                    *beta = Complex64::new(-a.im, a.re);
+                });
+        };
+        with_maybe_par!(self.num_qubits, self.data, 2 * dist, kernel);
+    }
+
+    /// Apply Pauli-Z gate: phase flip
+    /// Matrix: [[1, 0], [0, -1]]
+    /// Cost: Only processes half the array. 1 negation.
+    pub fn apply_z(&mut self, qubit: usize) {
+        let dist = 1 << qubit;
+        let kernel = |chunk: &mut [Complex64]| {
+            let (_lower, upper) = chunk.split_at_mut(dist);
+            upper.iter_mut().for_each(|val| {
+                *val = -*val;
+            });
+        };
+        with_maybe_par!(self.num_qubits, self.data, 2 * dist, kernel);
+    }
+
+    /// Apply Hadamard gate
+    /// Matrix: 1/sqrt(2) * [[1, 1], [1, -1]]
+    /// Creates superposition: H|0⟩ = (|0⟩ + |1⟩)/√2, H|1⟩ = (|0⟩ - |1⟩)/√2
+    pub fn apply_h(&mut self, qubit: usize) {
+        let dist = 1 << qubit;
+        let k = FRAC_1_SQRT_2;
+
+        let kernel = |chunk: &mut [Complex64]| {
+            let (lower, upper) = chunk.split_at_mut(dist);
+            lower
+                .iter_mut()
+                .zip(upper.iter_mut())
+                .for_each(|(alpha, beta)| {
+                    let a = *alpha;
+                    let b = *beta;
+                    *alpha = k * (a + b);
+                    *beta = k * (a - b);
+                });
+        };
+        with_maybe_par!(self.num_qubits, self.data, 2 * dist, kernel);
+    }
+
+    /// Apply U gate (generic single-qubit rotation)
+    /// Matrix: [[cos(θ/2), -e^(iλ)sin(θ/2)], [e^(iφ)sin(θ/2), e^(i(φ+λ))cos(θ/2)]]
+    ///
+    /// This is the most general single-qubit unitary (up to global phase).
+    /// Parameters:
+    ///   theta: rotation angle
+    ///   phi: phase of the rotation axis
+    ///   lambda: second phase parameter
+    pub fn apply_u(&mut self, qubit: usize, theta: f64, phi: f64, lambda: f64) {
+        // Fast path: if theta is 0, U simplifies to a Z-rotation-like operation
+        if theta.abs() < 1e-15 {
+            // U(0, φ, λ) = e^(i(φ+λ)/2) * [[1, 0], [0, e^(i(λ+φ))]]
+            // This is essentially a phase gate plus global phase
+            self.apply_p(qubit, lambda + phi);
+            return;
+        }
+
+        let dist = 1 << qubit;
+
+        let half_theta = theta * 0.5;
+        let c = half_theta.cos();
+        let s = half_theta.sin();
+
+        // Compute phase factors
+        let phase_phi = Complex64::from_polar(1.0, phi); // e^(iφ)
+        let phase_lambda = Complex64::from_polar(1.0, lambda); // e^(iλ)
+        let phase_phi_lambda = Complex64::from_polar(1.0, phi + lambda); // e^(i(φ+λ))
+
+        // Matrix elements:
+        // u00 = cos(θ/2)
+        // u01 = -e^(iλ) * sin(θ/2)
+        // u10 = e^(iφ) * sin(θ/2)
+        // u11 = e^(i(φ+λ)) * cos(θ/2)
+        let u00 = Complex64::new(c, 0.0);
+        let u01 = -phase_lambda * s;
+        let u10 = phase_phi * s;
+        let u11 = phase_phi_lambda * c;
+
+        let kernel = |chunk: &mut [Complex64]| {
+            let (lower, upper) = chunk.split_at_mut(dist);
+            lower
+                .iter_mut()
+                .zip(upper.iter_mut())
+                .for_each(|(alpha, beta)| {
+                    let a = *alpha;
+                    let b = *beta;
+                    *alpha = u00 * a + u01 * b;
+                    *beta = u10 * a + u11 * b;
+                });
+        };
+        with_maybe_par!(self.num_qubits, self.data, 2 * dist, kernel);
+    }
+
+    /// Apply S gate (Phase gate, Z^1/2)
+    /// Matrix: [[1, 0], [0, i]]
+    pub fn apply_s(&mut self, qubit: usize) {
+        let dist = 1 << qubit;
+        let kernel = |chunk: &mut [Complex64]| {
+            let (_lower, upper) = chunk.split_at_mut(dist);
+            upper.iter_mut().for_each(|val| {
+                *val = Complex64::new(-val.im, val.re);
+            });
+        };
+        with_maybe_par!(self.num_qubits, self.data, 2 * dist, kernel);
+    }
+
+    /// Apply S† (S-dagger) gate
+    /// Matrix: [[1, 0], [0, -i]]
+    pub fn apply_sdg(&mut self, qubit: usize) {
+        let dist = 1 << qubit;
+        let kernel = |chunk: &mut [Complex64]| {
+            let (_lower, upper) = chunk.split_at_mut(dist);
+            upper.iter_mut().for_each(|val| {
+                *val = Complex64::new(val.im, -val.re);
+            });
+        };
+        with_maybe_par!(self.num_qubits, self.data, 2 * dist, kernel);
+    }
+
+    /// Apply T gate (Z^1/4)
+    /// Matrix: [[1, 0], [0, e^(i*pi/4)]]
+    pub fn apply_t(&mut self, qubit: usize) {
+        let dist = 1 << qubit;
+        let phase = Complex64::new(FRAC_1_SQRT_2, FRAC_1_SQRT_2);
+        let kernel = |chunk: &mut [Complex64]| {
+            let (_lower, upper) = chunk.split_at_mut(dist);
+            upper.iter_mut().for_each(|val| {
+                *val *= phase;
+            });
+        };
+        with_maybe_par!(self.num_qubits, self.data, 2 * dist, kernel);
+    }
+
+    /// Apply T† (T-dagger) gate
+    /// Matrix: [[1, 0], [0, e^(-i*pi/4)]]
+    pub fn apply_tdg(&mut self, qubit: usize) {
+        let dist = 1 << qubit;
+        let phase = Complex64::new(FRAC_1_SQRT_2, -FRAC_1_SQRT_2);
+        let kernel = |chunk: &mut [Complex64]| {
+            let (_lower, upper) = chunk.split_at_mut(dist);
+            upper.iter_mut().for_each(|val| {
+                *val *= phase;
+            });
+        };
+        with_maybe_par!(self.num_qubits, self.data, 2 * dist, kernel);
+    }
+
+    /// Apply P (Phase) gate
+    /// Matrix: [[1, 0], [0, e^(i*theta)]]
+    pub fn apply_p(&mut self, qubit: usize, theta: f64) {
+        if theta.abs() < 1e-15 {
+            return;
+        }
+
+        let dist = 1 << qubit;
+        let phase = Complex64::from_polar(1.0, theta);
+        let kernel = |chunk: &mut [Complex64]| {
+            let (_lower, upper) = chunk.split_at_mut(dist);
+            upper.iter_mut().for_each(|val| {
+                *val *= phase;
+            });
+        };
+        with_maybe_par!(self.num_qubits, self.data, 2 * dist, kernel);
+    }
+
+    /// Apply Rx(theta) gate
+    /// Matrix: [[cos(t/2), -i*sin(t/2)], [-i*sin(t/2), cos(t/2)]]
+    pub fn apply_rx(&mut self, qubit: usize, theta: f64) {
+        if theta.abs() < 1e-15 {
+            return;
+        }
+
+        let dist = 1 << qubit;
+        let half_theta = theta * 0.5;
+        let c = half_theta.cos();
+        let s = half_theta.sin();
+
+        let kernel = |chunk: &mut [Complex64]| {
+            let (lower, upper) = chunk.split_at_mut(dist);
+            lower
+                .iter_mut()
+                .zip(upper.iter_mut())
+                .for_each(|(alpha, beta)| {
+                    let a = *alpha;
+                    let b = *beta;
+                    let bs_im = b.im * s;
+                    let bs_re = b.re * s;
+                    let as_im = a.im * s;
+                    let as_re = a.re * s;
+
+                    *alpha = Complex64::new(
+                        a.re * c + bs_im, // Real part
+                        a.im * c - bs_re, // Imag part
+                    );
+
+                    *beta = Complex64::new(
+                        b.re * c + as_im, // Real part
+                        b.im * c - as_re, // Imag part
+                    );
+                });
+        };
+        with_maybe_par!(self.num_qubits, self.data, 2 * dist, kernel);
+    }
+
+    /// Apply Ry(theta) gate
+    /// Matrix: [[cos(t/2), -sin(t/2)], [sin(t/2), cos(t/2)]]
+    pub fn apply_ry(&mut self, qubit: usize, theta: f64) {
+        if theta.abs() < 1e-15 {
+            return;
+        }
+
+        let dist = 1 << qubit;
+
+        let half_theta = theta * 0.5;
+        let c = half_theta.cos();
+        let s = half_theta.sin();
+
+        let kernel = |chunk: &mut [Complex64]| {
+            let (lower, upper) = chunk.split_at_mut(dist);
+            lower
+                .iter_mut()
+                .zip(upper.iter_mut())
+                .for_each(|(alpha, beta)| {
+                    let a = *alpha;
+                    let b = *beta;
+                    *alpha = a * c - b * s;
+                    *beta = a * s + b * c;
+                });
+        };
+        with_maybe_par!(self.num_qubits, self.data, 2 * dist, kernel);
+    }
+
+    /// Apply Rz(theta) gate
+    /// Matrix: [[e^(-i*theta/2), 0], [0, e^(i*theta/2)]]
+    pub fn apply_rz(&mut self, qubit: usize, theta: f64) {
+        if theta.abs() < 1e-15 {
+            return;
+        }
+
+        let dist = 1 << qubit;
+
+        // Precompute phase factors
+        let half_theta = theta * 0.5;
+        let phase_0 = Complex64::from_polar(1.0, -half_theta); // e^(-i*t/2)
+        let phase_1 = Complex64::from_polar(1.0, half_theta); // e^(i*t/2)
+
+        let kernel = |chunk: &mut [Complex64]| {
+            let (lower, upper) = chunk.split_at_mut(dist);
+            lower.iter_mut().zip(upper.iter_mut()).for_each(|(a, b)| {
+                *a *= phase_0;
+                *b *= phase_1;
+            });
+        };
+        with_maybe_par!(self.num_qubits, self.data, 2 * dist, kernel);
+    }
+
+    /// Applies X2P gate: Rx(π/2), also known as √X.
+    ///
+    /// Matrix: 1/√2 * [[1, -i], [-i, 1]]
+    ///
+    /// # Optimization
+    /// Uses constant factors only, no trigonometric functions.
+    pub fn apply_x2p(&mut self, qubit: usize) {
+        let dist = 1 << qubit;
+        let k = FRAC_1_SQRT_2;
+        let kernel = |chunk: &mut [Complex64]| {
+            let (lower, upper) = chunk.split_at_mut(dist);
+            lower
+                .iter_mut()
+                .zip(upper.iter_mut())
+                .for_each(|(alpha, beta)| {
+                    let a = *alpha;
+                    let b = *beta;
+                    *alpha = Complex64::new(k * (a.re + b.im), k * (a.im - b.re));
+                    *beta = Complex64::new(k * (b.re + a.im), k * (b.im - a.re));
+                });
+        };
+        with_maybe_par!(self.num_qubits, self.data, 2 * dist, kernel);
+    }
+
+    /// Applies X2M gate: Rx(-π/2), inverse of √X.
+    ///
+    /// Matrix: 1/√2 * [[1, i], [i, 1]]
+    pub fn apply_x2m(&mut self, qubit: usize) {
+        let dist = 1 << qubit;
+        let k = FRAC_1_SQRT_2;
+        let kernel = |chunk: &mut [Complex64]| {
+            let (lower, upper) = chunk.split_at_mut(dist);
+            lower
+                .iter_mut()
+                .zip(upper.iter_mut())
+                .for_each(|(alpha, beta)| {
+                    let a = *alpha;
+                    let b = *beta;
+                    *alpha = Complex64::new(k * (a.re - b.im), k * (a.im + b.re));
+                    *beta = Complex64::new(k * (b.re - a.im), k * (b.im + a.re));
+                });
+        };
+        with_maybe_par!(self.num_qubits, self.data, 2 * dist, kernel);
+    }
+
+    /// Applies Y2P gate: Ry(π/2).
+    ///
+    /// Matrix: 1/√2 * [[1, -1], [1, 1]]
+    pub fn apply_y2p(&mut self, qubit: usize) {
+        let dist = 1 << qubit;
+        let k = FRAC_1_SQRT_2;
+        let kernel = |chunk: &mut [Complex64]| {
+            let (lower, upper) = chunk.split_at_mut(dist);
+            lower
+                .iter_mut()
+                .zip(upper.iter_mut())
+                .for_each(|(alpha, beta)| {
+                    let a = *alpha;
+                    let b = *beta;
+                    *alpha = k * (a - b);
+                    *beta = k * (a + b);
+                });
+        };
+        with_maybe_par!(self.num_qubits, self.data, 2 * dist, kernel);
+    }
+
+    /// Applies Y2M gate: Ry(-π/2).
+    ///
+    /// Matrix: 1/√2 * [[1, 1], [-1, 1]]
+    pub fn apply_y2m(&mut self, qubit: usize) {
+        let dist = 1 << qubit;
+        let k = FRAC_1_SQRT_2;
+        let kernel = |chunk: &mut [Complex64]| {
+            let (lower, upper) = chunk.split_at_mut(dist);
+            lower
+                .iter_mut()
+                .zip(upper.iter_mut())
+                .for_each(|(alpha, beta)| {
+                    let a = *alpha;
+                    let b = *beta;
+                    *alpha = k * (a + b);
+                    *beta = k * (b - a);
+                });
+        };
+        with_maybe_par!(self.num_qubits, self.data, 2 * dist, kernel);
+    }
+    /// Applies XY2P gate: Rz(θ - π/2) Ry(π/2) Rz(π/2 - θ).
+    ///
+    /// Matrix: 1/√2 * [[1, -i·e^(-iθ)], [-i·e^(iθ), 1]]
+    ///
+    /// # Arguments
+    /// * `qubit` - Target qubit index
+    /// * `theta` - Rotation angle
+    pub fn apply_xy2p(&mut self, qubit: usize, theta: f64) {
+        let dist = 1 << qubit;
+        let k = FRAC_1_SQRT_2;
+
+        // Precompute coefficients, fuse k to reduce multiplications in loop
+        // e^(i*theta)
+        let phase = Complex64::from_polar(1.0, theta);
+        let phase_conj = phase.conj(); // e^(-i*theta)
+        let neg_i = Complex64::new(0.0, -1.0);
+
+        // off_diag_01 = k * (-i * e^(-i*theta))
+        let coef_01 = neg_i * phase_conj * k;
+
+        // off_diag_10 = k * (-i * e^(i*theta))
+        let coef_10 = neg_i * phase * k;
+
+        // Explicitly convert to Complex64 for multiplication with complex numbers
+        let k_complex = Complex64::new(k, 0.0);
+        let kernel = |chunk: &mut [Complex64]| {
+            let (lower, upper) = chunk.split_at_mut(dist);
+            lower
+                .iter_mut()
+                .zip(upper.iter_mut())
+                .for_each(|(alpha, beta)| {
+                    let a = *alpha;
+                    let b = *beta;
+                    *alpha = k_complex * a + coef_01 * b;
+                    *beta = coef_10 * a + k_complex * b;
+                });
+        };
+        with_maybe_par!(self.num_qubits, self.data, 2 * dist, kernel);
+    }
+
+    /// Applies XY2M gate: Rz(-θ + π/2) Ry(-π/2) Rz(-π/2 + θ).
+    ///
+    /// Matrix: 1/√2 * [[1, i·e^(-iθ)], [i·e^(iθ), 1]]
+    ///
+    /// # Arguments
+    /// * `qubit` - Target qubit index
+    /// * `theta` - Rotation angle
+    pub fn apply_xy2m(&mut self, qubit: usize, theta: f64) {
+        let dist = 1 << qubit;
+        let k = FRAC_1_SQRT_2;
+        let phase = Complex64::from_polar(1.0, theta);
+        let phase_conj = phase.conj();
+        let pos_i = Complex64::new(0.0, 1.0);
+        let coef_01 = pos_i * phase_conj * k;
+        let coef_10 = pos_i * phase * k;
+        let k_complex = Complex64::new(k, 0.0);
+        let kernel = |chunk: &mut [Complex64]| {
+            let (lower, upper) = chunk.split_at_mut(dist);
+            lower
+                .iter_mut()
+                .zip(upper.iter_mut())
+                .for_each(|(alpha, beta)| {
+                    let a = *alpha;
+                    let b = *beta;
+                    *alpha = k_complex * a + coef_01 * b;
+                    *beta = coef_10 * a + k_complex * b;
+                });
+        };
+        with_maybe_par!(self.num_qubits, self.data, 2 * dist, kernel);
+    }
+
+    /// Apply general rotation R(theta, phi).
+    ///
+    /// Rotates around axis cos(phi)X + sin(phi)Y by angle theta.
+    /// Matrix: [[cos(t/2), -i*e^(-i*phi)*sin(t/2)], [-i*e^(i*phi)*sin(t/2), cos(t/2)]]
+    ///
+    /// # Arguments
+    /// * `qubit` - Target qubit index
+    /// * `theta` - Rotation angle
+    /// * `phi` - Rotation axis angle in XY plane
+    pub fn apply_rxy(&mut self, qubit: usize, theta: f64, phi: f64) {
+        // Fast path: treat as Identity if theta is negligible
+        if theta.abs() < 1e-15 {
+            return;
+        }
+
+        // Precompute all coefficients
+        let dist = 1 << qubit;
+        let half_theta = theta * 0.5;
+        let c = half_theta.cos();
+        let s = half_theta.sin();
+
+        // Precompute phi trig functions
+        let (sin_phi, cos_phi) = phi.sin_cos();
+
+        // Construct off-diagonal coefficients
+        // u01 = -i * (cos_phi - i*sin_phi) * s
+        //     = (-i*cos_phi - sin_phi) * s
+        //     = s * (-sin_phi - i*cos_phi)
+        let u01 = Complex64::new(-s * sin_phi, -s * cos_phi);
+
+        // u10 = -i * (cos_phi + i*sin_phi) * s
+        //     = (-i*cos_phi + sin_phi) * s
+        //     = s * (sin_phi - i*cos_phi)
+        let u10 = Complex64::new(s * sin_phi, -s * cos_phi);
+
+        // Apply (serial or parallel based on qubit count)
+        let kernel = |chunk: &mut [Complex64]| {
+            let (lower, upper) = chunk.split_at_mut(dist);
+            lower
+                .iter_mut()
+                .zip(upper.iter_mut())
+                .for_each(|(alpha, beta)| {
+                    let a = *alpha;
+                    let b = *beta;
+
+                    // Core computation:
+                    // alpha' = c * a + u01 * b
+                    // beta'  = u10 * a + c * b
+
+                    // num_complex supports Complex * f64, faster than Complex(c, 0)
+                    *alpha = a * c + b * u01;
+                    *beta = a * u10 + b * c;
+                });
+        };
+        with_maybe_par!(self.num_qubits, self.data, 2 * dist, kernel);
+    }
+
+    /// Applies SWAP gate to exchange two qubits.
+    ///
+    /// Matrix: [[1,0,0,0], [0,0,1,0], [0,1,0,0], [0,0,0,1]]
+    ///
+    /// # Arguments
+    /// * `q0` - First qubit index
+    /// * `q1` - Second qubit index
+    ///
+    /// # Panics
+    /// Panics if either qubit index is out of bounds.
+    ///
+    /// # Optimization
+    /// Uses memory swap without floating-point operations.
+    pub fn apply_swap(&mut self, q0: usize, q1: usize) {
+        if q0 == q1 {
+            return;
+        }
+
+        // 1. Determine physical memory strides
+        let (q_min, q_max) = if q0 < q1 { (q0, q1) } else { (q1, q0) };
+        let dist_max = 1 << q_max;
+        let dist_min = 1 << q_min;
+
+        // 2. Choose serial or parallel based on qubit count
+        let kernel = |chunk: &mut [Complex64]| {
+            let (part0, part1) = chunk.split_at_mut(dist_max);
+
+            part0
+                .chunks_exact_mut(2 * dist_min)
+                .zip(part1.chunks_exact_mut(2 * dist_min))
+                .for_each(|(sub_chunk0, sub_chunk1)| {
+                    let (_, v01_slice) = sub_chunk0.split_at_mut(dist_min);
+                    let (v10_slice, _) = sub_chunk1.split_at_mut(dist_min);
+
+                    // v01_slice: physical (max=0, min=1) -> logical |01> or |10>
+                    // v10_slice: physical (max=1, min=0) -> logical |10> or |01>
+                    // SWAP always exchanges these two memory blocks
+                    v01_slice
+                        .iter_mut()
+                        .zip(v10_slice.iter_mut())
+                        .for_each(|(a, b)| {
+                            // Direct memory swap, no floating-point overhead
+                            std::mem::swap(a, b);
+                        });
+                });
+        };
+        with_maybe_par!(self.num_qubits, self.data, 2 * dist_max, kernel);
+    }
+
+    /// Applies CNOT (CX) gate: controlled-X operation.
+    ///
+    /// Flips the target qubit when the control qubit is |1⟩.
+    /// Matrix: [[1,0,0,0], [0,1,0,0], [0,0,0,1], [0,0,1,0]]
+    ///
+    /// # Arguments
+    /// * `control` - Control qubit index
+    /// * `target` - Target qubit index
+    ///
+    /// # Panics
+    /// Panics if control and target are the same qubit.
+    pub fn apply_cx(&mut self, control: usize, target: usize) {
+        if control == target {
+            panic!("Control and target cannot be the same");
+        }
+
+        let (q_min, q_max) = if control < target {
+            (control, target)
+        } else {
+            (target, control)
+        };
+        let dist_max = 1 << q_max;
+        let dist_min = 1 << q_min;
+
+        let kernel = |chunk: &mut [Complex64]| {
+            let (part0, part1) = chunk.split_at_mut(dist_max);
+
+            part0
+                .chunks_exact_mut(2 * dist_min)
+                .zip(part1.chunks_exact_mut(2 * dist_min))
+                .for_each(|(sub_chunk0, sub_chunk1)| {
+                    // Get references to four blocks; which to operate on depends on control/target
+                    let (_v00, v01) = sub_chunk0.split_at_mut(dist_min);
+                    let (v10, v11) = sub_chunk1.split_at_mut(dist_min);
+
+                    if control < target {
+                        // Case A: Control is low (q_min), Target is high (q_max)
+                        // Control=1 physical positions:
+                        //   1. max=0, min=1 (v01) -> Control=1, Target=0
+                        //   2. max=1, min=1 (v11) -> Control=1, Target=1
+                        // Action: swap v01 and v11 (flip Target)
+                        v01.iter_mut()
+                            .zip(v11.iter_mut())
+                            .for_each(|(a, b)| std::mem::swap(a, b));
+                    } else {
+                        // Case B: Control is high (q_max), Target is low (q_min)
+                        // Control=1 physical positions:
+                        //   1. max=1, min=0 (v10) -> Control=1, Target=0
+                        //   2. max=1, min=1 (v11) -> Control=1, Target=1
+                        // Action: swap v10 and v11 (flip Target)
+                        v10.iter_mut()
+                            .zip(v11.iter_mut())
+                            .for_each(|(a, b)| std::mem::swap(a, b));
+                    }
+                });
+        };
+        with_maybe_par!(self.num_qubits, self.data, 2 * dist_max, kernel);
+    }
+
+    /// Applies controlled-Y (CY) gate.
+    ///
+    /// Applies Y gate to target when control qubit is |1⟩.
+    /// Y matrix: [[0, -i], [i, 0]]
+    ///
+    /// # Arguments
+    /// * `control` - Control qubit index
+    /// * `target` - Target qubit index
+    ///
+    /// # Panics
+    /// Panics if control and target are the same qubit.
+    pub fn apply_cy(&mut self, control: usize, target: usize) {
+        assert_ne!(
+            control, target,
+            "Control and target qubits must be different"
+        );
+
+        // 1. Determine physical memory strides
+        let (q_min, q_max) = if control < target {
+            (control, target)
+        } else {
+            (target, control)
+        };
+        let dist_max = 1 << q_max;
+        let dist_min = 1 << q_min;
+
+        // 2. Choose serial or parallel based on qubit count
+        let kernel = |chunk: &mut [Complex64]| {
+            let (part0, part1) = chunk.split_at_mut(dist_max);
+
+            part0
+                .chunks_exact_mut(2 * dist_min)
+                .zip(part1.chunks_exact_mut(2 * dist_min))
+                .for_each(|(sub_chunk0, sub_chunk1)| {
+                    // Locate memory blocks where control=1
+                    // block_t0: amplitude where Control=1, Target=0
+                    // block_t1: amplitude where Control=1, Target=1
+
+                    let (block_t0, block_t1) = if control < target {
+                        // Case A: Control is low (min), Target is high (max)
+                        // part0: q_max=0 (Target=0), part1: q_max=1 (Target=1)
+                        // Need Control=1 states (q_min=1)
+                        // |10⟩ (q_min=1, q_max=0) and |11⟩ (q_min=1, q_max=1)
+                        // Corresponds to sub_chunk0[dist_min..] and sub_chunk1[dist_min..]
+                        let (_, c1_t0) = sub_chunk0.split_at_mut(dist_min);
+                        let (_, c1_t1) = sub_chunk1.split_at_mut(dist_min);
+                        (c1_t0, c1_t1)
+                    } else {
+                        // Case B: Control is high (max), Target is low (min)
+                        // part0 is Control=0 (skip), part1 is Control=1
+                        // Within part1, lower half is Target=0, upper half is Target=1
+                        let (t0, t1) = sub_chunk1.split_at_mut(dist_min);
+                        (t0, t1)
+                    };
+
+                    // 3. Apply Y gate transformation
+                    block_t0
+                        .iter_mut()
+                        .zip(block_t1.iter_mut())
+                        .for_each(|(alpha, beta)| {
+                            let a = *alpha; // Target=0
+                            let b = *beta; // Target=1
+
+                            // Y matrix: [[0, -i], [i, 0]]
+                            // new_a = -i * b
+                            // new_b =  i * a
+
+                            // -i * (x + it) = y - ix
+                            *alpha = Complex64::new(b.im, -b.re);
+
+                            // i * (x + it) = -y + ix
+                            *beta = Complex64::new(-a.im, a.re);
+                        });
+                });
+        };
+        with_maybe_par!(self.num_qubits, self.data, 2 * dist_max, kernel);
+    }
+
+    /// Applies controlled-Z (CZ) gate.
+    ///
+    /// Applies phase flip (-1) to |11⟩ component.
+    /// Leaves |00⟩, |01⟩, |10⟩ unchanged.
+    ///
+    /// # Arguments
+    /// * `q0` - First qubit index (acts as control)
+    /// * `q1` - Second qubit index (acts as control)
+    ///
+    /// # Panics
+    /// Panics if q0 and q1 are the same qubit.
+    pub fn apply_cz(&mut self, q0: usize, q1: usize) {
+        if q0 == q1 {
+            panic!("Qubits cannot be the same");
+        }
+
+        let (q_min, q_max) = if q0 < q1 { (q0, q1) } else { (q1, q0) };
+        let dist_max = 1 << q_max;
+        let dist_min = 1 << q_min;
+
+        let kernel = |chunk: &mut [Complex64]| {
+            let (_, part1) = chunk.split_at_mut(dist_max); // Only care about max=1 part
+
+            part1.chunks_exact_mut(2 * dist_min).for_each(|sub_chunk1| {
+                let (_, v11) = sub_chunk1.split_at_mut(dist_min); // Only care about min=1 part
+
+                // v11 now corresponds to max=1, min=1, i.e., |11⟩ state
+                // Apply sign flip only to this part
+                for val in v11.iter_mut() {
+                    *val = -*val;
+                }
+            });
+        };
+        with_maybe_par!(self.num_qubits, self.data, 2 * dist_max, kernel);
+    }
+
+    /// Apply Toffoli gate (CCX - Controlled-Controlled-X)
+    /// Two control qubits and one target qubit.
+    /// Flips the target if and only if both controls are |1⟩.
+    ///
+    /// # Arguments
+    /// * `c0` - First control qubit index
+    /// * `c1` - Second control qubit index
+    /// * `target` - Target qubit index
+    pub fn apply_ccx(&mut self, c0: usize, c1: usize, target: usize) {
+        assert_ne!(c0, target, "Control and target cannot be the same");
+        assert_ne!(c1, target, "Control and target cannot be the same");
+        assert_ne!(c0, c1, "Two controls must be different");
+
+        // 1. Sort: determine physical min, mid, max positions and their roles
+        // kind: 0 = Control, 1 = Target
+        let mut qubits = [(c0, 0), (c1, 0), (target, 1)];
+        qubits.sort_by_key(|(q, _)| *q);
+
+        let (q0, k0) = qubits[0]; // Min position
+        let (q1, k1) = qubits[1]; // Mid position
+        let (q2, k2) = qubits[2]; // Max position
+
+        let d0 = 1 << q0;
+        let d1 = 1 << q1;
+        let d2 = 1 << q2;
+
+        match (k0, k1, k2) {
+            // Case A: Target is at max position -> (Control, Control, Target)
+            (0, 0, 1) => {
+                let kernel = |chunk: &mut [Complex64]| {
+                    let (part_t0, part_t1) = chunk.split_at_mut(d2);
+
+                    // Iterate over Mid layer
+                    part_t0
+                        .chunks_exact_mut(2 * d1)
+                        .zip(part_t1.chunks_exact_mut(2 * d1))
+                        .for_each(|(sub_t0, sub_t1)| {
+                            // Take Mid=1 part (control is active)
+                            let (_, high_m_t0) = sub_t0.split_at_mut(d1);
+                            let (_, high_m_t1) = sub_t1.split_at_mut(d1);
+
+                            // Iterate over Min layer (using chunks to handle non-contiguous gaps)
+                            high_m_t0
+                                .chunks_exact_mut(2 * d0)
+                                .zip(high_m_t1.chunks_exact_mut(2 * d0))
+                                .for_each(|(leaf_t0, leaf_t1)| {
+                                    // Take Min=1 part (control is active)
+                                    let (_, valid_t0) = leaf_t0.split_at_mut(d0);
+                                    let (_, valid_t1) = leaf_t1.split_at_mut(d0);
+
+                                    // Now Min=1, Mid=1, execute Target flip
+                                    valid_t0
+                                        .iter_mut()
+                                        .zip(valid_t1.iter_mut())
+                                        .for_each(|(a, b)| std::mem::swap(a, b));
+                                });
+                        });
+                };
+                with_maybe_par!(self.num_qubits, self.data, 2 * d2, kernel);
+            }
+
+            // Case B: Target is at mid position -> (Control, Target, Control)
+            // Min=Control0, Mid=Target, Max=Control1
+            // Need to swap amplitudes where Control0=1, Control1=1, Target=0 with Target=1
+            //
+            // Memory layout note:
+            // We use zip to pair elements from low_t0 (Target=0) and high_t1 (Target=1).
+            // Although low_t0 and high_t1 are not contiguous in memory, they are "symmetric"
+            // in logical structure:
+            // - low_t0 contains Min=0 and Min=1 parts
+            // - high_t1 also contains Min=0 and Min=1 parts
+            // Since both slices come from the same d1 split, their internal structures match.
+            // Therefore, using zip on low_t0.chunks_exact_mut(2*d0) and
+            // high_t1.chunks_exact_mut(2*d0) correctly pairs elements at the same Min index.
+            (0, 1, 0) => {
+                let kernel = |chunk: &mut [Complex64]| {
+                    // Max (Control1) is a control, take Max=1 part
+                    let (_, part_c1) = chunk.split_at_mut(d2);
+
+                    part_c1.chunks_exact_mut(2 * d1).for_each(|sub| {
+                        // Mid is Target, split into Target=0 and Target=1
+                        let (low_t0, high_t1) = sub.split_at_mut(d1);
+
+                        // Iterate over Min (Control0) layer
+                        // Use memory structure symmetry to zip pair Target=0 and Target=1 blocks
+                        low_t0
+                            .chunks_exact_mut(2 * d0)
+                            .zip(high_t1.chunks_exact_mut(2 * d0))
+                            .for_each(|(leaf_t0, leaf_t1)| {
+                                // Min is Control0, take Min=1 part (both controls are 1)
+                                let (_, valid_t0) = leaf_t0.split_at_mut(d0);
+                                let (_, valid_t1) = leaf_t1.split_at_mut(d0);
+
+                                // Execute SWAP: exchange Target=0 and Target=1 amplitudes
+                                valid_t0
+                                    .iter_mut()
+                                    .zip(valid_t1.iter_mut())
+                                    .for_each(|(a, b)| std::mem::swap(a, b));
+                            });
+                    });
+                };
+                with_maybe_par!(self.num_qubits, self.data, 2 * d2, kernel);
+            }
+
+            // Case C: Target is at min position -> (Target, Control, Control)
+            (1, 0, 0) => {
+                let kernel = |chunk: &mut [Complex64]| {
+                    let (_, part_max1) = chunk.split_at_mut(d2); // Max=1
+
+                    part_max1.chunks_exact_mut(2 * d1).for_each(|sub| {
+                        let (_, part_mid1) = sub.split_at_mut(d1); // Mid=1
+
+                        part_mid1.chunks_exact_mut(2 * d0).for_each(|leaf| {
+                            let (target0, target1) = leaf.split_at_mut(d0); // Min=0 vs Min=1
+
+                            // No further split needed since Min is Target
+                            target0
+                                .iter_mut()
+                                .zip(target1.iter_mut())
+                                .for_each(|(a, b)| std::mem::swap(a, b));
+                        });
+                    });
+                };
+                with_maybe_par!(self.num_qubits, self.data, 2 * d2, kernel);
+            }
+
+            _ => unreachable!("Should cover all permutations"),
+        }
+    }
+
+    /// Applies RXX gate (Ising XX interaction).
+    ///
+    /// Matrix: exp(-i·θ/2 · X⊗X) = cos(θ/2)I - i·sin(θ/2)·X⊗X
+    ///
+    /// # Arguments
+    /// * `q0` - First qubit index
+    /// * `q1` - Second qubit index
+    /// * `theta` - Interaction angle
+    pub fn apply_rxx(&mut self, q0: usize, q1: usize, theta: f64) {
+        assert_ne!(q0, q1, "Qubits must be different");
+        if theta.abs() < 1e-15 {
+            return;
+        }
+
+        let (q_min, q_max) = if q0 < q1 { (q0, q1) } else { (q1, q0) };
+        let d_max = 1 << q_max;
+        let d_min = 1 << q_min;
+
+        let half_theta = theta * 0.5;
+        let c = half_theta.cos();
+        let s = half_theta.sin();
+
+        let kernel = |chunk: &mut [Complex64]| {
+            let (part0, part1) = chunk.split_at_mut(d_max);
+            part0
+                .chunks_exact_mut(2 * d_min)
+                .zip(part1.chunks_exact_mut(2 * d_min))
+                .for_each(|(sub0, sub1)| {
+                    let (v00, v01) = sub0.split_at_mut(d_min);
+                    let (v10, v11) = sub1.split_at_mut(d_min);
+                    for (((a, b), c_amp), d) in v00
+                        .iter_mut()
+                        .zip(v01.iter_mut())
+                        .zip(v10.iter_mut())
+                        .zip(v11.iter_mut())
+                    {
+                        let a_in = *a;
+                        let b_in = *b;
+                        let c_in = *c_amp;
+                        let d_in = *d;
+                        *a = c * a_in + Complex64::new(0.0, -s) * d_in;
+                        *b = c * b_in + Complex64::new(0.0, -s) * c_in;
+                        *c_amp = Complex64::new(0.0, -s) * b_in + c * c_in;
+                        *d = Complex64::new(0.0, -s) * a_in + c * d_in;
+                    }
+                });
+        };
+        with_maybe_par!(self.num_qubits, self.data, 2 * d_max, kernel);
+    }
+
+    /// Applies RYY gate (Ising YY interaction).
+    ///
+    /// Matrix: exp(-i·θ/2 · Y⊗Y) = cos(θ/2)I - i·sin(θ/2)·Y⊗Y
+    ///
+    /// # Arguments
+    /// * `q0` - First qubit index
+    /// * `q1` - Second qubit index
+    /// * `theta` - Interaction angle
+    pub fn apply_ryy(&mut self, q0: usize, q1: usize, theta: f64) {
+        assert_ne!(q0, q1, "Qubits must be different");
+        if theta.abs() < 1e-15 {
+            return;
+        }
+
+        let (q_min, q_max) = if q0 < q1 { (q0, q1) } else { (q1, q0) };
+        let d_max = 1 << q_max;
+        let d_min = 1 << q_min;
+
+        let half_theta = theta * 0.5;
+        let c = half_theta.cos();
+        let s = half_theta.sin();
+
+        let kernel = |chunk: &mut [Complex64]| {
+            let (part0, part1) = chunk.split_at_mut(d_max);
+            part0
+                .chunks_exact_mut(2 * d_min)
+                .zip(part1.chunks_exact_mut(2 * d_min))
+                .for_each(|(sub0, sub1)| {
+                    let (v00, v01) = sub0.split_at_mut(d_min);
+                    let (v10, v11) = sub1.split_at_mut(d_min);
+                    for (((a, b), c_amp), d) in v00
+                        .iter_mut()
+                        .zip(v01.iter_mut())
+                        .zip(v10.iter_mut())
+                        .zip(v11.iter_mut())
+                    {
+                        let a_in = *a;
+                        let b_in = *b;
+                        let c_in = *c_amp;
+                        let d_in = *d;
+                        *a = c * a_in + Complex64::new(0.0, s) * d_in;
+                        *b = c * b_in + Complex64::new(0.0, -s) * c_in;
+                        *c_amp = Complex64::new(0.0, -s) * b_in + c * c_in;
+                        *d = Complex64::new(0.0, s) * a_in + c * d_in;
+                    }
+                });
+        };
+        with_maybe_par!(self.num_qubits, self.data, 2 * d_max, kernel);
+    }
+
+    /// Applies RZZ gate (Ising ZZ interaction).
+    ///
+    /// Matrix: exp(-i·θ/2 · Z⊗Z) - applies phase based on qubit parity
+    ///
+    /// # Arguments
+    /// * `q0` - First qubit index
+    /// * `q1` - Second qubit index
+    /// * `theta` - Interaction angle
+    pub fn apply_rzz(&mut self, q0: usize, q1: usize, theta: f64) {
+        assert_ne!(q0, q1, "Qubits must be different");
+        if theta.abs() < 1e-15 {
+            return;
+        }
+
+        let (q_min, q_max) = if q0 < q1 { (q0, q1) } else { (q1, q0) };
+        let d_max = 1 << q_max;
+        let d_min = 1 << q_min;
+
+        let half_theta = theta * 0.5;
+        let phase_even = Complex64::from_polar(1.0, -half_theta);
+        let phase_odd = Complex64::from_polar(1.0, half_theta);
+
+        let kernel = |chunk: &mut [Complex64]| {
+            let (part0, part1) = chunk.split_at_mut(d_max);
+            part0
+                .chunks_exact_mut(2 * d_min)
+                .zip(part1.chunks_exact_mut(2 * d_min))
+                .for_each(|(sub0, sub1)| {
+                    let (v00, v01) = sub0.split_at_mut(d_min);
+                    let (v10, v11) = sub1.split_at_mut(d_min);
+                    v00.iter_mut().for_each(|a| *a *= phase_even);
+                    v11.iter_mut().for_each(|d| *d *= phase_even);
+                    v01.iter_mut().for_each(|b| *b *= phase_odd);
+                    v10.iter_mut().for_each(|c| *c *= phase_odd);
+                });
+        };
+        with_maybe_par!(self.num_qubits, self.data, 2 * d_max, kernel);
+    }
+
+    /// Applies RZX gate (Ising ZX interaction).
+    ///
+    /// Matrix: exp(-i·θ/2 · Z⊗X)
+    ///
+    /// # Arguments
+    /// * `q0` - First qubit index (Z rotation)
+    /// * `q1` - Second qubit index (X rotation)
+    /// * `theta` - Interaction angle
+    pub fn apply_rzx(&mut self, q0: usize, q1: usize, theta: f64) {
+        assert_ne!(q0, q1, "Qubits must be different");
+        if theta.abs() < 1e-15 {
+            return;
+        }
+
+        let (q_min, q_max) = if q0 < q1 { (q0, q1) } else { (q1, q0) };
+        let d_max = 1 << q_max;
+        let d_min = 1 << q_min;
+
+        let half_theta = theta * 0.5;
+        let c = half_theta.cos();
+        let s = half_theta.sin();
+
+        let kernel = |chunk: &mut [Complex64]| {
+            let (part0, part1) = chunk.split_at_mut(d_max);
+            part0
+                .chunks_exact_mut(2 * d_min)
+                .zip(part1.chunks_exact_mut(2 * d_min))
+                .for_each(|(sub0, sub1)| {
+                    let (v00, v01) = sub0.split_at_mut(d_min);
+                    let (v10, v11) = sub1.split_at_mut(d_min);
+                    for (((a, b), c_amp), d) in v00
+                        .iter_mut()
+                        .zip(v01.iter_mut())
+                        .zip(v10.iter_mut())
+                        .zip(v11.iter_mut())
+                    {
+                        let a_in = *a;
+                        let b_in = *b;
+                        let c_in = *c_amp;
+                        let d_in = *d;
+                        if q0 < q1 {
+                            *a = c * a_in + Complex64::new(0.0, -s) * c_in;
+                            *b = c * b_in + Complex64::new(0.0, s) * d_in;
+                            *c_amp = Complex64::new(0.0, -s) * a_in + c * c_in;
+                            *d = Complex64::new(0.0, s) * b_in + c * d_in;
+                        } else {
+                            *a = c * a_in + Complex64::new(0.0, -s) * b_in;
+                            *b = Complex64::new(0.0, -s) * a_in + c * b_in;
+                            *c_amp = c * c_in + Complex64::new(0.0, s) * d_in;
+                            *d = Complex64::new(0.0, s) * c_in + c * d_in;
+                        }
+                    }
+                });
+        };
+        with_maybe_par!(self.num_qubits, self.data, 2 * d_max, kernel);
+    }
+
+    /// Applies XY gate (XY interaction).
+    ///
+    /// Matrix: exp(-i·θ/2 · (X⊗X + Y⊗Y)/2)
+    /// Related to iSWAP: XY(π) = iSWAP
+    ///
+    /// # Arguments
+    /// * `q0` - First qubit index
+    /// * `q1` - Second qubit index
+    /// * `theta` - Interaction angle
+    pub fn apply_xy(&mut self, q0: usize, q1: usize, theta: f64) {
+        assert_ne!(q0, q1, "Qubits must be different");
+        if theta.abs() < 1e-15 {
+            return;
+        }
+
+        let (q_min, q_max) = if q0 < q1 { (q0, q1) } else { (q1, q0) };
+        let d_max = 1 << q_max;
+        let d_min = 1 << q_min;
+
+        let half_theta = theta * 0.5;
+        let c = half_theta.cos();
+        let s = half_theta.sin();
+
+        // XY couples |01⟩ and |10⟩ while leaving |00⟩ and |11⟩ unchanged
+        // |01⟩ = q_min=1, q_max=0 (part0, sub1)
+        // |10⟩ = q_min=0, q_max=1 (part1, sub0)
+        let kernel = |chunk: &mut [Complex64]| {
+            let (part0, part1) = chunk.split_at_mut(d_max);
+            part0
+                .chunks_exact_mut(2 * d_min)
+                .zip(part1.chunks_exact_mut(2 * d_min))
+                .for_each(|(sub0, sub1)| {
+                    let (_v00, v01) = sub0.split_at_mut(d_min);
+                    let (v10, _v11) = sub1.split_at_mut(d_min);
+
+                    // v01: |...01⟩ (q_min=1, q_max=0)
+                    // v10: |...10⟩ (q_min=0, q_max=1)
+                    // Pair them element-wise
+                    for (b, c_amp) in v01.iter_mut().zip(v10.iter_mut()) {
+                        let b_in = *b;
+                        let c_in = *c_amp;
+                        // |01⟩' = c|01⟩ - i*s|10⟩
+                        // |10⟩' = -i*s|01⟩ + c|10⟩
+                        *b = c * b_in + Complex64::new(0.0, -s) * c_in;
+                        *c_amp = Complex64::new(0.0, -s) * b_in + c * c_in;
+                    }
+                });
+        };
+        with_maybe_par!(self.num_qubits, self.data, 2 * d_max, kernel);
+    }
+
+    /// Applies controlled-RX gate.
+    ///
+    /// Applies RX(θ) to target when control is |1⟩.
+    ///
+    /// # Arguments
+    /// * `control` - Control qubit index
+    /// * `target` - Target qubit index
+    /// * `theta` - Rotation angle
+    pub fn apply_crx(&mut self, control: usize, target: usize, theta: f64) {
+        assert_ne!(control, target, "Control and target must be different");
+        if theta.abs() < 1e-15 {
+            return;
+        }
+
+        let (q_min, q_max) = if control < target {
+            (control, target)
+        } else {
+            (target, control)
+        };
+        let d_max = 1 << q_max;
+        let d_min = 1 << q_min;
+
+        let half_theta = theta * 0.5;
+        let c = half_theta.cos();
+        let s = half_theta.sin();
+
+        // CRX matrix on target (when control=1): [[c, -i*s], [-i*s, c]]
+
+        let kernel = |chunk: &mut [Complex64]| {
+            let (part0, part1) = chunk.split_at_mut(d_max);
+
+            if control < target {
+                // Control is q_min, target is q_max
+                // Need to pair |Target=0, Control=1⟩ (part0, sub upper) with |Target=1, Control=1⟩ (part1, sub upper)
+                part0
+                    .chunks_exact_mut(2 * d_min)
+                    .zip(part1.chunks_exact_mut(2 * d_min))
+                    .for_each(|(sub0, sub1)| {
+                        // sub0: target=0, sub1: target=1
+                        // In each sub, lower half is control=0, upper half is control=1
+                        let (_, target0_c1) = sub0.split_at_mut(d_min);
+                        let (_, target1_c1) = sub1.split_at_mut(d_min);
+
+                        // Apply RX rotation to target when control=1
+                        for (a, b) in target0_c1.iter_mut().zip(target1_c1.iter_mut()) {
+                            let a_in = *a;
+                            let b_in = *b;
+                            // RX: [[c, -i*s], [-i*s, c]]
+                            // -i*s*(x+iy) = s*y - i*s*x
+                            *a = Complex64::new(
+                                c * a_in.re + s * b_in.im,
+                                c * a_in.im - s * b_in.re,
+                            );
+                            *b = Complex64::new(
+                                s * a_in.im + c * b_in.re,
+                                -s * a_in.re + c * b_in.im,
+                            );
+                        }
+                    });
+            } else {
+                // Control is q_max, target is q_min
+                // Process pairs where control=1
+                part0
+                    .chunks_exact_mut(2 * d_min)
+                    .zip(part1.chunks_exact_mut(2 * d_min))
+                    .for_each(|(_, sub1)| {
+                        // sub0: control=0, sub1: control=1
+                        // In sub1, split by target
+                        let (target0_ctl1, target1_ctl1) = sub1.split_at_mut(d_min);
+
+                        // Apply RX rotation to target when control=1
+                        for (a, b) in target0_ctl1.iter_mut().zip(target1_ctl1.iter_mut()) {
+                            let a_in = *a;
+                            let b_in = *b;
+                            // RX: [[c, -i*s], [-i*s, c]]
+                            *a = Complex64::new(
+                                c * a_in.re + s * b_in.im,
+                                c * a_in.im - s * b_in.re,
+                            );
+                            *b = Complex64::new(
+                                s * a_in.im + c * b_in.re,
+                                -s * a_in.re + c * b_in.im,
+                            );
+                        }
+                    });
+            }
+        };
+        with_maybe_par!(self.num_qubits, self.data, 2 * d_max, kernel);
+    }
+
+    /// Applies controlled-RY gate.
+    ///
+    /// Applies RY(θ) to target when control is |1⟩.
+    ///
+    /// # Arguments
+    /// * `control` - Control qubit index
+    /// * `target` - Target qubit index
+    /// * `theta` - Rotation angle
+    pub fn apply_cry(&mut self, control: usize, target: usize, theta: f64) {
+        assert_ne!(control, target, "Control and target must be different");
+        if theta.abs() < 1e-15 {
+            return;
+        }
+
+        let (q_min, q_max) = if control < target {
+            (control, target)
+        } else {
+            (target, control)
+        };
+        let d_max = 1 << q_max;
+        let d_min = 1 << q_min;
+
+        let half_theta = theta * 0.5;
+        let c = half_theta.cos();
+        let s = half_theta.sin();
+
+        let kernel = |chunk: &mut [Complex64]| {
+            let (part0, part1) = chunk.split_at_mut(d_max);
+
+            if control < target {
+                // Control is q_min, target is q_max
+                // Need to pair |Target=0, Control=1> (part0, sub upper) with |Target=1, Control=1> (part1, sub upper)
+                part0
+                    .chunks_exact_mut(2 * d_min)
+                    .zip(part1.chunks_exact_mut(2 * d_min))
+                    .for_each(|(sub0, sub1)| {
+                        // sub0: target=0, sub1: target=1
+                        // In each sub, lower half is control=0, upper half is control=1
+                        let (_, target0_c1) = sub0.split_at_mut(d_min);
+                        let (_, target1_c1) = sub1.split_at_mut(d_min);
+
+                        // Apply RY rotation to target when control=1
+                        for (a, b) in target0_c1.iter_mut().zip(target1_c1.iter_mut()) {
+                            let a_in = *a;
+                            let b_in = *b;
+                            *a = c * a_in - s * b_in;
+                            *b = s * a_in + c * b_in;
+                        }
+                    });
+            } else {
+                // Control is q_max, target is q_min
+                // Process pairs where control=1
+                part0
+                    .chunks_exact_mut(2 * d_min)
+                    .zip(part1.chunks_exact_mut(2 * d_min))
+                    .for_each(|(_, sub1)| {
+                        // sub0: control=0, sub1: control=1
+                        // In sub1, split by target
+                        let (target0_ctl1, target1_ctl1) = sub1.split_at_mut(d_min);
+
+                        // Apply RY rotation to target when control=1
+                        for (a, b) in target0_ctl1.iter_mut().zip(target1_ctl1.iter_mut()) {
+                            let a_in = *a;
+                            let b_in = *b;
+                            *a = c * a_in - s * b_in;
+                            *b = s * a_in + c * b_in;
+                        }
+                    });
+            }
+        };
+        with_maybe_par!(self.num_qubits, self.data, 2 * d_max, kernel);
+    }
+
+    /// Applies controlled-RZ gate.
+    ///
+    /// Applies RZ(θ) to target when control is |1⟩.
+    ///
+    /// # Arguments
+    /// * `control` - Control qubit index
+    /// * `target` - Target qubit index
+    /// * `theta` - Rotation angle
+    pub fn apply_crz(&mut self, control: usize, target: usize, theta: f64) {
+        assert_ne!(control, target, "Control and target must be different");
+        if theta.abs() < 1e-15 {
+            return;
+        }
+
+        let (q_min, q_max) = if control < target {
+            (control, target)
+        } else {
+            (target, control)
+        };
+        let d_max = 1 << q_max;
+        let d_min = 1 << q_min;
+
+        let half_theta = theta * 0.5;
+        let phase_0 = Complex64::from_polar(1.0, -half_theta);
+        let phase_1 = Complex64::from_polar(1.0, half_theta);
+
+        let kernel = |chunk: &mut [Complex64]| {
+            let (part0, part1) = chunk.split_at_mut(d_max);
+
+            if control < target {
+                // Control is q_min, target is q_max
+                // Need to pair |Target=0, Control=1> (part0, sub upper) with |Target=1, Control=1> (part1, sub upper)
+                part0
+                    .chunks_exact_mut(2 * d_min)
+                    .zip(part1.chunks_exact_mut(2 * d_min))
+                    .for_each(|(sub0, sub1)| {
+                        // sub0: target=0, sub1: target=1
+                        // In each sub, lower half is control=0, upper half is control=1
+                        let (_, target0_c1) = sub0.split_at_mut(d_min);
+                        let (_, target1_c1) = sub1.split_at_mut(d_min);
+
+                        // Apply RZ rotation to target when control=1
+                        for (a, b) in target0_c1.iter_mut().zip(target1_c1.iter_mut()) {
+                            *a *= phase_0;
+                            *b *= phase_1;
+                        }
+                    });
+            } else {
+                // Control is q_max, target is q_min
+                // Process pairs where control=1
+                part0
+                    .chunks_exact_mut(2 * d_min)
+                    .zip(part1.chunks_exact_mut(2 * d_min))
+                    .for_each(|(_, sub1)| {
+                        // sub0: control=0, sub1: control=1
+                        // In sub1, split by target
+                        let (target0_ctl1, target1_ctl1) = sub1.split_at_mut(d_min);
+
+                        // When control=1, apply RZ to target
+                        for (a, b) in target0_ctl1.iter_mut().zip(target1_ctl1.iter_mut()) {
+                            *a *= phase_0;
+                            *b *= phase_1;
+                        }
+                    });
+            }
+        };
+        with_maybe_par!(self.num_qubits, self.data, 2 * d_max, kernel);
+    }
+
+    /// Applies Fermionic Simulation (fSim) gate.
+    ///
+    /// Native gate for superconducting qubits. Combines iSWAP and controlled-phase.
+    ///
+    /// Matrix: [[1, 0, 0, 0], [0, c, -i·s, 0], [0, -i·s, c, 0], [0, 0, 0, e^(-iφ)]]
+    /// where c = cos(θ), s = sin(θ)
+    ///
+    /// # Arguments
+    /// * `q0` - First qubit index
+    /// * `q1` - Second qubit index
+    /// * `theta` - iSWAP angle
+    /// * `phi` - Controlled-phase angle
+    pub fn apply_fsim(&mut self, q0: usize, q1: usize, theta: f64, phi: f64) {
+        assert_ne!(q0, q1, "Qubits must be different");
+
+        let (q_min, q_max) = if q0 < q1 { (q0, q1) } else { (q1, q0) };
+        let d_max = 1 << q_max;
+        let d_min = 1 << q_min;
+
+        let c = theta.cos();
+        let s = theta.sin();
+        let phase_11 = Complex64::from_polar(1.0, -phi);
+
+        let kernel = |chunk: &mut [Complex64]| {
+            let (part0, part1) = chunk.split_at_mut(d_max);
+            part0
+                .chunks_exact_mut(2 * d_min)
+                .zip(part1.chunks_exact_mut(2 * d_min))
+                .for_each(|(sub0, sub1)| {
+                    let (_, v01) = sub0.split_at_mut(d_min);
+                    let (v10, v11) = sub1.split_at_mut(d_min);
+
+                    // |11⟩ gets phase
+                    v11.iter_mut().for_each(|d| *d *= phase_11);
+
+                    // |01⟩ and |10⟩ get mixed
+                    for (b, c_amp) in v01.iter_mut().zip(v10.iter_mut()) {
+                        let b_in = *b;
+                        let c_in = *c_amp;
+                        *b = c * b_in + Complex64::new(0.0, -s) * c_in;
+                        *c_amp = Complex64::new(0.0, -s) * b_in + c * c_in;
+                    }
+                });
+        };
+        with_maybe_par!(self.num_qubits, self.data, 2 * d_max, kernel);
+    }
+
+    /// Applies global phase.
+    ///
+    /// Multiplies the entire statevector by e^(iφ).
+    /// Physically undetectable but mathematically relevant for circuit composition.
+    ///
+    /// # Arguments
+    /// * `phi` - Phase angle
+    pub fn apply_gphase(&mut self, phi: f64) {
+        if phi.abs() < 1e-15 {
+            return;
+        }
+        let phase = Complex64::from_polar(1.0, phi);
+        self.data.par_iter_mut().for_each(|a| *a *= phase);
+    }
+}
+
+#[cfg(test)]
+#[path = "./statevector_test.rs"]
+mod statevector_test;
