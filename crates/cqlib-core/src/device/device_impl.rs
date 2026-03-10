@@ -55,6 +55,27 @@ impl InstructionProp {
         self
     }
 
+    pub fn set_length(&mut self, length: f64) {
+        self.length = Some(length);
+    }
+    pub fn with_instruction(mut self, instruction: Instruction) -> Self {
+        self.instruction = instruction;
+        self
+    }
+
+    pub fn set_instruction(&mut self, instruction: Instruction) {
+        self.instruction = instruction;
+    }
+
+    pub fn with_error_rate(mut self, error_rate: f64) -> Self {
+        self.error_rate = error_rate;
+        self
+    }
+
+    pub fn set_error_rate(&mut self, error_rate: f64) {
+        self.error_rate = error_rate;
+    }
+
     /// Gets a reference to the underlying instruction.
     pub fn instruction(&self) -> &Instruction {
         &self.instruction
@@ -115,11 +136,17 @@ impl QubitProp {
         self.prob_meas0_prep1 = Some(prob);
         self
     }
+    pub fn set_prob_meas0_prep1(&mut self, prob: f64) {
+        self.prob_meas0_prep1 = Some(prob);
+    }
 
     /// Sets the probability of measuring 1 given the state was prepared in 0.
     pub fn with_prob_meas1_prep0(mut self, prob: f64) -> Self {
         self.prob_meas1_prep0 = Some(prob);
         self
+    }
+    pub fn set_prob_meas1_prep0(&mut self, prob: f64) {
+        self.prob_meas1_prep0 = Some(prob);
     }
 
     /// Sets the T1 relaxation time in microseconds.
@@ -128,10 +155,17 @@ impl QubitProp {
         self
     }
 
+    pub fn set_t1(&mut self, t1: f64) {
+        self.t1 = Some(t1);
+    }
+
     /// Sets the T2 dephasing time in microseconds.
     pub fn with_t2(mut self, t2: f64) -> Self {
         self.t2 = Some(t2);
         self
+    }
+    pub fn set_t2(&mut self, t2: f64) {
+        self.t2 = Some(t2);
     }
 
     /// Sets the qubit frequency in GHz.
@@ -140,15 +174,32 @@ impl QubitProp {
         self
     }
 
+    pub fn set_frequency(&mut self, frequency: f64) {
+        self.frequency = Some(frequency);
+    }
+
     /// Adds a native instruction to this qubit's supported instructions.
     pub fn with_native_instruction(mut self, prop: InstructionProp) -> Self {
         self.native_instructions.push(prop);
         self
     }
+    pub fn set_native_instruction(&mut self, prop: InstructionProp) {
+        self.native_instructions.push(prop);
+    }
 
     /// Gets the readout error rate.
     pub fn readout_error(&self) -> f64 {
         self.readout_error
+    }
+
+    /// Gets the probability of measuring 0 given the state was prepared in 1 (p0|1).
+    pub fn prob_meas0_prep1(&self) -> Option<f64> {
+        self.prob_meas0_prep1
+    }
+
+    /// Gets the probability of measuring 1 given the state was prepared in 0 (p1|0).
+    pub fn prob_meas1_prep0(&self) -> Option<f64> {
+        self.prob_meas1_prep0
     }
 
     /// Gets the T1 relaxation time in microseconds, if defined.
@@ -197,6 +248,10 @@ impl EdgeProp {
         self
     }
 
+    pub fn set_native_instruction(&mut self, prop: InstructionProp) {
+        self.native_instructions.push(prop);
+    }
+
     /// Gets a slice of the native instructions supported on this edge.
     pub fn native_instructions(&self) -> &[InstructionProp] {
         &self.native_instructions
@@ -226,16 +281,17 @@ impl Default for EdgeProp {
 /// # Example
 ///
 /// ```rust
+/// use std::collections::HashSet;
 /// use cqlib_core::circuit::Qubit;
 /// use cqlib_core::device::{Device, Topology, QubitProp};
 ///
 /// // Create a 2-qubit topology
 /// let q0 = Qubit::new(0);
 /// let q1 = Qubit::new(1);
-/// let topo = Topology::new(vec![q0, q1], vec![(q0, q1, "cx".to_string())]);
+/// let topo = Topology::new(vec![q0, q1], vec![(q0, q1, "G1".to_string())]).unwrap();
 ///
 /// // Initialize a device with defaults
-/// let mut device = Device::new("mock_device".to_string(), topo)
+/// let mut device = Device::new("mock_device", HashSet::from_iter([q0, q1]), topo).unwrap()
 ///     .with_default_t1(50.0)
 ///     .with_default_t2(25.0)
 ///     .with_default_readout_error(0.01);
@@ -281,10 +337,20 @@ pub struct Device {
 
 impl Device {
     /// Creates a new `Device` with the specified name and topology.
-    pub fn new(name: String, topology: Topology) -> Self {
-        Self {
-            name,
-            qubits: topology.qubits().collect(),
+    pub fn new(
+        name: impl Into<String>,
+        qubits: HashSet<Qubit>,
+        topology: Topology,
+    ) -> Result<Self, DeviceError> {
+        for q in topology.qubits() {
+            if !qubits.contains(&q) {
+                return Err(DeviceError::InvalidOnlineQubit(q));
+            }
+        }
+
+        Ok(Self {
+            name: name.into(),
+            qubits,
             invalid_qubits: HashSet::new(),
             topology,
             native_gates: Vec::new(),
@@ -296,7 +362,16 @@ impl Device {
             default_two_qubit_error: None,
             qubit_properties: HashMap::new(),
             edge_properties: HashMap::new(),
-        }
+        })
+    }
+
+    pub fn with_invalid_qubits(mut self, invalid_qubits: HashSet<Qubit>) -> Self {
+        self.invalid_qubits = invalid_qubits;
+        self
+    }
+
+    pub fn set_invalid_qubits(&mut self, invalid_qubits: HashSet<Qubit>) {
+        self.invalid_qubits = invalid_qubits;
     }
 
     /// Sets the device-wide native gates.
@@ -305,10 +380,18 @@ impl Device {
         self
     }
 
+    pub fn set_native_gates(&mut self, gates: Vec<Instruction>) {
+        self.native_gates = gates;
+    }
+
     /// Sets the system calibration timestamp.
     pub fn with_calibration_time(mut self, time: OffsetDateTime) -> Self {
         self.calibration_time = Some(time);
         self
+    }
+
+    pub fn set_calibration_time(&mut self, time: OffsetDateTime) {
+        self.calibration_time = Some(time);
     }
 
     /// Sets the default T1 time (μs).
@@ -317,10 +400,18 @@ impl Device {
         self
     }
 
+    pub fn set_default_t1(&mut self, t1: f64) {
+        self.default_t1 = Some(t1);
+    }
+
     /// Sets the default T2 time (μs).
     pub fn with_default_t2(mut self, t2: f64) -> Self {
         self.default_t2 = Some(t2);
         self
+    }
+
+    pub fn set_default_t2(&mut self, t2: f64) {
+        self.default_t2 = Some(t2);
     }
 
     /// Sets the default readout error rate.
@@ -329,16 +420,28 @@ impl Device {
         self
     }
 
+    pub fn set_default_readout_error(&mut self, error: f64) {
+        self.default_readout_error = Some(error);
+    }
+
     /// Sets the default single-qubit gate error rate.
     pub fn with_default_single_qubit_error(mut self, error: f64) -> Self {
         self.default_single_qubit_error = Some(error);
         self
     }
 
+    pub fn set_default_single_qubit_error(&mut self, error: f64) {
+        self.default_single_qubit_error = Some(error);
+    }
+
     /// Sets the default two-qubit gate error rate.
     pub fn with_default_two_qubit_error(mut self, error: f64) -> Self {
         self.default_two_qubit_error = Some(error);
         self
+    }
+
+    pub fn set_default_two_qubit_error(&mut self, error: f64) {
+        self.default_two_qubit_error = Some(error);
     }
 
     /// Adds properties for a specific qubit.
@@ -351,7 +454,7 @@ impl Device {
         qubit: Qubit,
         props: QubitProp,
     ) -> Result<(), DeviceError> {
-        if !(self.qubits.contains(&qubit) || self.invalid_qubits.contains(&qubit)) {
+        if !self.qubits.contains(&qubit) || self.invalid_qubits.contains(&qubit) {
             return Err(DeviceError::QubitNotInTopology(qubit));
         }
         self.qubit_properties.insert(qubit, props);
@@ -449,6 +552,11 @@ impl Device {
     /// Gets the default two-qubit gate error rate.
     pub fn default_two_qubit_error(&self) -> Option<f64> {
         self.default_two_qubit_error
+    }
+
+    /// Gets the system calibration timestamp.
+    pub fn calibration_time(&self) -> Option<OffsetDateTime> {
+        self.calibration_time
     }
 }
 

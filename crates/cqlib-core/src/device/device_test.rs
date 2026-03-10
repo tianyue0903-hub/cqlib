@@ -63,12 +63,17 @@ fn test_device_creation_and_defaults() {
     let q1 = Qubit::new(1);
     let topo = Topology::new(vec![q0, q1], vec![(q0, q1, "cx".to_string())]);
 
-    let mut device = Device::new("test_device".to_string(), topo)
-        .with_default_t1(40.0)
-        .with_default_t2(20.0)
-        .with_default_readout_error(0.03)
-        .with_default_single_qubit_error(0.001)
-        .with_default_two_qubit_error(0.01);
+    let mut device = Device::new(
+        "test_device".to_string(),
+        HashSet::from_iter([q0, q1]),
+        topo.unwrap(),
+    )
+    .unwrap()
+    .with_default_t1(40.0)
+    .with_default_t2(20.0)
+    .with_default_readout_error(0.03)
+    .with_default_single_qubit_error(0.001)
+    .with_default_two_qubit_error(0.01);
 
     assert_eq!(device.name(), "test_device");
     assert_eq!(device.default_single_qubit_error(), Some(0.001));
@@ -96,13 +101,18 @@ fn test_device_errors() {
     let q0 = Qubit::new(0);
     let q1 = Qubit::new(1);
     let q2 = Qubit::new(2); // Not in topology
-    let topo = Topology::new(vec![q0, q1], vec![(q0, q1, "cx".to_string())]);
+    let topo = Topology::new(vec![q0, q1], vec![(q0, q1, "0-1".to_string())]);
 
-    let mut device = Device::new("test_device".to_string(), topo);
+    let mut device = Device::new(
+        "test_device".to_string(),
+        HashSet::from_iter([q0, q1]),
+        topo.unwrap(),
+    )
+    .unwrap();
 
     let prop = QubitProp::new(0.05);
-    let err = device.add_qubit_properties(q2, prop).unwrap_err();
-    assert_eq!(err, DeviceError::QubitNotInTopology(q2));
+    let err = device.add_qubit_properties(q2, prop);
+    assert_eq!(err.unwrap_err(), DeviceError::QubitNotInTopology(q2));
 
     let edge_prop = EdgeProp::new();
     let err = device.add_edge_properties(q1, q0, edge_prop).unwrap_err();
