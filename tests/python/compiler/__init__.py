@@ -12,7 +12,7 @@
 
 import random
 from cqlib.circuit import Circuit
-from cqlib.compiler import Topology
+from cqlib.device import Topology
 import time
 
 
