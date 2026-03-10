@@ -14,6 +14,7 @@ pub mod circuit;
 pub mod compile;
 pub mod device;
 pub mod ir;
+pub mod qis;
 
 use pyo3::prelude::*;
 
@@ -23,7 +24,7 @@ use crate::circuit::gate::{
 };
 use circuit::circuit_to_matrix;
 use circuit::{PyCircuit, PyInstruction, PyOperation, PyParameter, PyQubit};
-use compile::{PySabreConfig, PyTopology};
+use compile::PySabreConfig;
 
 /// A Python module implemented in Rust.
 #[pymodule]
@@ -38,7 +39,6 @@ fn binding_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyCircuitGate>()?;
     m.add_class::<PyOperation>()?;
     m.add_class::<PyInstruction>()?;
-    m.add_class::<PyTopology>()?;
     m.add_class::<PySabreConfig>()?;
     m.add_class::<PyControlFlow>()?;
     m.add_class::<PyIfElseGate>()?;
@@ -50,6 +50,7 @@ fn binding_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Register IR module with qasm2 and qcis submodules
     ir::register_ir_module(m)?;
     device::register_device_module(m)?;
+    qis::register_qis_module(m)?;
     m.add_function(wrap_pyfunction!(
         circuit_to_matrix::py_circuit_to_matrix,
         m

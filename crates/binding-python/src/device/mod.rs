@@ -10,34 +10,101 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
-//! Python bindings for cqlib-core device module.
+//! Python bindings for the quantum device module.
+//!
+//! This module provides Python access to quantum hardware characterization data,
+//! including device topology, qubit properties, noise models, and execution results.
+//!
+//! # Submodules
+//!
+//! - [`device_impl`]: Device definitions and hardware properties ([`PyDevice`], [`PyQubitProp`], etc.)
+//! - [`topology`]: Qubit connectivity graphs ([`PyTopology`])
+//! - [`layout`]: Virtual-to-physical qubit mappings ([`PyLayout`])
+//! - [`noise`]: Noise models for quantum operations ([`PyNoiseModel`], [`PySingleQubitNoise`], etc.)
+//! - [`result`]: Execution results and measurement outcomes ([`PyExecutionResult`], [`PyOutcome`])
+//!
+//! # Example
+//!
+//! ```python
+//! from cqlib.device import Device, Topology, QubitProp
+//!
+//! # Create a device topology
+//! topology = Topology([0, 1, 2], [(0, 1, "CX"), (1, 2, "CX")])
+//!
+//! # Initialize a device with calibration data
+//! device = Device("superconducting_qpu", [0, 1, 2], topology)
+//! device.calibration_time = datetime.now(timezone.utc)
+//!
+//! # Set qubit properties
+//! prop = QubitProp(readout_error=0.01)
+//! prop.t1 = 50.0  # microseconds
+//! prop.t2 = 25.0
+//! device.add_qubit_properties(0, prop)
+//! ```
 
 use pyo3::prelude::*;
 
-pub mod common;
 pub mod device_impl;
+pub mod layout;
 pub mod noise;
 pub mod result;
+pub mod topology;
 
-/// Register the device submodule.
+/// Registers all device-related classes with the Python module.
+///
+/// This function adds the following classes to the `cqlib.device` submodule:
+/// - [`PyInstructionProp`]: Gate calibration data (error rates, duration)
+/// - [`PyQubitProp`]: Single-qubit properties (T1, T2, readout error)
+/// - [`PyEdgeProp`]: Coupling edge properties
+/// - [`PyDevice`]: Complete device characterization
+/// - [`PyLayout`]: Virtual-to-physical qubit mapping
+/// - [`PyTopology`]: Qubit connectivity graph
+/// - [`PySingleQubitNoise`]: Single-qubit noise channels
+/// - [`PyTwoQubitNoise`]: Two-qubit noise channels
+/// - [`PyReadoutError`]: Measurement error probabilities
+/// - [`PyOperationKey`]: Noise model lookup keys
+/// - [`PyNoiseModel`]: Complete noise model
+/// - [`PyOutcome`]: Measurement outcome bitstrings
+/// - [`PyStatus`]: Job execution status
+/// - [`PyExecutionResult`]: Full execution results
+///
+/// # Errors
+///
+/// Returns `PyResult::Err` if any class registration fails (e.g., due to
+/// naming conflicts or Python interpreter issues).
+///
+/// # Example
+///
+/// ```rust,no_run
+/// use pyo3::prelude::*;
+/// use binding_python::device::register_device_module;
+///
+/// Python::with_gil(|py| {
+///     let module = PyModule::new(py, "cqlib").unwrap();
+///     register_device_module(&module).unwrap();
+/// });
+/// ```
 pub fn register_device_module(parent: &Bound<'_, PyModule>) -> PyResult<()> {
     let device_module = PyModule::new(parent.py(), "device")?;
 
-    // Re-export compiler Topology type so users can construct Device directly from cqlib.device.
-    if let Ok(topology_type) = parent.getattr("Topology") {
-        device_module.add("Topology", topology_type)?;
-    }
-
+    // Hardware characterization classes
     device_module.add_class::<device_impl::PyInstructionProp>()?;
     device_module.add_class::<device_impl::PyQubitProp>()?;
     device_module.add_class::<device_impl::PyEdgeProp>()?;
     device_module.add_class::<device_impl::PyDevice>()?;
-    device_module.add_class::<device_impl::PyLayout>()?;
+
+    // Topology and layout classes
+    device_module.add_class::<layout::PyLayout>()?;
+    device_module.add_class::<topology::PyTopology>()?;
+
+    // Noise model classes
     device_module.add_class::<noise::PySingleQubitNoise>()?;
     device_module.add_class::<noise::PyTwoQubitNoise>()?;
     device_module.add_class::<noise::PyReadoutError>()?;
     device_module.add_class::<noise::PyOperationKey>()?;
     device_module.add_class::<noise::PyNoiseModel>()?;
+
+    // Execution result classes
     device_module.add_class::<result::PyOutcome>()?;
     device_module.add_class::<result::PyStatus>()?;
     device_module.add_class::<result::PyExecutionResult>()?;

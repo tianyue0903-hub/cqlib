@@ -10,8 +10,48 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
-use super::common::{parse_pauli, pauli_to_name, py_id_to_qubit};
+//! Python bindings for quantum noise models.
+//!
+//! This module provides types for modeling quantum noise in simulations and
+//! error-aware compilation. It includes representations for:
+//!
+//! - **Single-qubit noise channels**: Bit-flip, phase-flip, depolarizing, etc.
+//! - **Two-qubit noise channels**: Depolarizing, correlated Pauli errors
+//! - **Readout errors**: Asymmetric measurement errors
+//! - **Noise models**: Complete device noise characterization
+//!
+//! # Noise Channels
+//!
+//! Each noise channel can be converted to its Kraus operator representation
+//! via `to_kraus()`, which returns a list of NumPy arrays suitable for
+//! density matrix simulations.
+//!
+//! # Example
+//!
+//! ```python
+//! from cqlib.device import NoiseModel, SingleQubitNoise, TwoQubitNoise, ReadoutError
+//! from cqlib.circuit import StandardGate
+//!
+//! # Create a noise model
+//! model = NoiseModel()
+//!
+//! # Add single-qubit depolarizing noise to H gates on qubit 0
+//! noise = SingleQubitNoise.depolarizing(p=0.001)
+//! model.add_single_qubit_error(StandardGate.H, 0, noise)
+//!
+//! # Add two-qubit depolarizing noise to CX gates
+//! cx_noise = TwoQubitNoise.depolarizing(p=0.005)
+//! model.add_two_qubit_error(StandardGate.CX, 0, 1, cx_noise)
+//!
+//! # Add readout error
+//! readout = ReadoutError(p_0_given_1=0.02, p_1_given_0=0.01)
+//! model.add_readout_error(0, readout)
+//! ```
+
 use crate::circuit::PyStandardGate;
+use crate::circuit::bit::PyIntOrQubit;
+use crate::qis::pauli::PyPauli;
+use cqlib_core::circuit::Parameter;
 use cqlib_core::device::{NoiseModel, OperationKey, ReadoutError, SingleQubitNoise, TwoQubitNoise};
 use num_complex::Complex64;
 use numpy::{PyArray2, ToPyArray};
@@ -20,6 +60,36 @@ use pyo3::prelude::*;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
+/// Single-qubit quantum noise channel.
+///
+/// Represents various types of single-qubit noise that can occur in quantum
+/// systems, including bit-flip, phase-flip, depolarizing, and amplitude/phase
+/// damping channels.
+///
+/// # Noise Types
+///
+/// - **Bit-flip**: Flips |0⟩ ↔ |1⟩ with probability p
+/// - **Phase-flip**: Applies Z with probability p
+/// - **Pauli**: General Pauli noise with independent X, Y, Z probabilities
+/// - **Depolarizing**: Uniform mixture of all Pauli errors
+/// - **Amplitude damping**: Energy relaxation (T1) process
+/// - **Phase damping**: Pure dephasing (T2) process
+///
+/// # Example
+///
+/// ```python
+/// from cqlib.device import SingleQubitNoise
+/// import numpy as np
+///
+/// # Create depolarizing noise with 0.1% error probability
+/// noise = SingleQubitNoise.depolarizing(p=0.001)
+///
+/// # Get Kraus operators for simulation
+/// kraus_ops = noise.to_kraus()  # List of 2x2 NumPy arrays
+///
+/// # Validate noise parameters
+/// assert noise.is_valid()  # True if probabilities are in [0, 1]
+/// ```
 #[pyclass(name = "SingleQubitNoise", module = "cqlib.device")]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PySingleQubitNoise {
@@ -40,6 +110,13 @@ impl From<PySingleQubitNoise> for SingleQubitNoise {
 
 #[pymethods]
 impl PySingleQubitNoise {
+    /// Creates a bit-flip noise channel.
+    ///
+    /// Kraus operators: E₀ = √(1-p) I, E₁ = √p X
+    ///
+    /// # Arguments
+    ///
+    /// * `p` - Bit-flip probability in range [0.0, 1.0]
     #[staticmethod]
     fn bit_flip(p: f64) -> Self {
         Self {
@@ -47,6 +124,13 @@ impl PySingleQubitNoise {
         }
     }
 
+    /// Creates a phase-flip noise channel.
+    ///
+    /// Kraus operators: E₀ = √(1-p) I, E₁ = √p Z
+    ///
+    /// # Arguments
+    ///
+    /// * `p` - Phase-flip probability in range [0.0, 1.0]
     #[staticmethod]
     fn phase_flip(p: f64) -> Self {
         Self {
@@ -54,6 +138,19 @@ impl PySingleQubitNoise {
         }
     }
 
+    /// Creates a general Pauli noise channel.
+    ///
+    /// Kraus operators include √(1-px-py-pz) I, √px X, √py Y, √pz Z.
+    ///
+    /// # Arguments
+    ///
+    /// * `px` - Probability of X error
+    /// * `py` - Probability of Y error
+    /// * `pz` - Probability of Z error
+    ///
+    /// # Constraints
+    ///
+    /// Must satisfy px + py + pz ≤ 1.0
     #[staticmethod]
     fn pauli(px: f64, py: f64, pz: f64) -> Self {
         Self {
@@ -61,6 +158,14 @@ impl PySingleQubitNoise {
         }
     }
 
+    /// Creates a depolarizing noise channel.
+    ///
+    /// With probability p, applies a random Pauli error (X, Y, or Z).
+    /// Each Pauli occurs with probability p/3.
+    ///
+    /// # Arguments
+    ///
+    /// * `p` - Total depolarization probability in range [0.0, 1.0]
     #[staticmethod]
     fn depolarizing(p: f64) -> Self {
         Self {
@@ -68,6 +173,17 @@ impl PySingleQubitNoise {
         }
     }
 
+    /// Creates an amplitude damping channel.
+    ///
+    /// Models energy relaxation (T1) where excited states decay to ground state.
+    ///
+    /// # Arguments
+    ///
+    /// * `gamma` - Damping parameter in range [0.0, 1.0]
+    ///
+    /// # Physical Interpretation
+    ///
+    /// After time t, γ = 1 - exp(-t/T1). For small t/T1, γ ≈ t/T1.
     #[staticmethod]
     fn amplitude_damping(gamma: f64) -> Self {
         Self {
@@ -75,6 +191,17 @@ impl PySingleQubitNoise {
         }
     }
 
+    /// Creates a phase damping channel.
+    ///
+    /// Models pure dephasing (T2) without energy relaxation.
+    ///
+    /// # Arguments
+    ///
+    /// * `lambda_` - Phase damping parameter in range [0.0, 1.0]
+    ///
+    /// # Physical Interpretation
+    ///
+    /// After time t, λ = 1 - exp(-t/T2). For small t/T2, λ ≈ t/T2.
     #[staticmethod]
     fn phase_damping(lambda_: f64) -> Self {
         Self {
@@ -82,28 +209,26 @@ impl PySingleQubitNoise {
         }
     }
 
+    /// Validates that noise parameters are physically valid.
+    ///
+    /// Returns `True` if all probabilities are in valid ranges:
+    /// - Individual probabilities in [0.0, 1.0]
+    /// - For Pauli noise: px + py + pz ≤ 1.0
     fn is_valid(&self) -> bool {
         self.inner.is_valid()
     }
 
+    /// Returns the Kraus operators as NumPy arrays.
+    ///
+    /// # Returns
+    ///
+    /// List of 2x2 complex NumPy arrays representing the Kraus operators.
     fn to_kraus<'py>(&self, py: Python<'py>) -> Vec<Bound<'py, PyArray2<Complex64>>> {
         self.inner
             .to_kraus()
             .into_iter()
             .map(|k| k.to_pyarray(py))
             .collect()
-    }
-
-    #[getter]
-    fn kind(&self) -> &'static str {
-        match self.inner {
-            SingleQubitNoise::BitFlip(_) => "bit_flip",
-            SingleQubitNoise::PhaseFlip(_) => "phase_flip",
-            SingleQubitNoise::Pauli { .. } => "pauli",
-            SingleQubitNoise::Depolarizing(_) => "depolarizing",
-            SingleQubitNoise::AmplitudeDamping(_) => "amplitude_damping",
-            SingleQubitNoise::PhaseDamping(_) => "phase_damping",
-        }
     }
 
     fn __repr__(&self) -> String {
@@ -124,6 +249,30 @@ impl PySingleQubitNoise {
     }
 }
 
+/// Two-qubit quantum noise channel.
+///
+/// Represents noise affecting pairs of qubits, including depolarizing noise
+/// and correlated Pauli errors.
+///
+/// # Noise Types
+///
+/// - **Depolarizing**: Uniform mixture of all 15 non-identity Pauli operators
+/// - **Independent**: Tensor product of single-qubit noise channels
+/// - **Correlated Pauli**: Correlated error on both qubits (e.g., XX, ZZ)
+///
+/// # Example
+///
+/// ```python
+/// from cqlib.device import SingleQubitNoise, TwoQubitNoise
+///
+/// # Depolarizing noise with 1% total error probability
+/// noise = TwoQubitNoise.depolarizing(p=0.01)
+///
+/// # Independent noise on each qubit
+/// q0_noise = SingleQubitNoise.depolarizing(0.001)
+/// q1_noise = SingleQubitNoise.depolarizing(0.001)
+/// independent = TwoQubitNoise.independent(q0_noise, q1_noise)
+/// ```
 #[pyclass(name = "TwoQubitNoise", module = "cqlib.device")]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PyTwoQubitNoise {
@@ -144,6 +293,14 @@ impl From<PyTwoQubitNoise> for TwoQubitNoise {
 
 #[pymethods]
 impl PyTwoQubitNoise {
+    /// Creates a two-qubit depolarizing noise channel.
+    ///
+    /// With probability p, applies a random Pauli error from the 15 non-identity
+    /// Pauli operators (IX, IY, IZ, XI, XX, XY, ..., ZZ).
+    ///
+    /// # Arguments
+    ///
+    /// * `p` - Total depolarization probability in range [0.0, 1.0]
     #[staticmethod]
     fn depolarizing(p: f64) -> Self {
         Self {
@@ -151,6 +308,15 @@ impl PyTwoQubitNoise {
         }
     }
 
+    /// Creates independent single-qubit noise on both qubits.
+    ///
+    /// The resulting channel is E = E₀ ⊗ E₁ where E₀ and E₁ are the
+    /// single-qubit noise channels.
+    ///
+    /// # Arguments
+    ///
+    /// * `q0_noise` - Noise channel for the first qubit
+    /// * `q1_noise` - Noise channel for the second qubit
     #[staticmethod]
     fn independent(q0_noise: PySingleQubitNoise, q1_noise: PySingleQubitNoise) -> Self {
         Self {
@@ -161,21 +327,36 @@ impl PyTwoQubitNoise {
         }
     }
 
+    /// Creates correlated Pauli noise.
+    ///
+    /// With probability p, applies the specified Pauli operators to both qubits.
+    ///
+    /// # Arguments
+    ///
+    /// * `op_q0` - Pauli operator for first qubit (from `cqlib.qis.Pauli`)
+    /// * `op_q1` - Pauli operator for second qubit
+    /// * `p` - Correlation probability in range [0.0, 1.0]
     #[staticmethod]
-    fn correlated_pauli(op_q0: String, op_q1: String, p: f64) -> PyResult<Self> {
+    fn correlated_pauli(op_q0: PyPauli, op_q1: PyPauli, p: f64) -> PyResult<Self> {
         Ok(Self {
             inner: TwoQubitNoise::CorrelatedPauli {
-                op_q0: parse_pauli(&op_q0)?,
-                op_q1: parse_pauli(&op_q1)?,
+                op_q0: op_q0.inner,
+                op_q1: op_q1.inner,
                 p,
             },
         })
     }
 
+    /// Validates that noise parameters are physically valid.
     fn is_valid(&self) -> bool {
         self.inner.is_valid()
     }
 
+    /// Returns the Kraus operators as NumPy arrays.
+    ///
+    /// # Returns
+    ///
+    /// List of 4x4 complex NumPy arrays representing the Kraus operators.
     fn to_kraus<'py>(&self, py: Python<'py>) -> Vec<Bound<'py, PyArray2<Complex64>>> {
         self.inner
             .to_kraus()
@@ -184,6 +365,7 @@ impl PyTwoQubitNoise {
             .collect()
     }
 
+    /// Returns the noise channel type.
     #[getter]
     fn kind(&self) -> &'static str {
         match self.inner {
@@ -203,14 +385,36 @@ impl PyTwoQubitNoise {
             ),
             TwoQubitNoise::CorrelatedPauli { op_q0, op_q1, p } => format!(
                 "TwoQubitNoise.correlated_pauli('{}', '{}', {})",
-                pauli_to_name(op_q0),
-                pauli_to_name(op_q1),
-                p
+                op_q0, op_q1, p
             ),
         }
     }
 }
 
+/// Asymmetric readout error model.
+///
+/// Represents measurement errors where the probabilities of false 0 and false 1
+/// may differ. This is common in superconducting qubits where |1⟩ has higher
+/// readout error than |0⟩.
+///
+/// # State Discrimination
+///
+/// - `p_0_given_1`: Probability of measuring 0 when state was |1⟩ (false negative)
+/// - `p_1_given_0`: Probability of measuring 1 when state was |0⟩ (false positive)
+///
+/// # Example
+///
+/// ```python
+/// from cqlib.device import ReadoutError
+///
+/// # Typical superconducting qubit readout errors
+/// error = ReadoutError(
+///     p_0_given_1=0.02,  # 2% false negative
+///     p_1_given_0=0.01   # 1% false positive
+/// )
+///
+/// assert error.is_valid()  # Both probabilities in [0, 1]
+/// ```
 #[pyclass(name = "ReadoutError", module = "cqlib.device")]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PyReadoutError {
@@ -231,6 +435,16 @@ impl From<PyReadoutError> for ReadoutError {
 
 #[pymethods]
 impl PyReadoutError {
+    /// Creates a new readout error model.
+    ///
+    /// # Arguments
+    ///
+    /// * `p_0_given_1` - Probability of measuring 0 given state was prepared in 1
+    /// * `p_1_given_0` - Probability of measuring 1 given state was prepared in 0
+    ///
+    /// # Constraints
+    ///
+    /// Both probabilities must be in range [0.0, 1.0].
     #[new]
     fn new(p_0_given_1: f64, p_1_given_0: f64) -> Self {
         Self {
@@ -241,16 +455,21 @@ impl PyReadoutError {
         }
     }
 
+    /// Returns P(meas 0 | prep 1), the false-negative probability.
     #[getter]
     fn p_0_given_1(&self) -> f64 {
         self.inner.p_0_given_1
     }
 
+    /// Returns P(meas 1 | prep 0), the false-positive probability.
     #[getter]
     fn p_1_given_0(&self) -> f64 {
         self.inner.p_1_given_0
     }
 
+    /// Validates that error probabilities are valid.
+    ///
+    /// Returns `True` if both probabilities are in [0.0, 1.0].
     fn is_valid(&self) -> bool {
         self.inner.is_valid()
     }
@@ -264,6 +483,27 @@ impl PyReadoutError {
     }
 }
 
+/// Key for looking up noise parameters in a noise model.
+///
+/// Uniquely identifies a gate operation on specific qubits for noise lookup.
+/// The key includes the gate type and qubit indices but not gate parameters.
+///
+/// # Example
+///
+/// ```python
+/// from cqlib.device import OperationKey
+/// from cqlib.circuit import StandardGate
+///
+/// # Key for H gate on qubit 0
+/// key = OperationKey.new_single(StandardGate.H, 0)
+///
+/// # Key for CX gate on qubits 0 (control) and 1 (target)
+/// key = OperationKey.new_double(StandardGate.CX, 0, 1)
+///
+/// # Get gate and qubits
+/// print(key.gate)    # StandardGate.H
+/// print(key.qubits)  # [0]
+/// ```
 #[pyclass(name = "OperationKey", module = "cqlib.device")]
 #[derive(Clone, Debug)]
 pub struct PyOperationKey {
@@ -284,40 +524,85 @@ impl From<PyOperationKey> for OperationKey {
 
 #[pymethods]
 impl PyOperationKey {
+    /// Creates a key for a single-qubit operation.
+    ///
+    /// # Arguments
+    ///
+    /// * `gate` - The quantum gate
+    /// * `q0` - The target qubit
     #[staticmethod]
-    fn new_single(gate: PyStandardGate, q0: usize) -> PyResult<Self> {
+    fn new_single(gate: PyStandardGate, q0: PyIntOrQubit) -> PyResult<Self> {
         Ok(Self {
-            inner: OperationKey::new_single(gate.inner, py_id_to_qubit(q0)?),
+            inner: OperationKey::new_single(gate.inner, q0.into()),
         })
     }
 
+    /// Creates a key for a two-qubit operation.
+    ///
+    /// # Arguments
+    ///
+    /// * `gate` - The quantum gate
+    /// * `q0` - First qubit (typically control)
+    /// * `q1` - Second qubit (typically target)
+    ///
+    /// # Errors
+    ///
+    /// Raises `ValueError` if q0 and q1 are the same qubit.
     #[staticmethod]
-    fn new_double(gate: PyStandardGate, q0: usize, q1: usize) -> PyResult<Self> {
-        let q0 = py_id_to_qubit(q0)?;
-        let q1 = py_id_to_qubit(q1)?;
+    fn new_double(gate: PyStandardGate, q0: PyIntOrQubit, q1: PyIntOrQubit) -> PyResult<Self> {
+        let q0 = q0.into();
+        let q1 = q1.into();
         let inner = OperationKey::new_double(gate.inner, q0, q1)
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
         Ok(Self { inner })
     }
 
+    /// Creates a key for a three-qubit operation.
+    ///
+    /// # Arguments
+    ///
+    /// * `gate` - The quantum gate
+    /// * `q0` - First qubit
+    /// * `q1` - Second qubit
+    /// * `q2` - Third qubit
+    ///
+    /// # Errors
+    ///
+    /// Raises `ValueError` if any qubits are duplicated.
     #[staticmethod]
-    fn new_triple(gate: PyStandardGate, q0: usize, q1: usize, q2: usize) -> PyResult<Self> {
-        let q0 = py_id_to_qubit(q0)?;
-        let q1 = py_id_to_qubit(q1)?;
-        let q2 = py_id_to_qubit(q2)?;
-        let inner = OperationKey::new_triple(gate.inner, q0, q1, q2)
+    fn new_triple(
+        gate: PyStandardGate,
+        q0: PyIntOrQubit,
+        q1: PyIntOrQubit,
+        q2: PyIntOrQubit,
+    ) -> PyResult<Self> {
+        let inner = OperationKey::new_triple(gate.inner, q0.into(), q1.into(), q2.into())
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
         Ok(Self { inner })
     }
 
+    /// Returns the qubit indices involved in this operation.
     #[getter]
     fn qubits(&self) -> Vec<usize> {
         self.inner.qubits().to_vec()
     }
 
+    /// Returns the gate type.
+    ///
+    /// Note: For parametric gates (e.g., RX, U), the returned gate has
+    /// zero parameters since OperationKey only stores the gate type.
     #[getter]
     fn gate(&self) -> PyStandardGate {
-        PyStandardGate::from(*self.inner.gate(), Vec::new())
+        let gate = *self.inner.gate();
+        // Fill with zeros for parametric gates (e.g., RX, RY, RZ, U)
+        // This is necessary because OperationKey only stores gate type, not parameters.
+        let num_params = gate.num_params();
+        let params = if num_params > 0 {
+            vec![Parameter::from(0.0); num_params]
+        } else {
+            Vec::new()
+        };
+        PyStandardGate::from(gate, params)
     }
 
     fn __eq__(&self, other: &Bound<'_, PyAny>) -> PyResult<bool> {
@@ -343,6 +628,35 @@ impl PyOperationKey {
     }
 }
 
+/// Complete noise model for a quantum device.
+///
+/// Aggregates all noise sources: readout errors, single-qubit gate errors,
+/// and two-qubit gate errors. Used by noise-aware compilers and simulators.
+///
+/// # Example
+///
+/// ```python
+/// from cqlib.device import NoiseModel, SingleQubitNoise, TwoQubitNoise
+/// from cqlib.circuit import StandardGate
+///
+/// model = NoiseModel()
+///
+/// # Add noise to all H gates on qubit 0
+/// model.add_single_qubit_error(
+///     StandardGate.H, 0,
+///     SingleQubitNoise.depolarizing(0.001)
+/// )
+///
+/// # Add noise to CX gates between qubits 0 and 1
+/// model.add_two_qubit_error(
+///     StandardGate.CX, 0, 1,
+///     TwoQubitNoise.depolarizing(0.01)
+/// )
+///
+/// # Retrieve errors
+/// key = OperationKey.new_single(StandardGate.H, 0)
+/// errors = model.get_single_qubit_errors(key)
+/// ```
 #[pyclass(name = "NoiseModel", module = "cqlib.device")]
 #[derive(Clone, Debug, Default)]
 pub struct PyNoiseModel {
@@ -363,6 +677,7 @@ impl From<PyNoiseModel> for NoiseModel {
 
 #[pymethods]
 impl PyNoiseModel {
+    /// Creates an empty noise model.
     #[new]
     fn new() -> Self {
         Self {
@@ -370,48 +685,83 @@ impl PyNoiseModel {
         }
     }
 
-    fn add_readout_error(&mut self, qubit: usize, error: PyReadoutError) -> PyResult<()> {
+    /// Adds a readout error for a specific qubit.
+    ///
+    /// # Arguments
+    ///
+    /// * `qubit` - The qubit index
+    /// * `error` - The readout error model
+    ///
+    /// # Errors
+    ///
+    /// Raises `ValueError` if the error probabilities are invalid.
+    fn add_readout_error(&mut self, qubit: PyIntOrQubit, error: PyReadoutError) -> PyResult<()> {
         self.inner
-            .add_readout_error(py_id_to_qubit(qubit)?, error.inner)
+            .add_readout_error(qubit.into(), error.inner)
             .map_err(PyValueError::new_err)
     }
 
+    /// Adds single-qubit noise to a gate on a specific qubit.
+    ///
+    /// Multiple noise channels can be added to the same gate/qubit pair.
+    ///
+    /// # Arguments
+    ///
+    /// * `gate` - The quantum gate
+    /// * `qubit` - The target qubit
+    /// * `noise` - The noise channel
+    ///
+    /// # Errors
+    ///
+    /// Raises `ValueError` if the noise parameters are invalid.
     fn add_single_qubit_error(
         &mut self,
         gate: PyStandardGate,
-        qubit: usize,
+        qubit: PyIntOrQubit,
         noise: PySingleQubitNoise,
     ) -> PyResult<()> {
         self.inner
-            .add_single_qubit_error(gate.inner, py_id_to_qubit(qubit)?, noise.inner)
+            .add_single_qubit_error(gate.inner, qubit.into(), noise.inner)
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
+    /// Adds two-qubit noise to a gate on specific qubits.
+    ///
+    /// # Arguments
+    ///
+    /// * `gate` - The quantum gate
+    /// * `q0` - First qubit (typically control)
+    /// * `q1` - Second qubit (typically target)
+    /// * `noise` - The noise channel
+    ///
+    /// # Errors
+    ///
+    /// Raises `ValueError` if the noise parameters are invalid or if q0 == q1.
     fn add_two_qubit_error(
         &mut self,
         gate: PyStandardGate,
-        q0: usize,
-        q1: usize,
+        q0: PyIntOrQubit,
+        q1: PyIntOrQubit,
         noise: PyTwoQubitNoise,
     ) -> PyResult<()> {
         self.inner
-            .add_two_qubit_error(
-                gate.inner,
-                py_id_to_qubit(q0)?,
-                py_id_to_qubit(q1)?,
-                noise.inner,
-            )
+            .add_two_qubit_error(gate.inner, q0.into(), q1.into(), noise.inner)
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
-    fn get_readout_error(&self, qubit: usize) -> PyResult<Option<PyReadoutError>> {
+    /// Returns the readout error for a qubit, if any.
+    fn get_readout_error(&self, qubit: PyIntOrQubit) -> PyResult<Option<PyReadoutError>> {
         Ok(self
             .inner
-            .get_readout_error(&py_id_to_qubit(qubit)?)
+            .get_readout_error(&qubit.into())
             .copied()
             .map(PyReadoutError::from))
     }
 
+    /// Returns all single-qubit noise channels for an operation.
+    ///
+    /// Returns a list of noise channels (typically just one, but multiple
+    /// can be added to the same operation).
     fn get_single_qubit_errors(&self, key: PyOperationKey) -> Option<Vec<PySingleQubitNoise>> {
         self.inner
             .get_single_qubit_errors(&key.inner)
@@ -419,6 +769,7 @@ impl PyNoiseModel {
             .map(|v| v.into_iter().map(PySingleQubitNoise::from).collect())
     }
 
+    /// Returns all two-qubit noise channels for an operation.
     fn get_two_qubit_errors(&self, key: PyOperationKey) -> Option<Vec<PyTwoQubitNoise>> {
         self.inner
             .get_two_qubit_errors(&key.inner)
