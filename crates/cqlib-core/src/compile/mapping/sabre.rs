@@ -24,10 +24,10 @@
 
 use super::vf2::{Vf2CandidateOptions, Vf2Mapping, Vf2ScoreWeights};
 use super::{
-    build_if_else_operation, build_output_circuit_from_source, build_while_loop_operation, is_cx,
-    map_operation_qubits, normalize_index_pair, preprocess_circuit, preprocess_program,
     FidelityMap, PreparedCircuit, PreparedIfElse, PreparedPassthroughOp, PreparedProgram,
     PreparedProgramItem, PreparedSegment, PreparedWhileLoop, TopologyAdapter,
+    build_if_else_operation, build_output_circuit_from_source, build_while_loop_operation, is_cx,
+    map_operation_qubits, normalize_index_pair, preprocess_circuit, preprocess_program,
 };
 use crate::circuit::gate::control_flow::ConditionView;
 use crate::circuit::gate::{Instruction, StandardGate};
@@ -124,6 +124,45 @@ struct StructuredRoute {
 #[derive(Debug, Clone)]
 struct LayoutTransition {
     ops: Vec<Operation>,
+    cost: usize,
+    log_fidelity: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct StructuredLayoutState {
+    l2p: Vec<usize>,
+}
+
+impl StructuredLayoutState {
+    fn new(l2p: &[usize]) -> Self {
+        Self { l2p: l2p.to_vec() }
+    }
+
+    fn as_slice(&self) -> &[usize] {
+        &self.l2p
+    }
+
+    fn condition_view(
+        &self,
+        topology: &TopologyAdapter,
+        logical_qubit: usize,
+        target: u8,
+    ) -> ConditionView {
+        ConditionView::new(topology.physical_qubits[self.l2p[logical_qubit]], target)
+    }
+}
+
+#[derive(Debug, Clone)]
+struct StructuredBranchMerge {
+    true_body: Vec<Operation>,
+    false_body: Option<Vec<Operation>>,
+    cost: usize,
+    log_fidelity: f64,
+}
+
+#[derive(Debug, Clone)]
+struct StructuredLoopClosure {
+    body_ops: Vec<Operation>,
     cost: usize,
     log_fidelity: f64,
 }
@@ -468,67 +507,61 @@ impl SabreMapping {
         continuation: &[PreparedProgramItem],
         entry_l2p: &[usize],
     ) -> Result<StructuredRoute, CompileError> {
-        let true_route = self.route_items(&node.true_body, &node.true_body.items, entry_l2p)?;
+        let entry_state = StructuredLayoutState::new(entry_l2p);
+        let true_route = self.route_items(
+            &node.true_body,
+            &node.true_body.items,
+            entry_state.as_slice(),
+        )?;
         let false_route = if let Some(false_body) = &node.false_body {
-            self.route_items(false_body, &false_body.items, entry_l2p)?
+            self.route_items(false_body, &false_body.items, entry_state.as_slice())?
         } else {
-            Self::identity_route(entry_l2p)
+            Self::identity_route(entry_state.as_slice())
         };
 
-        let mut candidates = Vec::new();
-        candidates.push(entry_l2p.to_vec());
-        if let Some(layout) = self.best_items_layout(program, continuation)? {
-            candidates.push(layout);
+        let mut merge_states = vec![
+            entry_state.clone(),
+            StructuredLayoutState::new(&true_route.exit_l2p),
+            StructuredLayoutState::new(&false_route.exit_l2p),
+        ];
+        merge_states.extend(self.best_program_layouts(&node.true_body)?);
+        if let Some(false_body) = &node.false_body {
+            merge_states.extend(self.best_program_layouts(false_body)?);
         }
-        candidates.push(true_route.exit_l2p.clone());
-        candidates.push(false_route.exit_l2p.clone());
-
-        let mut seen = HashSet::new();
-        let candidates: Vec<Vec<usize>> = candidates
-            .into_iter()
-            .filter(|layout| seen.insert(layout.clone()))
-            .collect();
+        let merge_states = self.continuation_entry_states(program, continuation, merge_states)?;
 
         let mut best: Option<StructuredRoute> = None;
-        for merge_l2p in candidates {
-            let true_tail = self.reconcile_layout(&true_route.exit_l2p, &merge_l2p)?;
-            let false_tail = self.reconcile_layout(&false_route.exit_l2p, &merge_l2p)?;
-
-            let mut true_body = true_route.ops.clone();
-            true_body.extend(true_tail.ops.clone());
-            let mut false_body_ops = false_route.ops.clone();
-            false_body_ops.extend(false_tail.ops.clone());
-            let false_body = if false_body_ops.is_empty() && node.false_body.is_none() {
-                None
-            } else {
-                Some(false_body_ops)
+        for merge_state in merge_states {
+            let merged = match self.merge_branch_routes(
+                &true_route,
+                &false_route,
+                &merge_state,
+                node.false_body.is_some(),
+            ) {
+                Ok(merged) => merged,
+                Err(CompileError::SabreRoutingStuck) => continue,
+                Err(err) => return Err(err),
             };
 
             let if_else_op = build_if_else_operation(
-                ConditionView::new(
-                    self.topology.physical_qubits[entry_l2p[node.condition_logical]],
+                entry_state.condition_view(
+                    &self.topology,
+                    node.condition_logical,
                     node.condition.target,
                 ),
-                true_body,
-                false_body,
+                merged.true_body,
+                merged.false_body,
                 node.label.clone(),
             );
 
-            let continuation_route = if continuation.is_empty() {
-                Self::identity_route(&merge_l2p)
-            } else {
-                self.route_items(program, continuation, &merge_l2p)?
-            };
-
-            let true_cost = true_route.cost + true_tail.cost;
-            let false_cost = false_route.cost + false_tail.cost;
-            let true_log = true_route.log_fidelity + true_tail.log_fidelity;
-            let false_log = false_route.log_fidelity + false_tail.log_fidelity;
-
-            let branch_cost = true_cost.max(false_cost);
-            let branch_log = true_log.min(false_log);
-            let total_cost = branch_cost + continuation_route.cost;
-            let total_log_fidelity = branch_log + continuation_route.log_fidelity;
+            let continuation_route =
+                match self.route_continuation(program, continuation, &merge_state) {
+                    Ok(route) => route,
+                    Err(CompileError::SabreRoutingStuck) => continue,
+                    Err(err) => return Err(err),
+                };
+            let total_cost = merged.cost + continuation_route.cost;
+            let total_log_fidelity = merged.log_fidelity + continuation_route.log_fidelity;
 
             let mut ops = Vec::with_capacity(1 + continuation_route.ops.len());
             ops.push(if_else_op);
@@ -560,50 +593,50 @@ impl SabreMapping {
         continuation: &[PreparedProgramItem],
         entry_l2p: &[usize],
     ) -> Result<StructuredRoute, CompileError> {
-        let mut candidates = Vec::new();
-        candidates.push(entry_l2p.to_vec());
-        if let Some(layout) = self.best_program_layout(&node.body)? {
-            candidates.push(layout);
-        }
-        if let Some(layout) = self.best_items_layout(program, continuation)? {
-            candidates.push(layout);
-        }
-
-        let mut seen = HashSet::new();
-        let candidates: Vec<Vec<usize>> = candidates
-            .into_iter()
-            .filter(|layout| seen.insert(layout.clone()))
-            .collect();
+        let entry_state = StructuredLayoutState::new(entry_l2p);
+        let mut loop_states = vec![entry_state.clone()];
+        loop_states.extend(self.best_program_layouts(&node.body)?);
+        let loop_states = self.continuation_entry_states(program, continuation, loop_states)?;
 
         let mut best: Option<StructuredRoute> = None;
-        for loop_l2p in candidates {
-            let pre_loop = self.reconcile_layout(entry_l2p, &loop_l2p)?;
-            let body_route = self.route_items(&node.body, &node.body.items, &loop_l2p)?;
-            let body_tail = self.reconcile_layout(&body_route.exit_l2p, &loop_l2p)?;
-
-            let mut body_ops = body_route.ops.clone();
-            body_ops.extend(body_tail.ops.clone());
+        for loop_state in loop_states {
+            let pre_loop =
+                match self.reconcile_layout(entry_state.as_slice(), loop_state.as_slice()) {
+                    Ok(route) => route,
+                    Err(CompileError::SabreRoutingStuck) => continue,
+                    Err(err) => return Err(err),
+                };
+            let body_route =
+                match self.route_items(&node.body, &node.body.items, loop_state.as_slice()) {
+                    Ok(route) => route,
+                    Err(CompileError::SabreRoutingStuck) => continue,
+                    Err(err) => return Err(err),
+                };
+            let closed_loop = match self.close_loop_body(&body_route, &loop_state) {
+                Ok(closed) => closed,
+                Err(CompileError::SabreRoutingStuck) => continue,
+                Err(err) => return Err(err),
+            };
 
             let while_op = build_while_loop_operation(
-                ConditionView::new(
-                    self.topology.physical_qubits[loop_l2p[node.condition_logical]],
+                loop_state.condition_view(
+                    &self.topology,
+                    node.condition_logical,
                     node.condition.target,
                 ),
-                body_ops,
+                closed_loop.body_ops,
                 node.label.clone(),
             );
 
-            let continuation_route = if continuation.is_empty() {
-                Self::identity_route(&loop_l2p)
-            } else {
-                self.route_items(program, continuation, &loop_l2p)?
-            };
-
-            let loop_cost = body_route.cost + body_tail.cost;
-            let loop_log = body_route.log_fidelity + body_tail.log_fidelity;
-            let total_cost = pre_loop.cost + loop_cost + continuation_route.cost;
+            let continuation_route =
+                match self.route_continuation(program, continuation, &loop_state) {
+                    Ok(route) => route,
+                    Err(CompileError::SabreRoutingStuck) => continue,
+                    Err(err) => return Err(err),
+                };
+            let total_cost = pre_loop.cost + closed_loop.cost + continuation_route.cost;
             let total_log_fidelity =
-                pre_loop.log_fidelity + loop_log + continuation_route.log_fidelity;
+                pre_loop.log_fidelity + closed_loop.log_fidelity + continuation_route.log_fidelity;
 
             let mut ops = pre_loop.ops.clone();
             ops.push(while_op);
@@ -628,51 +661,142 @@ impl SabreMapping {
         best.ok_or(CompileError::SabreRoutingStuck)
     }
 
-    fn best_program_layout(
-        &self,
+    fn route_continuation(
+        &mut self,
         program: &PreparedProgram,
-    ) -> Result<Option<Vec<usize>>, CompileError> {
-        let prepared = program.flatten_interaction_circuit();
-        if prepared.operations.is_empty() {
-            return Ok(None);
+        continuation: &[PreparedProgramItem],
+        entry_state: &StructuredLayoutState,
+    ) -> Result<StructuredRoute, CompileError> {
+        if continuation.is_empty() {
+            Ok(Self::identity_route(entry_state.as_slice()))
+        } else {
+            self.route_items(program, continuation, entry_state.as_slice())
         }
-        self.best_prepared_layout(&prepared)
     }
 
-    fn best_items_layout(
+    fn continuation_entry_states(
+        &self,
+        program: &PreparedProgram,
+        continuation: &[PreparedProgramItem],
+        seeds: Vec<StructuredLayoutState>,
+    ) -> Result<Vec<StructuredLayoutState>, CompileError> {
+        let mut states = seeds;
+        states.extend(self.best_items_layouts(program, continuation)?);
+        Ok(Self::dedup_layout_states(states))
+    }
+
+    fn dedup_layout_states(states: Vec<StructuredLayoutState>) -> Vec<StructuredLayoutState> {
+        let mut seen = HashSet::new();
+        states
+            .into_iter()
+            .filter(|state| seen.insert(state.clone()))
+            .collect()
+    }
+
+    fn merge_branch_routes(
+        &self,
+        true_route: &StructuredRoute,
+        false_route: &StructuredRoute,
+        merge_state: &StructuredLayoutState,
+        preserve_false_body: bool,
+    ) -> Result<StructuredBranchMerge, CompileError> {
+        let true_tail = self.reconcile_layout(&true_route.exit_l2p, merge_state.as_slice())?;
+        let false_tail = self.reconcile_layout(&false_route.exit_l2p, merge_state.as_slice())?;
+
+        let mut true_body = true_route.ops.clone();
+        true_body.extend(true_tail.ops.clone());
+        let mut false_body_ops = false_route.ops.clone();
+        false_body_ops.extend(false_tail.ops.clone());
+        let false_body = if false_body_ops.is_empty() && !preserve_false_body {
+            None
+        } else {
+            Some(false_body_ops)
+        };
+
+        let true_cost = true_route.cost + true_tail.cost;
+        let false_cost = false_route.cost + false_tail.cost;
+        let true_log = true_route.log_fidelity + true_tail.log_fidelity;
+        let false_log = false_route.log_fidelity + false_tail.log_fidelity;
+
+        Ok(StructuredBranchMerge {
+            true_body,
+            false_body,
+            cost: true_cost.max(false_cost),
+            log_fidelity: true_log.min(false_log),
+        })
+    }
+
+    fn close_loop_body(
+        &self,
+        body_route: &StructuredRoute,
+        loop_state: &StructuredLayoutState,
+    ) -> Result<StructuredLoopClosure, CompileError> {
+        let body_tail = self.reconcile_layout(&body_route.exit_l2p, loop_state.as_slice())?;
+        let mut body_ops = body_route.ops.clone();
+        body_ops.extend(body_tail.ops.clone());
+
+        Ok(StructuredLoopClosure {
+            body_ops,
+            cost: body_route.cost + body_tail.cost,
+            log_fidelity: body_route.log_fidelity + body_tail.log_fidelity,
+        })
+    }
+
+    fn structured_layout_candidate_limit(&self) -> usize {
+        if self.config.vf2_policy == Vf2Policy::Disabled {
+            0
+        } else {
+            self.config.vf2_seed_top_k.min(4)
+        }
+    }
+
+    fn best_program_layouts(
+        &self,
+        program: &PreparedProgram,
+    ) -> Result<Vec<StructuredLayoutState>, CompileError> {
+        let prepared = program.flatten_interaction_circuit();
+        if prepared.operations.is_empty() {
+            return Ok(vec![]);
+        }
+        self.best_prepared_layouts(&prepared)
+    }
+
+    fn best_items_layouts(
         &self,
         program: &PreparedProgram,
         items: &[PreparedProgramItem],
-    ) -> Result<Option<Vec<usize>>, CompileError> {
+    ) -> Result<Vec<StructuredLayoutState>, CompileError> {
         if items.is_empty() {
-            return Ok(None);
+            return Ok(vec![]);
         }
         let continuation_program = PreparedProgram {
             logical_qubits: program.logical_qubits.clone(),
             parameters: program.parameters.clone(),
             items: items.to_vec(),
         };
-        self.best_program_layout(&continuation_program)
+        self.best_program_layouts(&continuation_program)
     }
 
-    fn best_prepared_layout(
+    fn best_prepared_layouts(
         &self,
         prepared: &PreparedCircuit,
-    ) -> Result<Option<Vec<usize>>, CompileError> {
-        if prepared.operations.is_empty() {
-            return Ok(None);
+    ) -> Result<Vec<StructuredLayoutState>, CompileError> {
+        let top_k = self.structured_layout_candidate_limit();
+        if prepared.operations.is_empty() || top_k == 0 {
+            return Ok(vec![]);
         }
 
         let vf2 = Vf2Mapping::from_adapter(self.topology.clone());
         let options = Vf2CandidateOptions {
-            top_k: 1,
+            top_k,
             weights: self.config.vf2_seed_weights,
             ..Vf2CandidateOptions::default()
         };
         Ok(vf2
-            .find_prepared_layout_candidate_indices(&prepared, Some(options))?
+            .find_prepared_layout_candidate_indices(prepared, Some(options))?
             .into_iter()
-            .next())
+            .map(|l2p| StructuredLayoutState { l2p })
+            .collect())
     }
 
     fn map_passthrough(&self, op: &PreparedPassthroughOp, entry_l2p: &[usize]) -> Operation {
@@ -1086,9 +1210,7 @@ impl SabreMapping {
         let mut steps = 0usize;
         while logic2phy != target_l2p {
             if steps >= max_steps {
-                return Err(CompileError::Internal(
-                    "layout reconciliation failed to converge".into(),
-                ));
+                return Err(CompileError::SabreRoutingStuck);
             }
             steps += 1;
 
@@ -1906,6 +2028,18 @@ mod tests {
         )
     }
 
+    fn square_topology() -> Topology {
+        Topology::new(
+            vec![Qubit::new(0), Qubit::new(1), Qubit::new(2), Qubit::new(3)],
+            vec![
+                (Qubit::new(0), Qubit::new(1), "CX".to_string()),
+                (Qubit::new(1), Qubit::new(2), "CX".to_string()),
+                (Qubit::new(2), Qubit::new(3), "CX".to_string()),
+                (Qubit::new(3), Qubit::new(0), "CX".to_string()),
+            ],
+        )
+    }
+
     fn triangle_circuit() -> Circuit {
         let mut circuit = Circuit::new(3);
         circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
@@ -1948,6 +2082,12 @@ mod tests {
             weight_gates: vec![Vec::new(); mapper.topology.num_qubits()],
             preprocessing_h: 0.0,
         }
+    }
+
+    fn count_swap_ops(ops: &[Operation]) -> usize {
+        ops.iter()
+            .filter(|op| matches!(op.instruction, Instruction::Standard(StandardGate::SWAP)))
+            .count()
     }
 
     #[test]
@@ -1994,6 +2134,98 @@ mod tests {
 
         assert!(!expected.is_empty());
         assert_eq!(layouts[0], expected[0]);
+    }
+
+    #[test]
+    fn test_best_prepared_layouts_use_bounded_top_k_for_structured_candidates() {
+        let topology = square_topology();
+        let cfg = SabreConfig {
+            vf2_policy: Vf2Policy::InitialOnly,
+            vf2_seed_top_k: 4,
+            ..SabreConfig::default()
+        };
+
+        let mapper = SabreMapping::new(topology, None, cfg).unwrap();
+        let prepared = preprocess_circuit(&single_cx_circuit()).unwrap();
+        let states = mapper.best_prepared_layouts(&prepared).unwrap();
+
+        assert!(states.len() > 1);
+        assert!(states.len() <= 4);
+    }
+
+    #[test]
+    fn test_continuation_entry_states_preserve_explicit_seed_before_vf2_candidates() {
+        let topology = square_topology();
+        let cfg = SabreConfig {
+            vf2_policy: Vf2Policy::InitialOnly,
+            vf2_seed_top_k: 4,
+            ..SabreConfig::default()
+        };
+
+        let mapper = SabreMapping::new(topology, None, cfg).unwrap();
+        let program = preprocess_program(&single_cx_circuit()).unwrap();
+        let explicit = StructuredLayoutState::new(&[3, 0]);
+        let states = mapper
+            .continuation_entry_states(&program, &program.items, vec![explicit.clone()])
+            .unwrap();
+
+        assert_eq!(states.first(), Some(&explicit));
+        assert!(states.len() > 1);
+    }
+
+    #[test]
+    fn test_merge_branch_routes_uses_worst_case_cost_and_preserves_empty_false_body() {
+        let topology = line_topology(&[0, 1, 2]);
+        let mapper = SabreMapping::new(topology, None, SabreConfig::default()).unwrap();
+        let true_route = StructuredRoute {
+            exit_l2p: vec![0, 2],
+            ops: Vec::new(),
+            cost: 5,
+            log_fidelity: -1.0,
+            objective: 0.0,
+        };
+        let false_route = StructuredRoute {
+            exit_l2p: vec![0, 1],
+            ops: Vec::new(),
+            cost: 2,
+            log_fidelity: -0.25,
+            objective: 0.0,
+        };
+
+        let merged = mapper
+            .merge_branch_routes(
+                &true_route,
+                &false_route,
+                &StructuredLayoutState::new(&[0, 1]),
+                true,
+            )
+            .unwrap();
+
+        assert_eq!(count_swap_ops(&merged.true_body), 1);
+        assert!(matches!(merged.false_body.as_ref(), Some(body) if body.is_empty()));
+        assert_eq!(merged.cost, 8);
+        assert_eq!(merged.log_fidelity, -1.0);
+    }
+
+    #[test]
+    fn test_close_loop_body_reconciles_back_to_loop_layout() {
+        let topology = line_topology(&[0, 1, 2]);
+        let mapper = SabreMapping::new(topology, None, SabreConfig::default()).unwrap();
+        let body_route = StructuredRoute {
+            exit_l2p: vec![0, 2],
+            ops: Vec::new(),
+            cost: 4,
+            log_fidelity: -0.5,
+            objective: 0.0,
+        };
+
+        let closed = mapper
+            .close_loop_body(&body_route, &StructuredLayoutState::new(&[0, 1]))
+            .unwrap();
+
+        assert_eq!(count_swap_ops(&closed.body_ops), 1);
+        assert_eq!(closed.cost, 7);
+        assert_eq!(closed.log_fidelity, -0.5);
     }
 
     #[test]
