@@ -26,6 +26,7 @@
 
 /// SABRE mapper implementation and its configuration model.
 pub mod sabre;
+mod structured;
 /// VF2-based structural mapper and candidate-layout search.
 pub mod vf2;
 /// Genetic Algorithm-based mapping optimizer.
@@ -33,6 +34,11 @@ pub mod ga_mapping;
 
 
 pub use sabre::{SabreConfig, SabreMapping, Vf2Policy};
+pub(crate) use structured::{
+    build_if_else_operation, build_while_loop_operation, map_program_static, preprocess_program,
+    PreparedIfElse, PreparedPassthroughOp, PreparedProgram, PreparedProgramItem, PreparedSegment,
+    PreparedWhileLoop,
+};
 pub use vf2::{
     Vf2CandidateOptions, Vf2CandidateScore, Vf2LayoutCandidate, Vf2Mapping, Vf2ScoreWeights,
 };
@@ -40,14 +46,16 @@ pub use ga_mapping::{GaConfig, GeneticAlgMapping};
 
 
 use crate::circuit::dag::Terminator;
+use crate::circuit::gate::control_flow::ControlFlow;
 use crate::circuit::gate::{Instruction, StandardGate};
 use crate::circuit::param::CircuitParam;
 use crate::circuit::param::ParameterValue;
 use crate::circuit::{Circuit, CircuitDag, Operation, Parameter, Qubit};
 use crate::compile::error::CompileError;
 use crate::device::Topology;
+use indexmap::IndexSet;
 use rustworkx_core::petgraph::visit::{EdgeRef, IntoEdgeReferences};
-use smallvec::{SmallVec, smallvec};
+use smallvec::{smallvec, SmallVec};
 use std::collections::{HashMap, HashSet};
 
 /// Optional fidelity map keyed by physical qubit edge.
@@ -214,7 +222,11 @@ impl TopologyAdapter {
 
 /// Normalizes an undirected index pair so `(a, b)` and `(b, a)` share one key.
 pub(crate) fn normalize_index_pair(a: usize, b: usize) -> (usize, usize) {
-    if a <= b { (a, b) } else { (b, a) }
+    if a <= b {
+        (a, b)
+    } else {
+        (b, a)
+    }
 }
 
 /// Returns whether an operation is a standard `CX` gate.
@@ -229,7 +241,7 @@ pub(crate) fn map_operation_qubits(op: &Operation, mapped_qubits: &[Qubit]) -> O
     mapped
 }
 
-/// Appends one mapped operation to output while resolving parameter references.
+/// Appends one operation to an output circuit while resolving parameter references.
 pub(crate) fn append_operation(
     output: &mut Circuit,
     op: &Operation,
@@ -261,27 +273,69 @@ pub(crate) fn append_operation(
     Ok(())
 }
 
-/// Builds output circuit from mapped operations and preserved parameters.
-pub(crate) fn build_output_circuit(
-    mapped_ops: &[Operation],
-    parameter_pool: &[Parameter],
-) -> Result<Circuit, CompileError> {
-    let mut used_set: HashSet<Qubit> = HashSet::new();
-    for op in mapped_ops {
-        for &q in &op.qubits {
-            used_set.insert(q);
-        }
-    }
-
+/// Builds mapped output from source metadata while preserving recursive control-flow qubits.
+pub(crate) fn build_output_circuit_from_source(
+    source: &Circuit,
+    mapped_ops: Vec<Operation>,
+) -> Circuit {
+    let mut used_set = HashSet::new();
+    collect_program_qubits(&mapped_ops, &mut used_set);
     let mut used_qubits: Vec<Qubit> = used_set.into_iter().collect();
     used_qubits.sort_by_key(Qubit::id);
 
-    let mut output = Circuit::from_qubits(used_qubits)?;
-    for op in mapped_ops {
-        append_operation(&mut output, op, parameter_pool)?;
-    }
+    let mut symbols = source.symbols().clone();
+    let mut parameters = source.parameters().clone();
+    let global_phase = preserve_global_phase(source, &mut symbols, &mut parameters);
 
-    Ok(output)
+    Circuit::from_parts(
+        used_qubits.into_iter().collect::<IndexSet<Qubit>>(),
+        symbols,
+        parameters,
+        mapped_ops,
+        global_phase,
+    )
+}
+
+fn preserve_global_phase(
+    source: &Circuit,
+    symbols: &mut IndexSet<String>,
+    parameters: &mut IndexSet<Parameter>,
+) -> CircuitParam {
+    let phase_param = source.global_phase();
+    if let Ok(value) = phase_param.evaluate(&None) {
+        CircuitParam::Fixed(value)
+    } else {
+        let (index, is_new) = parameters.insert_full(phase_param.clone());
+        if is_new {
+            for sym in phase_param.get_symbols() {
+                symbols.insert(sym);
+            }
+        }
+        CircuitParam::Index(index as u32)
+    }
+}
+
+fn collect_program_qubits(ops: &[Operation], out: &mut HashSet<Qubit>) {
+    for op in ops {
+        for &q in &op.qubits {
+            out.insert(q);
+        }
+        if let Instruction::ControlFlowGate(control_flow) = &op.instruction {
+            match control_flow {
+                ControlFlow::IfElse(gate) => {
+                    out.insert(gate.condition().qubit);
+                    collect_program_qubits(gate.true_body(), out);
+                    if let Some(false_body) = gate.false_body() {
+                        collect_program_qubits(false_body, out);
+                    }
+                }
+                ControlFlow::WhileLoop(gate) => {
+                    out.insert(gate.condition().qubit);
+                    collect_program_qubits(gate.body(), out);
+                }
+            }
+        }
+    }
 }
 
 /// Validates and flattens a circuit into compile-friendly internal form.
@@ -493,12 +547,14 @@ fn compute_largest_component(neighbors: &[Vec<usize>]) -> Vec<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::circuit::gate::control_flow::ConditionView;
-    use crate::circuit::gate::{Instruction, StandardGate};
-    use crate::circuit::{Circuit, Operation, Qubit};
+    use crate::circuit::gate::control_flow::{ConditionView, ControlFlow};
+    use crate::circuit::gate::{Directive, Instruction, StandardGate};
+    use crate::circuit::param::ParameterValue;
+    use crate::circuit::{Circuit, Operation, Parameter, Qubit};
     use crate::compile::error::CompileError;
     use smallvec::smallvec;
     use std::collections::HashSet;
+    use std::convert::TryFrom;
 
     fn line_topology(ids: &[u32]) -> Topology {
         let qubits: Vec<Qubit> = ids.iter().copied().map(Qubit::new).collect();
@@ -513,8 +569,8 @@ mod tests {
         topology.is_connected(a, b) || topology.is_connected(b, a)
     }
 
-    fn assert_mapped_2q_edges(mapped: &Circuit, topology: &Topology) {
-        for op in mapped.operations() {
+    fn assert_mapped_ops_2q_edges(ops: &[Operation], topology: &Topology) {
+        for op in ops {
             if op.qubits.len() == 2 {
                 assert!(
                     connected_undirected(topology, op.qubits[0], op.qubits[1]),
@@ -522,27 +578,134 @@ mod tests {
                     op.qubits
                 );
             }
+            if let Instruction::ControlFlowGate(control_flow) = &op.instruction {
+                match control_flow {
+                    ControlFlow::IfElse(gate) => {
+                        assert_mapped_ops_2q_edges(gate.true_body(), topology);
+                        if let Some(false_body) = gate.false_body() {
+                            assert_mapped_ops_2q_edges(false_body, topology);
+                        }
+                    }
+                    ControlFlow::WhileLoop(gate) => {
+                        assert_mapped_ops_2q_edges(gate.body(), topology);
+                    }
+                }
+            }
         }
     }
 
+    fn assert_mapped_2q_edges(mapped: &Circuit, topology: &Topology) {
+        assert_mapped_ops_2q_edges(mapped.operations(), topology);
+    }
+
     fn count_swaps(circuit: &Circuit) -> usize {
+        fn count_ops(ops: &[Operation]) -> usize {
+            ops.iter()
+                .map(|op| {
+                    let mut total = usize::from(matches!(
+                        op.instruction,
+                        Instruction::Standard(StandardGate::SWAP)
+                    ));
+                    if let Instruction::ControlFlowGate(control_flow) = &op.instruction {
+                        match control_flow {
+                            ControlFlow::IfElse(gate) => {
+                                total += count_ops(gate.true_body());
+                                if let Some(false_body) = gate.false_body() {
+                                    total += count_ops(false_body);
+                                }
+                            }
+                            ControlFlow::WhileLoop(gate) => {
+                                total += count_ops(gate.body());
+                            }
+                        }
+                    }
+                    total
+                })
+                .sum()
+        }
+
+        count_ops(circuit.operations())
+    }
+
+    fn append_test_operation(circuit: &mut Circuit, op: Operation) {
         circuit
-            .operations()
-            .iter()
-            .filter(|op| matches!(op.instruction, Instruction::Standard(StandardGate::SWAP)))
-            .count()
+            .append(
+                op.instruction,
+                op.qubits,
+                std::iter::empty::<ParameterValue>(),
+                op.label.as_deref(),
+            )
+            .unwrap();
+    }
+
+    fn collect_directives_recursive(ops: &[Operation]) -> Vec<Directive> {
+        let mut out = Vec::new();
+        for op in ops {
+            if let Instruction::Directive(directive) = op.instruction {
+                out.push(directive);
+            }
+            if let Instruction::ControlFlowGate(control_flow) = &op.instruction {
+                match control_flow {
+                    ControlFlow::IfElse(gate) => {
+                        out.extend(collect_directives_recursive(gate.true_body()));
+                        if let Some(false_body) = gate.false_body() {
+                            out.extend(collect_directives_recursive(false_body));
+                        }
+                    }
+                    ControlFlow::WhileLoop(gate) => {
+                        out.extend(collect_directives_recursive(gate.body()));
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    fn fingerprint_ops(ops: &[Operation], out: &mut Vec<String>) {
+        for op in ops {
+            let mut qids: Vec<u32> = op.qubits.iter().map(Qubit::id).collect();
+            qids.sort_unstable();
+            match &op.instruction {
+                Instruction::ControlFlowGate(ControlFlow::IfElse(gate)) => {
+                    out.push(format!(
+                        "if:{:?}:{:?}:{:?}",
+                        gate.condition(),
+                        qids,
+                        op.label.as_deref()
+                    ));
+                    fingerprint_ops(gate.true_body(), out);
+                    if let Some(false_body) = gate.false_body() {
+                        out.push("if:false:some".into());
+                        fingerprint_ops(false_body, out);
+                    } else {
+                        out.push("if:false:none".into());
+                    }
+                    out.push("if:end".into());
+                }
+                Instruction::ControlFlowGate(ControlFlow::WhileLoop(gate)) => {
+                    out.push(format!(
+                        "while:{:?}:{:?}:{:?}",
+                        gate.condition(),
+                        qids,
+                        op.label.as_deref()
+                    ));
+                    fingerprint_ops(gate.body(), out);
+                    out.push("while:end".into());
+                }
+                _ => out.push(format!(
+                    "{:?}:{:?}:{:?}",
+                    op.instruction,
+                    qids,
+                    op.label.as_deref()
+                )),
+            }
+        }
     }
 
     fn fingerprint(circuit: &Circuit) -> Vec<String> {
-        circuit
-            .operations()
-            .iter()
-            .map(|op| {
-                let mut qids: Vec<u32> = op.qubits.iter().map(Qubit::id).collect();
-                qids.sort_unstable();
-                format!("{:?}:{:?}", op.instruction, qids)
-            })
-            .collect()
+        let mut out = Vec::new();
+        fingerprint_ops(circuit.operations(), &mut out);
+        out
     }
 
     #[test]
@@ -552,42 +715,447 @@ mod tests {
     }
 
     #[test]
-    fn test_reject_control_flow() {
-        let mut circuit = Circuit::new(2);
+    fn test_vf2_map_while_loop_preserves_structure_and_condition() {
+        let topology = line_topology(&[0, 1, 2]);
+        let mut circuit = Circuit::new(3);
         let q0 = Qubit::new(0);
         let q1 = Qubit::new(1);
+        let q2 = Qubit::new(2);
         circuit.measure(q0).unwrap();
 
+        let body = vec![Operation {
+            instruction: Instruction::Standard(StandardGate::CX),
+            qubits: smallvec![q1, q2],
+            params: smallvec![],
+            label: None,
+        }];
+        circuit.while_loop(ConditionView::new(q0, 1), body).unwrap();
+
+        let mut vf2 = Vf2Mapping::new(topology.clone(), None).unwrap();
+        let mapped = vf2.execute(&circuit).unwrap();
+        assert_mapped_2q_edges(&mapped, &topology);
+
+        assert!(matches!(
+            mapped.operations()[1].instruction,
+            Instruction::ControlFlowGate(ControlFlow::WhileLoop(_))
+        ));
+        match &mapped.operations()[1].instruction {
+            Instruction::ControlFlowGate(ControlFlow::WhileLoop(gate)) => {
+                assert_eq!(gate.condition().qubit, mapped.operations()[0].qubits[0]);
+                assert_eq!(gate.body().len(), 1);
+                assert!(matches!(
+                    gate.body()[0].instruction,
+                    Instruction::Standard(StandardGate::CX)
+                ));
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn test_vf2_preserves_control_flow_metadata_and_empty_else() {
+        let topology = line_topology(&[0, 1, 2]);
+        let mut circuit = Circuit::new(3);
+        circuit.set_global_phase(Parameter::from(0.25));
+        circuit.measure(Qubit::new(0)).unwrap();
+
+        let labeled_if = build_if_else_operation(
+            ConditionView::new(Qubit::new(0), 1),
+            vec![Operation {
+                instruction: Instruction::Standard(StandardGate::CX),
+                qubits: smallvec![Qubit::new(1), Qubit::new(2)],
+                params: smallvec![],
+                label: None,
+            }],
+            None,
+            Some("branch_label".into()),
+        );
+        append_test_operation(&mut circuit, labeled_if);
+
+        let mut vf2 = Vf2Mapping::new(topology.clone(), None).unwrap();
+        let mapped = vf2.execute(&circuit).unwrap();
+        assert_mapped_2q_edges(&mapped, &topology);
+        assert_eq!(mapped.global_phase(), Parameter::from(0.25));
+
+        match &mapped.operations()[1] {
+            Operation {
+                instruction: Instruction::ControlFlowGate(ControlFlow::IfElse(gate)),
+                label,
+                ..
+            } => {
+                assert_eq!(label.as_deref(), Some("branch_label"));
+                assert_eq!(gate.condition().target, 1);
+                assert_eq!(gate.condition().qubit, mapped.operations()[0].qubits[0]);
+                assert!(gate.false_body().is_none());
+            }
+            _ => panic!("expected labeled mapped if_else operation"),
+        }
+    }
+
+    #[test]
+    fn test_preserve_measure_barrier_and_reset() {
+        let mut circuit = Circuit::new(2);
+        circuit.h(Qubit::new(0)).unwrap();
+        circuit.barrier(vec![Qubit::new(0), Qubit::new(1)]).unwrap();
+        circuit.measure(Qubit::new(0)).unwrap();
+        circuit.reset(Qubit::new(1)).unwrap();
+
+        let topology = line_topology(&[0, 1]);
+        let mapped =
+            map_with_vf2_sabre(&circuit, &topology, None, &SabreConfig::default()).unwrap();
+        let directives: Vec<Directive> = mapped
+            .operations()
+            .iter()
+            .filter_map(|op| match op.instruction {
+                Instruction::Directive(d) => Some(d),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            directives,
+            vec![Directive::Barrier, Directive::Measure, Directive::Reset]
+        );
+    }
+
+    #[test]
+    fn test_vf2_map_if_else_preserves_structure_and_condition() {
+        let topology = line_topology(&[0, 1, 2]);
+        let mut circuit = Circuit::new(3);
+        circuit.measure(Qubit::new(0)).unwrap();
         let true_body = vec![Operation {
             instruction: Instruction::Standard(StandardGate::X),
-            qubits: smallvec![q1],
+            qubits: smallvec![Qubit::new(1)],
+            params: smallvec![],
+            label: None,
+        }];
+        let false_body = vec![Operation {
+            instruction: Instruction::Standard(StandardGate::CX),
+            qubits: smallvec![Qubit::new(1), Qubit::new(2)],
             params: smallvec![],
             label: None,
         }];
         circuit
-            .if_else(ConditionView::new(q0, 1), true_body, None)
+            .if_else(
+                ConditionView::new(Qubit::new(0), 1),
+                true_body,
+                Some(false_body),
+            )
             .unwrap();
 
-        let topology = line_topology(&[0, 1, 2]);
-        let err =
-            map_with_vf2_sabre(&circuit, &topology, None, &SabreConfig::default()).unwrap_err();
-        assert!(matches!(err, CompileError::UnsupportedControlFlow));
+        let mut vf2 = Vf2Mapping::new(topology.clone(), None).unwrap();
+        let mapped = vf2.execute(&circuit).unwrap();
+        assert_mapped_2q_edges(&mapped, &topology);
+
+        assert!(matches!(
+            mapped.operations()[1].instruction,
+            Instruction::ControlFlowGate(ControlFlow::IfElse(_))
+        ));
+        match &mapped.operations()[1].instruction {
+            Instruction::ControlFlowGate(ControlFlow::IfElse(gate)) => {
+                assert_eq!(gate.condition().qubit, mapped.operations()[0].qubits[0]);
+                assert_eq!(gate.true_body().len(), 1);
+                assert_eq!(gate.false_body().unwrap().len(), 1);
+                assert!(matches!(
+                    gate.false_body().unwrap()[0].instruction,
+                    Instruction::Standard(StandardGate::CX)
+                ));
+            }
+            _ => unreachable!(),
+        }
     }
 
     #[test]
-    fn test_reject_directive_and_delay() {
-        let mut circuit = Circuit::new(1);
-        circuit.barrier(vec![Qubit::new(0)]).unwrap();
-        let topology = line_topology(&[0, 1]);
-        let err =
-            map_with_vf2_sabre(&circuit, &topology, None, &SabreConfig::default()).unwrap_err();
-        assert!(matches!(
-            err,
-            CompileError::UnsupportedInstruction {
-                instruction: _,
-                op_index: _
+    fn test_vf2_isomorphic_on_nested_if_else() {
+        let topology = line_topology(&[0, 1, 2, 3]);
+        let mut circuit = Circuit::new(4);
+        circuit.measure(Qubit::new(0)).unwrap();
+        circuit.measure(Qubit::new(1)).unwrap();
+
+        let inner_true = vec![Operation {
+            instruction: Instruction::Standard(StandardGate::CX),
+            qubits: smallvec![Qubit::new(2), Qubit::new(3)],
+            params: smallvec![],
+            label: None,
+        }];
+        let nested_if = Operation {
+            instruction: Instruction::ControlFlowGate(ControlFlow::if_else(
+                ConditionView::new(Qubit::new(1), 1),
+                inner_true,
+                None,
+            )),
+            qubits: smallvec![Qubit::new(1), Qubit::new(2), Qubit::new(3)],
+            params: smallvec![],
+            label: None,
+        };
+        circuit
+            .if_else(
+                ConditionView::new(Qubit::new(0), 1),
+                vec![nested_if],
+                Some(vec![Operation {
+                    instruction: Instruction::Standard(StandardGate::X),
+                    qubits: smallvec![Qubit::new(2)],
+                    params: smallvec![],
+                    label: None,
+                }]),
+            )
+            .unwrap();
+
+        let vf2 = Vf2Mapping::new(topology, None).unwrap();
+        assert!(vf2.is_subgraph_isomorphic(&circuit).unwrap());
+    }
+
+    #[test]
+    fn test_vf2_maps_nested_if_else_inside_while_loop() {
+        let topology = line_topology(&[0, 1, 2]);
+        let mut circuit = Circuit::new(3);
+        circuit.measure(Qubit::new(0)).unwrap();
+        circuit.measure(Qubit::new(1)).unwrap();
+
+        let nested_if = build_if_else_operation(
+            ConditionView::new(Qubit::new(1), 1),
+            vec![Operation {
+                instruction: Instruction::Standard(StandardGate::CX),
+                qubits: smallvec![Qubit::new(0), Qubit::new(1)],
+                params: smallvec![],
+                label: None,
+            }],
+            Some(vec![Operation {
+                instruction: Instruction::Standard(StandardGate::CX),
+                qubits: smallvec![Qubit::new(1), Qubit::new(2)],
+                params: smallvec![],
+                label: None,
+            }]),
+            None,
+        );
+        circuit
+            .while_loop(
+                ConditionView::new(Qubit::new(0), 1),
+                vec![
+                    nested_if,
+                    Operation {
+                        instruction: Instruction::Standard(StandardGate::X),
+                        qubits: smallvec![Qubit::new(2)],
+                        params: smallvec![],
+                        label: None,
+                    },
+                ],
+            )
+            .unwrap();
+
+        let mut vf2 = Vf2Mapping::new(topology.clone(), None).unwrap();
+        let mapped = vf2.execute(&circuit).unwrap();
+        assert_mapped_2q_edges(&mapped, &topology);
+
+        match &mapped.operations()[2].instruction {
+            Instruction::ControlFlowGate(ControlFlow::WhileLoop(gate)) => {
+                assert!(matches!(
+                    gate.body()[0].instruction,
+                    Instruction::ControlFlowGate(ControlFlow::IfElse(_))
+                ));
             }
+            _ => panic!("expected mapped while_loop with nested if_else"),
+        }
+    }
+
+    #[test]
+    fn test_map_with_vf2_sabre_routes_if_else_and_continuation() {
+        let topology = line_topology(&[0, 1, 2]);
+        let mut circuit = Circuit::new(3);
+        circuit.measure(Qubit::new(0)).unwrap();
+        circuit
+            .if_else(
+                ConditionView::new(Qubit::new(0), 1),
+                vec![Operation {
+                    instruction: Instruction::Standard(StandardGate::CX),
+                    qubits: smallvec![Qubit::new(0), Qubit::new(1)],
+                    params: smallvec![],
+                    label: None,
+                }],
+                Some(vec![Operation {
+                    instruction: Instruction::Standard(StandardGate::CX),
+                    qubits: smallvec![Qubit::new(1), Qubit::new(2)],
+                    params: smallvec![],
+                    label: None,
+                }]),
+            )
+            .unwrap();
+        circuit.cx(Qubit::new(0), Qubit::new(2)).unwrap();
+
+        let cfg = SabreConfig {
+            vf2_policy: Vf2Policy::InitialOnly,
+            repeat_iterations: 0,
+            ..SabreConfig::default()
+        };
+        let mapped = map_with_vf2_sabre(&circuit, &topology, None, &cfg).unwrap();
+
+        assert_mapped_2q_edges(&mapped, &topology);
+        assert!(matches!(
+            mapped.operations()[1].instruction,
+            Instruction::ControlFlowGate(ControlFlow::IfElse(_))
         ));
+        assert!(count_swaps(&mapped) > 0);
+        assert!(matches!(
+            mapped.operations().last().unwrap().instruction,
+            Instruction::Standard(StandardGate::CX)
+        ));
+    }
+
+    #[test]
+    fn test_map_with_vf2_sabre_routes_while_loop_and_continuation() {
+        let topology = line_topology(&[0, 1, 2]);
+        let mut circuit = Circuit::new(3);
+        circuit.measure(Qubit::new(0)).unwrap();
+        circuit
+            .while_loop(
+                ConditionView::new(Qubit::new(0), 1),
+                vec![
+                    Operation {
+                        instruction: Instruction::Standard(StandardGate::CX),
+                        qubits: smallvec![Qubit::new(0), Qubit::new(1)],
+                        params: smallvec![],
+                        label: None,
+                    },
+                    Operation {
+                        instruction: Instruction::Standard(StandardGate::CX),
+                        qubits: smallvec![Qubit::new(1), Qubit::new(2)],
+                        params: smallvec![],
+                        label: None,
+                    },
+                    Operation {
+                        instruction: Instruction::Standard(StandardGate::CX),
+                        qubits: smallvec![Qubit::new(0), Qubit::new(2)],
+                        params: smallvec![],
+                        label: None,
+                    },
+                ],
+            )
+            .unwrap();
+        circuit.cx(Qubit::new(0), Qubit::new(2)).unwrap();
+
+        let cfg = SabreConfig {
+            vf2_policy: Vf2Policy::InitialOnly,
+            repeat_iterations: 0,
+            ..SabreConfig::default()
+        };
+        let mapped = map_with_vf2_sabre(&circuit, &topology, None, &cfg).unwrap();
+
+        assert_mapped_2q_edges(&mapped, &topology);
+        match &mapped.operations()[1].instruction {
+            Instruction::ControlFlowGate(ControlFlow::WhileLoop(gate)) => {
+                assert!(gate.body().len() > 3);
+            }
+            _ => panic!("expected mapped while_loop operation"),
+        }
+        assert!(matches!(
+            mapped.operations().last().unwrap().instruction,
+            Instruction::Standard(StandardGate::CX)
+        ));
+    }
+
+    #[test]
+    fn test_sabre_preserves_symbolic_global_phase_and_directives_inside_control_flow() {
+        let topology = line_topology(&[0, 1, 2]);
+        let mut circuit = Circuit::new(3);
+        let theta = Parameter::try_from("theta").unwrap();
+        circuit.set_global_phase(theta.clone());
+        circuit.measure(Qubit::new(0)).unwrap();
+        circuit
+            .while_loop(
+                ConditionView::new(Qubit::new(0), 1),
+                vec![
+                    Operation {
+                        instruction: Instruction::Directive(Directive::Measure),
+                        qubits: smallvec![Qubit::new(1)],
+                        params: smallvec![],
+                        label: None,
+                    },
+                    Operation {
+                        instruction: Instruction::Directive(Directive::Reset),
+                        qubits: smallvec![Qubit::new(2)],
+                        params: smallvec![],
+                        label: None,
+                    },
+                    Operation {
+                        instruction: Instruction::Standard(StandardGate::CX),
+                        qubits: smallvec![Qubit::new(0), Qubit::new(2)],
+                        params: smallvec![],
+                        label: None,
+                    },
+                ],
+            )
+            .unwrap();
+        circuit.cx(Qubit::new(0), Qubit::new(2)).unwrap();
+
+        let cfg = SabreConfig {
+            vf2_policy: Vf2Policy::InitialOnly,
+            repeat_iterations: 0,
+            seed: 9,
+            ..SabreConfig::default()
+        };
+        let mapped = map_with_vf2_sabre(&circuit, &topology, None, &cfg).unwrap();
+        assert_mapped_2q_edges(&mapped, &topology);
+        assert_eq!(mapped.global_phase(), theta);
+
+        match &mapped.operations()[1].instruction {
+            Instruction::ControlFlowGate(ControlFlow::WhileLoop(gate)) => {
+                assert_eq!(
+                    collect_directives_recursive(gate.body()),
+                    vec![Directive::Measure, Directive::Reset]
+                );
+            }
+            _ => panic!("expected mapped while_loop operation"),
+        }
+    }
+
+    #[test]
+    fn test_sabre_maps_nested_while_loop_inside_if_else() {
+        let topology = line_topology(&[0, 1, 2]);
+        let mut circuit = Circuit::new(3);
+        circuit.measure(Qubit::new(0)).unwrap();
+        circuit.measure(Qubit::new(1)).unwrap();
+
+        let nested_while = build_while_loop_operation(
+            ConditionView::new(Qubit::new(1), 1),
+            vec![Operation {
+                instruction: Instruction::Standard(StandardGate::CX),
+                qubits: smallvec![Qubit::new(0), Qubit::new(2)],
+                params: smallvec![],
+                label: None,
+            }],
+            None,
+        );
+        circuit
+            .if_else(
+                ConditionView::new(Qubit::new(0), 1),
+                vec![nested_while],
+                Some(vec![Operation {
+                    instruction: Instruction::Standard(StandardGate::CX),
+                    qubits: smallvec![Qubit::new(1), Qubit::new(2)],
+                    params: smallvec![],
+                    label: None,
+                }]),
+            )
+            .unwrap();
+        circuit.cx(Qubit::new(0), Qubit::new(2)).unwrap();
+
+        let cfg = SabreConfig {
+            vf2_policy: Vf2Policy::InitialOnly,
+            repeat_iterations: 0,
+            seed: 17,
+            ..SabreConfig::default()
+        };
+        let mapped = map_with_vf2_sabre(&circuit, &topology, None, &cfg).unwrap();
+        assert_mapped_2q_edges(&mapped, &topology);
+
+        match &mapped.operations()[2].instruction {
+            Instruction::ControlFlowGate(ControlFlow::IfElse(gate)) => {
+                assert!(matches!(
+                    gate.true_body()[0].instruction,
+                    Instruction::ControlFlowGate(ControlFlow::WhileLoop(_))
+                ));
+            }
+            _ => panic!("expected mapped if_else with nested while_loop"),
+        }
     }
 
     #[test]
@@ -947,6 +1515,47 @@ mod tests {
             seed: 12345,
             initial_iterations: 3,
             repeat_iterations: 2,
+            swap_iterations: 3,
+            ..SabreConfig::default()
+        };
+
+        let mut sabre1 = SabreMapping::new(topology.clone(), None, cfg.clone()).unwrap();
+        let mut sabre2 = SabreMapping::new(topology, None, cfg).unwrap();
+
+        let out1 = sabre1.execute(&circuit).unwrap();
+        let out2 = sabre2.execute(&circuit).unwrap();
+        assert_eq!(fingerprint(&out1), fingerprint(&out2));
+    }
+
+    #[test]
+    fn test_sabre_control_flow_determinism_with_fixed_seed() {
+        let topology = line_topology(&[0, 1, 2]);
+        let mut circuit = Circuit::new(3);
+        circuit.measure(Qubit::new(0)).unwrap();
+        circuit
+            .if_else(
+                ConditionView::new(Qubit::new(0), 1),
+                vec![Operation {
+                    instruction: Instruction::Standard(StandardGate::CX),
+                    qubits: smallvec![Qubit::new(0), Qubit::new(1)],
+                    params: smallvec![],
+                    label: None,
+                }],
+                Some(vec![Operation {
+                    instruction: Instruction::Standard(StandardGate::CX),
+                    qubits: smallvec![Qubit::new(1), Qubit::new(2)],
+                    params: smallvec![],
+                    label: None,
+                }]),
+            )
+            .unwrap();
+        circuit.cx(Qubit::new(0), Qubit::new(2)).unwrap();
+
+        let cfg = SabreConfig {
+            vf2_policy: Vf2Policy::InitialOnly,
+            seed: 12345,
+            initial_iterations: 3,
+            repeat_iterations: 0,
             swap_iterations: 3,
             ..SabreConfig::default()
         };

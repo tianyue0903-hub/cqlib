@@ -22,8 +22,8 @@
 //! - weighted ranking by fidelity, topology distance, and gate distribution
 
 use super::{
-    FidelityMap, PreparedCircuit, TopologyAdapter, build_output_circuit, map_operation_qubits,
-    normalize_index_pair, preprocess_circuit,
+    build_output_circuit_from_source, map_program_static, normalize_index_pair, preprocess_program,
+    FidelityMap, PreparedCircuit, TopologyAdapter,
 };
 use crate::circuit::{Circuit, Qubit};
 use crate::compile::error::CompileError;
@@ -219,7 +219,7 @@ impl Vf2Mapping {
 
     /// Returns whether a strict subgraph-monomorphic mapping exists.
     pub fn is_subgraph_isomorphic(&self, circuit: &Circuit) -> Result<bool, CompileError> {
-        let prepared = preprocess_circuit(circuit)?;
+        let prepared = preprocess_program(circuit)?.flatten_interaction_circuit();
         let mapping = self.solve_prepared_initial_layout(&prepared)?;
         Ok(mapping.is_some())
     }
@@ -232,7 +232,7 @@ impl Vf2Mapping {
         &self,
         circuit: &Circuit,
     ) -> Result<Option<Vec<Qubit>>, CompileError> {
-        let prepared = preprocess_circuit(circuit)?;
+        let prepared = preprocess_program(circuit)?.flatten_interaction_circuit();
         if let Some(mapping) = self.solve_prepared_initial_layout(&prepared)? {
             let strict_layout = mapping
                 .into_iter()
@@ -262,7 +262,7 @@ impl Vf2Mapping {
         circuit: &Circuit,
         options: Option<Vf2CandidateOptions>,
     ) -> Result<Vec<Vf2LayoutCandidate>, CompileError> {
-        let prepared = preprocess_circuit(circuit)?;
+        let prepared = preprocess_program(circuit)?.flatten_interaction_circuit();
         let options = options.unwrap_or_default();
         self.find_prepared_layout_candidates(&prepared, &options, true)
     }
@@ -314,7 +314,8 @@ impl Vf2Mapping {
 
     /// Executes strict monomorphism-based mapping and returns mapped circuit.
     pub fn execute(&mut self, circuit: &Circuit) -> Result<Circuit, CompileError> {
-        let prepared = preprocess_circuit(circuit)?;
+        let program = preprocess_program(circuit)?;
+        let prepared = program.flatten_interaction_circuit();
         let mapping_idx = self
             .find_best_mapping(&prepared)?
             .ok_or(CompileError::Vf2NoMapping)?;
@@ -329,20 +330,12 @@ impl Vf2Mapping {
             phy2logic.insert(physical, logical);
         }
 
-        let mut mapped_ops = Vec::with_capacity(prepared.operations.len());
-        for prep_op in &prepared.operations {
-            let mapped_qubits: Vec<Qubit> = prep_op
-                .logical_qubits
-                .iter()
-                .map(|&l| self.topology.physical_qubits[mapping_idx[l]])
-                .collect();
-            mapped_ops.push(map_operation_qubits(&prep_op.op, &mapped_qubits));
-        }
+        let mapped_ops = map_program_static(&program, &mapping_idx, &self.topology.physical_qubits);
 
         self.logic2phy = logic2phy;
         self.phy2logic = phy2logic;
 
-        build_output_circuit(&mapped_ops, &prepared.parameters)
+        Ok(build_output_circuit_from_source(circuit, mapped_ops))
     }
 
     /// Internal helper for find prepared layout candidates.

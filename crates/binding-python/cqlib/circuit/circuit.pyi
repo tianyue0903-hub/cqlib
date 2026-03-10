@@ -19,7 +19,8 @@ from .gates.standard import StandardGate
 from .gates.unitary import UnitaryGate
 from .gates.circuit_gate import CircuitGate
 from .gates.mc_gate import McGate
-from .gates.control_flow import ConditionView
+from .gates.control_flow import ConditionView, ControlFlow
+from .gates.directive import Directive
 
 # Type alias for qubit list in control flow operations
 # Supports list[int] or list[Qubit]
@@ -30,11 +31,11 @@ ParamList = List[Union[float, Parameter]]
 
 # Type alias for control flow operation tuples
 # Format: (gate, qubits) or (gate, qubits, params)
-# - gate: The gate to apply (StandardGate, McGate, or UnitaryGate)
+# - gate: The gate to apply (StandardGate, McGate, UnitaryGate, Directive, or ControlFlow)
 # - qubits: List of qubit indices (list[int]) or list of Qubit objects
 # - params: Optional list of parameters (float or Parameter objects)
-OpTuple2 = Tuple[Union[StandardGate, McGate, UnitaryGate], QubitList]
-OpTuple3 = Tuple[Union[StandardGate, McGate, UnitaryGate], QubitList, ParamList]
+OpTuple2 = Tuple[Union[StandardGate, McGate, UnitaryGate, Directive, ControlFlow], QubitList]
+OpTuple3 = Tuple[Union[StandardGate, McGate, UnitaryGate, Directive, ControlFlow], QubitList, ParamList]
 OpTuple = Union[OpTuple2, OpTuple3]
 
 class Circuit:
@@ -498,7 +499,7 @@ class Circuit:
                 - (gate, qubits, params): 3-tuple with parameters
 
                 Where:
-                - gate: The gate to apply (StandardGate, McGate, or UnitaryGate)
+                - gate: The gate to apply (StandardGate, McGate, UnitaryGate, Directive, or ControlFlow)
                 - qubits: List of qubit indices (list[int]) or list of Qubit objects
                 - params: List of parameters (float or Parameter objects)
             false_body: Optional list of operation tuples for the false branch.
@@ -546,7 +547,7 @@ class Circuit:
                 - (gate, qubits, params): 3-tuple with parameters
 
                 Where:
-                - gate: The gate to apply (StandardGate, McGate, or UnitaryGate)
+                - gate: The gate to apply (StandardGate, McGate, UnitaryGate, Directive, or ControlFlow)
                 - qubits: List of qubit indices (list[int]) or list of Qubit objects
                 - params: List of parameters (float or Parameter objects)
 
