@@ -37,7 +37,7 @@ fn test_build_copy_swap_circuit_for_two_single_qubit_copies() {
     circuit.x(q0).unwrap();
 
     let vd = VirtualDistillation::new(circuit, 2).unwrap();
-    let copy_swap = vd.build_copy_swap_circuit().unwrap();
+    let copy_swap = vd.build_copy_swap_circuit(None).unwrap();
     let ops = copy_swap.operations();
 
     assert_eq!(copy_swap.width(), 2);
@@ -65,7 +65,7 @@ fn test_build_copy_swap_circuit_for_two_single_qubit_copies() {
 #[test]
 fn test_build_copy_swap_circuit_adds_pairwise_swaps_for_multiple_copies() {
     let vd = VirtualDistillation::new(Circuit::new(1), 3).unwrap();
-    let copy_swap = vd.build_copy_swap_circuit().unwrap();
+    let copy_swap = vd.build_copy_swap_circuit(None).unwrap();
     let ops = copy_swap.operations();
 
     assert_eq!(copy_swap.width(), 3);
@@ -76,5 +76,93 @@ fn test_build_copy_swap_circuit_adds_pairwise_swaps_for_multiple_copies() {
         .filter(|op| matches!(op.instruction, Instruction::Standard(StandardGate::SWAP)))
         .count();
     assert_eq!(swap_count, 2);
+}
+
+#[test]
+fn test_build_copy_swap_circuit_applies_optional_observable_to_first_copy() {
+    let q0 = Qubit::new(0);
+    let mut circuit = Circuit::new(1);
+    circuit.x(q0).unwrap();
+
+    let mut observable = Circuit::new(1);
+    observable.z(q0).unwrap();
+
+    let vd = VirtualDistillation::new(circuit, 2).unwrap();
+    let copy_swap = vd.build_copy_swap_circuit(Some(observable)).unwrap();
+    let ops = copy_swap.operations();
+
+    assert_eq!(ops.len(), 4);
+    assert!(matches!(
+        ops[3].instruction,
+        Instruction::Standard(StandardGate::Z)
+    ));
+    assert_eq!(ops[3].qubits.as_slice(), &[Qubit::new(0)]);
+}
+
+#[test]
+fn test_build_copy_swap_circuit_rejects_optional_observable_qubit_mismatch() {
+    let vd = VirtualDistillation::new(Circuit::new(1), 2).unwrap();
+    let observable = Circuit::new(2);
+
+    let err = vd.build_copy_swap_circuit(Some(observable)).unwrap_err();
+
+    assert!(matches!(
+        err,
+        crate::circuit::CircuitError::QubitCountMismatch {
+            expected: 1,
+            actual: 2
+        }
+    ));
+}
+
+#[test]
+fn test_run_denominator_circuit_runs_copy_swap_circuit() {
+    let vd = VirtualDistillation::new(Circuit::new(1), 2).unwrap();
+
+    let observed_value = vd
+        .run_denominator_circuit(128, |denominator, _num_samples| {
+            let denominator_ops = denominator.operations();
+
+            assert_eq!(denominator.width(), 2);
+            assert_eq!(denominator_ops.len(), 1);
+            assert!(matches!(
+                denominator_ops[0].instruction,
+                Instruction::Standard(StandardGate::SWAP)
+            ));
+
+            1.0
+        })
+        .unwrap();
+
+    assert_eq!(observed_value, 1.0);
+}
+
+#[test]
+fn test_run_numerator_circuit_applies_observable_to_first_copy() {
+    let q0 = Qubit::new(0);
+    let mut circuit = Circuit::new(1);
+    circuit.x(q0).unwrap();
+
+    let mut observable = Circuit::new(1);
+    observable.z(q0).unwrap();
+
+    let vd = VirtualDistillation::new(circuit, 2).unwrap();
+    let observed_value = vd
+        .run_numerator_circuit(observable, 128, |numerator, _num_samples| {
+            let numerator_ops = numerator.operations();
+
+            assert_eq!(numerator_ops.len(), 4);
+
+            assert!(matches!(
+                numerator_ops[3].instruction,
+                Instruction::Standard(StandardGate::Z)
+            ));
+            assert_eq!(numerator_ops[3].qubits.as_slice(), &[Qubit::new(0)]);
+
+            1.0
+        })
+        .unwrap();
+
+    assert_eq!(observed_value, 1.0);
 }
 

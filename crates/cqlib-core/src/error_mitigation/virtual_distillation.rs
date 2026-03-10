@@ -61,7 +61,10 @@ impl VirtualDistillation {
     /// The returned circuit contains:
     /// - `copies` disjoint copies of the base circuit preparation,
     /// - pairwise SWAP operations between the first copy and every additional copy.
-    pub fn build_copy_swap_circuit(&self) -> Result<Circuit, CircuitError> {
+    pub fn build_copy_swap_circuit(
+        &self,
+        observable_circ: Option<Circuit>,
+    ) -> Result<Circuit, CircuitError> {
         let base_circuit = self.circuit.decompose()?;
         let base_width = base_circuit.width();
         let mut copy_swap_circuit = Circuit::new(self.copies * base_width);
@@ -81,7 +84,46 @@ impl VirtualDistillation {
             }
         }
 
+        if let Some(observable_circ) = observable_circ {
+            if observable_circ.width() != base_width {
+                return Err(CircuitError::QubitCountMismatch {
+                    expected: base_width,
+                    actual: observable_circ.width(),
+                });
+            }
+
+            let observable_circ = observable_circ.decompose()?;
+            Self::append_circuit_with_offset(&mut copy_swap_circuit, &observable_circ, 0)?;
+        }
+
         Ok(copy_swap_circuit)
+    }
+
+    pub fn run_denominator_circuit<F>(
+        &self,
+        num_samples: usize,
+        avg_eigen_calc: F,
+    ) -> Result<f64, CircuitError>
+    where
+        F: Fn(&Circuit, usize) -> f64,
+    {
+        let denominator_circuit = self.build_copy_swap_circuit(None)?;
+
+        Ok(avg_eigen_calc(&denominator_circuit, num_samples))
+    }
+
+    pub fn run_numerator_circuit<F>(
+        &self,
+        observable_circ: Circuit,
+        num_samples: usize,
+        avg_eigen_calc: F,
+    ) -> Result<f64, CircuitError>
+    where
+        F: Fn(&Circuit, usize) -> f64,
+    {
+        let numerator_circuit = self.build_copy_swap_circuit(Some(observable_circ))?;
+
+        Ok(avg_eigen_calc(&numerator_circuit, num_samples))
     }
 
     fn append_circuit_with_offset(
