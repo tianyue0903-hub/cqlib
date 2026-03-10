@@ -116,6 +116,65 @@ impl PyTopology {
         self.inner.num_couplings()
     }
 
+    /// Returns all physical qubit ids in the topology.
+    #[getter]
+    fn qubits(&self) -> Vec<usize> {
+        self.inner.qubits().map(|q| q.id() as usize).collect()
+    }
+
+    /// Adds physical qubits to topology.
+    ///
+    /// Raises:
+    ///     ValueError: If a qubit already exists.
+    fn add_qubits(&mut self, qubits: Vec<usize>) -> PyResult<()> {
+        let qubits = qubits
+            .into_iter()
+            .map(py_id_to_qubit)
+            .collect::<PyResult<Vec<_>>>()?;
+        self.inner
+            .add_qubits(qubits)
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    /// Adds couplings to topology.
+    ///
+    /// Raises:
+    ///     ValueError: If endpoint qubits are missing.
+    fn add_couplings(&mut self, couplings: Vec<PyCouplingSpec>) -> PyResult<()> {
+        let couplings = py_couplings_to_core(couplings)?;
+        self.inner
+            .add_couplings(couplings)
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    /// Removes physical qubits from topology.
+    ///
+    /// Raises:
+    ///     ValueError: If a qubit does not exist.
+    fn remove_qubits(&mut self, qubits: Vec<usize>) -> PyResult<()> {
+        let qubits = qubits
+            .into_iter()
+            .map(py_id_to_qubit)
+            .collect::<PyResult<Vec<_>>>()?;
+        self.inner
+            .remove_qubits(qubits)
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    /// Removes couplings from topology.
+    ///
+    /// Raises:
+    ///     ValueError: If a coupling does not exist.
+    fn remove_couplings(&mut self, couplings: Vec<(usize, usize)>) -> PyResult<()> {
+        let mut core = Vec::with_capacity(couplings.len());
+        for (u, v) in couplings {
+            core.push((py_id_to_qubit(u)?, py_id_to_qubit(v)?));
+        }
+        self.inner
+            .remove_couplings(core)
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
     /// Checks whether two physical qubits are directly connected.
     ///
     /// Args:
@@ -131,6 +190,34 @@ impl PyTopology {
         Ok(self
             .inner
             .is_connected(py_id_to_qubit(u)?, py_id_to_qubit(v)?))
+    }
+
+    /// Returns neighbors of a physical qubit.
+    fn neighbors(&self, qubit: usize) -> PyResult<Vec<usize>> {
+        Ok(self
+            .inner
+            .neighbors(py_id_to_qubit(qubit)?)
+            .map(|q| q.id() as usize)
+            .collect())
+    }
+
+    /// Returns coupling name between two qubits, if exists.
+    fn get_coupling_name(&self, u: usize, v: usize) -> PyResult<Option<String>> {
+        Ok(self
+            .inner
+            .get_coupling_name(py_id_to_qubit(u)?, py_id_to_qubit(v)?))
+    }
+
+    /// Returns whether topology contains the given qubit id.
+    fn contains_qubit(&self, qubit: usize) -> PyResult<bool> {
+        let qubit = py_id_to_qubit(qubit)?;
+        Ok(self.inner.contains_qubit(&qubit))
+    }
+
+    /// Returns the degree (number of incident couplings) of a qubit.
+    fn degree(&self, qubit: usize) -> PyResult<usize> {
+        let qubit = py_id_to_qubit(qubit)?;
+        Ok(self.inner.degree(&qubit))
     }
 
     /// Returns a compact debug representation.

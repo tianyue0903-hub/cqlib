@@ -12,6 +12,7 @@
 
 pub mod circuit;
 pub mod compile;
+pub mod device;
 pub mod ir;
 
 use pyo3::prelude::*;
@@ -48,6 +49,7 @@ fn binding_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // Register IR module with qasm2 and qcis submodules
     ir::register_ir_module(m)?;
+    device::register_device_module(m)?;
     m.add_function(wrap_pyfunction!(
         circuit_to_matrix::py_circuit_to_matrix,
         m
