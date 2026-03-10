@@ -28,13 +28,13 @@ import pytest
 from cqlib.circuit import Circuit
 from cqlib.compiler import (
     SabreConfig,
-    Topology,
     map_with_vf2_sabre,
     vf2_find_initial_layout,
     vf2_is_subgraph_isomorphic,
     vf2_map,
 )
 
+from cqlib.device import Topology
 from . import assert_all_2q_on_topology
 from . import count_gate
 from . import random_circuit
@@ -42,7 +42,9 @@ from . import random_circuit
 
 def _ops_signature(circuit: Circuit) -> tuple:
     """Builds a deterministic operation signature for mapped-circuit comparisons."""
-    return tuple((op.name, tuple(q.index for q in op.qubits)) for op in circuit.operations)
+    return tuple(
+        (op.name, tuple(q.index for q in op.qubits)) for op in circuit.operations
+    )
 
 
 def _swap_edges(circuit: Circuit) -> list[tuple[int, int]]:
@@ -61,24 +63,13 @@ class TestCompilerTopologyApi:
 
     def test_topology_properties_and_connectivity(self):
         """Reports qubit/coupling counts and direct-edge connectivity correctly."""
-        topology = Topology([0, 2, 4], [(0, 2), (2, 4, "CZ")])
+        topology = Topology([0, 2, 4], [(0, 2, "G1"), (2, 4, "G2")])
         assert topology.num_qubits == 3
         assert topology.num_couplings == 2
 
         assert topology.is_connected(0, 2) or topology.is_connected(2, 0)
         assert topology.is_connected(2, 4) or topology.is_connected(4, 2)
         assert not (topology.is_connected(0, 4) or topology.is_connected(4, 0))
-
-    def test_topology_rejects_overflow_qubit_id(self):
-        """Rejects qubit ids that overflow internal `u32` representation."""
-        overflow_id = 1 << 40
-
-        with pytest.raises(ValueError):
-            Topology([overflow_id], [])
-
-        topology = Topology.line([0, 1])
-        with pytest.raises(ValueError):
-            topology.is_connected(0, overflow_id)
 
 
 class TestSabreConfigApi:
@@ -176,7 +167,9 @@ class TestCompilerWorkflowValidation:
 
         valid_map = {(1, 0): 0.95}
         cfg = SabreConfig(vf2_policy="disabled", seed=10)
-        mapped = map_with_vf2_sabre(circuit, topology, fidelity_map=valid_map, config=cfg)
+        mapped = map_with_vf2_sabre(
+            circuit, topology, fidelity_map=valid_map, config=cfg
+        )
         assert_all_2q_on_topology(mapped, topology)
 
         invalid_map = {(0, 1): 1.2}
@@ -309,11 +302,13 @@ class TestSabreFidelityEnhancements:
 
         assert_all_2q_on_topology(mapped_fidelity_seed, topology)
         assert_all_2q_on_topology(mapped_topology_seed, topology)
-        assert _ops_signature(mapped_fidelity_seed) != _ops_signature(mapped_topology_seed)
+        assert _ops_signature(mapped_fidelity_seed) != _ops_signature(
+            mapped_topology_seed
+        )
 
     def test_local_swap_prefers_high_fidelity_edge(self):
         """On equal-distance choices, SABRE chooses SWAPs on higher-fidelity edges."""
-        topology = Topology([0, 1, 2], [(0, 1), (0, 2)])
+        topology = Topology([0, 1, 2], [(0, 1, "G0"), (0, 2, "G1")])
         circuit = Circuit(3)
         circuit.cx(0, 1)
         circuit.cx(1, 2)

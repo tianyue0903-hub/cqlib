@@ -9,21 +9,3 @@
 # Any modifications or derivative works of this code must retain this
 # copyright notice, and modified files need to carry a notice indicating
 # that they have been altered from the originals.
-
-from .._native import (
-    SabreConfig,
-    vf2_is_subgraph_isomorphic,
-    vf2_find_initial_layout,
-    vf2_find_initial_layout_candidates,
-    vf2_map,
-    map_with_vf2_sabre,
-)
-
-__all__ = [
-    "SabreConfig",
-    "vf2_is_subgraph_isomorphic",
-    "vf2_find_initial_layout",
-    "vf2_find_initial_layout_candidates",
-    "vf2_map",
-    "map_with_vf2_sabre",
-]

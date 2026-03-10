@@ -11,6 +11,7 @@
 # that they have been altered from the originals.
 
 from .circuit import Parameter, Circuit, Qubit
-from .compiler import Topology, SabreConfig
+from .compiler import SabreConfig
+from .device import Topology
 
 __all__ = ["Parameter", "Circuit", "Qubit", "Topology", "SabreConfig"]

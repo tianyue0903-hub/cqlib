@@ -192,18 +192,13 @@ impl ZNEMitigation {
         }
     }
 
-
     /// Given the noisy results, extrapolate the expectation value using a polynomial fit.
     ///
     /// - `noisy_results`: the noisy results to extrapolate.
     /// - `degree`: the degree of the polynomial to use for extrapolation.
     ///
     /// Returns the extrapolated expectation value.
-    pub fn poly_extrapolate(
-        &self,
-        noisy_results: &Vec<f64>,
-        degree: usize,
-    ) -> f64 {
+    pub fn poly_extrapolate(&self, noisy_results: &Vec<f64>, degree: usize) -> f64 {
         let n = self.noise_factors.len();
         assert!(
             !noisy_results.is_empty(),
@@ -294,11 +289,7 @@ impl ZNEMitigation {
     fn solve_linear_system(mut a: Vec<Vec<f64>>, mut b: Vec<f64>) -> Vec<f64> {
         let n = a.len();
         assert!(n > 0, "Coefficient matrix must not be empty.");
-        assert_eq!(
-            b.len(),
-            n,
-            "Right-hand side length must match matrix size."
-        );
+        assert_eq!(b.len(), n, "Right-hand side length must match matrix size.");
         for row in &a {
             assert_eq!(row.len(), n, "Coefficient matrix must be square.");
         }
