@@ -10,44 +10,101 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
-//! Python Bindings for Quantum Bits
+//! Python bindings for quantum bits.
 //!
-//! This module provides Python bindings for quantum bit (qubit) types.
-//! It represents a quantum register index used in circuit operations.
+//! This module provides Python-compatible types for working with qubits in quantum circuits.
+//!
+//! # Types
+//!
+//! - [`PyQubit`]: A Python wrapper around the core [`Qubit`] type. Represents a single
+//!   qubit identified by its index in a quantum register.
+//!
+//! - [`PyIntQubitList`]: Flexible input type for circuit constructors. Accepts:
+//!   - An integer `n` → creates qubits `[0, 1, ..., n-1]`
+//!   - A list of integers `[0, 2, 4]` → creates qubits with specific indices
+//!   - A list of `Qubit` objects
+//!
+//! - [`PyIntOrQubit`]: Flexible input type for single-qubit gate methods. Accepts either
+//!   an integer index or a `Qubit` object, allowing both `circuit.h(0)` and `circuit.h(Qubit(0))`.
+//!
+//! - [`PyIntListOrQubitList`]: Flexible input type for multi-qubit operations. Accepts
+//!   either a list of integer indices or a list of `Qubit` objects.
+//!
+//! # Examples
+//!
+//! ```python
+//! from cqlib import Circuit, Qubit
+//!
+//! # Create qubits directly
+//! q0 = Qubit(0)
+//! q1 = Qubit(1)
+//!
+//! # Initialize circuits with different formats
+//! c1 = Circuit(3)                      # 3 qubits: 0, 1, 2
+//! c2 = Circuit([0, 2, 4])              # 3 qubits: 0, 2, 4
+//! c3 = Circuit([Qubit(0), Qubit(1)])   # 2 qubits: 0, 1
+//!
+//! # Gate methods accept flexible arguments
+//! c1.h(0)           # integer index
+//! c1.h(Qubit(0))    # Qubit object
+//! ```
 
 use cqlib_core::circuit::Qubit;
 use pyo3::prelude::*;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
-/// Python wrapper for `Qubit`.
+/// A qubit in a quantum register.
 ///
-/// Represents a quantum bit identified by its index in a quantum register.
-/// Qubits are copyable and comparable for use in circuit construction.
+/// In quantum computing, a qubit (quantum bit) is the basic unit of quantum information.
+/// This type represents a qubit identified by its index in a quantum register.
 ///
-/// # Examples
+/// # Python API
 ///
 /// ```python
 /// from cqlib import Qubit
 ///
+/// # Create a qubit by its index
 /// q0 = Qubit(0)
 /// q1 = Qubit(1)
+///
+/// # Access properties
 /// print(q0.index)  # 0
-/// print(q0 < q1)   # True
+/// print(q0.id)     # 0 (raw identifier)
+///
+/// # Compare qubits
+/// q0 < q1          # True
+/// q0 == Qubit(0)   # True
 /// ```
+///
+/// # Notes
+///
+/// - Qubits with the same index are considered equal.
+/// - Qubits can be used as dictionary keys (hashable).
+/// - Comparison operators (`<`, `<=`, `>`, `>=`) compare by index.
 #[pyclass(name = "Qubit", module = "cqlib.circuit")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct PyQubit {
+    /// The underlying core `Qubit` type.
     pub inner: Qubit,
 }
 
 #[pymethods]
 impl PyQubit {
-    /// Creates a new qubit with the given index.
+    /// Creates a qubit with the given index.
     ///
     /// # Arguments
     ///
-    /// * `index` - The index of the qubit in the quantum register.
+    /// * `index` - The qubit index in the quantum register (non-negative integer).
+    ///
+    /// # Python Example
+    ///
+    /// ```python
+    /// from cqlib import Qubit
+    ///
+    /// q0 = Qubit(0)
+    /// q1 = Qubit(1)
+    /// ```
     #[new]
     fn new(index: u32) -> Self {
         PyQubit {
@@ -55,29 +112,38 @@ impl PyQubit {
         }
     }
 
-    /// Returns the index of this qubit.
+    /// Returns the qubit index.
+    ///
+    /// The index identifies the qubit's position in the quantum register.
     #[getter]
     fn index(&self) -> usize {
         self.inner.index()
     }
 
-    /// Returns the raw identifier of this qubit as a u32.
+    /// Returns the raw identifier.
     ///
-    /// This is the underlying storage type used by the qubit.
-    /// Use this when you need the compact 4-byte representation.
+    /// This is the underlying storage value (same as `index` but as `u32`).
     #[getter]
     fn id(&self) -> u32 {
         self.inner.id()
     }
 
+    /// Returns a string representation for debugging.
+    ///
+    /// Example: `Qubit(0)`
     fn __repr__(&self) -> String {
         format!("Qubit({})", self.inner.index())
     }
 
+    /// Returns a human-readable string representation.
     fn __str__(&self) -> String {
         format!("{}", self.inner)
     }
 
+    /// Compares two qubits for equality.
+    ///
+    /// Returns `True` if both qubits have the same index.
+    /// Returns `False` if `other` is not a `Qubit`.
     fn __eq__(&self, other: &Bound<'_, PyAny>) -> PyResult<bool> {
         if !other.is_instance_of::<PyQubit>() {
             return Ok(false);
@@ -86,37 +152,179 @@ impl PyQubit {
         Ok(self.inner == other_qubit.inner)
     }
 
+    /// Computes a hash for use in dictionaries and sets.
     fn __hash__(&self) -> u64 {
         let mut hasher = DefaultHasher::new();
         self.inner.hash(&mut hasher);
         hasher.finish()
     }
 
+    /// Less-than comparison (by index).
     fn __lt__(&self, other: &PyQubit) -> bool {
         self.inner < other.inner
     }
 
+    /// Less-than-or-equal comparison (by index).
     fn __le__(&self, other: &PyQubit) -> bool {
         self.inner <= other.inner
     }
 
+    /// Greater-than comparison (by index).
     fn __gt__(&self, other: &PyQubit) -> bool {
         self.inner > other.inner
     }
 
+    /// Greater-than-or-equal comparison (by index).
     fn __ge__(&self, other: &PyQubit) -> bool {
         self.inner >= other.inner
     }
 }
 
 impl From<Qubit> for PyQubit {
+    /// Wraps a core `Qubit` into a `PyQubit`.
     fn from(inner: Qubit) -> Self {
         PyQubit { inner }
     }
 }
 
 impl From<PyQubit> for Qubit {
+    /// Unwraps a `PyQubit` into the core `Qubit`.
     fn from(py_qubit: PyQubit) -> Self {
         py_qubit.inner
+    }
+}
+
+/// Circuit constructor argument: accepts `int`, `List[int]`, or `List[Qubit]`.
+///
+/// Used by [`PyCircuit::new`] to support flexible circuit initialization.
+///
+/// # Variants
+///
+/// | Input Type | Example | Result |
+/// |------------|---------|--------|
+/// | `int` | `Circuit(3)` | Qubits `[0, 1, 2]` |
+/// | `List[int]` | `Circuit([0, 2, 4])` | Qubits at specified indices |
+/// | `List[Qubit]` | `Circuit([Qubit(0), Qubit(1)])` | Given Qubit objects |
+#[derive(FromPyObject)]
+pub enum PyIntQubitList {
+    /// Integer: create N sequential qubits (0 to N-1).
+    NumQubits(usize),
+    /// List of integers: create qubits at specific indices.
+    IndexList(Vec<usize>),
+    /// List of Qubit objects: use the provided qubits.
+    QubitList(Vec<PyQubit>),
+}
+
+impl From<PyIntQubitList> for Vec<PyQubit> {
+    /// Converts to a vector of `PyQubit` objects.
+    fn from(item: PyIntQubitList) -> Vec<PyQubit> {
+        match item {
+            PyIntQubitList::NumQubits(n) => (0..n)
+                .map(|i| PyQubit::from(Qubit::new(i as u32)))
+                .collect(),
+            PyIntQubitList::IndexList(indices) => indices
+                .iter()
+                .map(|&i| PyQubit::from(Qubit::new(i as u32)))
+                .collect(),
+            PyIntQubitList::QubitList(qubits) => qubits,
+        }
+    }
+}
+
+impl From<PyIntQubitList> for Vec<Qubit> {
+    /// Converts to a vector of core `Qubit` objects.
+    fn from(item: PyIntQubitList) -> Vec<Qubit> {
+        match item {
+            PyIntQubitList::NumQubits(n) => (0..n).map(|i| Qubit::new(i as u32)).collect(),
+            PyIntQubitList::IndexList(indices) => {
+                indices.iter().map(|&i| Qubit::new(i as u32)).collect()
+            }
+            PyIntQubitList::QubitList(qubits) => qubits.into_iter().map(|q| q.inner).collect(),
+        }
+    }
+}
+
+/// Single-qubit gate argument: accepts `int` or `Qubit`.
+///
+/// Enables gate methods to accept flexible qubit arguments.
+///
+/// # Python Usage
+///
+/// ```python
+/// # Both forms are equivalent
+/// circuit.h(0)           # integer index
+/// circuit.h(Qubit(0))    # Qubit object
+/// ```
+#[derive(FromPyObject)]
+pub enum PyIntOrQubit {
+    /// Integer qubit index (e.g., `0`).
+    Int(usize),
+    /// Qubit object.
+    Qubit(PyQubit),
+}
+
+impl From<PyIntOrQubit> for PyQubit {
+    /// Converts to a `PyQubit`, creating one from the index if needed.
+    fn from(item: PyIntOrQubit) -> PyQubit {
+        match item {
+            PyIntOrQubit::Int(i) => PyQubit::from(Qubit::new(i as u32)),
+            PyIntOrQubit::Qubit(q) => q,
+        }
+    }
+}
+
+impl From<PyIntOrQubit> for Qubit {
+    /// Converts to a core `Qubit`, creating one from the index if needed.
+    fn from(item: PyIntOrQubit) -> Qubit {
+        match item {
+            PyIntOrQubit::Int(i) => Qubit::new(i as u32),
+            PyIntOrQubit::Qubit(q) => q.inner,
+        }
+    }
+}
+
+/// Multi-qubit operation argument: accepts `List[int]` or `List[Qubit]`.
+///
+/// Enables gate methods to accept flexible qubit list arguments.
+///
+/// # Python Usage
+///
+/// ```python
+/// # Both forms are equivalent
+/// circuit.barrier([0, 1, 2])
+/// circuit.barrier([Qubit(0), Qubit(1), Qubit(2)])
+/// ```
+#[derive(FromPyObject)]
+pub enum PyIntListOrQubitList {
+    /// List of integer indices (e.g., `[0, 1, 2]`).
+    IntList(Vec<usize>),
+    /// List of Qubit objects.
+    QubitList(Vec<PyQubit>),
+}
+
+impl From<PyIntListOrQubitList> for Vec<PyQubit> {
+    /// Converts to a vector of `PyQubit` objects, creating from indices if needed.
+    fn from(item: PyIntListOrQubitList) -> Vec<PyQubit> {
+        match item {
+            PyIntListOrQubitList::IntList(indices) => indices
+                .into_iter()
+                .map(|i| PyQubit::from(Qubit::new(i as u32)))
+                .collect(),
+            PyIntListOrQubitList::QubitList(qubits) => qubits,
+        }
+    }
+}
+
+impl From<PyIntListOrQubitList> for Vec<Qubit> {
+    /// Converts to a vector of core `Qubit` objects, creating from indices if needed.
+    fn from(item: PyIntListOrQubitList) -> Vec<Qubit> {
+        match item {
+            PyIntListOrQubitList::IntList(indices) => {
+                indices.into_iter().map(|i| Qubit::new(i as u32)).collect()
+            }
+            PyIntListOrQubitList::QubitList(qubits) => {
+                qubits.into_iter().map(|q| q.inner).collect()
+            }
+        }
     }
 }
