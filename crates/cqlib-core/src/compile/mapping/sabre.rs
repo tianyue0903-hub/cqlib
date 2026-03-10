@@ -916,7 +916,7 @@ impl SabreMapping {
 
         // 6. 重建并返回映射后的物理量子线路
         let mapped_ops = self.replay_ops(&prepared, &original_info, &best_group);
-        build_output_circuit(&mapped_ops, &prepared.parameters)
+        Ok(build_output_circuit_from_source(circuit, mapped_ops))
     }
 
     /// Internal helper for replay ops.
