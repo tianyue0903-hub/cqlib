@@ -10,7 +10,43 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
-use super::common::{py_id_to_qubit, qubit_to_py_id};
+//! Python bindings for quantum execution results.
+//!
+//! This module provides types for representing quantum measurement outcomes,
+//! job execution status, and complete execution results with histogram data.
+//!
+//! # Types
+//!
+//! - [`PyOutcome`]: Compact bitstring representation of measurement outcomes
+//! - [`PyStatus`]: Job execution state machine (queued, running, completed, etc.)
+//! - [`PyExecutionResult`]: Complete results with counts, timestamps, and metadata
+//!
+//! # Example
+//!
+//! ```python
+//! from cqlib.device import ExecutionResult, Status, Outcome
+//!
+//! # Create a new execution
+//! result = ExecutionResult(
+//!     task_id="task-001",
+//!     qubits=[0, 1],
+//!     shots=1000,
+//!     num_qubits=2,
+//!     backend="simulator"
+//! )
+//!
+//! # Mark as running
+//! result.start()
+//!
+//! # Finish with measurement counts
+//! result.finish({"00": 520, "11": 480})
+//!
+//! # Calculate probabilities
+//! result.calc_probabilities()
+//! print(result.probabilities)  # {"00": 0.52, "11": 0.48}
+//! ```
+
+use crate::circuit::PyQubit;
 use cqlib_core::device::{ExecutionResult, Outcome, Status};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -18,6 +54,32 @@ use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
+/// Measurement outcome as a compact bitstring.
+///
+/// Represents a quantum measurement result as a bit vector. The outcome
+/// is stored efficiently using 64-bit chunks and supports arbitrary
+/// numbers of qubits.
+///
+/// # Bit Ordering
+///
+/// Uses little-endian bit ordering: the rightmost bit in the string
+/// corresponds to qubit 0, and the leftmost to qubit N-1.
+///
+/// # Example
+///
+/// ```python
+/// from cqlib.device import Outcome
+///
+/// # Create from bitstring
+/// outcome = Outcome("101")  # Qubit 0 = 1, Qubit 1 = 0, Qubit 2 = 1
+///
+/// # Check individual bits
+/// assert outcome.is_one(0)  # True
+/// assert not outcome.is_one(1)  # False
+///
+/// # Convert back to string
+/// bitstring = outcome.to_bitstring(3)  # "101"
+/// ```
 #[pyclass(name = "Outcome", module = "cqlib.device")]
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct PyOutcome {
@@ -38,6 +100,19 @@ impl From<PyOutcome> for Outcome {
 
 #[pymethods]
 impl PyOutcome {
+    /// Creates an outcome from a bitstring.
+    ///
+    /// # Arguments
+    ///
+    /// * `bitstring` - Binary string of '0's and '1's
+    ///
+    /// # Errors
+    ///
+    /// Raises `ValueError` if the string contains characters other than '0' or '1'.
+    ///
+    /// # Bit Ordering
+    ///
+    /// The rightmost character corresponds to qubit 0 (least significant bit).
     #[new]
     fn new(bitstring: String) -> PyResult<Self> {
         Outcome::from_bitstring(&bitstring)
@@ -45,19 +120,38 @@ impl PyOutcome {
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
+    /// Alternative constructor from bitstring (same as `Outcome()`).
     #[staticmethod]
     fn from_bitstring(bitstring: String) -> PyResult<Self> {
         Self::new(bitstring)
     }
 
+    /// Returns True if the bit at the given index is 1.
+    ///
+    /// # Arguments
+    ///
+    /// * `index` - Bit index (0 = least significant = rightmost in string)
     fn is_one(&self, index: usize) -> bool {
         self.inner.is_one(index)
     }
 
+    /// Formats the outcome as a binary string.
+    ///
+    /// # Arguments
+    ///
+    /// * `num_qubits` - Total number of qubits (pads with leading zeros if needed)
+    ///
+    /// # Returns
+    ///
+    /// Binary string of length `num_qubits`
     fn to_bitstring(&self, num_qubits: usize) -> String {
         self.inner.to_string(num_qubits)
     }
 
+    /// Returns the raw storage chunks.
+    ///
+    /// For advanced use only. Returns the internal 64-bit chunks storing
+    /// the bit values.
     #[getter]
     fn chunks(&self) -> Vec<u64> {
         self.inner.0.to_vec()
@@ -82,6 +176,35 @@ impl PyOutcome {
     }
 }
 
+/// Execution status of a quantum job.
+///
+/// Represents the state of a quantum computation job through its lifecycle
+/// from submission to completion or failure.
+///
+/// # States
+///
+/// - **Queued**: Job is waiting in the queue
+/// - **Running**: Job is currently executing on the backend
+/// - **Completed**: Job finished successfully
+/// - **Failed**: Job encountered an error
+/// - **Cancelled**: Job was cancelled by the user
+///
+/// # Example
+///
+/// ```python
+/// from cqlib.device import Status
+///
+/// # Create different statuses
+/// status = Status.queued()
+/// status = Status.running()
+/// status = Status.completed()
+/// status = Status.failed("Timeout", 500)
+/// status = Status.cancelled()
+///
+/// # Check state
+/// if status.is_terminal():
+///     print(f"Job finished with status: {status}")
+/// ```
 #[pyclass(name = "Status", module = "cqlib.device")]
 #[derive(Clone, Debug, PartialEq)]
 pub struct PyStatus {
@@ -102,6 +225,7 @@ impl From<PyStatus> for Status {
 
 #[pymethods]
 impl PyStatus {
+    /// Creates a "queued" status.
     #[staticmethod]
     fn queued() -> Self {
         Self {
@@ -109,6 +233,7 @@ impl PyStatus {
         }
     }
 
+    /// Creates a "running" status.
     #[staticmethod]
     fn running() -> Self {
         Self {
@@ -116,6 +241,7 @@ impl PyStatus {
         }
     }
 
+    /// Creates a "completed" status.
     #[staticmethod]
     fn completed() -> Self {
         Self {
@@ -123,6 +249,12 @@ impl PyStatus {
         }
     }
 
+    /// Creates a "failed" status.
+    ///
+    /// # Arguments
+    ///
+    /// * `error_msg` - Human-readable error description
+    /// * `error_code` - Numeric error code
     #[staticmethod]
     fn failed(error_msg: String, error_code: i32) -> Self {
         Self {
@@ -133,6 +265,7 @@ impl PyStatus {
         }
     }
 
+    /// Creates a "cancelled" status.
     #[staticmethod]
     fn cancelled() -> Self {
         Self {
@@ -140,11 +273,15 @@ impl PyStatus {
         }
     }
 
+    /// Returns the status kind as a string.
+    ///
+    /// One of: "queued", "running", "completed", "failed", "cancelled"
     #[getter]
     fn kind(&self) -> &'static str {
         status_kind(&self.inner)
     }
 
+    /// Returns the error message if status is "failed", None otherwise.
     #[getter]
     fn error_msg(&self) -> Option<String> {
         match &self.inner {
@@ -153,6 +290,7 @@ impl PyStatus {
         }
     }
 
+    /// Returns the error code if status is "failed", None otherwise.
     #[getter]
     fn error_code(&self) -> Option<i32> {
         match self.inner {
@@ -161,10 +299,14 @@ impl PyStatus {
         }
     }
 
+    /// Returns True if the job has reached a terminal state.
+    ///
+    /// Terminal states are: completed, failed, cancelled.
     fn is_terminal(&self) -> bool {
         self.inner.is_terminal()
     }
 
+    /// Returns True if the job completed successfully.
     fn is_success(&self) -> bool {
         self.inner.is_success()
     }
@@ -178,6 +320,34 @@ impl PyStatus {
     }
 }
 
+/// Complete execution results for a quantum job.
+///
+/// Contains all information about a quantum computation: measurement counts,
+/// timestamps, backend information, and calculated probabilities.
+///
+/// # Example
+///
+/// ```python
+/// from cqlib.device import ExecutionResult
+///
+/// # Create result object
+/// result = ExecutionResult(
+///     task_id="task-001",
+///     qubits=[0, 1],
+///     shots=1000,
+///     num_qubits=2,
+///     backend="ibmq_manila"
+/// )
+///
+/// # Lifecycle
+/// result.start()  # Mark as running
+/// result.finish({"00": 512, "11": 488})  # Set counts
+/// result.calc_probabilities()  # Calculate probabilities
+///
+/// # Access results
+/// print(result.counts)  # {"00": 512, "11": 488}
+/// print(result.probabilities)  # {"00": 0.512, "11": 0.488}
+/// ```
 #[pyclass(name = "ExecutionResult", module = "cqlib.device")]
 #[derive(Clone, Debug)]
 pub struct PyExecutionResult {
@@ -198,28 +368,46 @@ impl From<PyExecutionResult> for ExecutionResult {
 
 #[pymethods]
 impl PyExecutionResult {
+    /// Creates a new execution result in "queued" status.
+    ///
+    /// # Arguments
+    ///
+    /// * `task_id` - Unique job identifier
+    /// * `qubits` - List of measured qubits
+    /// * `shots` - Number of measurement shots
+    /// * `num_qubits` - Total number of qubits in the circuit
+    /// * `backend` - Optional backend name
     #[new]
     #[pyo3(signature = (task_id, qubits, shots, num_qubits, backend=None))]
     fn new(
         task_id: String,
-        qubits: Vec<usize>,
+        qubits: Vec<PyQubit>,
         shots: usize,
         num_qubits: usize,
         backend: Option<String>,
     ) -> PyResult<Self> {
-        let qubits = qubits
-            .into_iter()
-            .map(py_id_to_qubit)
-            .collect::<PyResult<Vec<_>>>()?;
+        let qubits = qubits.into_iter().map(|q| q.inner).collect();
         Ok(Self {
             inner: ExecutionResult::new(task_id, qubits, shots, num_qubits, backend, None),
         })
     }
 
+    /// Marks the job as running.
+    ///
+    /// Sets status to "running" and records the start timestamp.
     fn start(&mut self) {
         self.inner.start(None);
     }
 
+    /// Marks the job as completed with measurement counts.
+    ///
+    /// # Arguments
+    ///
+    /// * `counts` - Dictionary mapping bitstrings to occurrence counts
+    ///
+    /// # Errors
+    ///
+    /// Raises `ValueError` if any bitstring contains invalid characters.
     fn finish(&mut self, counts: HashMap<String, usize>) -> PyResult<()> {
         let counts = counts
             .into_iter()
@@ -233,43 +421,58 @@ impl PyExecutionResult {
         Ok(())
     }
 
+    /// Marks the job as failed.
+    ///
+    /// # Arguments
+    ///
+    /// * `msg` - Error message
+    /// * `code` - Error code
     fn fail(&mut self, msg: String, code: i32) {
         self.inner.fail(msg, code);
     }
 
+    /// Marks the job as cancelled.
     fn cancel(&mut self) {
         self.inner.cancel();
     }
 
+    /// Calculates probabilities from measurement counts.
+    ///
+    /// Populates the `probabilities` property with normalized frequencies.
     fn calc_probabilities(&mut self) {
         self.inner.calc_probabilities();
     }
 
+    /// Returns the task ID.
     #[getter]
     fn task_id(&self) -> String {
         self.inner.task_id().to_string()
     }
 
+    /// Returns the number of shots.
     #[getter]
     fn shots(&self) -> usize {
         self.inner.shots()
     }
 
+    /// Returns the number of qubits.
     #[getter]
     fn num_qubits(&self) -> usize {
         self.inner.num_qubits()
     }
 
+    /// Returns the list of measured qubits.
     #[getter]
-    fn qubits(&self) -> Vec<usize> {
+    fn qubits(&self) -> Vec<PyQubit> {
         self.inner
             .qubits()
             .iter()
             .copied()
-            .map(qubit_to_py_id)
+            .map(PyQubit::from)
             .collect()
     }
 
+    /// Returns the current execution status.
     #[getter]
     fn status(&self) -> PyStatus {
         PyStatus {
@@ -277,31 +480,42 @@ impl PyExecutionResult {
         }
     }
 
+    /// Returns the creation timestamp as an ISO 8601 string.
     #[getter]
     fn created_at(&self) -> String {
         self.inner.created_at().to_string()
     }
 
+    /// Returns the start timestamp, if the job has started.
     #[getter]
     fn started_at(&self) -> Option<String> {
         self.inner.started_at().as_ref().map(ToString::to_string)
     }
 
+    /// Returns the finish timestamp, if the job has finished.
     #[getter]
     fn finished_at(&self) -> Option<String> {
         self.inner.finished_at().as_ref().map(ToString::to_string)
     }
 
+    /// Returns the backend name, if set.
     #[getter]
     fn backend(&self) -> Option<String> {
         self.inner.backend().cloned()
     }
 
+    /// Returns the measurement counts as a dictionary.
+    ///
+    /// Maps bitstrings (e.g., "00101") to occurrence counts.
     #[getter]
     fn counts(&self) -> HashMap<String, usize> {
         counts_to_bitstring_map(self.inner.counts(), self.num_qubits())
     }
 
+    /// Returns the calculated probabilities, if available.
+    ///
+    /// Maps bitstrings to probabilities (0.0 to 1.0).
+    /// Requires `calc_probabilities()` to be called first.
     #[getter]
     fn probabilities(&self) -> Option<HashMap<String, f64>> {
         self.inner
@@ -321,6 +535,7 @@ impl PyExecutionResult {
     }
 }
 
+/// Converts Status to its string representation.
 fn status_kind(status: &Status) -> &'static str {
     match status {
         Status::Queued => "queued",
@@ -331,6 +546,7 @@ fn status_kind(status: &Status) -> &'static str {
     }
 }
 
+/// Converts internal counts to string-keyed dictionary.
 fn counts_to_bitstring_map(
     counts: &HashMap<Outcome, usize>,
     num_qubits: usize,
@@ -341,6 +557,7 @@ fn counts_to_bitstring_map(
         .collect()
 }
 
+/// Converts internal probabilities to string-keyed dictionary.
 fn probabilities_to_bitstring_map(
     probabilities: &HashMap<Outcome, f64>,
     num_qubits: usize,

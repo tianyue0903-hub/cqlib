@@ -11,7 +11,6 @@
 # that they have been altered from the originals.
 
 from .._native import (
-    Topology,
     SabreConfig,
     vf2_is_subgraph_isomorphic,
     vf2_find_initial_layout,
@@ -21,7 +20,6 @@ from .._native import (
 )
 
 __all__ = [
-    "Topology",
     "SabreConfig",
     "vf2_is_subgraph_isomorphic",
     "vf2_find_initial_layout",

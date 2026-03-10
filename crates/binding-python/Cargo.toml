@@ -11,8 +11,10 @@ name = "_native"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3 = { version = "0.27", features = ["extension-module", "abi3-py310", "num-complex"] }
+pyo3 = { version = "0.27", features = ["extension-module", "abi3-py310", "num-complex", "chrono"] }
+chrono = "0.4"
 cqlib-core = { path = "../cqlib-core", version = '0.1.0' }
 num-complex.workspace = true
 numpy.workspace = true
 smallvec.workspace = true
+time.workspace = true

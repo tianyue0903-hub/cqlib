@@ -88,6 +88,18 @@ pub enum Phase {
     MinusI = 3,
 }
 
+impl fmt::Display for Phase {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let s = match self {
+            Phase::Plus => "1",
+            Phase::I => "i",
+            Phase::Minus => "-1",
+            Phase::MinusI => "-i",
+        };
+        write!(f, "{:?}", s)
+    }
+}
+
 impl From<u8> for Phase {
     /// Converts a `u8` to a `Phase` by taking modulo 4.
     ///
@@ -371,7 +383,7 @@ impl Pauli {
 /// other.set_pauli(0, Pauli::Z);
 /// other.set_pauli(1, Pauli::X);
 ///
-/// assert!(!ps.commutes_with(&other)); // [X⊗Z, Z⊗X] ≠ 0
+/// assert!(ps.commutes_with(&other)); // [X⊗Z, Z⊗X] ≠ 0
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PauliString {
@@ -557,7 +569,7 @@ impl PauliString {
 /// p2.set_pauli(0, Pauli::Z);
 ///
 /// let product = &p1 * &p2;
-/// assert_eq!(product.to_string(), "-iYI"); // XZ = -iY
+/// assert_eq!(product.to_string(), "-iIY");
 /// ```
 impl Mul for &PauliString {
     type Output = PauliString;
@@ -587,7 +599,7 @@ impl Mul for &PauliString {
 ///
 /// let p2 = PauliString::new(2);
 /// p1 *= &p2; // Multiply by identity
-/// assert_eq!(p1.to_string(), "+XI");
+/// assert_eq!(p1.to_string(), "+IX");
 /// ```
 impl MulAssign<&PauliString> for PauliString {
     fn mul_assign(&mut self, rhs: &PauliString) {

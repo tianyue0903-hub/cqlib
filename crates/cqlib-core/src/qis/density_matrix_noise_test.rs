@@ -1114,7 +1114,7 @@ fn test_complex_circuit_with_readout_and_gate_noise() {
     // Verify all states have some probability
     for (i, &p) in probs.iter().enumerate() {
         assert!(
-            p >= 0.0 && p <= 1.0,
+            (0.0..=1.0).contains(&p),
             "P(|{:02b}>) = {} is out of range",
             i,
             p

@@ -16,6 +16,7 @@ use thiserror::Error;
 
 #[derive(Error, Debug, Clone, PartialEq, Eq)]
 pub enum DeviceError {
+    InvalidOnlineQubit(Qubit),
     QubitNotInTopology(Qubit),
     EdgeNotInTopology(Qubit, Qubit),
 }
@@ -23,6 +24,13 @@ pub enum DeviceError {
 impl fmt::Display for DeviceError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::InvalidOnlineQubit(q) => {
+                write!(
+                    f,
+                    "Specified online qubit {} does not exist in the device topology",
+                    q
+                )
+            }
             Self::QubitNotInTopology(q) => {
                 write!(f, "Qubit {} is not in the device topology", q)
             }

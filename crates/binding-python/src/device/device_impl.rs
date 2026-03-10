@@ -10,15 +10,65 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
-use super::common::{py_id_to_qubit, qubit_to_py_id};
-use crate::circuit::PyInstruction;
-use crate::compile::PyTopology;
+//! Python bindings for quantum device hardware characteristics.
+//!
+//! This module provides Python wrappers around the core device types:
+//!
+//! - [`PyInstructionProp`]: Calibration data for quantum gates (error rates, duration)
+//! - [`PyQubitProp`]: Physical properties of individual qubits (T1, T2, readout errors)
+//! - [`PyEdgeProp`]: Properties of coupling edges between qubits
+//! - [`PyDevice`]: Complete hardware description including topology and calibration data
+//!
+//! # Example
+//!
+//! ```python
+//! from cqlib.device import Device, Topology, QubitProp
+//! from datetime import datetime, timezone
+//!
+//! # Create device topology
+//! topology = Topology([0, 1, 2], [(0, 1, "CX"), (1, 2, "CX")])
+//!
+//! # Initialize device
+//! device = Device("superconducting_qpu", [0, 1, 2], topology)
+//!
+//! # Set calibration timestamp
+//! device.calibration_time = datetime.now(timezone.utc)
+//!
+//! # Set default coherence times
+//! device.default_t1 = 100.0
+//! device.default_t2 = 50.0
+//!
+//! # Add qubit-specific properties
+//! prop = QubitProp(readout_error=0.01)
+//! prop.t1 = 120.0
+//! device.add_qubit_properties(0, prop)
+//! ```
+
+use crate::circuit::bit::{PyIntListOrQubitList, PyIntOrQubit};
+use crate::circuit::{PyInstruction, PyQubit};
+use crate::device::topology::PyTopology;
 use cqlib_core::circuit::Qubit;
-use cqlib_core::device::{Device, EdgeProp, InstructionProp, Layout, QubitProp};
+use cqlib_core::device::{Device, EdgeProp, InstructionProp, QubitProp};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use std::collections::{HashMap, HashSet};
+use time::OffsetDateTime;
 
+/// Python wrapper for [`InstructionProp`].
+///
+/// Represents calibration data for a quantum gate executed on specific qubits,
+/// including the gate's error rate (infidelity) and optionally its execution duration.
+///
+/// # Python Example
+///
+/// ```python
+/// from cqlib.device import InstructionProp, StandardGate
+///
+/// # Create properties for an H gate with 0.1% error rate
+/// prop = InstructionProp(StandardGate.H, error_rate=0.001)
+///
+/// # Optionally set gate duration in nanoseconds
+/// prop.length = 35.0  # 35 ns
+/// ```
 #[pyclass(name = "InstructionProp", module = "cqlib.device")]
 #[derive(Clone, Debug)]
 pub struct PyInstructionProp {
@@ -46,10 +96,19 @@ impl PyInstructionProp {
         }
     }
 
-    fn with_length(&self, length: f64) -> Self {
-        Self {
-            inner: self.inner.clone().with_length(length),
-        }
+    #[setter]
+    fn set_length(&mut self, length: f64) {
+        self.inner.set_length(length);
+    }
+
+    #[setter]
+    fn set_instruction(&mut self, instruction: PyInstruction) {
+        self.inner.set_instruction(instruction.inner);
+    }
+
+    #[setter]
+    fn set_error_rate(&mut self, error_rate: f64) {
+        self.inner.set_error_rate(error_rate);
     }
 
     #[getter]
@@ -85,6 +144,28 @@ impl PyInstructionProp {
     }
 }
 
+/// Python wrapper for [`QubitProp`].
+///
+/// Represents the physical properties and operational characteristics of a single
+/// quantum qubit, including coherence times (T1, T2), readout errors, and supported
+/// native gates.
+///
+/// # Python Example
+///
+/// ```python
+/// from cqlib.device import QubitProp
+///
+/// # Create qubit properties with 1% readout error
+/// prop = QubitProp(readout_error=0.01)
+///
+/// # Set coherence times (in microseconds)
+/// prop.t1 = 50.0
+/// prop.t2 = 30.0
+///
+/// # Set measurement discrimination errors
+/// prop.prob_meas0_prep1 = 0.02  # P(meas 0 | prep 1)
+/// prop.prob_meas1_prep0 = 0.01  # P(meas 1 | prep 0)
+/// ```
 #[pyclass(name = "QubitProp", module = "cqlib.device")]
 #[derive(Clone, Debug)]
 pub struct PyQubitProp {
@@ -112,45 +193,49 @@ impl PyQubitProp {
         }
     }
 
-    fn with_prob_meas0_prep1(&self, prob: f64) -> Self {
-        Self {
-            inner: self.inner.clone().with_prob_meas0_prep1(prob),
-        }
+    #[setter]
+    fn set_prob_meas0_prep1(&mut self, prob: f64) {
+        self.inner.set_prob_meas0_prep1(prob);
     }
 
-    fn with_prob_meas1_prep0(&self, prob: f64) -> Self {
-        Self {
-            inner: self.inner.clone().with_prob_meas1_prep0(prob),
-        }
+    #[setter]
+    fn set_prob_meas1_prep0(&mut self, prob: f64) {
+        self.inner.set_prob_meas1_prep0(prob);
     }
 
-    fn with_t1(&self, t1: f64) -> Self {
-        Self {
-            inner: self.inner.clone().with_t1(t1),
-        }
+    #[setter]
+    fn set_t1(&mut self, t1: f64) {
+        self.inner.set_t1(t1);
     }
 
-    fn with_t2(&self, t2: f64) -> Self {
-        Self {
-            inner: self.inner.clone().with_t2(t2),
-        }
+    #[setter]
+    fn set_t2(&mut self, t2: f64) {
+        self.inner.set_t2(t2);
     }
 
-    fn with_frequency(&self, frequency: f64) -> Self {
-        Self {
-            inner: self.inner.clone().with_frequency(frequency),
-        }
+    #[setter]
+    fn set_frequency(&mut self, frequency: f64) {
+        self.inner.set_frequency(frequency);
     }
 
-    fn with_native_instruction(&self, prop: PyInstructionProp) -> Self {
-        Self {
-            inner: self.inner.clone().with_native_instruction(prop.inner),
-        }
+    #[setter]
+    fn set_native_instruction(&mut self, prop: PyInstructionProp) {
+        self.inner.set_native_instruction(prop.inner);
     }
 
     #[getter]
     fn readout_error(&self) -> f64 {
         self.inner.readout_error()
+    }
+
+    #[getter]
+    fn prob_meas0_prep1(&self) -> Option<f64> {
+        self.inner.prob_meas0_prep1()
+    }
+
+    #[getter]
+    fn prob_meas1_prep0(&self) -> Option<f64> {
+        self.inner.prob_meas1_prep0()
     }
 
     #[getter]
@@ -217,10 +302,9 @@ impl PyEdgeProp {
         }
     }
 
-    fn with_native_instruction(&self, prop: PyInstructionProp) -> Self {
-        Self {
-            inner: self.inner.clone().with_native_instruction(prop.inner),
-        }
+    #[setter]
+    fn set_native_instruction(&mut self, prop: PyInstructionProp) {
+        self.inner.set_native_instruction(prop.inner);
     }
 
     #[getter]
@@ -241,6 +325,38 @@ impl PyEdgeProp {
     }
 }
 
+/// Python wrapper for [`Device`].
+///
+/// Represents a complete quantum device characterization, including topology,
+/// qubit properties, coupling edge properties, and default calibration values.
+///
+/// This is the primary interface for describing quantum hardware to the compiler
+/// and simulator.
+///
+/// # Python Example
+///
+/// ```python
+/// from cqlib.device import Device, Topology, QubitProp
+/// from datetime import datetime, timezone
+///
+/// # Create device topology
+/// topology = Topology([0, 1, 2], [(0, 1, "CX"), (1, 2, "CX")])
+///
+/// # Initialize device
+/// device = Device("superconducting_qpu", [0, 1, 2], topology)
+///
+/// # Set calibration timestamp
+/// device.calibration_time = datetime.now(timezone.utc)
+///
+/// # Set default coherence times
+/// device.default_t1 = 100.0
+/// device.default_t2 = 50.0
+///
+/// # Add qubit-specific properties
+/// prop = QubitProp(readout_error=0.01)
+/// prop.t1 = 120.0
+/// device.add_qubit_properties(0, prop)
+/// ```
 #[pyclass(name = "Device", module = "cqlib.device")]
 #[derive(Clone, Debug)]
 pub struct PyDevice {
@@ -262,66 +378,79 @@ impl From<PyDevice> for Device {
 #[pymethods]
 impl PyDevice {
     #[new]
-    fn new(name: String, topology: PyTopology) -> Self {
-        Self {
-            inner: Device::new(name, topology.inner),
-        }
+    fn new(name: String, qubits: PyIntListOrQubitList, topology: PyTopology) -> PyResult<Self> {
+        let inner = Device::new(
+            name,
+            <PyIntListOrQubitList as Into<Vec<Qubit>>>::into(qubits)
+                .into_iter()
+                .collect(),
+            topology.inner,
+        )
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        Ok(Self { inner })
     }
 
-    fn with_native_gates(&self, gates: Vec<PyInstruction>) -> Self {
+    #[setter]
+    pub fn set_native_gates(&mut self, gates: Vec<PyInstruction>) {
         let gates = gates.into_iter().map(|g| g.inner).collect();
-        Self {
-            inner: self.inner.clone().with_native_gates(gates),
-        }
+        self.inner.set_native_gates(gates)
     }
 
-    fn with_default_t1(&self, t1: f64) -> Self {
-        Self {
-            inner: self.inner.clone().with_default_t1(t1),
-        }
+    #[setter]
+    fn set_default_t1(&mut self, t1: f64) {
+        self.inner.set_default_t1(t1)
     }
 
-    fn with_default_t2(&self, t2: f64) -> Self {
-        Self {
-            inner: self.inner.clone().with_default_t2(t2),
-        }
+    #[setter]
+    fn set_default_t2(&mut self, t2: f64) {
+        self.inner.set_default_t2(t2)
     }
 
-    fn with_default_readout_error(&self, error: f64) -> Self {
-        Self {
-            inner: self.inner.clone().with_default_readout_error(error),
-        }
+    #[setter]
+    fn set_default_readout_error(&mut self, error: f64) {
+        self.inner.set_default_readout_error(error)
     }
 
-    fn with_default_single_qubit_error(&self, error: f64) -> Self {
-        Self {
-            inner: self.inner.clone().with_default_single_qubit_error(error),
-        }
+    #[setter]
+    fn set_default_single_qubit_error(&mut self, error: f64) {
+        self.inner.set_default_single_qubit_error(error)
     }
 
-    fn with_default_two_qubit_error(&self, error: f64) -> Self {
-        Self {
-            inner: self.inner.clone().with_default_two_qubit_error(error),
-        }
+    #[setter]
+    fn set_default_two_qubit_error(&mut self, error: f64) {
+        self.inner.set_default_two_qubit_error(error)
     }
 
-    fn add_qubit_properties(&mut self, qubit: usize, props: PyQubitProp) -> PyResult<()> {
-        let qubit = py_id_to_qubit(qubit)?;
+    #[setter]
+    fn set_calibration_time(&mut self, datetime: chrono::DateTime<chrono::Utc>) {
+        let timestamp = datetime.timestamp();
+        let time = OffsetDateTime::from_unix_timestamp(timestamp)
+            .unwrap_or_else(|_| OffsetDateTime::now_utc());
+        self.inner.set_calibration_time(time);
+    }
+
+    #[getter]
+    fn calibration_time(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        self.inner.calibration_time().map(|t| {
+            chrono::DateTime::from_timestamp(t.unix_timestamp(), 0)
+                .unwrap_or_else(|| chrono::Utc::now())
+        })
+    }
+
+    fn add_qubit_properties(&mut self, qubit: PyIntOrQubit, props: PyQubitProp) -> PyResult<()> {
         self.inner
-            .add_qubit_properties(qubit, props.inner)
+            .add_qubit_properties(qubit.into(), props.inner)
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
     fn add_edge_properties(
         &mut self,
-        control: usize,
-        target: usize,
+        control: PyIntOrQubit,
+        target: PyIntOrQubit,
         props: PyEdgeProp,
     ) -> PyResult<()> {
-        let control = py_id_to_qubit(control)?;
-        let target = py_id_to_qubit(target)?;
         self.inner
-            .add_edge_properties(control, target, props.inner)
+            .add_edge_properties(control.into(), target.into(), props.inner)
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
@@ -331,13 +460,22 @@ impl PyDevice {
     }
 
     #[getter]
-    fn qubits(&self) -> Vec<usize> {
-        self.inner.qubits().map(qubit_to_py_id).collect()
+    fn qubits(&self) -> Vec<PyQubit> {
+        self.inner.qubits().map(PyQubit::from).collect()
     }
 
     #[getter]
-    fn invalid_qubits(&self) -> Vec<usize> {
-        self.inner.invalid_qubits().map(qubit_to_py_id).collect()
+    fn invalid_qubits(&self) -> Vec<PyQubit> {
+        self.inner.invalid_qubits().map(PyQubit::from).collect()
+    }
+
+    #[setter]
+    fn set_invalid_qubits(&mut self, qubits: PyIntListOrQubitList) {
+        let qubits: std::collections::HashSet<_> =
+            <PyIntListOrQubitList as Into<Vec<Qubit>>>::into(qubits)
+                .into_iter()
+                .collect();
+        self.inner.set_invalid_qubits(qubits);
     }
 
     #[getter]
@@ -357,35 +495,36 @@ impl PyDevice {
             .collect()
     }
 
-    fn qubit_properties(&self, qubit: usize) -> PyResult<Option<PyQubitProp>> {
-        let qubit = py_id_to_qubit(qubit)?;
+    fn qubit_properties(&self, qubit: PyIntOrQubit) -> PyResult<Option<PyQubitProp>> {
         Ok(self
             .inner
-            .qubit_properties(qubit)
+            .qubit_properties(qubit.into())
             .cloned()
             .map(PyQubitProp::from))
     }
 
-    fn edge_properties(&self, control: usize, target: usize) -> PyResult<Option<PyEdgeProp>> {
-        let control = py_id_to_qubit(control)?;
-        let target = py_id_to_qubit(target)?;
+    fn edge_properties(
+        &self,
+        control: PyIntOrQubit,
+        target: PyIntOrQubit,
+    ) -> PyResult<Option<PyEdgeProp>> {
         Ok(self
             .inner
-            .edge_properties(control, target)
+            .edge_properties(control.into(), target.into())
             .cloned()
             .map(PyEdgeProp::from))
     }
 
-    fn get_t1(&self, qubit: usize) -> PyResult<Option<f64>> {
-        Ok(self.inner.get_t1(py_id_to_qubit(qubit)?))
+    fn get_t1(&self, qubit: PyIntOrQubit) -> PyResult<Option<f64>> {
+        Ok(self.inner.get_t1(qubit.into()))
     }
 
-    fn get_t2(&self, qubit: usize) -> PyResult<Option<f64>> {
-        Ok(self.inner.get_t2(py_id_to_qubit(qubit)?))
+    fn get_t2(&self, qubit: PyIntOrQubit) -> PyResult<Option<f64>> {
+        Ok(self.inner.get_t2(qubit.into()))
     }
 
-    fn get_readout_error(&self, qubit: usize) -> PyResult<Option<f64>> {
-        Ok(self.inner.get_readout_error(py_id_to_qubit(qubit)?))
+    fn get_readout_error(&self, qubit: PyIntOrQubit) -> PyResult<Option<f64>> {
+        Ok(self.inner.get_readout_error(qubit.into()))
     }
 
     #[getter]
@@ -399,150 +538,6 @@ impl PyDevice {
     }
 
     fn __repr__(&self) -> String {
-        format!(
-            "Device(name='{}', qubits={}, invalid_qubits={}, native_gates={})",
-            self.name(),
-            self.qubits().len(),
-            self.invalid_qubits().len(),
-            self.native_gates().len()
-        )
-    }
-}
-
-#[pyclass(name = "Layout", module = "cqlib.device")]
-#[derive(Clone, Debug)]
-pub struct PyLayout {
-    pub(crate) inner: Layout,
-}
-
-impl From<Layout> for PyLayout {
-    fn from(inner: Layout) -> Self {
-        Self { inner }
-    }
-}
-
-impl From<PyLayout> for Layout {
-    fn from(value: PyLayout) -> Self {
-        value.inner
-    }
-}
-
-#[pymethods]
-impl PyLayout {
-    #[new]
-    #[pyo3(signature = (logical, physical, init_map=None))]
-    fn new(
-        logical: Vec<usize>,
-        physical: Vec<usize>,
-        init_map: Option<HashMap<usize, usize>>,
-    ) -> PyResult<Self> {
-        let logical = logical
-            .into_iter()
-            .map(py_id_to_qubit)
-            .collect::<PyResult<Vec<_>>>()?;
-        let physical = physical
-            .into_iter()
-            .map(py_id_to_qubit)
-            .collect::<PyResult<Vec<_>>>()?;
-        let init_map = init_map
-            .map(|m| {
-                m.into_iter()
-                    .map(|(v, p)| Ok((py_id_to_qubit(v)?, py_id_to_qubit(p)?)))
-                    .collect::<PyResult<HashMap<_, _>>>()
-            })
-            .transpose()?;
-
-        let inner = Layout::new(logical, physical, init_map)
-            .map_err(|e| PyValueError::new_err(e.to_string()))?;
-        Ok(Self { inner })
-    }
-
-    #[getter]
-    fn num_logical(&self) -> usize {
-        self.inner.num_logical()
-    }
-
-    #[getter]
-    fn num_ancilla(&self) -> usize {
-        self.inner.num_ancilla()
-    }
-
-    #[getter]
-    fn num_physical(&self) -> usize {
-        self.inner.num_physical()
-    }
-
-    fn get_physical(&self, virtual_id: usize) -> PyResult<Option<usize>> {
-        let virtual_id = py_id_to_qubit(virtual_id)?;
-        Ok(self.inner.get_physical(virtual_id).map(qubit_to_py_id))
-    }
-
-    fn get_virtual(&self, physical_id: usize) -> PyResult<Option<usize>> {
-        let physical_id = py_id_to_qubit(physical_id)?;
-        Ok(self.inner.get_virtual(physical_id).map(qubit_to_py_id))
-    }
-
-    #[getter]
-    fn logical_qubits(&self) -> Vec<usize> {
-        self.inner.logical_qubits().map(qubit_to_py_id).collect()
-    }
-
-    #[getter]
-    fn ancilla_qubits(&self) -> Vec<usize> {
-        self.inner.ancilla_qubits().map(qubit_to_py_id).collect()
-    }
-
-    #[getter]
-    fn physical_qubits(&self) -> Vec<usize> {
-        self.inner.physical_qubits().map(qubit_to_py_id).collect()
-    }
-
-    #[getter]
-    fn v2p_map(&self) -> HashMap<usize, usize> {
-        self.inner
-            .v2p_map()
-            .iter()
-            .map(|(k, v)| (qubit_to_py_id(*k), qubit_to_py_id(*v)))
-            .collect()
-    }
-
-    #[getter]
-    fn p2v_map(&self) -> HashMap<usize, usize> {
-        self.inner
-            .p2v_map()
-            .iter()
-            .map(|(k, v)| (qubit_to_py_id(*k), qubit_to_py_id(*v)))
-            .collect()
-    }
-
-    fn swap_physical(&mut self, phys_a: usize, phys_b: usize) -> PyResult<()> {
-        let phys_a = py_id_to_qubit(phys_a)?;
-        let phys_b = py_id_to_qubit(phys_b)?;
-        let physical_set: HashSet<Qubit> = self.inner.physical_qubits().collect();
-
-        if !physical_set.contains(&phys_a) {
-            return Err(PyValueError::new_err(format!(
-                "physical qubit {} not in layout",
-                qubit_to_py_id(phys_a)
-            )));
-        }
-        if !physical_set.contains(&phys_b) {
-            return Err(PyValueError::new_err(format!(
-                "physical qubit {} not in layout",
-                qubit_to_py_id(phys_b)
-            )));
-        }
-
-        self.inner.swap_physical(phys_a, phys_b);
-        Ok(())
-    }
-
-    fn __repr__(&self) -> String {
-        format!(
-            "Layout(num_logical={}, num_ancilla={}, num_physical={})",
-            self.num_logical(),
-            self.num_ancilla(),
-            self.num_physical()
-        )
+        format!("Device(name='{}')", self.name(),)
     }
 }
