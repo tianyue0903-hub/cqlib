@@ -24,11 +24,14 @@
 
 use super::vf2::{Vf2CandidateOptions, Vf2Mapping, Vf2ScoreWeights};
 use super::{
-    FidelityMap, PreparedCircuit, TopologyAdapter, build_output_circuit, is_cx,
-    map_operation_qubits, normalize_index_pair, preprocess_circuit,
+    build_if_else_operation, build_output_circuit_from_source, build_while_loop_operation, is_cx,
+    map_operation_qubits, normalize_index_pair, preprocess_circuit, preprocess_program,
+    FidelityMap, PreparedCircuit, PreparedIfElse, PreparedPassthroughOp, PreparedProgram,
+    PreparedProgramItem, PreparedSegment, PreparedWhileLoop, TopologyAdapter,
 };
+use crate::circuit::gate::control_flow::ConditionView;
 use crate::circuit::gate::{Instruction, StandardGate};
-use crate::circuit::{Circuit, Operation, Qubit};
+use crate::circuit::{Circuit, Operation, Parameter, Qubit};
 use crate::compile::error::CompileError;
 use crate::compile::graph::{DependencyNode, GateGraph};
 use crate::device::Topology;
@@ -107,6 +110,22 @@ struct RoutingState {
     decay_time: usize,
     weight_gates: Vec<Vec<(usize, f64)>>,
     preprocessing_h: f64,
+}
+
+#[derive(Debug, Clone)]
+struct StructuredRoute {
+    exit_l2p: Vec<usize>,
+    ops: Vec<Operation>,
+    cost: usize,
+    log_fidelity: f64,
+    objective: f64,
+}
+
+#[derive(Debug, Clone)]
+struct LayoutTransition {
+    ops: Vec<Operation>,
+    cost: usize,
+    log_fidelity: f64,
 }
 
 /// Policy controlling how VF2 is used around SABRE routing.
@@ -237,6 +256,14 @@ impl SabreMapping {
 
     /// Executes SABRE routing on a validated 1q/2q, control-flow-free circuit.
     pub fn execute(&mut self, circuit: &Circuit) -> Result<Circuit, CompileError> {
+        let program = preprocess_program(circuit)?;
+        if !program.is_plain_linear() {
+            return self.execute_structured(circuit, &program);
+        }
+        self.execute_linear(circuit)
+    }
+
+    fn execute_linear(&mut self, circuit: &Circuit) -> Result<Circuit, CompileError> {
         let prepared = preprocess_circuit(circuit)?;
         let reverse_circuit = circuit.inverse()?;
         let reverse_prepared = preprocess_circuit(&reverse_circuit)?;
@@ -310,7 +337,369 @@ impl SabreMapping {
         }
 
         let mapped_ops = self.replay_ops(&prepared, &original_info, &best_group);
-        build_output_circuit(&mapped_ops, &prepared.parameters)
+        Ok(build_output_circuit_from_source(circuit, mapped_ops))
+    }
+
+    fn execute_structured(
+        &mut self,
+        circuit: &Circuit,
+        program: &PreparedProgram,
+    ) -> Result<Circuit, CompileError> {
+        let prepared = program.flatten_interaction_circuit();
+        let logical_width = prepared.logical_qubits.len();
+        let available_nodes = self.usable_nodes();
+
+        if logical_width > available_nodes.len() {
+            return Err(CompileError::TopologyTooSmall {
+                required: logical_width,
+                available: available_nodes.len(),
+            });
+        }
+
+        let initial_iters = self.config.initial_iterations.max(1);
+        let mut initial_layouts = self.initial_layout_candidates(
+            &prepared,
+            &available_nodes,
+            logical_width,
+            initial_iters,
+        )?;
+
+        let mut best_route: Option<StructuredRoute> = None;
+        for initial_layout in initial_layouts.drain(..) {
+            let candidate = self.route_items(program, &program.items, &initial_layout)?;
+            if best_route
+                .as_ref()
+                .map(|best| self.structured_route_better(&candidate, best))
+                .unwrap_or(true)
+            {
+                best_route = Some(candidate);
+            }
+        }
+
+        let best_route = best_route.ok_or(CompileError::SabreRoutingStuck)?;
+        self.logic2phy = best_route
+            .exit_l2p
+            .iter()
+            .map(|&p| self.topology.physical_qubits[p])
+            .collect();
+        self.phy2logic.clear();
+        for (logical, &physical) in self.logic2phy.iter().enumerate() {
+            self.phy2logic.insert(physical, logical);
+        }
+
+        Ok(build_output_circuit_from_source(circuit, best_route.ops))
+    }
+
+    fn route_items(
+        &mut self,
+        program: &PreparedProgram,
+        items: &[PreparedProgramItem],
+        entry_l2p: &[usize],
+    ) -> Result<StructuredRoute, CompileError> {
+        let mut current = Self::identity_route(entry_l2p);
+        let mut idx = 0usize;
+        while idx < items.len() {
+            match &items[idx] {
+                PreparedProgramItem::Segment(segment) => {
+                    let next = self.route_segment(
+                        segment,
+                        &program.logical_qubits,
+                        &program.parameters,
+                        &current.exit_l2p,
+                    )?;
+                    self.extend_route(&mut current, next);
+                    idx += 1;
+                }
+                PreparedProgramItem::Passthrough(op) => {
+                    current
+                        .ops
+                        .push(self.map_passthrough(op, &current.exit_l2p));
+                    idx += 1;
+                }
+                PreparedProgramItem::IfElse(node) => {
+                    let next =
+                        self.route_if_else(program, node, &items[idx + 1..], &current.exit_l2p)?;
+                    self.extend_route(&mut current, next);
+                    return Ok(current);
+                }
+                PreparedProgramItem::WhileLoop(node) => {
+                    let next =
+                        self.route_while_loop(program, node, &items[idx + 1..], &current.exit_l2p)?;
+                    self.extend_route(&mut current, next);
+                    return Ok(current);
+                }
+            }
+        }
+        current.objective = self.routing_objective(current.cost, current.log_fidelity);
+        Ok(current)
+    }
+
+    fn route_segment(
+        &mut self,
+        segment: &PreparedSegment,
+        logical_qubits: &[Qubit],
+        parameters: &[Parameter],
+        entry_l2p: &[usize],
+    ) -> Result<StructuredRoute, CompileError> {
+        if segment.operations.is_empty() {
+            return Ok(Self::identity_route(entry_l2p));
+        }
+        let prepared = segment.to_prepared_circuit(logical_qubits, parameters);
+        let info = self.build_circuit_info(&prepared, prepared.logical_qubits.len())?;
+        let group = self.execute_routing(
+            &info,
+            &prepared,
+            entry_l2p,
+            self.config.swap_iterations.max(1),
+        )?;
+        Ok(StructuredRoute {
+            exit_l2p: group.final_l2p.clone(),
+            ops: self.replay_ops(&prepared, &info, &group),
+            cost: group.cost,
+            log_fidelity: group.log_fidelity,
+            objective: group.objective,
+        })
+    }
+
+    fn route_if_else(
+        &mut self,
+        program: &PreparedProgram,
+        node: &PreparedIfElse,
+        continuation: &[PreparedProgramItem],
+        entry_l2p: &[usize],
+    ) -> Result<StructuredRoute, CompileError> {
+        let true_route = self.route_items(&node.true_body, &node.true_body.items, entry_l2p)?;
+        let false_route = if let Some(false_body) = &node.false_body {
+            self.route_items(false_body, &false_body.items, entry_l2p)?
+        } else {
+            Self::identity_route(entry_l2p)
+        };
+
+        let mut candidates = Vec::new();
+        candidates.push(entry_l2p.to_vec());
+        if let Some(layout) = self.best_items_layout(program, continuation)? {
+            candidates.push(layout);
+        }
+        candidates.push(true_route.exit_l2p.clone());
+        candidates.push(false_route.exit_l2p.clone());
+
+        let mut seen = HashSet::new();
+        let candidates: Vec<Vec<usize>> = candidates
+            .into_iter()
+            .filter(|layout| seen.insert(layout.clone()))
+            .collect();
+
+        let mut best: Option<StructuredRoute> = None;
+        for merge_l2p in candidates {
+            let true_tail = self.reconcile_layout(&true_route.exit_l2p, &merge_l2p)?;
+            let false_tail = self.reconcile_layout(&false_route.exit_l2p, &merge_l2p)?;
+
+            let mut true_body = true_route.ops.clone();
+            true_body.extend(true_tail.ops.clone());
+            let mut false_body_ops = false_route.ops.clone();
+            false_body_ops.extend(false_tail.ops.clone());
+            let false_body = if false_body_ops.is_empty() && node.false_body.is_none() {
+                None
+            } else {
+                Some(false_body_ops)
+            };
+
+            let if_else_op = build_if_else_operation(
+                ConditionView::new(
+                    self.topology.physical_qubits[entry_l2p[node.condition_logical]],
+                    node.condition.target,
+                ),
+                true_body,
+                false_body,
+                node.label.clone(),
+            );
+
+            let continuation_route = if continuation.is_empty() {
+                Self::identity_route(&merge_l2p)
+            } else {
+                self.route_items(program, continuation, &merge_l2p)?
+            };
+
+            let true_cost = true_route.cost + true_tail.cost;
+            let false_cost = false_route.cost + false_tail.cost;
+            let true_log = true_route.log_fidelity + true_tail.log_fidelity;
+            let false_log = false_route.log_fidelity + false_tail.log_fidelity;
+
+            let branch_cost = true_cost.max(false_cost);
+            let branch_log = true_log.min(false_log);
+            let total_cost = branch_cost + continuation_route.cost;
+            let total_log_fidelity = branch_log + continuation_route.log_fidelity;
+
+            let mut ops = Vec::with_capacity(1 + continuation_route.ops.len());
+            ops.push(if_else_op);
+            ops.extend(continuation_route.ops.clone());
+
+            let candidate = StructuredRoute {
+                exit_l2p: continuation_route.exit_l2p.clone(),
+                ops,
+                cost: total_cost,
+                log_fidelity: total_log_fidelity,
+                objective: self.routing_objective(total_cost, total_log_fidelity),
+            };
+            if best
+                .as_ref()
+                .map(|current| self.structured_route_better(&candidate, current))
+                .unwrap_or(true)
+            {
+                best = Some(candidate);
+            }
+        }
+
+        best.ok_or(CompileError::SabreRoutingStuck)
+    }
+
+    fn route_while_loop(
+        &mut self,
+        program: &PreparedProgram,
+        node: &PreparedWhileLoop,
+        continuation: &[PreparedProgramItem],
+        entry_l2p: &[usize],
+    ) -> Result<StructuredRoute, CompileError> {
+        let mut candidates = Vec::new();
+        candidates.push(entry_l2p.to_vec());
+        if let Some(layout) = self.best_program_layout(&node.body)? {
+            candidates.push(layout);
+        }
+        if let Some(layout) = self.best_items_layout(program, continuation)? {
+            candidates.push(layout);
+        }
+
+        let mut seen = HashSet::new();
+        let candidates: Vec<Vec<usize>> = candidates
+            .into_iter()
+            .filter(|layout| seen.insert(layout.clone()))
+            .collect();
+
+        let mut best: Option<StructuredRoute> = None;
+        for loop_l2p in candidates {
+            let pre_loop = self.reconcile_layout(entry_l2p, &loop_l2p)?;
+            let body_route = self.route_items(&node.body, &node.body.items, &loop_l2p)?;
+            let body_tail = self.reconcile_layout(&body_route.exit_l2p, &loop_l2p)?;
+
+            let mut body_ops = body_route.ops.clone();
+            body_ops.extend(body_tail.ops.clone());
+
+            let while_op = build_while_loop_operation(
+                ConditionView::new(
+                    self.topology.physical_qubits[loop_l2p[node.condition_logical]],
+                    node.condition.target,
+                ),
+                body_ops,
+                node.label.clone(),
+            );
+
+            let continuation_route = if continuation.is_empty() {
+                Self::identity_route(&loop_l2p)
+            } else {
+                self.route_items(program, continuation, &loop_l2p)?
+            };
+
+            let loop_cost = body_route.cost + body_tail.cost;
+            let loop_log = body_route.log_fidelity + body_tail.log_fidelity;
+            let total_cost = pre_loop.cost + loop_cost + continuation_route.cost;
+            let total_log_fidelity =
+                pre_loop.log_fidelity + loop_log + continuation_route.log_fidelity;
+
+            let mut ops = pre_loop.ops.clone();
+            ops.push(while_op);
+            ops.extend(continuation_route.ops.clone());
+
+            let candidate = StructuredRoute {
+                exit_l2p: continuation_route.exit_l2p.clone(),
+                ops,
+                cost: total_cost,
+                log_fidelity: total_log_fidelity,
+                objective: self.routing_objective(total_cost, total_log_fidelity),
+            };
+            if best
+                .as_ref()
+                .map(|current| self.structured_route_better(&candidate, current))
+                .unwrap_or(true)
+            {
+                best = Some(candidate);
+            }
+        }
+
+        best.ok_or(CompileError::SabreRoutingStuck)
+    }
+
+    fn best_program_layout(
+        &self,
+        program: &PreparedProgram,
+    ) -> Result<Option<Vec<usize>>, CompileError> {
+        let prepared = program.flatten_interaction_circuit();
+        if prepared.operations.is_empty() {
+            return Ok(None);
+        }
+        self.best_prepared_layout(&prepared)
+    }
+
+    fn best_items_layout(
+        &self,
+        program: &PreparedProgram,
+        items: &[PreparedProgramItem],
+    ) -> Result<Option<Vec<usize>>, CompileError> {
+        if items.is_empty() {
+            return Ok(None);
+        }
+        let continuation_program = PreparedProgram {
+            logical_qubits: program.logical_qubits.clone(),
+            parameters: program.parameters.clone(),
+            items: items.to_vec(),
+        };
+        self.best_program_layout(&continuation_program)
+    }
+
+    fn best_prepared_layout(
+        &self,
+        prepared: &PreparedCircuit,
+    ) -> Result<Option<Vec<usize>>, CompileError> {
+        if prepared.operations.is_empty() {
+            return Ok(None);
+        }
+
+        let vf2 = Vf2Mapping::from_adapter(self.topology.clone());
+        let options = Vf2CandidateOptions {
+            top_k: 1,
+            weights: self.config.vf2_seed_weights,
+            ..Vf2CandidateOptions::default()
+        };
+        Ok(vf2
+            .find_prepared_layout_candidate_indices(&prepared, Some(options))?
+            .into_iter()
+            .next())
+    }
+
+    fn map_passthrough(&self, op: &PreparedPassthroughOp, entry_l2p: &[usize]) -> Operation {
+        let mapped_qubits: Vec<Qubit> = op
+            .logical_qubits
+            .iter()
+            .map(|&logical| self.topology.physical_qubits[entry_l2p[logical]])
+            .collect();
+        map_operation_qubits(&op.op, &mapped_qubits)
+    }
+
+    fn extend_route(&self, current: &mut StructuredRoute, next: StructuredRoute) {
+        current.ops.extend(next.ops);
+        current.exit_l2p = next.exit_l2p;
+        current.cost += next.cost;
+        current.log_fidelity += next.log_fidelity;
+        current.objective = self.routing_objective(current.cost, current.log_fidelity);
+    }
+
+    fn identity_route(entry_l2p: &[usize]) -> StructuredRoute {
+        StructuredRoute {
+            exit_l2p: entry_l2p.to_vec(),
+            ops: Vec::new(),
+            cost: 0,
+            log_fidelity: 0.0,
+            objective: 0.0,
+        }
     }
 
     /// Internal helper for replay ops.
@@ -652,6 +1041,163 @@ impl SabreMapping {
     /// Internal helper for ans-group preference.
     fn group_better(&self, candidate: &AnsGroup, best: &AnsGroup) -> bool {
         self.compare_groups(candidate, best) == Ordering::Less
+    }
+
+    fn structured_route_better(&self, candidate: &StructuredRoute, best: &StructuredRoute) -> bool {
+        self.compare_structured_routes(candidate, best) == Ordering::Less
+    }
+
+    fn compare_structured_routes(&self, lhs: &StructuredRoute, rhs: &StructuredRoute) -> Ordering {
+        self.cmp_f64_with_eps(lhs.objective, rhs.objective)
+            .then_with(|| lhs.cost.cmp(&rhs.cost))
+            .then_with(|| self.cmp_f64_with_eps(rhs.log_fidelity, lhs.log_fidelity))
+            .then_with(|| lhs.exit_l2p.cmp(&rhs.exit_l2p))
+            .then_with(|| lhs.ops.len().cmp(&rhs.ops.len()))
+    }
+
+    fn reconcile_layout(
+        &self,
+        from_l2p: &[usize],
+        target_l2p: &[usize],
+    ) -> Result<LayoutTransition, CompileError> {
+        if from_l2p.len() != target_l2p.len() {
+            return Err(CompileError::Internal(format!(
+                "layout reconciliation size mismatch: {} vs {}",
+                from_l2p.len(),
+                target_l2p.len()
+            )));
+        }
+
+        let mut logic2phy = from_l2p.to_vec();
+        let mut phy2logic = vec![None; self.topology.num_qubits()];
+        for (logical, &physical) in logic2phy.iter().enumerate() {
+            phy2logic[physical] = Some(logical);
+        }
+
+        let mut ops = Vec::new();
+        let mut cost = 0usize;
+        let mut log_fidelity = 0.0;
+        let max_steps = self
+            .topology
+            .num_qubits()
+            .saturating_mul(from_l2p.len().max(1))
+            .saturating_mul(8);
+
+        let mut steps = 0usize;
+        while logic2phy != target_l2p {
+            if steps >= max_steps {
+                return Err(CompileError::Internal(
+                    "layout reconciliation failed to converge".into(),
+                ));
+            }
+            steps += 1;
+
+            let mut choice: Option<(bool, u32, usize, Vec<usize>)> = None;
+            for logical in 0..logic2phy.len() {
+                let src = logic2phy[logical];
+                let dst = target_l2p[logical];
+                if src == dst {
+                    continue;
+                }
+                let Some(path) = self.shortest_path_indices(src, dst) else {
+                    continue;
+                };
+                if path.len() < 2 {
+                    continue;
+                }
+                let target_free = phy2logic[dst].is_none();
+                let dist = self.topology.dist[src][dst];
+                let candidate = (target_free, dist, logical, path);
+                let should_update = match &choice {
+                    None => true,
+                    Some((best_free, best_dist, best_logical, _)) => {
+                        candidate.0 > *best_free
+                            || (candidate.0 == *best_free
+                                && (candidate.1 < *best_dist
+                                    || (candidate.1 == *best_dist && candidate.2 < *best_logical)))
+                    }
+                };
+                if should_update {
+                    choice = Some(candidate);
+                }
+            }
+
+            let Some((_, _, _, path)) = choice else {
+                return Err(CompileError::SabreRoutingStuck);
+            };
+            let u = path[0];
+            let v = path[1];
+
+            let logic_u = phy2logic[u];
+            let logic_v = phy2logic[v];
+            phy2logic[u] = logic_v;
+            phy2logic[v] = logic_u;
+            if let Some(logical) = logic_u {
+                logic2phy[logical] = v;
+            }
+            if let Some(logical) = logic_v {
+                logic2phy[logical] = u;
+            }
+
+            ops.push(self.standard_op(
+                StandardGate::SWAP,
+                &[
+                    self.topology.physical_qubits[u],
+                    self.topology.physical_qubits[v],
+                ],
+            ));
+            cost += 3;
+            log_fidelity += 3.0 * self.edge_log_fidelity(u, v);
+        }
+
+        Ok(LayoutTransition {
+            ops,
+            cost,
+            log_fidelity,
+        })
+    }
+
+    fn shortest_path_indices(&self, src: usize, dst: usize) -> Option<Vec<usize>> {
+        if src == dst {
+            return Some(vec![src]);
+        }
+
+        let n = self.topology.num_qubits();
+        let mut prev = vec![usize::MAX; n];
+        let mut visited = vec![false; n];
+        let mut queue = VecDeque::new();
+        visited[src] = true;
+        queue.push_back(src);
+
+        while let Some(node) = queue.pop_front() {
+            if node == dst {
+                break;
+            }
+            for &next in &self.topology.neighbors[node] {
+                if visited[next] {
+                    continue;
+                }
+                visited[next] = true;
+                prev[next] = node;
+                queue.push_back(next);
+            }
+        }
+
+        if !visited[dst] {
+            return None;
+        }
+
+        let mut path = vec![dst];
+        let mut now = dst;
+        while now != src {
+            now = prev[now];
+            if now == usize::MAX {
+                return None;
+            }
+            path.push(now);
+        }
+        path.reverse();
+        Some(path)
     }
 
     /// Internal helper for execute once.

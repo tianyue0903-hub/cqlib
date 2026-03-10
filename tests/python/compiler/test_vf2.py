@@ -24,7 +24,7 @@ import random
 
 import pytest
 
-from cqlib.circuit import Circuit
+from cqlib.circuit import Circuit, ConditionView, ControlFlow, Directive, Parameter, Qubit, StandardGate
 from cqlib.compiler import (
     Topology,
     vf2_find_initial_layout,
@@ -34,6 +34,7 @@ from cqlib.compiler import (
 )
 
 from . import assert_all_2q_on_topology
+from . import assert_ops_on_topology_recursive
 from . import random_circuit
 
 
@@ -78,6 +79,115 @@ class TestVf2LayoutBehavior:
 
         with pytest.raises(ValueError):
             vf2_map(circuit, topology)
+
+    def test_vf2_map_if_else_preserves_structure(self):
+        """Maps `if_else` with one static layout and preserves the control-flow node."""
+        topology = Topology.line([0, 1, 2])
+        circuit = Circuit(3)
+        circuit.measure(0)
+        circuit.if_else(
+            ConditionView(Qubit(0), 1),
+            [(StandardGate.X, [1])],
+            [(StandardGate.CX, [1, 2])],
+        )
+
+        mapped = vf2_map(circuit, topology)
+        mapped_ops = list(mapped.operations)
+        assert_ops_on_topology_recursive(mapped_ops, topology)
+
+        control_flow = mapped_ops[1].instruction.control_flow
+        assert control_flow is not None
+        assert control_flow.is_if_else
+        gate = control_flow.as_if_else
+        assert gate.condition.qubit.index == mapped_ops[0].qubits[0].index
+        assert len(gate.true_body) == 1
+        assert len(gate.false_body) == 1
+
+    def test_vf2_map_while_loop_preserves_structure(self):
+        """Maps `while_loop` with one static layout and preserves the control-flow node."""
+        topology = Topology.line([0, 1, 2])
+        circuit = Circuit(3)
+        circuit.measure(0)
+        circuit.while_loop(
+            ConditionView(Qubit(0), 1),
+            [(StandardGate.CX, [1, 2])],
+        )
+
+        mapped = vf2_map(circuit, topology)
+        mapped_ops = list(mapped.operations)
+        assert_ops_on_topology_recursive(mapped_ops, topology)
+
+        control_flow = mapped_ops[1].instruction.control_flow
+        assert control_flow is not None
+        assert control_flow.is_while_loop
+        gate = control_flow.as_while_loop
+        assert gate.condition.qubit.index == mapped_ops[0].qubits[0].index
+        assert len(gate.body) == 1
+
+    def test_if_else_isomorphic(self):
+        """Includes `if_else` body interactions in the global static-layout check."""
+        topology = Topology.line([0, 1, 2, 3])
+        circuit = Circuit(4)
+        circuit.measure(0)
+        circuit.if_else(
+            ConditionView(Qubit(0), 1),
+            [(StandardGate.CX, [1, 2])],
+            [(StandardGate.CX, [2, 3])],
+        )
+
+        assert vf2_is_subgraph_isomorphic(circuit, topology) is True
+
+    def test_vf2_map_preserves_global_phase_with_control_flow(self):
+        """Preserves source global phase when statically mapping control-flow circuits."""
+        topology = Topology.line([0, 1, 2])
+        circuit = Circuit(3)
+        circuit.set_global_phase(0.5)
+        circuit.measure(0)
+        circuit.if_else(
+            ConditionView(Qubit(0), 1),
+            [(StandardGate.CX, [1, 2])],
+        )
+
+        mapped = vf2_map(circuit, topology)
+        assert mapped.global_phase.evaluate() == pytest.approx(0.5)
+        assert_ops_on_topology_recursive(list(mapped.operations), topology)
+
+    def test_vf2_map_supports_nested_control_flow_objects(self):
+        """Preserves nested control-flow bodies exposed through the Python binding."""
+        topology = Topology.line([0, 1, 2])
+
+        inner_true = Circuit(3)
+        inner_true.cx(0, 1)
+        inner_false = Circuit(3)
+        inner_false.cx(1, 2)
+        nested_if = ControlFlow.if_else(
+            ConditionView(Qubit(1), 1),
+            list(inner_true.operations),
+            list(inner_false.operations),
+        )
+
+        circuit = Circuit(3)
+        circuit.measure(0)
+        circuit.measure(1)
+        circuit.while_loop(
+            ConditionView(Qubit(0), 1),
+            [
+                (nested_if, [0, 1, 2]),
+                (Directive.measure(), [2]),
+            ],
+        )
+
+        mapped = vf2_map(circuit, topology)
+        mapped_ops = list(mapped.operations)
+        assert_ops_on_topology_recursive(mapped_ops, topology)
+
+        control_flow = mapped_ops[2].instruction.control_flow
+        assert control_flow is not None
+        assert control_flow.is_while_loop
+        assert control_flow.as_while_loop.body[1].name == "Measure"
+        nested = control_flow.as_while_loop.body[0].instruction.control_flow
+        assert nested is not None
+        assert nested.is_if_else
 
 
 class TestVf2CandidateSearch:
