@@ -38,3 +38,4 @@ smallvec = "1.15"
 thiserror = "2.0.18"
 time = "0.3"
 uuid = { version = "1.19", features = ["v4", "serde"] }
+rayon = "1.10"

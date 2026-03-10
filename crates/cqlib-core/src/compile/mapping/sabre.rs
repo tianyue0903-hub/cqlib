@@ -313,6 +313,99 @@ impl SabreMapping {
         build_output_circuit(&mapped_ops, &prepared.parameters)
     }
 
+    /// Executes SABRE routing using a specific initial mapping provided by the Genetic Algorithm.
+    ///
+    /// Unlike `execute`, which generates its own initial layouts (via random sampling or VF2),
+    /// this function forces the router to start from the provided `initial_mapping`. This is
+    /// crucial for the Genetic Algorithm to evaluate the fitness of specific individuals.
+    pub fn execute_with_genetic_algorithm(
+        &mut self,
+        circuit: &Circuit,
+        initial_mapping: Vec<usize>,
+    ) -> Result<Circuit, CompileError> {
+        
+        let prepared = preprocess_circuit(circuit)?;
+        let reverse_circuit = circuit.inverse()?;
+        let reverse_prepared = preprocess_circuit(&reverse_circuit)?;
+
+        let logical_width = prepared.logical_qubits.len();
+        let available_nodes = self.usable_nodes();
+
+        if logical_width > available_nodes.len() {
+            return Err(CompileError::TopologyTooSmall {
+                required: logical_width,
+                available: available_nodes.len(),
+            });
+        }
+
+        if initial_mapping.len() != logical_width {
+            return Err(CompileError::Internal(format!(
+                "GA initial mapping size mismatch: expected {}, got {}",
+                logical_width,
+                initial_mapping.len()
+            )));
+        }
+
+        let original_info = self.build_circuit_info(&prepared, logical_width)?;
+        let reverse_info = self.build_circuit_info(&reverse_prepared, logical_width)?;
+
+        let repeat_iters = self.config.repeat_iterations;
+        let swap_iters = self.config.swap_iterations.max(1);
+        
+        let mut best_group: Option<AnsGroup> = None;
+        let mut current_mapping = initial_mapping; 
+
+        for iter in 0..=repeat_iters {
+            let forward_group =
+                self.execute_routing(&original_info, &prepared, &current_mapping, swap_iters)?;
+
+            if best_group
+                .as_ref()
+                .map(|g| self.group_better(&forward_group, g))
+                .unwrap_or(true)
+            {
+                best_group = Some(forward_group.clone());
+            }
+
+            if iter == repeat_iters {
+                break;
+            }
+
+            let best_ref = best_group
+                .as_ref()
+                .ok_or_else(|| CompileError::Internal("missing best SABRE group".into()))?;
+
+            // 执行后向路由来优化映射
+            let reverse_group = self.execute_routing(
+                &reverse_info,
+                &reverse_prepared,
+                &best_ref.final_l2p,
+                swap_iters,
+            )?;
+            
+            // 将后向路由的结果作为下一次前向路由的起点
+            current_mapping = reverse_group.final_l2p;
+        }
+
+        let best_group = best_group.ok_or(CompileError::SabreRoutingStuck)?;
+
+        // 5. 更新 Mapper 的内部状态 (Logic -> Physical)
+        self.logic2phy = best_group
+            .final_l2p
+            .iter()
+            .map(|&p| self.topology.physical_qubits[p])
+            .collect();
+            
+        self.phy2logic.clear();
+        for (logical, &physical) in self.logic2phy.iter().enumerate() {
+            self.phy2logic.insert(physical, logical);
+        }
+
+        // 6. 重建并返回映射后的物理量子线路
+        let mapped_ops = self.replay_ops(&prepared, &original_info, &best_group);
+        build_output_circuit(&mapped_ops, &prepared.parameters)
+    }
+
     /// Internal helper for replay ops.
     fn replay_ops(
         &self,

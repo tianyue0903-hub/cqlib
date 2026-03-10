@@ -41,6 +41,7 @@ serde_json.workspace = true
 thiserror.workspace = true
 time.workspace = true
 uuid.workspace = true
+rayon.workspace = true
 
 [build-dependencies]
 lalrpop.workspace = true

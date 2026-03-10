@@ -28,11 +28,16 @@
 pub mod sabre;
 /// VF2-based structural mapper and candidate-layout search.
 pub mod vf2;
+/// Genetic Algorithm-based mapping optimizer.
+pub mod ga_mapping;
+
 
 pub use sabre::{SabreConfig, SabreMapping, Vf2Policy};
 pub use vf2::{
     Vf2CandidateOptions, Vf2CandidateScore, Vf2LayoutCandidate, Vf2Mapping, Vf2ScoreWeights,
 };
+pub use ga_mapping::{GaConfig, GeneticAlgMapping};
+
 
 use crate::circuit::dag::Terminator;
 use crate::circuit::gate::{Instruction, StandardGate};
@@ -392,6 +397,20 @@ pub fn map_with_vf2_sabre(
 
     let mut sabre = SabreMapping::new(topology.clone(), fidelity_owned, config.clone())?;
     sabre.execute(circuit)
+}
+
+
+pub fn map_with_ga(
+    circuit: &Circuit,
+    topology: &Topology,
+    config: &GaConfig,
+    fidelity_map: Option<&FidelityMap>,
+    invalid_qubits: Option<HashSet<usize>>
+) -> Result<Circuit, CompileError> {
+
+    let fidelity_owned = fidelity_map.cloned();
+    let mut ga = GeneticAlgMapping::new(topology.clone(), config.clone(), fidelity_owned.clone(), invalid_qubits.clone()).unwrap();
+    ga.execute(circuit)
 }
 
 /// Computes all-pairs shortest path on an unweighted adjacency matrix.
@@ -956,5 +975,188 @@ mod tests {
             assert!(topo_set.contains(&q));
         }
         assert_mapped_2q_edges(&mapped, &topology);
+    }
+
+    fn test_circuit(width: usize) -> Circuit {
+        let mut circuit = Circuit::new(width);
+        if width > 1 {
+            circuit.cx(Qubit::new(0), Qubit::new((width as u32) - 1)).unwrap();
+        }
+        circuit
+    }
+
+    fn fast_ga_config(seed: i64) -> GaConfig {
+        let mut sabre_config = SabreConfig::default();
+        sabre_config.repeat_iterations = 0; 
+        sabre_config.seed = seed;
+
+        GaConfig {
+            population: 4,
+            update_iters: 2,
+            seed,
+            sabre_config,
+            ..GaConfig::default()
+        }
+    }
+
+
+    #[test]
+    fn test_map_with_ga_basic_success() {
+        
+        let topology = line_topology(&[0, 1, 2, 3]);
+        let circuit = test_circuit(3);
+        let config = fast_ga_config(42);
+
+        let result = map_with_ga(&circuit, &topology, &config, None, None);
+        
+        assert!(result.is_ok(), "GA mapping failed in basic scenario");
+        let mapped_circuit = result.unwrap();
+        
+        assert!(mapped_circuit.operations().len() >= circuit.operations().len());
+    }
+
+    #[test]
+    fn test_map_with_ga_invalid_qubits_avoidance() {
+        
+        let topology = line_topology(&[0, 1, 2, 3, 4, 5]);
+        let circuit = test_circuit(3); 
+        
+        let mut invalid_qubits = HashSet::new();
+        invalid_qubits.insert(2);
+
+        let config = fast_ga_config(42);
+        
+        let result = map_with_ga(&circuit, &topology, &config, None, Some(invalid_qubits));
+        assert!(result.is_ok(), "Failed to find mapping in partitioned topology");
+        
+        let mapped_circuit = result.unwrap();
+        
+        for op in mapped_circuit.operations() {
+            for q in &op.qubits {
+                let id = q.id();
+                assert!(
+                    id == 3 || id == 4 || id == 5,
+                    "Algorithm mapped to an invalid or disconnected qubit: {}",
+                    id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_map_with_ga_invalid_qubits_causes_too_small() {
+        
+        let topology = line_topology(&[0, 1, 2, 3]);
+        let circuit = test_circuit(3); 
+        
+        let mut invalid_qubits = HashSet::new();
+        invalid_qubits.insert(1);
+        invalid_qubits.insert(2);
+
+        let config = fast_ga_config(42);
+        let result = map_with_ga(&circuit, &topology, &config, None, Some(invalid_qubits));
+        
+        assert!(
+            matches!(result, Err(CompileError::TopologyTooSmall { .. })),
+            "Expected TopologyTooSmall error due to fragmentation"
+        );
+    }
+
+    #[test]
+    fn test_map_with_ga_fidelity_map_integration() {
+        
+        let topology = line_topology(&[0, 1, 2, 3]);
+        let circuit = test_circuit(2);
+        
+        let mut fidelity_map = HashMap::new();
+        fidelity_map.insert((Qubit::new(0), Qubit::new(1)), 0.5);
+        fidelity_map.insert((Qubit::new(1), Qubit::new(2)), 0.99);
+        fidelity_map.insert((Qubit::new(2), Qubit::new(3)), 0.99);
+
+        let config = fast_ga_config(1024);
+
+        let result = map_with_ga(&circuit, &topology, &config, Some(&fidelity_map), None);
+        assert!(result.is_ok(), "Mapping failed with fidelity map provided");
+    }
+
+    #[test]
+    fn test_map_with_ga_determinism() {
+        let topology = line_topology(&[0, 1, 2, 3, 4]);
+        let circuit = test_circuit(4);
+        
+        let seed = 999;
+        let config = fast_ga_config(seed);
+
+        let result1 = map_with_ga(&circuit, &topology, &config, None, None).unwrap();
+        let result2 = map_with_ga(&circuit, &topology, &config, None, None).unwrap();
+        
+        let fp1 = fingerprint(&result1);
+        let fp2 = fingerprint(&result2);
+
+        assert_eq!(
+            fp1, fp2, 
+            "GA mapping should be deterministic given the same seed. Run 1: {:?}, Run 2: {:?}", 
+            fp1, fp2
+        );
+    }
+
+    #[test]
+    fn test_map_with_ga_ghz_circuit_on_star_topology() {
+        
+        let topology = Topology::new(
+            vec![Qubit::new(0), Qubit::new(1), Qubit::new(2), Qubit::new(3), Qubit::new(4)],
+            vec![
+                (Qubit::new(0), Qubit::new(1), "CX".to_string()),
+                (Qubit::new(0), Qubit::new(2), "CX".to_string()),
+                (Qubit::new(0), Qubit::new(3), "CX".to_string()),
+                (Qubit::new(0), Qubit::new(4), "CX".to_string()),
+            ],
+        );
+
+        let mut circuit = Circuit::new(5);
+        circuit.h(Qubit::new(0)).unwrap();
+        for i in 0..4 {
+            circuit.cx(Qubit::new(i as u32), Qubit::new((i + 1) as u32)).unwrap();
+        }
+
+        let config = fast_ga_config(100);
+
+        let result = map_with_ga(&circuit, &topology, &config, None, None);
+        assert!(result.is_ok(), "GA failed to map GHZ circuit on star topology");
+        
+        let mapped = result.unwrap();
+        
+        assert_mapped_2q_edges(&mapped, &topology);
+        
+        assert!(mapped.operations().len() == 6);
+    }
+
+    #[test]
+    fn test_map_with_ga_all_to_all_heavy_routing() {
+        
+        let topology = line_topology(&[0, 1, 2, 3, 4]);
+
+        let mut circuit = Circuit::new(5);
+        for i in 0..5 {
+            for j in (i + 1)..5 {
+                circuit.cx(Qubit::new(i as u32), Qubit::new(j as u32)).unwrap();
+            }
+        }
+
+        let config = GaConfig {
+            population: 10,   
+            update_iters: 5,  
+            seed: 2024,
+            ..fast_ga_config(2024)
+        };
+
+        let result = map_with_ga(&circuit, &topology, &config, None, None);
+        assert!(result.is_ok(), "GA failed to map all-to-all circuit");
+        
+        let mapped = result.unwrap();
+        assert_mapped_2q_edges(&mapped, &topology);
+        
+        println!("All-to-All 5-qubit mapped operations count: {}", mapped.operations().len());
+
     }
 }
