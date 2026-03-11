@@ -44,7 +44,7 @@
 //! circuit.rx(0, theta)
 //! ```
 
-use super::bit::PyQubit;
+use super::bit::{PyIntListOrQubitList, PyIntOrQubit, PyIntQubitList, PyQubit};
 use super::gate::{
     PyCircuitGate, PyConditionView, PyControlFlow, PyDirective, PyMcGate, PyStandardGate,
     PyUnitaryGate,
@@ -142,111 +142,6 @@ impl From<Circuit> for PyCircuit {
     }
 }
 
-/// Flexible qubit specification for circuit initialization.
-///
-/// This enum allows the [`PyCircuit::new`] constructor to accept three different
-/// input formats for specifying which qubits the circuit should manage.
-///
-/// # Variants
-///
-/// - `NumQubits(usize)`: Create a circuit with N sequential qubits (0 to N-1).
-/// - `IndexList(Vec<usize>)`: Create a circuit with specific qubit indices.
-/// - `QubitList(Vec<PyQubit>)`: Create a circuit from existing Qubit objects.
-///
-/// # Example
-///
-/// ```python
-/// from cqlib import Circuit, Qubit
-///
-/// # 5 qubits numbered 0-4
-/// c1 = Circuit(5)
-///
-/// # Specific indices: 0, 2, 4
-/// c2 = Circuit([0, 2, 4])
-///
-/// # Using Qubit objects
-/// c3 = Circuit([Qubit(0), Qubit(1)])
-/// ```
-#[derive(FromPyObject)]
-pub enum PyIntQubitList {
-    /// Create a circuit with N sequential qubits (0 to N-1).
-    NumQubits(usize),
-    /// Create a circuit with specific qubit indices.
-    IndexList(Vec<usize>),
-    /// Create a circuit from existing Qubit objects.
-    QubitList(Vec<PyQubit>),
-}
-
-/// Accepts a single qubit identifier: either an integer or a Qubit object.
-///
-/// This type enables methods to accept both:
-/// - `int`: Direct qubit index (e.g., `0`)
-/// - `Qubit`: A Qubit object (e.g., `Qubit(0)`)
-///
-/// # Example
-///
-/// ```python
-/// from cqlib import Qubit
-///
-/// # Both are equivalent
-/// circuit.h(0)
-/// circuit.h(Qubit(0))
-/// ```
-#[derive(FromPyObject)]
-pub enum PyIntOrQubit {
-    /// Integer qubit index.
-    Int(usize),
-    /// Qubit object.
-    Qubit(PyQubit),
-}
-
-impl PyIntOrQubit {
-    /// Converts to the underlying Qubit type.
-    pub fn into_qubit(self) -> Qubit {
-        match self {
-            PyIntOrQubit::Int(i) => Qubit::new(i as u32),
-            PyIntOrQubit::Qubit(q) => q.inner,
-        }
-    }
-}
-
-/// Accepts a list of qubits: either integers or Qubit objects.
-///
-/// This type enables methods to accept both:
-/// - `List[int]`: List of qubit indices (e.g., `[0, 1, 2]`)
-/// - `List[Qubit]`: List of Qubit objects (e.g., `[Qubit(0), Qubit(1)]`)
-///
-/// # Example
-///
-/// ```python
-/// from cqlib import Qubit
-///
-/// # Both are equivalent
-/// circuit.barrier([0, 1, 2])
-/// circuit.barrier([Qubit(0), Qubit(1), Qubit(2)])
-/// ```
-#[derive(FromPyObject)]
-pub enum PyIntListOrQubitList {
-    /// List of integer qubit indices.
-    IntList(Vec<usize>),
-    /// List of Qubit objects.
-    QubitList(Vec<PyQubit>),
-}
-
-impl PyIntListOrQubitList {
-    /// Converts to a vector of Qubits.
-    pub fn into_qubits(self) -> Vec<Qubit> {
-        match self {
-            PyIntListOrQubitList::IntList(indices) => {
-                indices.into_iter().map(|i| Qubit::new(i as u32)).collect()
-            }
-            PyIntListOrQubitList::QubitList(qubits) => {
-                qubits.into_iter().map(|q| q.inner).collect()
-            }
-        }
-    }
-}
-
 #[pymethods]
 impl PyCircuit {
     /// Creates a new quantum circuit.
@@ -260,26 +155,9 @@ impl PyCircuit {
     ///     qubits (Union[int, List[int], List[Qubit]]): The qubits to include in the circuit.
     #[new]
     fn new(qubits: PyIntQubitList) -> PyResult<Self> {
-        match qubits {
-            PyIntQubitList::NumQubits(num) => Ok(PyCircuit {
-                inner: Circuit::new(num),
-            }),
-            PyIntQubitList::IndexList(indices) => {
-                let core_qubits: Vec<Qubit> = indices
-                    .into_iter()
-                    .map(|idx| Qubit::new(idx as u32))
-                    .collect();
-                let inner = Circuit::from_qubits(core_qubits)
-                    .map_err(|e| PyValueError::new_err(e.to_string()))?;
-                Ok(PyCircuit { inner })
-            }
-            PyIntQubitList::QubitList(qubits) => {
-                let core_qubits: Vec<Qubit> = qubits.into_iter().map(|q| q.inner).collect();
-                let inner = Circuit::from_qubits(core_qubits)
-                    .map_err(|e| PyValueError::new_err(e.to_string()))?;
-                Ok(PyCircuit { inner })
-            }
-        }
+        let inner = Circuit::from_qubits(qubits.into())
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        Ok(PyCircuit { inner })
     }
 
     /// Returns the number of qubits in the circuit.
@@ -353,7 +231,7 @@ impl PyCircuit {
     ///     qubit: Qubit index (int) or Qubit object
     fn i(&mut self, qubit: PyIntOrQubit) -> PyResult<()> {
         self.inner
-            .i(qubit.into_qubit())
+            .i(qubit.into())
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
@@ -365,7 +243,7 @@ impl PyCircuit {
     ///     qubit: Qubit index (int) or Qubit object
     fn h(&mut self, qubit: PyIntOrQubit) -> PyResult<()> {
         self.inner
-            .h(qubit.into_qubit())
+            .h(qubit.into())
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
@@ -377,7 +255,7 @@ impl PyCircuit {
     ///     qubit: Qubit index (int) or Qubit object
     fn x(&mut self, qubit: PyIntOrQubit) -> PyResult<()> {
         self.inner
-            .x(qubit.into_qubit())
+            .x(qubit.into())
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
@@ -389,7 +267,7 @@ impl PyCircuit {
     ///     qubit: Qubit index (int) or Qubit object
     fn y(&mut self, qubit: PyIntOrQubit) -> PyResult<()> {
         self.inner
-            .y(qubit.into_qubit())
+            .y(qubit.into())
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
@@ -401,7 +279,7 @@ impl PyCircuit {
     ///     qubit: Qubit index (int) or Qubit object
     fn z(&mut self, qubit: PyIntOrQubit) -> PyResult<()> {
         self.inner
-            .z(qubit.into_qubit())
+            .z(qubit.into())
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
@@ -413,7 +291,7 @@ impl PyCircuit {
     ///     qubit: Qubit index (int) or Qubit object
     fn s(&mut self, qubit: PyIntOrQubit) -> PyResult<()> {
         self.inner
-            .s(qubit.into_qubit())
+            .s(qubit.into())
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
@@ -425,7 +303,7 @@ impl PyCircuit {
     ///     qubit: Qubit index (int) or Qubit object
     fn sdg(&mut self, qubit: PyIntOrQubit) -> PyResult<()> {
         self.inner
-            .sdg(qubit.into_qubit())
+            .sdg(qubit.into())
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
@@ -437,7 +315,7 @@ impl PyCircuit {
     ///     qubit: Qubit index (int) or Qubit object
     fn t(&mut self, qubit: PyIntOrQubit) -> PyResult<()> {
         self.inner
-            .t(qubit.into_qubit())
+            .t(qubit.into())
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
@@ -447,7 +325,7 @@ impl PyCircuit {
     ///     qubit: Qubit index (int) or Qubit object
     fn tdg(&mut self, qubit: PyIntOrQubit) -> PyResult<()> {
         self.inner
-            .tdg(qubit.into_qubit())
+            .tdg(qubit.into())
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
@@ -459,7 +337,7 @@ impl PyCircuit {
     ///     qubit: Qubit index (int) or Qubit object
     fn x2p(&mut self, qubit: PyIntOrQubit) -> PyResult<()> {
         self.inner
-            .x2p(qubit.into_qubit())
+            .x2p(qubit.into())
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
@@ -471,7 +349,7 @@ impl PyCircuit {
     ///     qubit: Qubit index (int) or Qubit object
     fn x2m(&mut self, qubit: PyIntOrQubit) -> PyResult<()> {
         self.inner
-            .x2m(qubit.into_qubit())
+            .x2m(qubit.into())
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
@@ -481,7 +359,7 @@ impl PyCircuit {
     ///     qubit: Qubit index (int) or Qubit object
     fn y2p(&mut self, qubit: PyIntOrQubit) -> PyResult<()> {
         self.inner
-            .y2p(qubit.into_qubit())
+            .y2p(qubit.into())
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
@@ -491,7 +369,7 @@ impl PyCircuit {
     ///     qubit: Qubit index (int) or Qubit object
     fn y2m(&mut self, qubit: PyIntOrQubit) -> PyResult<()> {
         self.inner
-            .y2m(qubit.into_qubit())
+            .y2m(qubit.into())
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
@@ -504,7 +382,7 @@ impl PyCircuit {
     ///     theta: Rotation angle (can be float or Parameter)
     fn rx(&mut self, qubit: PyIntOrQubit, theta: PyParamLike) -> PyResult<()> {
         self.inner
-            .rx(qubit.into_qubit(), theta)
+            .rx(qubit.into(), theta)
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
@@ -517,7 +395,7 @@ impl PyCircuit {
     ///     theta: Rotation angle (can be float or Parameter)
     fn ry(&mut self, qubit: PyIntOrQubit, theta: PyParamLike) -> PyResult<()> {
         self.inner
-            .ry(qubit.into_qubit(), theta)
+            .ry(qubit.into(), theta)
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
@@ -530,7 +408,7 @@ impl PyCircuit {
     ///     theta: Rotation angle (can be float or Parameter)
     fn rz(&mut self, qubit: PyIntOrQubit, theta: PyParamLike) -> PyResult<()> {
         self.inner
-            .rz(qubit.into_qubit(), theta)
+            .rz(qubit.into(), theta)
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
@@ -543,7 +421,7 @@ impl PyCircuit {
     ///     lambda: Phase angle (can be float or Parameter)
     fn phase(&mut self, qubit: PyIntOrQubit, lambda: PyParamLike) -> PyResult<()> {
         self.inner
-            .phase(qubit.into_qubit(), lambda)
+            .phase(qubit.into(), lambda)
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
@@ -556,7 +434,7 @@ impl PyCircuit {
     ///     theta: Rotation angle (can be float or Parameter)
     fn xy(&mut self, qubit: PyIntOrQubit, theta: PyParamLike) -> PyResult<()> {
         self.inner
-            .xy(qubit.into_qubit(), theta)
+            .xy(qubit.into(), theta)
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
@@ -567,7 +445,7 @@ impl PyCircuit {
     ///     theta: Rotation angle (can be float or Parameter)
     fn xy2p(&mut self, qubit: PyIntOrQubit, theta: PyParamLike) -> PyResult<()> {
         self.inner
-            .xy2p(qubit.into_qubit(), theta)
+            .xy2p(qubit.into(), theta)
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
@@ -578,7 +456,7 @@ impl PyCircuit {
     ///     theta: Rotation angle (can be float or Parameter)
     fn xy2m(&mut self, qubit: PyIntOrQubit, theta: PyParamLike) -> PyResult<()> {
         self.inner
-            .xy2m(qubit.into_qubit(), theta)
+            .xy2m(qubit.into(), theta)
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
@@ -598,7 +476,7 @@ impl PyCircuit {
         lambda: PyParamLike,
     ) -> PyResult<()> {
         self.inner
-            .u(qubit.into_qubit(), theta, phi, lambda)
+            .u(qubit.into(), theta, phi, lambda)
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
@@ -609,7 +487,7 @@ impl PyCircuit {
     ///     theta, phi: Rotation angles (can be float or Parameter)
     fn rxy(&mut self, qubit: PyIntOrQubit, theta: PyParamLike, phi: PyParamLike) -> PyResult<()> {
         self.inner
-            .rxy(qubit.into_qubit(), theta, phi)
+            .rxy(qubit.into(), theta, phi)
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
@@ -622,7 +500,7 @@ impl PyCircuit {
     ///     target: Target qubit index (int) or Qubit object
     fn cx(&mut self, control: PyIntOrQubit, target: PyIntOrQubit) -> PyResult<()> {
         self.inner
-            .cx(control.into_qubit(), target.into_qubit())
+            .cx(control.into(), target.into())
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
@@ -633,7 +511,7 @@ impl PyCircuit {
     ///     target: Target qubit index (int) or Qubit object
     fn cy(&mut self, control: PyIntOrQubit, target: PyIntOrQubit) -> PyResult<()> {
         self.inner
-            .cy(control.into_qubit(), target.into_qubit())
+            .cy(control.into(), target.into())
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
@@ -646,7 +524,7 @@ impl PyCircuit {
     ///     target: Target qubit index (int) or Qubit object
     fn cz(&mut self, control: PyIntOrQubit, target: PyIntOrQubit) -> PyResult<()> {
         self.inner
-            .cz(control.into_qubit(), target.into_qubit())
+            .cz(control.into(), target.into())
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
@@ -658,7 +536,7 @@ impl PyCircuit {
     ///     a, b: Qubit indices (int) or Qubit objects
     fn swap(&mut self, a: PyIntOrQubit, b: PyIntOrQubit) -> PyResult<()> {
         self.inner
-            .swap(a.into_qubit(), b.into_qubit())
+            .swap(a.into(), b.into())
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
@@ -671,7 +549,7 @@ impl PyCircuit {
     ///     theta: Rotation angle (can be float or Parameter)
     fn rxx(&mut self, a: PyIntOrQubit, b: PyIntOrQubit, theta: PyParamLike) -> PyResult<()> {
         self.inner
-            .rxx(a.into_qubit(), b.into_qubit(), theta)
+            .rxx(a.into(), b.into(), theta)
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
@@ -684,7 +562,7 @@ impl PyCircuit {
     ///     theta: Rotation angle (can be float or Parameter)
     fn ryy(&mut self, a: PyIntOrQubit, b: PyIntOrQubit, theta: PyParamLike) -> PyResult<()> {
         self.inner
-            .ryy(a.into_qubit(), b.into_qubit(), theta)
+            .ryy(a.into(), b.into(), theta)
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
@@ -697,7 +575,7 @@ impl PyCircuit {
     ///     theta: Rotation angle (can be float or Parameter)
     fn rzz(&mut self, a: PyIntOrQubit, b: PyIntOrQubit, theta: PyParamLike) -> PyResult<()> {
         self.inner
-            .rzz(a.into_qubit(), b.into_qubit(), theta)
+            .rzz(a.into(), b.into(), theta)
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
@@ -710,7 +588,7 @@ impl PyCircuit {
     ///     theta: Rotation angle (can be float or Parameter)
     fn rzx(&mut self, a: PyIntOrQubit, b: PyIntOrQubit, theta: PyParamLike) -> PyResult<()> {
         self.inner
-            .rzx(a.into_qubit(), b.into_qubit(), theta)
+            .rzx(a.into(), b.into(), theta)
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
@@ -733,7 +611,7 @@ impl PyCircuit {
         phi: PyParamLike,
     ) -> PyResult<()> {
         self.inner
-            .fsim(a.into_qubit(), b.into_qubit(), theta, phi)
+            .fsim(a.into(), b.into(), theta, phi)
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
@@ -752,7 +630,7 @@ impl PyCircuit {
         theta: PyParamLike,
     ) -> PyResult<()> {
         self.inner
-            .crx(control.into_qubit(), target.into_qubit(), theta)
+            .crx(control.into(), target.into(), theta)
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
@@ -769,7 +647,7 @@ impl PyCircuit {
         theta: PyParamLike,
     ) -> PyResult<()> {
         self.inner
-            .cry(control.into_qubit(), target.into_qubit(), theta)
+            .cry(control.into(), target.into(), theta)
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
@@ -786,7 +664,7 @@ impl PyCircuit {
         theta: PyParamLike,
     ) -> PyResult<()> {
         self.inner
-            .crz(control.into_qubit(), target.into_qubit(), theta)
+            .crz(control.into(), target.into(), theta)
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
@@ -804,11 +682,7 @@ impl PyCircuit {
         target: PyIntOrQubit,
     ) -> PyResult<()> {
         self.inner
-            .ccx(
-                control1.into_qubit(),
-                control2.into_qubit(),
-                target.into_qubit(),
-            )
+            .ccx(control1.into(), control2.into(), target.into())
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
@@ -922,7 +796,7 @@ impl PyCircuit {
     /// ```
     fn unitary(&mut self, gate: PyUnitaryGate, qubits: PyIntListOrQubitList) -> PyResult<()> {
         self.inner
-            .unitary(gate.into(), qubits.into_qubits())
+            .unitary(gate.into(), qubits.into())
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
@@ -934,7 +808,7 @@ impl PyCircuit {
     ///     qubit: Qubit index (int) or Qubit object
     fn measure(&mut self, qubit: PyIntOrQubit) -> PyResult<()> {
         self.inner
-            .measure(qubit.into_qubit())
+            .measure(qubit.into())
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
@@ -946,7 +820,7 @@ impl PyCircuit {
     ///     qubit: Qubit index (int) or Qubit object
     fn reset(&mut self, qubit: PyIntOrQubit) -> PyResult<()> {
         self.inner
-            .reset(qubit.into_qubit())
+            .reset(qubit.into())
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
@@ -959,7 +833,7 @@ impl PyCircuit {
     ///     qubits: List of qubit indices (int) or Qubit objects
     fn barrier(&mut self, qubits: PyIntListOrQubitList) -> PyResult<()> {
         self.inner
-            .barrier(qubits.into_qubits())
+            .barrier(qubits.into())
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
@@ -978,7 +852,7 @@ impl PyCircuit {
         qubits: PyIntListOrQubitList,
         params: Option<Vec<PyParamLike>>,
     ) -> PyResult<()> {
-        let qubits_core: Vec<Qubit> = qubits.into_qubits();
+        let qubits_core: Vec<Qubit> = qubits.into();
 
         let inst = Instruction::CircuitGate(Box::new(instruction.inner));
         let params_core: Vec<ParameterValue> = params
@@ -1002,7 +876,7 @@ impl PyCircuit {
     ///     param: The duration of the delay (can be float or Parameter)
     fn delay(&mut self, qubit: PyIntOrQubit, param: PyParamLike) -> PyResult<()> {
         self.inner
-            .delay(qubit.into_qubit(), param.into())
+            .delay(qubit, param.into())
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
         Ok(())
     }
@@ -1017,10 +891,11 @@ impl PyCircuit {
     /// Raises:
     ///     ValueError: If the circuit contains non-unitary operations (Measure, Reset)
     ///                  or gates that cannot be symbolically inverted.
-    fn inverse(&self) -> PyResult<Self> {
-        let new_inner = self
-            .inner
-            .inverse()
+    fn inverse(&self, py: Python<'_>) -> PyResult<Self> {
+        // Clone circuit data for thread-safe access without holding GIL
+        let circuit = self.inner.clone();
+        let new_inner = py
+            .detach(move || circuit.inverse())
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
         Ok(PyCircuit { inner: new_inner })
     }
@@ -1040,10 +915,15 @@ impl PyCircuit {
     ///     >>> circuit.rx(0, theta)
     ///     >>> assigned = circuit.assign_parameters({"theta": 3.14159})
     #[pyo3(signature = (bindings=None))]
-    fn assign_parameters(&self, bindings: Option<HashMap<String, f64>>) -> PyResult<Self> {
-        let new_inner = self
-            .inner
-            .assign_parameters(&bindings)
+    fn assign_parameters(
+        &self,
+        py: Python<'_>,
+        bindings: Option<HashMap<String, f64>>,
+    ) -> PyResult<Self> {
+        // Clone circuit data for thread-safe access without holding GIL
+        let circuit = self.inner.clone();
+        let new_inner = py
+            .detach(move || circuit.assign_parameters(&bindings))
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
         Ok(PyCircuit { inner: new_inner })
     }
@@ -1117,7 +997,12 @@ impl PyCircuit {
         py: Python<'py>,
         qubits_order: Option<Vec<usize>>,
     ) -> PyResult<Bound<'py, PyArray2<Complex64>>> {
-        Ok(self.inner.to_matrix(qubits_order.as_ref()).to_pyarray(py))
+        // Clone circuit data for thread-safe access without holding GIL
+        let circuit = self.inner.clone();
+        let order = qubits_order.clone();
+        // Release GIL during potentially expensive matrix computation
+        let result = py.detach(move || circuit.to_matrix(order.as_ref()));
+        Ok(result.to_pyarray(py))
     }
 
     /// Decomposes the circuit by expanding all sub-circuit gates.
@@ -1127,9 +1012,19 @@ impl PyCircuit {
     ///
     /// Returns:
     ///     A new flattened circuit with only base instructions.
-    fn decompose(&self) -> Self {
-        Self {
-            inner: self.inner.decompose(),
+    ///
+    /// Raises:
+    ///     ValueError: If a symbolic parameter cannot be resolved during decomposition.
+    fn decompose(&self, py: Python<'_>) -> PyResult<Self> {
+        // Clone circuit data for thread-safe access without holding GIL
+        let circuit = self.inner.clone();
+        // Release GIL during potentially expensive decomposition
+        match py.detach(move || circuit.decompose()) {
+            Ok(circuit) => Ok(Self { inner: circuit }),
+            Err(e) => Err(PyValueError::new_err(format!(
+                "Circuit decomposition failed: {}",
+                e
+            ))),
         }
     }
 
@@ -1387,8 +1282,10 @@ fn convert_op_tuples(
             }
 
             // Convert qubits
-            // let qubits: Vec<Qubit> = qubits.iter().map(|&q| Qubit::new(q as u32)).collect();
-            let qubits: SmallVec<[Qubit; 3]> = qubits.into_qubits().into_iter().collect();
+            let qubits: SmallVec<[Qubit; 3]> =
+                <PyIntListOrQubitList as Into<Vec<Qubit>>>::into(qubits)
+                    .into_iter()
+                    .collect();
             // Convert params - handle both fixed values and symbolic parameters
             let mut circuit_params = SmallVec::new();
             if let Some(params) = params {

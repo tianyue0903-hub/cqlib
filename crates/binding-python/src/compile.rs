@@ -22,127 +22,16 @@
 //! be mapped to Python `ValueError` with actionable messages.
 
 use crate::circuit::PyCircuit;
-use cqlib_core::circuit::Qubit;
+use crate::device::topology::PyTopology;
 use cqlib_core::compile::{
-    FidelityMap, SabreConfig, Vf2CandidateOptions, Vf2Mapping, Vf2Policy, Vf2ScoreWeights,
-    map_with_vf2_sabre, TemplateMatching as CoreTemplateMatching,
-    TemplateOptimization as CoreTemplateOptimization,
+    map_with_vf2_sabre, FidelityMap, SabreConfig, TemplateMatching as CoreTemplateMatching,
+    TemplateOptimization as CoreTemplateOptimization, Vf2CandidateOptions, Vf2Mapping, Vf2Policy,
+    Vf2ScoreWeights,
 };
-use cqlib_core::device::Topology;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use std::collections::HashMap;
-
-/// Python-side coupling tuple accepted by `Topology(...)`.
-///
-/// - `Bare((u, v))` means an unnamed 2q coupling and defaults to `"CX"`.
-/// - `Named((u, v, name))` carries an explicit gate name.
-#[derive(FromPyObject)]
-enum PyCouplingSpec {
-    Bare((usize, usize)),
-    Named((usize, usize, String)),
-}
-
-/// Python wrapper for core hardware topology.
-#[pyclass(name = "Topology", module = "cqlib.compiler")]
-#[derive(Clone, Debug)]
-pub struct PyTopology {
-    /// Internal core topology object.
-    pub(crate) inner: Topology,
-}
-
-#[pymethods]
-impl PyTopology {
-    /// Creates a topology from physical qubit ids and coupling tuples.
-    ///
-    /// Args:
-    ///     qubits (List[int]): Physical qubit ids.
-    ///     couplings (List[Tuple[int, int] | Tuple[int, int, str]]): Coupling edges.
-    ///
-    /// Raises:
-    ///     ValueError: If qubit ids overflow core limits.
-    #[new]
-    #[pyo3(signature = (qubits, couplings))]
-    fn new(qubits: Vec<usize>, couplings: Vec<PyCouplingSpec>) -> PyResult<Self> {
-        let qubits = qubits
-            .into_iter()
-            .map(py_id_to_qubit)
-            .collect::<PyResult<Vec<_>>>()?;
-        let couplings = py_couplings_to_core(couplings)?;
-        Ok(Self {
-            inner: Topology::new(qubits, couplings),
-        })
-    }
-
-    /// Builds a line topology whose adjacent qubits are CX-coupled.
-    ///
-    /// Args:
-    ///     qubits (List[int]): Physical qubit ids in line order.
-    ///
-    /// Returns:
-    ///     Topology: A new line topology.
-    ///
-    /// Raises:
-    ///     ValueError: If qubit ids overflow core limits.
-    #[staticmethod]
-    fn line(qubits: Vec<usize>) -> PyResult<Self> {
-        let core_qubits = qubits
-            .iter()
-            .copied()
-            .map(py_id_to_qubit)
-            .collect::<PyResult<Vec<_>>>()?;
-
-        let mut couplings = Vec::new();
-        for pair in qubits.windows(2) {
-            let u = py_id_to_qubit(pair[0])?;
-            let v = py_id_to_qubit(pair[1])?;
-            couplings.push((u, v, "CX".to_string()));
-        }
-
-        Ok(Self {
-            inner: Topology::new(core_qubits, couplings),
-        })
-    }
-
-    /// Returns the number of physical qubits.
-    #[getter]
-    fn num_qubits(&self) -> usize {
-        self.inner.num_qubits()
-    }
-
-    /// Returns the number of coupling edges.
-    #[getter]
-    fn num_couplings(&self) -> usize {
-        self.inner.num_couplings()
-    }
-
-    /// Checks whether two physical qubits are directly connected.
-    ///
-    /// Args:
-    ///     u (int): First qubit id.
-    ///     v (int): Second qubit id.
-    ///
-    /// Returns:
-    ///     bool: `True` when a direct coupling exists.
-    ///
-    /// Raises:
-    ///     ValueError: If qubit ids overflow core limits.
-    fn is_connected(&self, u: usize, v: usize) -> PyResult<bool> {
-        Ok(self
-            .inner
-            .is_connected(py_id_to_qubit(u)?, py_id_to_qubit(v)?))
-    }
-
-    /// Returns a compact debug representation.
-    fn __repr__(&self) -> String {
-        format!(
-            "Topology(num_qubits={}, num_couplings={})",
-            self.inner.num_qubits(),
-            self.inner.num_couplings()
-        )
-    }
-}
 
 /// Python wrapper for SABRE configuration.
 #[pyclass(name = "SabreConfig", module = "cqlib.compiler")]
@@ -386,11 +275,10 @@ impl PyTemplateOptimization {
                 CoreTemplateOptimization::from_template_file(&path, qubit_fixing_cnt, prune_param)
                     .map_err(|e| PyValueError::new_err(e.to_string()))?
             }
-            (None, None) => CoreTemplateOptimization::with_default_templates(
-                qubit_fixing_cnt,
-                prune_param,
-            )
-            .map_err(|e| PyValueError::new_err(e.to_string()))?,
+            (None, None) => {
+                CoreTemplateOptimization::with_default_templates(qubit_fixing_cnt, prune_param)
+                    .map_err(|e| PyValueError::new_err(e.to_string()))?
+            }
             (Some(_), Some(_)) => unreachable!(),
         };
 
@@ -627,25 +515,6 @@ pub fn py_map_with_vf2_sabre(
         .map_err(|e| PyValueError::new_err(e.to_string()))
 }
 
-/// Converts Python coupling tuples into core coupling triples.
-///
-/// Bare tuples default to `"CX"` to keep ergonomics aligned with
-/// `Topology.line(...)`.
-fn py_couplings_to_core(couplings: Vec<PyCouplingSpec>) -> PyResult<Vec<(Qubit, Qubit, String)>> {
-    let mut core = Vec::with_capacity(couplings.len());
-    for coupling in couplings {
-        match coupling {
-            PyCouplingSpec::Bare((u, v)) => {
-                core.push((py_id_to_qubit(u)?, py_id_to_qubit(v)?, "CX".to_string()));
-            }
-            PyCouplingSpec::Named((u, v, name)) => {
-                core.push((py_id_to_qubit(u)?, py_id_to_qubit(v)?, name));
-            }
-        }
-    }
-    Ok(core)
-}
-
 /// Converts Python fidelity map keys to core `Qubit` keys.
 ///
 /// The conversion performs index-range validation through `py_id_to_qubit`.
@@ -658,16 +527,9 @@ fn py_fidelity_to_core(
 
     let mut core = FidelityMap::with_capacity(fidelity_map.len());
     for ((u, v), value) in fidelity_map {
-        core.insert((py_id_to_qubit(u)?, py_id_to_qubit(v)?), value);
+        core.insert(((u as u32).into(), (v as u32).into()), value);
     }
     Ok(Some(core))
-}
-
-/// Converts Python integer qubit ids into core `Qubit`.
-fn py_id_to_qubit(idx: usize) -> PyResult<Qubit> {
-    let id = u32::try_from(idx)
-        .map_err(|_| PyValueError::new_err(format!("qubit id {} overflows u32", idx)))?;
-    Ok(Qubit::new(id))
 }
 
 /// Parses user-provided `vf2_policy` strings into enum policy values.

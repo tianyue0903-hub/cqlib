@@ -88,6 +88,27 @@ class Topology:
         """Returns the number of coupling edges in the topology."""
         ...
 
+    @property
+    def qubits(self) -> List[int]:
+        """Returns all physical qubit ids in the topology."""
+        ...
+
+    def add_qubits(self, qubits: List[int]) -> None:
+        """Adds physical qubits to topology."""
+        ...
+
+    def add_couplings(self, couplings: List[Tuple[int, int] | Tuple[int, int, str]]) -> None:
+        """Adds coupling edges to topology."""
+        ...
+
+    def remove_qubits(self, qubits: List[int]) -> None:
+        """Removes physical qubits from topology."""
+        ...
+
+    def remove_couplings(self, couplings: List[Tuple[int, int]]) -> None:
+        """Removes coupling edges from topology."""
+        ...
+
     def is_connected(self, u: int, v: int) -> bool:
         """Checks whether two physical qubits are directly connected.
 
@@ -101,6 +122,22 @@ class Topology:
         Raises:
             ValueError: If a qubit id overflows internal representation.
         """
+        ...
+
+    def neighbors(self, qubit: int) -> List[int]:
+        """Returns neighbor qubits directly connected to `qubit`."""
+        ...
+
+    def get_coupling_name(self, u: int, v: int) -> Optional[str]:
+        """Returns the coupling name between `u` and `v`, if it exists."""
+        ...
+
+    def contains_qubit(self, qubit: int) -> bool:
+        """Returns whether `qubit` exists in the topology."""
+        ...
+
+    def degree(self, qubit: int) -> int:
+        """Returns the degree (number of couplings) of `qubit`."""
         ...
 
 

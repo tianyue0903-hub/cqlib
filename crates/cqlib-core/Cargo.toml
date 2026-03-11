@@ -27,11 +27,13 @@ categories = [
 
 [dependencies]
 approx.workspace = true
+bitvec.workspace = true
 lalrpop-util = { workspace = true, features = ["lexer"] }
 indexmap.workspace = true
 ndarray.workspace = true
 num.workspace = true
 num-complex.workspace = true
+rayon.workspace = true
 rand.workspace = true
 regex.workspace = true
 rustworkx-core.workspace = true
@@ -41,7 +43,6 @@ serde_json.workspace = true
 thiserror.workspace = true
 time.workspace = true
 uuid.workspace = true
-rayon.workspace = true
 
 [build-dependencies]
 lalrpop.workspace = true

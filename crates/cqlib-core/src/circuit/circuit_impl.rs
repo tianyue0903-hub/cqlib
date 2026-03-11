@@ -1264,8 +1264,14 @@ impl Circuit {
     ///
     /// # Returns
     ///
-    /// A new flattened `Circuit` containing only base instructions (Standard, Unitary, Directives).
-    pub fn decompose(&self) -> Self {
+    /// - `Ok(Circuit)`: A new flattened `Circuit` containing only base instructions (Standard, Unitary, Directives).
+    /// - `Err(CircuitError)`: If a parameter cannot be resolved during decomposition.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CircuitError::UnresolvedParameter`] if a symbolic parameter in a sub-circuit
+    /// or control flow body cannot be evaluated to a concrete value.
+    pub fn decompose(&self) -> Result<Circuit, CircuitError> {
         let mut new_circuit = Circuit::from_qubits(self.qubits()).unwrap();
         // Preserve the order of symbols from the original circuit.
         new_circuit.symbols = self.symbols.clone();
@@ -1296,10 +1302,10 @@ impl Circuit {
                 &initial_qubit_map,
                 &initial_param_map,
                 &mut new_circuit,
-            );
+            )?;
         }
 
-        new_circuit
+        Ok(new_circuit)
     }
 
     fn decompose_recursive(
@@ -1308,7 +1314,7 @@ impl Circuit {
         qubit_map: &HashMap<Qubit, Qubit>,
         param_map: &HashMap<String, Parameter>,
         target_circuit: &mut Circuit,
-    ) {
+    ) -> Result<(), CircuitError> {
         match &op.instruction {
             Instruction::CircuitGate(cg) => {
                 // 1. Resolve Parameters in current context
@@ -1356,8 +1362,9 @@ impl Circuit {
                         &next_qubit_map,
                         &next_param_map,
                         target_circuit,
-                    );
+                    )?;
                 }
+                Ok(())
             }
             Instruction::ControlFlowGate(cf) => {
                 use crate::circuit::gate::control_flow::{
@@ -1371,10 +1378,11 @@ impl Circuit {
                     qubit_map: &HashMap<Qubit, Qubit>,
                     param_map: &HashMap<String, Parameter>,
                     target: &mut Vec<Operation>,
-                ) {
+                ) -> Result<(), CircuitError> {
                     for op in ops {
-                        decompose_op(op, context, qubit_map, param_map, target);
+                        decompose_op(op, context, qubit_map, param_map, target)?;
                     }
+                    Ok(())
                 }
 
                 // Helper: decompose a single operation
@@ -1384,7 +1392,7 @@ impl Circuit {
                     qubit_map: &HashMap<Qubit, Qubit>,
                     param_map: &HashMap<String, Parameter>,
                     target: &mut Vec<Operation>,
-                ) {
+                ) -> Result<(), CircuitError> {
                     let mapped_qubits: SmallVec<[Qubit; 3]> = op
                         .qubits
                         .iter()
@@ -1432,7 +1440,8 @@ impl Circuit {
                                 &next_qubit_map,
                                 &next_param_map,
                                 target,
-                            );
+                            )?;
+                            Ok(())
                         }
                         Instruction::ControlFlowGate(cf) => {
                             // Recurse into control flow bodies but preserve structure
@@ -1445,12 +1454,16 @@ impl Circuit {
                                         qubit_map,
                                         param_map,
                                         &mut true_body,
-                                    );
-                                    let false_body = gate.false_body().map(|fb| {
+                                    )?;
+                                    let false_body = if let Some(fb) = gate.false_body() {
                                         let mut body = Vec::new();
-                                        decompose_ops(fb, context, qubit_map, param_map, &mut body);
-                                        body
-                                    });
+                                        decompose_ops(
+                                            fb, context, qubit_map, param_map, &mut body,
+                                        )?;
+                                        Some(body)
+                                    } else {
+                                        None
+                                    };
                                     let mapped_cond = ConditionView::new(
                                         *qubit_map
                                             .get(&gate.condition().qubit)
@@ -1478,7 +1491,7 @@ impl Circuit {
                                         qubit_map,
                                         param_map,
                                         &mut body,
-                                    );
+                                    )?;
                                     let mapped_cond = ConditionView::new(
                                         *qubit_map
                                             .get(&gate.condition().qubit)
@@ -1498,37 +1511,39 @@ impl Circuit {
                                     });
                                 }
                             }
+                            Ok(())
                         }
                         _ => {
                             // Base case: map parameters and push
-                            let mapped_params: SmallVec<[CircuitParam; 1]> = op
-                                .params
-                                .iter()
-                                .map(|p| {
-                                    match p {
-                                        CircuitParam::Fixed(v) => CircuitParam::Fixed(*v),
-                                        CircuitParam::Index(idx) => {
-                                            let param = context.parameters[*idx as usize].clone();
-                                            let new_param =
-                                                Circuit::apply_param_map(param, param_map);
-                                            if let Ok(val) = new_param.evaluate(&None) {
-                                                CircuitParam::Fixed(val)
-                                            } else {
-                                                // For unresolved params, use Fixed(0.0) as placeholder
-                                                // In practice, symbolic params in control flow bodies
-                                                // should have been resolved or are handled by the caller
-                                                CircuitParam::Fixed(0.0)
-                                            }
+                            let mut mapped_params: SmallVec<[CircuitParam; 1]> = smallvec![];
+                            for p in &op.params {
+                                let param = match p {
+                                    CircuitParam::Fixed(v) => CircuitParam::Fixed(*v),
+                                    CircuitParam::Index(idx) => {
+                                        let param = context.parameters[*idx as usize].clone();
+                                        let new_param = Circuit::apply_param_map(param, param_map);
+                                        if let Ok(val) = new_param.evaluate(&None) {
+                                            CircuitParam::Fixed(val)
+                                        } else {
+                                            // Parameter cannot be resolved - return error instead of using placeholder
+                                            return Err(CircuitError::UnresolvedParameter(
+                                                format!(
+                                                    "Cannot resolve parameter '{}' in control flow body. Symbolic parameters in control flow must be bound before decomposition.",
+                                                    new_param
+                                                ),
+                                            ));
                                         }
                                     }
-                                })
-                                .collect();
+                                };
+                                mapped_params.push(param);
+                            }
                             target.push(Operation {
                                 instruction: op.instruction.clone(),
                                 qubits: mapped_qubits,
                                 params: mapped_params,
                                 label: op.label.clone(),
                             });
+                            Ok(())
                         }
                     }
                 }
@@ -1543,12 +1558,14 @@ impl Circuit {
                             qubit_map,
                             param_map,
                             &mut true_body,
-                        );
-                        let false_body = gate.false_body().map(|fb| {
+                        )?;
+                        let false_body = if let Some(fb) = gate.false_body() {
                             let mut body = Vec::new();
-                            decompose_ops(fb, context_circuit, qubit_map, param_map, &mut body);
-                            body
-                        });
+                            decompose_ops(fb, context_circuit, qubit_map, param_map, &mut body)?;
+                            Some(body)
+                        } else {
+                            None
+                        };
                         let mapped_cond = ConditionView::new(
                             *qubit_map
                                 .get(&gate.condition().qubit)
@@ -1576,7 +1593,7 @@ impl Circuit {
                             qubit_map,
                             param_map,
                             &mut body,
-                        );
+                        )?;
                         let mapped_cond = ConditionView::new(
                             *qubit_map
                                 .get(&gate.condition().qubit)
@@ -1597,6 +1614,7 @@ impl Circuit {
                         });
                     }
                 }
+                Ok(())
             }
             _ => {
                 // Base case: Standard/Unitary/Directive
@@ -1630,6 +1648,7 @@ impl Circuit {
                         op.label.as_deref(),
                     )
                     .unwrap();
+                Ok(())
             }
         }
     }
@@ -1711,7 +1730,10 @@ impl Circuit {
             let mut new_op = op.clone();
             for p in &mut new_op.params {
                 if let CircuitParam::Index(old_idx) = p {
-                    *p = index_map[*old_idx as usize].clone();
+                    *p = index_map
+                        .get(*old_idx as usize)
+                        .cloned()
+                        .ok_or(CircuitError::InvalidParameterIndex(*old_idx))?;
                 }
             }
             new_circuit.data.push(new_op);
@@ -1720,7 +1742,10 @@ impl Circuit {
         // Remap global phase
         match self.global_phase {
             CircuitParam::Index(old_idx) => {
-                new_circuit.global_phase = index_map[old_idx as usize].clone();
+                new_circuit.global_phase = index_map
+                    .get(old_idx as usize)
+                    .cloned()
+                    .ok_or(CircuitError::InvalidParameterIndex(old_idx))?;
             }
             CircuitParam::Fixed(val) => {
                 new_circuit.global_phase = CircuitParam::Fixed(val);

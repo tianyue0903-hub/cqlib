@@ -26,12 +26,13 @@ import pytest
 
 from cqlib.circuit import Circuit, ConditionView, ControlFlow, Directive, Parameter, Qubit, StandardGate
 from cqlib.compiler import (
-    Topology,
     vf2_find_initial_layout,
     vf2_find_initial_layout_candidates,
     vf2_is_subgraph_isomorphic,
     vf2_map,
 )
+
+from cqlib.device import Topology
 
 from . import assert_all_2q_on_topology
 from . import assert_ops_on_topology_recursive
@@ -249,7 +250,9 @@ class TestVf2CandidateSearch:
 
     def test_candidates_topk_effective_on_strict_case(self):
         """Returns more than one candidate in a strictly embeddable small case."""
-        topology = Topology([0, 1, 2, 3], [(0, 1), (1, 2), (2, 3), (3, 0)])
+        topology = Topology(
+            [0, 1, 2, 3], [(0, 1, "G0"), (1, 2, "G1"), (2, 3, "G2"), (3, 0, "G3")]
+        )
         circuit = Circuit(2)
         circuit.cx(0, 1)
 
@@ -258,7 +261,9 @@ class TestVf2CandidateSearch:
 
     def test_candidates_respect_max_matches_per_subgraph(self):
         """Respects match cap and returns bounded candidate count."""
-        topology = Topology([0, 1, 2, 3], [(0, 1), (1, 2), (2, 3), (3, 0)])
+        topology = Topology(
+            [0, 1, 2, 3], [(0, 1, "G0"), (1, 2, "G1"), (2, 3, "G2"), (3, 0, "G3")]
+        )
         circuit = Circuit(2)
         circuit.cx(0, 1)
 
@@ -272,7 +277,7 @@ class TestVf2CandidateSearch:
 
     def test_candidates_topk_zero_returns_empty(self):
         """Returns an empty list when top_k is explicitly set to zero."""
-        topology = Topology([0, 1, 2], [(0, 1), (1, 2)])
+        topology = Topology([0, 1, 2], [(0, 1, "G0"), (1, 2, "G1")])
         circuit = Circuit(2)
         circuit.cx(0, 1)
 
@@ -281,7 +286,9 @@ class TestVf2CandidateSearch:
 
     def test_candidates_non_positive_weights_are_stable(self):
         """Handles non-positive candidate weights without crashing."""
-        topology = Topology([0, 1, 2, 3], [(0, 1), (1, 2), (2, 3), (3, 0)])
+        topology = Topology(
+            [0, 1, 2, 3], [(0, 1, "G0"), (1, 2, "G1"), (2, 3, "G2"), (3, 0, "G3")]
+        )
         circuit = Circuit(2)
         circuit.cx(0, 1)
 
@@ -308,7 +315,7 @@ class TestVf2RandomizedStress:
         line_topology = Topology.line(list(range(num_qubits)))
         full_topology = Topology(
             list(range(num_qubits)),
-            [(i, j) for i in range(num_qubits) for j in range(i + 1, num_qubits)],
+            [(i, j, "") for i in range(num_qubits) for j in range(i + 1, num_qubits)],
         )
 
         for _ in range(repeats):

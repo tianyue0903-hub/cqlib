@@ -789,8 +789,22 @@ impl CircuitDag {
                         }
                     }
 
-                    let true_target = true_target.expect("Missing TrueBranch edge");
-                    let false_target = false_target.expect("Missing FalseBranch edge");
+                    let true_target = true_target.ok_or_else(|| {
+                        let block_label = block.label().unwrap_or("<unlabeled>");
+                        CircuitError::InvalidControlFlow(format!(
+                            "Block '{}' (index {:?}) has a Branch terminator but is missing a TrueBranch outgoing edge. \
+                             Expected a FlowEdge::TrueBranch edge from this block to the true branch target.",
+                            block_label, node
+                        ))
+                    })?;
+                    let false_target = false_target.ok_or_else(|| {
+                        let block_label = block.label().unwrap_or("<unlabeled>");
+                        CircuitError::InvalidControlFlow(format!(
+                            "Block '{}' (index {:?}) has a Branch terminator but is missing a FalseBranch outgoing edge. \
+                             Expected a FlowEdge::FalseBranch edge from this block to the false branch target.",
+                            block_label, node
+                        ))
+                    })?;
 
                     // Determine structure type by checking block label
                     // While loop: cond block label starts with "while_cond_"

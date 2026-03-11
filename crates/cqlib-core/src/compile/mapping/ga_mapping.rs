@@ -32,16 +32,15 @@
 use std::collections::{HashMap, HashSet};
 
 use rand::rngs::StdRng;
-use rand::{Rng, SeedableRng};
 use rand::seq::SliceRandom;
+use rand::{Rng, SeedableRng};
 
+use super::{FidelityMap, TopologyAdapter};
 use crate::circuit::{Circuit, Instruction, StandardGate};
 use crate::compile::error::CompileError;
 use crate::compile::mapping::sabre::{SabreConfig, SabreMapping};
-use super::{TopologyAdapter, FidelityMap};
 use crate::device::Topology;
 use rayon::prelude::*;
-
 
 /// Configuration for Genetic Algorithm mapping.
 #[derive(Debug, Clone)]
@@ -63,7 +62,7 @@ pub struct GaConfig {
     /// Configuration for the underlying SABRE evaluations.
     pub sabre_config: SabreConfig,
     /// Random seed (`-1` means auto-seeded).
-    pub seed: i64
+    pub seed: i64,
 }
 
 impl Default for GaConfig {
@@ -78,7 +77,7 @@ impl Default for GaConfig {
             crossover_qubit_number: 3,
             update_iters: 5,
             sabre_config: SabreConfig::default(),
-            seed: -1
+            seed: -1,
         }
     }
 }
@@ -118,13 +117,16 @@ impl GeneticAlgMapping {
         invalid_qubits: Option<HashSet<usize>>,
     ) -> Result<Self, CompileError> {
         let topology_adapter = TopologyAdapter::new(&topology, fidelity_map.as_ref())?;
-        
+
         let qubit_number = topology_adapter.num_qubits();
 
         let mut is_ideal_topology = true;
         for i in 0..qubit_number {
             for j in 0..qubit_number {
-                if i != j && topology_adapter.is_adjacent(i, j) && (topology_adapter.edge_fidelity(i, j) - 1.0).abs() > 1e-9 {
+                if i != j
+                    && topology_adapter.is_adjacent(i, j)
+                    && (topology_adapter.edge_fidelity(i, j) - 1.0).abs() > 1e-9
+                {
                     is_ideal_topology = false;
                     break;
                 }
@@ -134,7 +136,7 @@ impl GeneticAlgMapping {
         let invalid_qubits_set = invalid_qubits.unwrap_or_default();
 
         let layout_regions = Self::get_all_connected_nodes(&topology_adapter, &invalid_qubits_set);
-        
+
         let seed = if config.seed >= 0 {
             config.seed as u64
         } else {
@@ -175,7 +177,8 @@ impl GeneticAlgMapping {
             return Vec::new();
         }
 
-        let random_region_idx = valid_region_idxes[self.rng.random_range(0..valid_region_idxes.len())];
+        let random_region_idx =
+            valid_region_idxes[self.rng.random_range(0..valid_region_idxes.len())];
         let region = &self.layout_regions[random_region_idx];
 
         let random_start_node_idx = self.rng.random_range(0..region.len());
@@ -222,7 +225,12 @@ impl GeneticAlgMapping {
             if individual.len() != self.circuit_width {
                 return Err(CompileError::TopologyTooSmall {
                     required: self.circuit_width,
-                    available: self.layout_regions.iter().map(|x| x.len()).max().unwrap_or(0),
+                    available: self
+                        .layout_regions
+                        .iter()
+                        .map(|x| x.len())
+                        .max()
+                        .unwrap_or(0),
                 });
             }
             self.population_space.push(individual);
@@ -263,28 +271,33 @@ impl GeneticAlgMapping {
         self.initial(circuit)?;
 
         for _ in 0..self.config.update_iters {
-            
             // Parallel evaluation of the population
-            let evaluated_population: Vec<(usize, Vec<usize>, Circuit)> = (0..self.config.population).into_par_iter().map(|idx| {
-                let mut sabre_mapping = SabreMapping::new(
-                    self.original_topology.clone(),
-                    self.fidelity_map.clone(), // Fidelity map integration typically inherited or passed here
-                    self.config.sabre_config.clone(),
-                ).expect("Failed to initialize Sabre within GA");
+            let evaluated_population: Vec<(usize, Vec<usize>, Circuit)> = (0..self
+                .config
+                .population)
+                .into_par_iter()
+                .map(|idx| {
+                    let mut sabre_mapping = SabreMapping::new(
+                        self.original_topology.clone(),
+                        self.fidelity_map.clone(), // Fidelity map integration typically inherited or passed here
+                        self.config.sabre_config.clone(),
+                    )
+                    .expect("Failed to initialize Sabre within GA");
 
-                // In a true integration, `execute_with_genetic_algorithm` or a seed layout param is used.
-                let mapped_circuit = sabre_mapping
-                    .execute_with_genetic_algorithm(circuit, self.population_space[idx].clone())
-                    .expect("Sabre routing failed during GA evaluation");
+                    // In a true integration, `execute_with_genetic_algorithm` or a seed layout param is used.
+                    let mapped_circuit = sabre_mapping
+                        .execute_with_genetic_algorithm(circuit, self.population_space[idx].clone())
+                        .expect("Sabre routing failed during GA evaluation");
 
-                let im_usize = sabre_mapping
-                    .logic2phy
-                    .into_iter()
-                    .map(|q| q.id() as usize)
-                    .collect::<Vec<usize>>();
+                    let im_usize = sabre_mapping
+                        .logic2phy
+                        .into_iter()
+                        .map(|q| q.id() as usize)
+                        .collect::<Vec<usize>>();
 
-                (idx, im_usize, mapped_circuit)
-            }).collect();
+                    (idx, im_usize, mapped_circuit)
+                })
+                .collect();
 
             for (idx, initial_mapping, mapped_circuit) in evaluated_population {
                 let mapped_info = self.post_mapping_analysis(&mapped_circuit);
@@ -376,7 +389,7 @@ impl GeneticAlgMapping {
             .enumerate()
             .max_by_key(|(_, x)| *x)
             .unwrap();
-            
+
         let mut cross_q = connected_qubits[max_index.0].clone();
         cross_q.shuffle(&mut self.rng);
 
@@ -416,7 +429,7 @@ impl GeneticAlgMapping {
 
             // Allow mutation only if it's a "leaf node" (connected to the subgraph via a single anchor point).
             if inner_points.len() == 1 {
-                let inner_node = inner_points[0]; 
+                let inner_node = inner_points[0];
                 let muta_neighbors = &self.topology.neighbors[inner_node];
 
                 // Look for free physical qubits around the anchor.
@@ -428,14 +441,14 @@ impl GeneticAlgMapping {
             }
         }
 
-        // If no nodes can be mutated 
+        // If no nodes can be mutated
         if mutation_candidates.is_empty() {
             let force_muta_rate: f64 = self.rng.random();
             if force_muta_rate < self.config.forced_mutation_prob {
                 return self.generate_random_initial_mapping(self.circuit_width);
             }
             // Otherwise, return the original individual.
-            return individual; 
+            return individual;
         }
 
         // Core fix: Randomly pick exactly ONE action from all valid mutation candidates to execute.
@@ -457,19 +470,21 @@ impl GeneticAlgMapping {
     }
 
     /// Internal helper to analyze mapping results for routing cost (SWAP count).
-    fn post_mapping_analysis(&self, swaped_circuit: &Circuit) -> (usize, Vec<(usize, usize, usize)>) {
+    fn post_mapping_analysis(
+        &self,
+        swaped_circuit: &Circuit,
+    ) -> (usize, Vec<(usize, usize, usize)>) {
         let mut swap_counter = 0;
         let mut edge_list_counting: HashMap<(usize, usize), usize> = HashMap::new();
 
         for op in swaped_circuit.operations() {
             if let Instruction::Standard(StandardGate::SWAP) = op.instruction {
-
                 swap_counter += 1;
                 let gate_qubits = &op.qubits;
                 if gate_qubits.len() == 2 {
                     let u = gate_qubits[0].id() as usize;
                     let v = gate_qubits[1].id() as usize;
-                    
+
                     let order_q = (u, v);
                     let inv_order_q = (v, u);
 
@@ -504,7 +519,10 @@ impl GeneticAlgMapping {
 
     /// Finds all connected components in the topology using BFS.
     /// Returns a vector of connected regions, where each region is a vector of qubit IDs
-    fn get_all_connected_nodes(topology: &TopologyAdapter, invalid_qubits: &HashSet<usize>) -> Vec<Vec<usize>> {
+    fn get_all_connected_nodes(
+        topology: &TopologyAdapter,
+        invalid_qubits: &HashSet<usize>,
+    ) -> Vec<Vec<usize>> {
         let mut all_regions: Vec<Vec<usize>> = Vec::new();
         let qubit_number = topology.num_qubits();
         if invalid_qubits.is_empty() {
@@ -514,13 +532,12 @@ impl GeneticAlgMapping {
 
         // Topology Analysis
         let mut valid_nodes: Vec<usize> = Vec::new();
-        for idx in 0..qubit_number{
+        for idx in 0..qubit_number {
             if !invalid_qubits.contains(&idx) {
                 valid_nodes.push(idx);
             }
         }
-        
-        
+
         while !valid_nodes.is_empty() {
             let mut cnodes: Vec<usize> = Vec::new();
             let start_node: usize = valid_nodes[0];
@@ -529,16 +546,18 @@ impl GeneticAlgMapping {
             let mut queue: Vec<usize> = vec![start_node];
             let mut visited_in_component: HashSet<usize> = HashSet::new();
             visited_in_component.insert(start_node);
-            
+
             while !queue.is_empty() {
                 let mut next_queue: Vec<usize> = Vec::new();
-                
+
                 for node in queue {
-                    cnodes.push(node); 
+                    cnodes.push(node);
 
                     for &neighbor in &topology.neighbors[node] {
                         // Only process if it's valid AND hasn't been visited yet
-                        if !invalid_qubits.contains(&neighbor) && !visited_in_component.contains(&neighbor) {
+                        if !invalid_qubits.contains(&neighbor)
+                            && !visited_in_component.contains(&neighbor)
+                        {
                             visited_in_component.insert(neighbor);
                             next_queue.push(neighbor);
                         }
@@ -554,8 +573,6 @@ impl GeneticAlgMapping {
 
         all_regions
     }
-
-
 }
 
 #[cfg(test)]
@@ -571,7 +588,7 @@ mod tests {
             .windows(2)
             .map(|w| (Qubit::new(w[0]), Qubit::new(w[1]), "CX".to_string()))
             .collect();
-        Topology::new(qubits, couplings)
+        Topology::new(qubits, couplings).unwrap()
     }
 
     // auxiliary functions：create a circuit
@@ -586,34 +603,39 @@ mod tests {
     fn test_ga_initialization_with_empty_invalid_qubits() {
         let topology = line_topology(&[0, 1, 2, 3]);
         let config = GaConfig {
-            population: 5, 
+            population: 5,
             ..GaConfig::default()
         };
-        
+
         let mut ga = GeneticAlgMapping::new(topology, config, None, None).unwrap();
         let circuit = simple_circuit();
-        
+
         ga.initial(&circuit).unwrap();
-        
+
         assert_eq!(ga.population_space.len(), 5);
         assert_eq!(ga.population_space[0].len(), 3);
     }
 
     #[test]
     fn test_connected_components_with_invalid_qubits() {
-        
         let topology = line_topology(&[0, 1, 2, 3, 4]);
-        
+
         let mut invalid_qubits = HashSet::new();
         invalid_qubits.insert(2);
 
         let config = GaConfig::default();
         let ga = GeneticAlgMapping::new(topology, config, None, Some(invalid_qubits)).unwrap();
-        
+
         assert_eq!(ga.layout_regions.len(), 2);
-        
-        let has_region_0_1 = ga.layout_regions.iter().any(|r| r.contains(&0) && r.contains(&1));
-        let has_region_3_4 = ga.layout_regions.iter().any(|r| r.contains(&3) && r.contains(&4));
+
+        let has_region_0_1 = ga
+            .layout_regions
+            .iter()
+            .any(|r| r.contains(&0) && r.contains(&1));
+        let has_region_3_4 = ga
+            .layout_regions
+            .iter()
+            .any(|r| r.contains(&3) && r.contains(&4));
         let contains_invalid = ga.layout_regions.iter().any(|r| r.contains(&2));
 
         assert!(has_region_0_1, "Should contain region with 0 and 1");
@@ -627,15 +649,15 @@ mod tests {
         let topology = line_topology(&[0, 1]);
         let config = GaConfig::default();
         let mut ga = GeneticAlgMapping::new(topology, config, None, None).unwrap();
-        
+
         // Circuit needs 3 qubits
         let circuit = simple_circuit();
-        
+
         // initial() should return TopologyTooSmall error
         let result = ga.initial(&circuit);
         assert!(
             matches!(result, Err(CompileError::TopologyTooSmall { .. })),
-            "Expected TopologyTooSmall error, got {:?}", 
+            "Expected TopologyTooSmall error, got {:?}",
             result
         );
     }
@@ -645,13 +667,13 @@ mod tests {
         let topology = line_topology(&[0, 1, 2, 3, 4]);
         let config = GaConfig::default();
         let mut ga = GeneticAlgMapping::new(topology, config, None, None).unwrap();
-        
+
         ga.circuit_width = 3;
         let individual = vec![0, 1, 2];
-        
+
         // Run mutation
         let mutated = ga.mutation(individual.clone());
-        
+
         // The mutated individual should maintain the exact same length (circuit width)
         assert_eq!(mutated.len(), 3);
         // Ensure all elements in the mutated individual are unique (no duplicated qubits)
@@ -663,88 +685,93 @@ mod tests {
     fn test_post_mapping_analysis_swap_counting() {
         let topology = line_topology(&[0, 1, 2]);
         let ga = GeneticAlgMapping::new(topology, GaConfig::default(), None, None).unwrap();
-        
+
         let mut circuit = Circuit::new(3);
         // Add some SWAPs manually to simulate a routed circuit
-        circuit.append(
-            Instruction::Standard(StandardGate::SWAP),
-            vec![Qubit::new(0), Qubit::new(1)],
-            vec![],
-            None
-        ).unwrap();
-        circuit.append(
-            Instruction::Standard(StandardGate::SWAP),
-            vec![Qubit::new(1), Qubit::new(2)],
-            vec![],
-            None
-        ).unwrap();
-        circuit.append(
-            Instruction::Standard(StandardGate::SWAP),
-            vec![Qubit::new(0), Qubit::new(1)], // Second SWAP on the (0,1) edge
-            vec![],
-            None
-        ).unwrap();
-        
-        let (swap_count, mut layout) = ga.post_mapping_analysis(&circuit);
-        
+        circuit
+            .append(
+                Instruction::Standard(StandardGate::SWAP),
+                vec![Qubit::new(0), Qubit::new(1)],
+                vec![],
+                None,
+            )
+            .unwrap();
+        circuit
+            .append(
+                Instruction::Standard(StandardGate::SWAP),
+                vec![Qubit::new(1), Qubit::new(2)],
+                vec![],
+                None,
+            )
+            .unwrap();
+        circuit
+            .append(
+                Instruction::Standard(StandardGate::SWAP),
+                vec![Qubit::new(0), Qubit::new(1)], // Second SWAP on the (0,1) edge
+                vec![],
+                None,
+            )
+            .unwrap();
+
+        let (swap_count, layout) = ga.post_mapping_analysis(&circuit);
+
         // Total SWAP count should be 3
         assert_eq!(swap_count, 3);
-        
+
         // Layout should contain two edges, sorted by count ascending: (1, 2) has 1, (0, 1) has 2
         assert_eq!(layout.len(), 2);
-        
+
         // Ensure they are normalized (u < v) and sorted by usage frequency
-        assert_eq!(layout[0], (1, 2, 1)); 
-        assert_eq!(layout[1], (0, 1, 2)); 
+        assert_eq!(layout[0], (1, 2, 1));
+        assert_eq!(layout[1], (0, 1, 2));
     }
 
     #[test]
     fn test_execute_end_to_end() {
         // Create a 5-qubit line topology
         let topology = line_topology(&[0, 1, 2, 3, 4]);
-        
+
         // Create a circuit that intentionally requires routing
         // A CX between 0 and 2 on a line topology requires a SWAP
         let mut circuit = Circuit::new(3);
         circuit.cx(Qubit::new(0), Qubit::new(2)).unwrap();
-        
+
         // Configure GA and Sabre for a fast, deterministic test
         let mut sabre_config = SabreConfig::default();
         sabre_config.repeat_iterations = 0; // Pure GA mode (no SABRE backward optimization)
         sabre_config.seed = 42;
-        
+
         let config = GaConfig {
-            population: 4,  
-            update_iters: 2, 
+            population: 4,
+            update_iters: 2,
             seed: 42,
             sabre_config,
             ..GaConfig::default()
         };
-        
+
         let mut ga = GeneticAlgMapping::new(topology, config, None, None).unwrap();
-        
+
         // Execute the GA mapping
         let mapped_circuit = ga.execute(&circuit).expect("GA mapping failed to execute");
-        
+
         // The mapped circuit should have at least the same number of gates as the original
         assert!(mapped_circuit.operations().len() >= circuit.operations().len());
-        
+
         // Verify that all 2Q gates in the resulting circuit are physically adjacent
         for op in mapped_circuit.operations() {
             if op.qubits.len() == 2 {
                 let u_id = op.qubits[0].id();
                 let v_id = op.qubits[1].id();
-                
-                // On a strictly sequential line topology [0, 1, 2, 3, 4], 
+
+                // On a strictly sequential line topology [0, 1, 2, 3, 4],
                 // physical adjacency means the difference in IDs is exactly 1.
                 let distance = (u_id as i32 - v_id as i32).abs();
                 assert_eq!(
                     distance, 1,
-                    "Routing failed: found a 2Q gate between unconnected physical qubits {} and {}", 
+                    "Routing failed: found a 2Q gate between unconnected physical qubits {} and {}",
                     u_id, v_id
                 );
             }
         }
     }
-
 }

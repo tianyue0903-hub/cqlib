@@ -143,14 +143,18 @@ pub fn circuit_to_matrix(
 
         match &op.instruction {
             Instruction::Standard(std_gate) => {
-                let gate_matrix = std_gate.matrix(params.as_slice());
+                let gate_matrix = std_gate
+                    .matrix(params.as_slice())
+                    .map_err(|_| CompileError::Error)?;
                 // StandardGate matrices are Big-Endian (Controls/First Args are MSB).
                 // System is Little-Endian. Reverse bits to align.
                 let reversed_bits: Vec<usize> = bits.iter().cloned().rev().collect();
                 apply_gate_to_matrix(&mut matrix, gate_matrix.as_ref(), &reversed_bits);
             }
             Instruction::McGate(mc_gate) => {
-                let gate_matrix = mc_gate.matrix(params.as_slice());
+                let gate_matrix = mc_gate
+                    .matrix(params.as_slice())
+                    .map_err(|_| CompileError::Error)?;
                 // McGate matrices are Big-Endian (Controls MSB).
                 let reversed_bits: Vec<usize> = bits.iter().cloned().rev().collect();
                 apply_gate_to_matrix(&mut matrix, gate_matrix.as_ref(), &reversed_bits);

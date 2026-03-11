@@ -21,12 +21,12 @@
 //! - [`PyUnitaryGate`]: The main class for creating and manipulating custom gates.
 
 use crate::circuit::PyCircuit;
-use cqlib_core::circuit::gate::UnitaryGate;
 use cqlib_core::circuit::gate::circuit_gate::FrozenCircuit;
+use cqlib_core::circuit::gate::UnitaryGate;
 use num_complex::Complex64;
 use numpy::{PyArray2, PyArrayMethods};
 use pyo3::prelude::*;
-use pyo3::{PyResult, Python, pyclass, pymethods};
+use pyo3::{pyclass, pymethods, PyResult, Python};
 use std::sync::Arc;
 
 /// Python wrapper for `UnitaryGate`.

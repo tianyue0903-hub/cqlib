@@ -11,7 +11,6 @@
 # that they have been altered from the originals.
 
 from .._native import (
-    Topology,
     SabreConfig,
     TemplateMatching,
     TemplateOptimization,
@@ -23,7 +22,6 @@ from .._native import (
 )
 
 __all__ = [
-    "Topology",
     "SabreConfig",
     "TemplateMatching",
     "TemplateOptimization",

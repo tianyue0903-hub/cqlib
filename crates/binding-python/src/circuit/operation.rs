@@ -31,8 +31,8 @@ use crate::circuit::instruction::PyInstruction;
 use cqlib_core::circuit::operation::Operation;
 use cqlib_core::circuit::param::CircuitParam;
 use numpy::ToPyArray;
-use pyo3::IntoPyObjectExt;
 use pyo3::prelude::*;
+use pyo3::IntoPyObjectExt;
 use std::sync::Arc;
 
 /// Python wrapper for `Operation`.
