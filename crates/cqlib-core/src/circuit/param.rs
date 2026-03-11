@@ -101,3 +101,12 @@ impl From<Parameter> for ParameterValue {
         }
     }
 }
+
+impl From<ParameterValue> for Parameter {
+    fn from(para: ParameterValue) -> Parameter {
+        match para {
+            ParameterValue::Param(p) => p,
+            ParameterValue::Fixed(f) => Parameter::from(f),
+        }
+    }
+}

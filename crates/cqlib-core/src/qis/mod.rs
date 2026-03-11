@@ -56,12 +56,14 @@
 //! ```
 
 pub mod error;
+pub mod evolution;
 pub mod hamiltonian;
 pub mod observable;
 pub mod pauli;
 pub mod state;
 
 pub use error::{PauliStringParseError, QisError};
+pub use evolution::{PauliEvolution, TrotterMode};
 pub use hamiltonian::Hamiltonian;
 pub use observable::Observable;
 pub use pauli::{Pauli, PauliString, Phase};

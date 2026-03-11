@@ -64,6 +64,10 @@ pub enum QisError {
     /// (e.g., a non-Hermitian Hamiltonian or density matrix).
     #[error("Operator is not Hermitian")]
     NotHermitian,
+
+    /// Thrown when a parameter value is invalid.
+    #[error("Invalid parameter value: {0}")]
+    InvalidParameterValue(String),
 }
 
 /// Error type for parsing PauliString from a string representation.
