@@ -41,11 +41,13 @@
 //! // ps now represents X ⊗ Z ⊗ I
 //! ```
 
+use crate::qis::error::PauliStringParseError;
 use bitvec::prelude::*;
 use ndarray::{Array2, arr2};
 use num_complex::Complex64;
 use std::fmt;
 use std::ops::{Add, AddAssign, Mul, MulAssign};
+use std::str::FromStr;
 
 /// Phase factor in the Pauli group, isomorphic to Z4 (the cyclic group of order 4).
 ///
@@ -513,6 +515,182 @@ impl PauliString {
         anti_commutations % 2 == 0
     }
 
+    /// Converts the X bit vector to a usize mask.
+    ///
+    /// The i-th bit of the returned value corresponds to the X component of qubit i.
+    ///
+    /// # Examples
+    /// ```
+    /// use cqlib_core::qis::pauli::{Pauli, PauliString};
+    ///
+    /// let mut ps = PauliString::new(3);
+    /// ps.set_pauli(0, Pauli::X);
+    /// ps.set_pauli(2, Pauli::Y); // Y has both X and Z
+    /// assert_eq!(ps.x_mask(), 0b101); // X on qubit 0 and Z on qubit 2
+    /// ```
+    pub fn x_mask(&self) -> usize {
+        self.x.iter().enumerate().fold(
+            0usize,
+            |acc, (i, bit)| {
+                if *bit { acc | (1 << i) } else { acc }
+            },
+        )
+    }
+
+    /// Converts the Z bit vector to a usize mask.
+    ///
+    /// The i-th bit of the returned value corresponds to the Z component of qubit i.
+    pub fn z_mask(&self) -> usize {
+        self.z.iter().enumerate().fold(
+            0usize,
+            |acc, (i, bit)| {
+                if *bit { acc | (1 << i) } else { acc }
+            },
+        )
+    }
+
+    /// Computes the phase factor contributed by Y operators.
+    ///
+    /// In the symplectic representation, Y = iXZ. When there are `n` Y operators,
+    /// the total phase contributed is i^n, which cycles through {1, i, -1, -i}.
+    ///
+    /// # Returns
+    /// The complex phase factor (1, i, -1, or -i) corresponding to i^n where n is the Y count.
+    ///
+    /// # Examples
+    /// ```
+    /// use cqlib_core::qis::pauli::{Pauli, PauliString};
+    /// use num_complex::Complex64;
+    ///
+    /// // No Y operators: phase = 1
+    /// let ps1: PauliString = "XZI".parse().unwrap();
+    /// assert_eq!(ps1.y_phase(), Complex64::new(1.0, 0.0));
+    ///
+    /// // One Y operator: phase = i
+    /// let ps2: PauliString = "YII".parse().unwrap();
+    /// assert_eq!(ps2.y_phase(), Complex64::new(0.0, 1.0));
+    ///
+    /// // Two Y operators: phase = -1 (i^2)
+    /// let mut ps3 = PauliString::new(2);
+    /// ps3.set_pauli(0, Pauli::Y);
+    /// ps3.set_pauli(1, Pauli::Y);
+    /// assert_eq!(ps3.y_phase(), Complex64::new(-1.0, 0.0));
+    /// ```
+    pub fn y_phase(&self) -> Complex64 {
+        // Count Y operators (where both X and Z are set)
+        let y_count: u32 = self
+            .x
+            .iter()
+            .zip(self.z.iter())
+            .filter(|(x_bit, z_bit)| **x_bit && **z_bit)
+            .count() as u32;
+
+        // Y = iXZ, so Y^n contributes i^n
+        match y_count % 4 {
+            0 => Complex64::new(1.0, 0.0),
+            1 => Complex64::new(0.0, 1.0),
+            2 => Complex64::new(-1.0, 0.0),
+            3 => Complex64::new(0.0, -1.0),
+            _ => unreachable!(),
+        }
+    }
+
+    /// Computes the expectation value given a probability distribution over computational basis states.
+    ///
+    /// This calculates ⟨P⟩ = Σ_s p(s) ⟨s|P|s⟩, where p(s) is the probability of basis state |s⟩.
+    ///
+    /// # Important Notes on Conventions
+    /// - The string keys in `probs` use **little-endian** convention: the rightmost character corresponds to qubit 0.
+    ///   For example, "01" means qubit 0 = 1, qubit 1 = 0 (state |10⟩ in big-endian notation).
+    /// - If this Pauli string contains X or Y operators (non-diagonal), the expectation value is 0
+    ///   for any probability distribution over computational basis states.
+    /// - For Pauli strings containing only Z and I operators, the expectation is:
+    ///   ⟨P⟩ = phase × Σ_s p(s) × (-1)^{Σ_i (z[i] × s[i])}
+    ///
+    /// # Arguments
+    /// * `probs` - A HashMap mapping state strings (e.g., "00", "01") to their probabilities.
+    ///   The string uses little-endian: index 0 (leftmost) is qubit n-1, index n-1 (rightmost) is qubit 0.
+    ///
+    /// # Returns
+    /// The expectation value as a real number (f64).
+    ///
+    /// # Errors
+    /// Returns `QisError::DimensionMismatch` if any state string has length different from `self.num_qubits`.
+    /// Returns `QisError::PauliStringParseError` if any state string contains characters other than '0' or '1'.
+    ///
+    /// # Examples
+    /// ```
+    /// use cqlib_core::qis::pauli::{Pauli, PauliString};
+    /// use std::collections::HashMap;
+    ///
+    /// // Create Z on qubit 0
+    /// let mut ps = PauliString::new(2);
+    /// ps.set_pauli(0, Pauli::Z);
+    ///
+    /// // Probability distribution: 50% |00⟩, 50% |01⟩ (little-endian strings)
+    /// let mut probs = HashMap::new();
+    /// probs.insert("00".to_string(), 0.5); // |00⟩: qubit1=0, qubit0=0
+    /// probs.insert("01".to_string(), 0.5); // |01⟩: qubit1=0, qubit0=1
+    ///
+    /// // ⟨Z⟩ = 0.5 × 1 + 0.5 × (-1) = 0
+    /// let exp = ps.expectation(&probs).unwrap();
+    /// assert!((exp).abs() < 1e-10);
+    /// ```
+    pub fn expectation(
+        &self,
+        probs: &std::collections::HashMap<String, f64>,
+    ) -> Result<f64, crate::qis::error::QisError> {
+        // Check if this Pauli string contains X or Y operators
+        // X is represented by x[i]=1, z[i]=0
+        // Y is represented by x[i]=1, z[i]=1
+        // So if any bit in x is set, there is X or Y, and expectation is 0
+        if self.x.iter().any(|bit| *bit) {
+            return Ok(0.0);
+        }
+
+        // Only Z and I operators remain (diagonal in computational basis)
+        let z_mask = self.z_mask();
+        let global_phase = self.phase.to_complex();
+
+        let mut exp_value = 0.0;
+
+        for (state_str, prob) in probs {
+            if state_str.len() != self.num_qubits {
+                return Err(crate::qis::error::QisError::DimensionMismatch {
+                    expected: self.num_qubits,
+                    actual: state_str.len(),
+                });
+            }
+
+            // Parse state string to index using little-endian convention
+            // "01" -> qubit 0 = 1, qubit 1 = 0 -> index = 0b01 = 1
+            let mut state_idx = 0usize;
+            for (i, c) in state_str.chars().rev().enumerate() {
+                match c {
+                    '1' => state_idx |= 1 << i,
+                    '0' => {}
+                    _ => {
+                        return Err(crate::qis::error::QisError::PauliStringParseError(
+                            crate::qis::error::PauliStringParseError::InvalidCharacter(c),
+                        ));
+                    }
+                }
+            }
+
+            // Calculate eigenvalue: (-1)^{number of overlapping Z bits that are 1}
+            // For each qubit i with Z operator (z[i]=1) and state s[i]=1, contribute factor -1
+            let overlap = state_idx & z_mask;
+            let parity = overlap.count_ones();
+            let eigenvalue = if parity % 2 == 0 { 1.0 } else { -1.0 };
+
+            exp_value += prob * eigenvalue;
+        }
+
+        // Apply global phase and return real part
+        // For Hermitian observables (phase = ±1), this is just ±exp_value
+        Ok((exp_value * global_phase).re)
+    }
+
     /// Computes the phase exponent for multiplying two Pauli operators.
     ///
     /// Returns the exponent `n` such that `P1 * P2 = i^n * P3`.
@@ -569,7 +747,7 @@ impl PauliString {
 /// p2.set_pauli(0, Pauli::Z);
 ///
 /// let product = &p1 * &p2;
-/// assert_eq!(product.to_string(), "-iIY");
+/// assert_eq!(product.to_string(), "-iIT");
 /// ```
 impl Mul for &PauliString {
     type Output = PauliString;
@@ -615,6 +793,127 @@ impl MulAssign<&PauliString> for PauliString {
         // Update bit vectors using XOR (symplectic addition)
         self.x ^= &rhs.x;
         self.z ^= &rhs.z;
+    }
+}
+
+impl FromStr for PauliString {
+    type Err = PauliStringParseError;
+
+    /// Parses a PauliString from a string.
+    ///
+    /// The format is: `[+|-][i|j]<pauli operators>`
+    /// where pauli operators are I, X, Y, or Z.
+    ///
+    /// Qubits are in reverse order: the first character corresponds to the highest qubit index.
+    ///
+    /// # Examples
+    /// ```
+    /// use cqlib_core::qis::pauli::PauliString;
+    ///
+    /// // Parse without phase prefix
+    /// let ps: PauliString = "XZI".parse().unwrap();
+    /// assert_eq!(ps.to_string(), "+XZI");
+    ///
+    /// // Parse with + phase (explicit)
+    /// let ps: PauliString = "+XYZ".parse().unwrap();
+    /// assert_eq!(ps.to_string(), "+XYZ");
+    ///
+    /// // Parse with -i phase
+    /// let ps: PauliString = "-iZII".parse().unwrap();
+    /// assert_eq!(ps.to_string(), "-iZII");
+    ///
+    /// // Parse with +j (alternative for +i)
+    /// let ps: PauliString = "+jX".parse().unwrap();
+    /// assert_eq!(ps.to_string(), "+iX");
+    /// ```
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let s = s.trim();
+        if s.is_empty() {
+            return Err(PauliStringParseError::EmptyString);
+        }
+
+        let mut chars = s.chars().peekable();
+
+        // Parse optional phase
+        let mut phase = Phase::Plus;
+
+        // Check for sign
+        if let Some(&c) = chars.peek() {
+            if c == '+' || c == '-' {
+                let sign = if c == '+' { 0 } else { 2 }; // Plus = 0, Minus = 2
+                chars.next();
+
+                // Check for 'i' or 'j' after sign
+                if let Some(&c) = chars.peek() {
+                    if c == 'i' || c == 'j' {
+                        chars.next();
+                        phase = if sign == 0 { Phase::I } else { Phase::MinusI };
+                    } else {
+                        phase = if sign == 0 { Phase::Plus } else { Phase::Minus };
+                    }
+                } else {
+                    // Just "+" or "-" without operators
+                    return Err(PauliStringParseError::NoOperators);
+                }
+            } else if c == 'i' || c == 'j' {
+                // Implied + sign
+                chars.next();
+                phase = Phase::I;
+            }
+        }
+
+        // Collect Pauli operators
+        let mut operators: Vec<char> = Vec::new();
+        for c in chars {
+            match c {
+                'I' | 'X' | 'Y' | 'Z' => operators.push(c),
+                c => return Err(PauliStringParseError::InvalidCharacter(c)),
+            }
+        }
+
+        if operators.is_empty() {
+            return Err(PauliStringParseError::NoOperators);
+        }
+
+        // Create PauliString with correct dimensions
+        let num_qubits = operators.len();
+        let mut result = PauliString::new(num_qubits);
+        result.phase = phase;
+
+        // Set operators in reverse order (highest index first in string)
+        for (i, &op) in operators.iter().rev().enumerate() {
+            let pauli = match op {
+                'I' => Pauli::I,
+                'X' => Pauli::X,
+                'Y' => Pauli::Y,
+                'Z' => Pauli::Z,
+                _ => unreachable!(),
+            };
+            result.set_pauli(i, pauli);
+        }
+
+        Ok(result)
+    }
+}
+
+impl From<&str> for PauliString {
+    /// Creates a PauliString from a string slice.
+    ///
+    /// Panics if the string is not a valid Pauli string representation.
+    /// For a fallible version, use `str::parse::<PauliString>()`.
+    ///
+    /// # Examples
+    /// ```
+    /// use cqlib_core::qis::pauli::PauliString;
+    ///
+    /// let ps: PauliString = "XYZ".into();
+    /// assert_eq!(ps.to_string(), "+XYZ");
+    ///
+    /// let ps: PauliString = "-iZII".into();
+    /// assert_eq!(ps.to_string(), "-iZII");
+    /// ```
+    fn from(s: &str) -> Self {
+        s.parse().expect("Invalid PauliString format")
     }
 }
 

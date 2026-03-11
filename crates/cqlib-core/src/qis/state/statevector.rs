@@ -45,6 +45,8 @@ use crate::circuit::error::CircuitError;
 use crate::circuit::gate::StandardGate;
 use crate::circuit::gate::instruction::Instruction;
 use crate::circuit::param::CircuitParam;
+use crate::qis::Observable;
+use crate::qis::error::QisError;
 use num_complex::Complex64;
 use rayon::prelude::*;
 use std::f64::consts::FRAC_1_SQRT_2;
@@ -171,28 +173,21 @@ impl Statevector {
     /// ];
     /// let sv = Statevector::from_state(2, amps);
     /// ```
-    pub fn from_state(num_qubits: usize, initial_state: Vec<Complex64>) -> Self {
+    pub fn from_state(num_qubits: usize, initial_state: Vec<Complex64>) -> Result<Self, QisError> {
         let size = 1 << num_qubits;
-        assert_eq!(
-            initial_state.len(),
-            size,
-            "Initial state length {} does not match expected size {} for {} qubits",
-            initial_state.len(),
-            size,
-            num_qubits
-        );
+        if initial_state.len() != size {
+            return Err(QisError::InvalidStateDimension(initial_state.len()));
+        }
         // Verify normalization (probabilities should sum to ~1)
         let norm: f64 = initial_state.iter().map(|c| c.norm_sqr()).sum();
-        assert!(
-            (norm - 1.0).abs() < 1e-10,
-            "Initial state is not normalized (norm = {})",
-            norm
-        );
+        if (norm - 1.0).abs() >= 1e-10 {
+            return Err(QisError::NotNormalized);
+        }
 
-        Statevector {
+        Ok(Statevector {
             data: initial_state,
             num_qubits,
-        }
+        })
     }
 
     /// Constructs a statevector by simulating a quantum circuit.
@@ -227,7 +222,7 @@ impl Statevector {
     ///
     /// let sv = Statevector::from_circuit(&circuit).unwrap();
     /// ```
-    pub fn from_circuit(circuit: &Circuit) -> Result<Self, CircuitError> {
+    pub fn from_circuit(circuit: &Circuit) -> Result<Self, QisError> {
         // Decompose circuit to basic gates
         let circuit = circuit.decompose()?;
         let mut sv = Statevector::new(circuit.num_qubits());
@@ -258,21 +253,21 @@ impl Statevector {
                         .get(*idx as usize)
                         .copied()
                         .flatten()
-                        .ok_or(CircuitError::SymbolicParameterError),
+                        .ok_or(QisError::CircuitError(CircuitError::SymbolicParameterError)),
                 })
-                .collect::<Result<Vec<_>, _>>()?;
+                .collect::<Result<Vec<_>, QisError>>()?;
 
             // Get physical qubit indices
-            let qubit_indices: Vec<usize> = op
-                .qubits
-                .iter()
-                .map(|q| {
-                    qubit_map
-                        .get(q)
-                        .copied()
-                        .expect("Qubit not found in circuit")
-                })
-                .collect();
+            let qubit_indices: Result<Vec<usize>, QisError> =
+                op.qubits
+                    .iter()
+                    .map(|q| {
+                        qubit_map.get(q).copied().ok_or_else(|| {
+                            QisError::CircuitError(CircuitError::QubitNotFound(q.id()))
+                        })
+                    })
+                    .collect();
+            let qubit_indices = qubit_indices?;
 
             match &op.instruction {
                 Instruction::Standard(gate) => {
@@ -303,9 +298,9 @@ impl Statevector {
                                 sv.apply_crz(control, target, theta);
                             }
                             _ => {
-                                let matrix = mc_gate
-                                    .matrix(&params)
-                                    .map_err(|_| CircuitError::NoMatrixRepresentation)?;
+                                let matrix = mc_gate.matrix(&params).map_err(|_| {
+                                    QisError::CircuitError(CircuitError::NoMatrixRepresentation)
+                                })?;
                                 sv.apply_unitary_gate(&qubit_indices, &matrix);
                             }
                         }
@@ -316,9 +311,9 @@ impl Statevector {
                         let target = qubit_indices[2];
                         sv.apply_ccx(c0, c1, target);
                     } else {
-                        let matrix = mc_gate
-                            .matrix(&params)
-                            .map_err(|_| CircuitError::NoMatrixRepresentation)?;
+                        let matrix = mc_gate.matrix(&params).map_err(|_| {
+                            QisError::CircuitError(CircuitError::NoMatrixRepresentation)
+                        })?;
                         sv.apply_unitary_gate(&qubit_indices, &matrix);
                     }
                 }
@@ -326,13 +321,13 @@ impl Statevector {
                     if let Some(matrix) = u_gate.matrix() {
                         sv.apply_unitary_gate(&qubit_indices, matrix);
                     } else {
-                        return Err(CircuitError::NoMatrixRepresentation);
+                        return Err(QisError::CircuitError(CircuitError::NoMatrixRepresentation));
                     }
                 }
                 Instruction::CircuitGate(_) => {
-                    return Err(CircuitError::InvalidOperation(
+                    return Err(QisError::CircuitError(CircuitError::InvalidOperation(
                         "CircuitGate should have been decomposed".to_string(),
-                    ));
+                    )));
                 }
                 Instruction::Directive(_) => {
                     // Ignore barriers
@@ -343,7 +338,7 @@ impl Statevector {
                     continue;
                 }
                 Instruction::ControlFlowGate(_) => {
-                    return Err(CircuitError::InvalidControlOperation(
+                    return Err(QisError::UnsupportedOperation(
                         "Control flow gates not supported in statevector simulation".to_string(),
                     ));
                 }
@@ -367,7 +362,7 @@ impl Statevector {
         gate: StandardGate,
         qubits: &[usize],
         params: &[f64],
-    ) -> Result<(), CircuitError> {
+    ) -> Result<(), QisError> {
         match gate {
             // Single-qubit gates
             StandardGate::I => { /* no-op */ }
@@ -388,7 +383,7 @@ impl Statevector {
             StandardGate::Y2P => self.apply_y2p(qubits[0]),
             StandardGate::Y2M => self.apply_y2m(qubits[0]),
             StandardGate::RXY => self.apply_rxy(qubits[0], params[0], params[1]),
-            StandardGate::XY => self.apply_xy2p(qubits[0], params[0]),
+            StandardGate::XY => self.apply_xy(qubits[0], params[0]),
             StandardGate::XY2P => self.apply_xy2p(qubits[0], params[0]),
             StandardGate::XY2M => self.apply_xy2m(qubits[0], params[0]),
             StandardGate::U => {
@@ -1224,6 +1219,45 @@ impl Statevector {
         with_maybe_par!(self.num_qubits, self.data, 2 * dist, kernel);
     }
 
+    /// Applies XY gate.
+    ///
+    /// Matrix: [[0, -i·e^(-iθ)], [-i·e^(iθ), 0]]
+    ///
+    /// This is a single-qubit gate distinct from XY2P/XY2M.
+    ///
+    /// # Arguments
+    /// * `qubit` - Target qubit index
+    /// * `theta` - Rotation angle
+    pub fn apply_xy(&mut self, qubit: usize, theta: f64) {
+        if theta.abs() < 1e-15 {
+            return;
+        }
+
+        let dist = 1 << qubit;
+        let phase = Complex64::from_polar(1.0, theta);
+        let phase_conj = phase.conj();
+        let neg_i = Complex64::new(0.0, -1.0);
+
+        // u01 = -i * e^(-i*theta)
+        let u01 = neg_i * phase_conj;
+        // u10 = -i * e^(i*theta)
+        let u10 = neg_i * phase;
+
+        let kernel = |chunk: &mut [Complex64]| {
+            let (lower, upper) = chunk.split_at_mut(dist);
+            lower
+                .iter_mut()
+                .zip(upper.iter_mut())
+                .for_each(|(alpha, beta)| {
+                    let a = *alpha;
+                    let b = *beta;
+                    *alpha = u01 * b;
+                    *beta = u10 * a;
+                });
+        };
+        with_maybe_par!(self.num_qubits, self.data, 2 * dist, kernel);
+    }
+
     /// Apply general rotation R(theta, phi).
     ///
     /// Rotates around axis cos(phi)X + sin(phi)Y by angle theta.
@@ -1829,57 +1863,6 @@ impl Statevector {
         with_maybe_par!(self.num_qubits, self.data, 2 * d_max, kernel);
     }
 
-    /// Applies XY gate (XY interaction).
-    ///
-    /// Matrix: exp(-i·θ/2 · (X⊗X + Y⊗Y)/2)
-    /// Related to iSWAP: XY(π) = iSWAP
-    ///
-    /// # Arguments
-    /// * `q0` - First qubit index
-    /// * `q1` - Second qubit index
-    /// * `theta` - Interaction angle
-    pub fn apply_xy(&mut self, q0: usize, q1: usize, theta: f64) {
-        assert_ne!(q0, q1, "Qubits must be different");
-        if theta.abs() < 1e-15 {
-            return;
-        }
-
-        let (q_min, q_max) = if q0 < q1 { (q0, q1) } else { (q1, q0) };
-        let d_max = 1 << q_max;
-        let d_min = 1 << q_min;
-
-        let half_theta = theta * 0.5;
-        let c = half_theta.cos();
-        let s = half_theta.sin();
-
-        // XY couples |01⟩ and |10⟩ while leaving |00⟩ and |11⟩ unchanged
-        // |01⟩ = q_min=1, q_max=0 (part0, sub1)
-        // |10⟩ = q_min=0, q_max=1 (part1, sub0)
-        let kernel = |chunk: &mut [Complex64]| {
-            let (part0, part1) = chunk.split_at_mut(d_max);
-            part0
-                .chunks_exact_mut(2 * d_min)
-                .zip(part1.chunks_exact_mut(2 * d_min))
-                .for_each(|(sub0, sub1)| {
-                    let (_v00, v01) = sub0.split_at_mut(d_min);
-                    let (v10, _v11) = sub1.split_at_mut(d_min);
-
-                    // v01: |...01⟩ (q_min=1, q_max=0)
-                    // v10: |...10⟩ (q_min=0, q_max=1)
-                    // Pair them element-wise
-                    for (b, c_amp) in v01.iter_mut().zip(v10.iter_mut()) {
-                        let b_in = *b;
-                        let c_in = *c_amp;
-                        // |01⟩' = c|01⟩ - i*s|10⟩
-                        // |10⟩' = -i*s|01⟩ + c|10⟩
-                        *b = c * b_in + Complex64::new(0.0, -s) * c_in;
-                        *c_amp = Complex64::new(0.0, -s) * b_in + c * c_in;
-                    }
-                });
-        };
-        with_maybe_par!(self.num_qubits, self.data, 2 * d_max, kernel);
-    }
-
     /// Applies controlled-RX gate.
     ///
     /// Applies RX(θ) to target when control is |1⟩.
@@ -2172,6 +2155,43 @@ impl Statevector {
         }
         let phase = Complex64::from_polar(1.0, phi);
         self.data.par_iter_mut().for_each(|a| *a *= phase);
+    }
+
+    /// Computes the expectation value of a Hamiltonian observable.
+    ///
+    /// Calculates ⟨ψ|H|ψ⟩ for the current statevector |ψ⟩ and a given Hamiltonian H.
+    /// The Hamiltonian is represented as a sum of Pauli strings with coefficients.
+    ///
+    /// # Arguments
+    /// * `h` - The Hamiltonian observable.
+    ///
+    /// # Returns
+    /// The expectation value as a real number (f64), or a `CircuitError` if the
+    /// qubit counts do not match.
+    ///
+    /// # Errors
+    /// Returns `CircuitError::InvalidOperation` if the Hamiltonian acts on a different
+    /// number of qubits than the statevector.
+    ///
+    /// # Example
+    /// ```rust
+    /// use cqlib_core::qis::{Statevector, Hamiltonian};
+    /// use cqlib_core::qis::pauli::{Pauli, PauliString};
+    /// use num_complex::Complex64;
+    ///
+    /// let mut sv = Statevector::new(1);
+    /// sv.apply_x(0);
+    ///
+    /// // Create Hamiltonian H = Z (Pauli-Z observable)
+    /// let mut ps = PauliString::new(1);
+    /// ps.set_pauli(0, Pauli::Z);
+    /// let h = Hamiltonian::from_pauli(ps);
+    ///
+    /// let exp = sv.expectation(&h).unwrap();
+    /// // For |1⟩ state, ⟨Z⟩ = -1
+    /// ```
+    pub fn expectation(&self, h: &dyn Observable) -> Result<f64, QisError> {
+        h.expectation_statevector(self)
     }
 }
 

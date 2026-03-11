@@ -11,7 +11,10 @@
 // that they have been altered from the originals.
 
 use crate::circuit::Circuit;
-use crate::qis::DensityMatrix;
+use crate::qis::hamiltonian::Hamiltonian;
+use crate::qis::pauli::{Pauli, PauliString};
+use crate::qis::state::density_matrix::DensityMatrix;
+use crate::qis::state::statevector::Statevector;
 use approx::assert_relative_eq;
 use num_complex::Complex64;
 use std::f64::consts::PI;
@@ -20,7 +23,7 @@ use std::f64::consts::PI;
 fn test_from_state_normalization() {
     // Correctly normalized |1> state: [0.0, 1.0]
     let state = vec![Complex64::new(0.0, 0.0), Complex64::new(1.0, 0.0)];
-    let dm = DensityMatrix::from_state(1, state);
+    let dm = DensityMatrix::from_state(1, state).unwrap();
 
     assert_relative_eq!(dm.data[0].re, 0.0);
     assert_relative_eq!(dm.data[3].re, 1.0);
@@ -28,10 +31,10 @@ fn test_from_state_normalization() {
 }
 
 #[test]
-#[should_panic(expected = "Initial state must be normalized")]
 fn test_from_state_not_normalized() {
     let state = vec![Complex64::new(1.0, 0.0), Complex64::new(1.0, 0.0)];
-    let _ = DensityMatrix::from_state(1, state);
+    let result = DensityMatrix::from_state(1, state);
+    assert!(result.is_err());
 }
 
 #[test]
@@ -117,19 +120,19 @@ fn test_from_density_matrix_state() {
     let mut state = vec![Complex64::new(0.0, 0.0); size];
     state[0] = Complex64::new(0.5, 0.0); // |0><0|
     state[3] = Complex64::new(0.5, 0.0); // |1><1|
-    let dm = DensityMatrix::from_density_matrix_state(1, state);
+    let dm = DensityMatrix::from_density_matrix_state(1, state).unwrap();
     assert_relative_eq!(dm.trace().re, 1.0);
     assert_relative_eq!(dm.probabilities()[0], 0.5);
     assert_relative_eq!(dm.probabilities()[1], 0.5);
 }
 
 #[test]
-#[should_panic(expected = "Density matrix must have trace 1")]
 fn test_from_density_matrix_state_invalid_trace() {
     let size = 4;
     let mut state = vec![Complex64::new(0.0, 0.0); size];
     state[0] = Complex64::new(0.5, 0.0);
-    let _ = DensityMatrix::from_density_matrix_state(1, state);
+    let result = DensityMatrix::from_density_matrix_state(1, state);
+    assert!(result.is_err());
 }
 
 #[test]
@@ -255,4 +258,132 @@ fn test_two_qubit_gates_cz() {
     // row = 00 = 0, col = 11 = 3 -> index = 0 * 4 + 3 = 3
     // value = 0.5 * -0.5 = -0.25
     assert_relative_eq!(dm.data[3].re, -0.25);
+}
+
+#[test]
+fn test_expectation_z_on_zero() {
+    // |0⟩ state, ⟨Z⟩ = 1
+    let dm = DensityMatrix::new(1);
+    let mut ps = PauliString::new(1);
+    ps.set_pauli(0, Pauli::Z);
+    let h = Hamiltonian::from_pauli(ps);
+
+    let exp = dm.expectation(&h).unwrap();
+    assert_relative_eq!(exp, 1.0);
+}
+
+#[test]
+fn test_expectation_z_on_one() {
+    // |1⟩ state, ⟨Z⟩ = -1
+    let mut dm = DensityMatrix::new(1);
+    dm.apply_x(0);
+
+    let mut ps = PauliString::new(1);
+    ps.set_pauli(0, Pauli::Z);
+    let h = Hamiltonian::from_pauli(ps);
+
+    let exp = dm.expectation(&h).unwrap();
+    assert_relative_eq!(exp, -1.0);
+}
+
+#[test]
+fn test_expectation_x_on_plus() {
+    // |+⟩ state, ⟨X⟩ = 1
+    let mut dm = DensityMatrix::new(1);
+    dm.apply_h(0);
+
+    let mut ps = PauliString::new(1);
+    ps.set_pauli(0, Pauli::X);
+    let h = Hamiltonian::from_pauli(ps);
+
+    let exp = dm.expectation(&h).unwrap();
+    assert_relative_eq!(exp, 1.0);
+}
+
+#[test]
+fn test_expectation_multi_qubit() {
+    // Bell state |Φ+⟩ = (|00⟩ + |11⟩)/√2
+    // For H = Z⊗I, ⟨H⟩ = 0
+    let mut dm = DensityMatrix::new(2);
+    dm.apply_h(0);
+    dm.apply_cx(0, 1);
+
+    let mut ps = PauliString::new(2);
+    ps.set_pauli(0, Pauli::Z); // Z on qubit 0
+    let h = Hamiltonian::from_pauli(ps);
+
+    let exp = dm.expectation(&h).unwrap();
+    assert_relative_eq!(exp, 0.0, epsilon = 1e-10);
+}
+
+#[test]
+fn test_expectation_zz_on_bell() {
+    // Bell state |Φ+⟩ = (|00⟩ + |11⟩)/√2
+    // For H = Z⊗Z, ⟨H⟩ = 1
+    let mut dm = DensityMatrix::new(2);
+    dm.apply_h(0);
+    dm.apply_cx(0, 1);
+
+    let mut ps = PauliString::new(2);
+    ps.set_pauli(0, Pauli::Z);
+    ps.set_pauli(1, Pauli::Z);
+    let h = Hamiltonian::from_pauli(ps);
+
+    let exp = dm.expectation(&h).unwrap();
+    assert_relative_eq!(exp, 1.0);
+}
+
+#[test]
+fn test_expectation_with_coefficient() {
+    // |0⟩ state, ⟨2Z⟩ = 2
+    let dm = DensityMatrix::new(1);
+    let mut ps = PauliString::new(1);
+    ps.set_pauli(0, Pauli::Z);
+    let h = Hamiltonian::from_list(vec![(ps, Complex64::new(2.0, 0.0))]).unwrap();
+
+    let exp = dm.expectation(&h).unwrap();
+    assert_relative_eq!(exp, 2.0);
+}
+
+#[test]
+fn test_expectation_qubit_mismatch() {
+    let dm = DensityMatrix::new(1);
+    let h = Hamiltonian::new(2); // 2 qubit Hamiltonian
+
+    let result = dm.expectation(&h);
+    assert!(result.is_err(), "Should error on qubit mismatch");
+}
+
+#[test]
+fn test_expectation_sv_dm_consistency() {
+    // Compare Statevector and DensityMatrix expectation values
+
+    // Create the same state in both simulators
+    let mut sv = Statevector::new(2);
+    sv.apply_h(0);
+    sv.apply_cx(0, 1);
+
+    let mut dm = DensityMatrix::new(2);
+    dm.apply_h(0);
+    dm.apply_cx(0, 1);
+
+    // Create Hamiltonian H = X⊗X + Z⊗Z
+    let mut ps_xx = PauliString::new(2);
+    ps_xx.set_pauli(0, Pauli::X);
+    ps_xx.set_pauli(1, Pauli::X);
+
+    let mut ps_zz = PauliString::new(2);
+    ps_zz.set_pauli(0, Pauli::Z);
+    ps_zz.set_pauli(1, Pauli::Z);
+
+    let h = Hamiltonian::from_list(vec![
+        (ps_xx, Complex64::new(1.0, 0.0)),
+        (ps_zz, Complex64::new(1.0, 0.0)),
+    ])
+    .unwrap();
+
+    let exp_sv = sv.expectation(&h).unwrap();
+    let exp_dm = dm.expectation(&h).unwrap();
+
+    assert_relative_eq!(exp_sv, exp_dm, epsilon = 1e-10);
 }

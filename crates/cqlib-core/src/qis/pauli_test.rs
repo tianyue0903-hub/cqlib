@@ -482,3 +482,191 @@ fn test_commutation_relation_xyz() {
     // Phase difference should be i - (-i) = 2i, which corresponds to XY = -YX * (-1)
     // Actually: iZ - (-iZ) = 2iZ, so XY and YX have opposite signs
 }
+
+// ============================================================================
+// Expectation value tests with probability distributions
+// ============================================================================
+
+use std::collections::HashMap;
+
+#[test]
+fn test_expectation_z_on_zero() {
+    // Z on qubit 0, state |0⟩ (prob 1.0)
+    let mut ps = PauliString::new(1);
+    ps.set_pauli(0, Pauli::Z);
+
+    let mut probs = HashMap::new();
+    probs.insert("0".to_string(), 1.0);
+
+    let exp = ps.expectation(&probs).unwrap();
+    assert!(
+        (exp - 1.0).abs() < 1e-10,
+        "⟨0|Z|0⟩ should be 1, got {}",
+        exp
+    );
+}
+
+#[test]
+fn test_expectation_z_on_one() {
+    // Z on qubit 0, state |1⟩ (prob 1.0)
+    let mut ps = PauliString::new(1);
+    ps.set_pauli(0, Pauli::Z);
+
+    let mut probs = HashMap::new();
+    probs.insert("1".to_string(), 1.0);
+
+    let exp = ps.expectation(&probs).unwrap();
+    assert!(
+        (exp + 1.0).abs() < 1e-10,
+        "⟨1|Z|1⟩ should be -1, got {}",
+        exp
+    );
+}
+
+#[test]
+fn test_expectation_z_mixed() {
+    // Z on qubit 0, mixed state: 50% |0⟩, 50% |1⟩
+    let mut ps = PauliString::new(1);
+    ps.set_pauli(0, Pauli::Z);
+
+    let mut probs = HashMap::new();
+    probs.insert("0".to_string(), 0.5);
+    probs.insert("1".to_string(), 0.5);
+
+    let exp = ps.expectation(&probs).unwrap();
+    assert!(
+        exp.abs() < 1e-10,
+        "⟨Z⟩ for maximally mixed state should be 0, got {}",
+        exp
+    );
+}
+
+#[test]
+fn test_expectation_x_is_zero() {
+    // X on qubit 0 - expectation is always 0 for computational basis states
+    let mut ps = PauliString::new(1);
+    ps.set_pauli(0, Pauli::X);
+
+    let mut probs = HashMap::new();
+    probs.insert("0".to_string(), 0.3);
+    probs.insert("1".to_string(), 0.7);
+
+    let exp = ps.expectation(&probs).unwrap();
+    assert!(
+        exp.abs() < 1e-10,
+        "⟨X⟩ for computational basis states should be 0, got {}",
+        exp
+    );
+}
+
+#[test]
+fn test_expectation_y_is_zero() {
+    // Y on qubit 0 - expectation is always 0 for computational basis states
+    let mut ps = PauliString::new(1);
+    ps.set_pauli(0, Pauli::Y);
+
+    let mut probs = HashMap::new();
+    probs.insert("0".to_string(), 0.5);
+    probs.insert("1".to_string(), 0.5);
+
+    let exp = ps.expectation(&probs).unwrap();
+    assert!(
+        exp.abs() < 1e-10,
+        "⟨Y⟩ for computational basis states should be 0, got {}",
+        exp
+    );
+}
+
+#[test]
+fn test_expectation_two_qubit_zz() {
+    // Z⊗Z on |00⟩ and |11⟩ (Bell state probabilities)
+    let mut ps = PauliString::new(2);
+    ps.set_pauli(0, Pauli::Z);
+    ps.set_pauli(1, Pauli::Z);
+
+    let mut probs = HashMap::new();
+    probs.insert("00".to_string(), 0.5); // |00⟩: qubit1=0, qubit0=0, ZZ eigenvalue = 1
+    probs.insert("11".to_string(), 0.5); // |11⟩: qubit1=1, qubit0=1, ZZ eigenvalue = (-1)×(-1) = 1
+
+    let exp = ps.expectation(&probs).unwrap();
+    assert!(
+        (exp - 1.0).abs() < 1e-10,
+        "⟨ZZ⟩ for (|00⟩+|11⟩)/√2 should be 1, got {}",
+        exp
+    );
+}
+
+#[test]
+fn test_expectation_two_qubit_zz_orthogonal() {
+    // Z⊗Z on |01⟩ and |10⟩
+    let mut ps = PauliString::new(2);
+    ps.set_pauli(0, Pauli::Z);
+    ps.set_pauli(1, Pauli::Z);
+
+    let mut probs = HashMap::new();
+    probs.insert("01".to_string(), 0.5); // |01⟩: qubit1=0, qubit0=1, ZZ eigenvalue = 1×(-1) = -1
+    probs.insert("10".to_string(), 0.5); // |10⟩: qubit1=1, qubit0=0, ZZ eigenvalue = (-1)×1 = -1
+
+    let exp = ps.expectation(&probs).unwrap();
+    assert!(
+        (exp + 1.0).abs() < 1e-10,
+        "⟨ZZ⟩ for (|01⟩+|10⟩)/√2 should be -1, got {}",
+        exp
+    );
+}
+
+#[test]
+fn test_expectation_identity() {
+    // Identity on any state should give 1
+    let ps = PauliString::new(2); // All I
+
+    let mut probs = HashMap::new();
+    probs.insert("00".to_string(), 0.25);
+    probs.insert("01".to_string(), 0.25);
+    probs.insert("10".to_string(), 0.25);
+    probs.insert("11".to_string(), 0.25);
+
+    let exp = ps.expectation(&probs).unwrap();
+    assert!(
+        (exp - 1.0).abs() < 1e-10,
+        "⟨I⟩ should always be 1, got {}",
+        exp
+    );
+}
+
+#[test]
+fn test_expectation_with_global_phase() {
+    // -Z (global phase Minus)
+    let mut ps = PauliString::new(1);
+    ps.set_pauli(0, Pauli::Z);
+    ps.phase = Phase::Minus; // Multiply by -1
+
+    let mut probs = HashMap::new();
+    probs.insert("0".to_string(), 1.0);
+
+    let exp = ps.expectation(&probs).unwrap();
+    assert!(
+        (exp + 1.0).abs() < 1e-10,
+        "⟨-Z⟩ for |0⟩ should be -1, got {}",
+        exp
+    );
+}
+
+#[test]
+fn test_expectation_partial_probabilities() {
+    // Only some states in the distribution (others implicitly have prob 0)
+    let mut ps = PauliString::new(2);
+    ps.set_pauli(0, Pauli::Z); // Only Z on qubit 0
+
+    let mut probs = HashMap::new();
+    // Only include states with qubit 0 = 0, expect ⟨Z⟩ = 1
+    probs.insert("00".to_string(), 0.5); // qubit0=0
+    probs.insert("10".to_string(), 0.5); // qubit0=0
+
+    let exp = ps.expectation(&probs).unwrap();
+    assert!(
+        (exp - 1.0).abs() < 1e-10,
+        "⟨Z⊗I⟩ when qubit 0 is always 0 should be 1, got {}",
+        exp
+    );
+}

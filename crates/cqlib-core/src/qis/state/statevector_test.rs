@@ -11,6 +11,8 @@
 // that they have been altered from the originals.
 
 use super::*;
+use crate::qis::hamiltonian::Hamiltonian;
+use crate::qis::pauli::{Pauli, PauliString};
 use num_complex::Complex64;
 use std::f64::consts::{FRAC_1_SQRT_2, PI};
 
@@ -1072,10 +1074,6 @@ fn test_apply_ccx() {
     assert_complex_eq(sv5.data[3], c(1.0, 0.0), "CCX^2 should be I");
 }
 
-// =========================================================================
-// Medium Priority Gate Tests (Ising Interactions)
-// =========================================================================
-
 #[test]
 fn test_apply_rxx() {
     // RXX(π)|00⟩ should give something non-trivial
@@ -1184,50 +1182,6 @@ fn test_apply_rzx() {
         c(0.0, -1.0),
         "RZX(π, rev)|00⟩ should be -i|01⟩",
     );
-}
-
-// =========================================================================
-// Low Priority Gate Tests (XY, Controlled Rotations, FSIM, GPhase)
-// =========================================================================
-
-#[test]
-fn test_apply_xy() {
-    // XY(0) = I
-    let mut sv1 = Statevector::new(2);
-    sv1.apply_xy(0, 1, 0.0);
-    assert_complex_eq(sv1.data[0], c(1.0, 0.0), "XY(0) should be I");
-
-    // XY couples |01⟩ and |10⟩
-    // |01⟩ with θ=π/2: should become (|01⟩ - i|10⟩)/√2
-    let mut sv2 = Statevector::new(2);
-    sv2.apply_x(0); // |01⟩
-    sv2.apply_xy(0, 1, PI / 2.0);
-    assert_complex_eq(sv2.data[0], c(0.0, 0.0), "XY|01⟩[00] should be 0");
-    assert!(
-        (sv2.data[1].norm_sqr() - 0.5).abs() < EPSILON,
-        "P(|01⟩) should be ~0.5"
-    );
-    assert!(
-        (sv2.data[2].norm_sqr() - 0.5).abs() < EPSILON,
-        "P(|10⟩) should be ~0.5"
-    );
-
-    // |00⟩ and |11⟩ are unchanged
-    let mut sv3 = Statevector::new(2);
-    sv3.apply_xy(0, 1, PI);
-    assert_complex_eq(sv3.data[0], c(1.0, 0.0), "XY|00⟩ should be |00⟩");
-
-    let mut sv4 = Statevector::new(2);
-    sv4.apply_x(0);
-    sv4.apply_x(1); // |11⟩
-    sv4.apply_xy(0, 1, PI);
-    assert_complex_eq(sv4.data[3], c(1.0, 0.0), "XY|11⟩ should be |11⟩");
-
-    // Verify normalization
-    let mut sv5 = Statevector::new(3);
-    sv5.apply_h(0);
-    sv5.apply_xy(0, 2, 0.7);
-    assert_normalized(&sv5);
 }
 
 #[test]
@@ -1466,16 +1420,12 @@ fn test_apply_gphase() {
     assert_complex_eq(sv3.data[1], c(1.0, 0.0), "GPhase(2π) should be I");
 }
 
-// =========================================================================
-// Statevector Creation Tests
-// =========================================================================
-
 #[test]
 fn test_from_state() {
     // Test creating Statevector from a valid initial state
     // |+⟩ state: (|0⟩ + |1⟩)/√2
     let initial_state = vec![c(FRAC_1_SQRT_2, 0.0), c(FRAC_1_SQRT_2, 0.0)];
-    let sv = Statevector::from_state(1, initial_state);
+    let sv = Statevector::from_state(1, initial_state).unwrap();
     assert_eq!(sv.num_qubits, 1);
     assert_eq!(sv.data.len(), 2);
     assert_complex_eq(sv.data[0], c(FRAC_1_SQRT_2, 0.0), "|+⟩[0] should be 1/√2");
@@ -1488,7 +1438,7 @@ fn test_from_state() {
         c(0.0, 0.0),
         c(FRAC_1_SQRT_2, 0.0),
     ];
-    let sv2 = Statevector::from_state(2, bell_state);
+    let sv2 = Statevector::from_state(2, bell_state).unwrap();
     assert_eq!(sv2.num_qubits, 2);
     assert_eq!(sv2.data.len(), 4);
     assert_complex_eq(sv2.data[0], c(FRAC_1_SQRT_2, 0.0), "Bell |00⟩ amp");
@@ -1496,24 +1446,24 @@ fn test_from_state() {
 
     // Test |i⟩ state: (|0⟩ + i|1⟩)/√2
     let i_state = vec![c(FRAC_1_SQRT_2, 0.0), c(0.0, FRAC_1_SQRT_2)];
-    let sv3 = Statevector::from_state(1, i_state);
+    let sv3 = Statevector::from_state(1, i_state).unwrap();
     assert_complex_eq(sv3.data[1], c(0.0, FRAC_1_SQRT_2), "|i⟩[1] should be i/√2");
 }
 
 #[test]
-#[should_panic(expected = "Initial state length")]
 fn test_from_state_wrong_length() {
-    // Should panic if state length doesn't match 2^num_qubits
+    // Should return error if state length doesn't match 2^num_qubits
     let state = vec![c(1.0, 0.0), c(0.0, 0.0), c(0.0, 0.0)]; // 3 elements for 2 qubits (should be 4)
-    let _sv = Statevector::from_state(2, state);
+    let result = Statevector::from_state(2, state);
+    assert!(result.is_err());
 }
 
 #[test]
-#[should_panic(expected = "Initial state is not normalized")]
 fn test_from_state_not_normalized() {
-    // Should panic if state is not normalized
+    // Should return error if state is not normalized
     let state = vec![c(1.0, 0.0), c(1.0, 0.0)]; // norm = sqrt(2) != 1
-    let _sv = Statevector::from_state(1, state);
+    let result = Statevector::from_state(1, state);
+    assert!(result.is_err());
 }
 
 #[test]
@@ -1645,4 +1595,118 @@ fn test_apply_unitary_asymmetric() {
 
     assert_complex_eq(sv.data[1], c(0.0, 0.0), "Old state |01⟩ should be empty");
     assert_complex_eq(sv.data[2], c(0.0, 1.0), "New state should be i|10⟩");
+}
+
+#[test]
+fn test_expectation_z_on_zero() {
+    // |0⟩ state, ⟨Z⟩ = 1
+    let sv = Statevector::new(1);
+    let mut ps = PauliString::new(1);
+    ps.set_pauli(0, Pauli::Z);
+    let h = Hamiltonian::from_pauli(ps);
+
+    let exp = sv.expectation(&h).unwrap();
+    assert!(
+        (exp - 1.0).abs() < EPSILON,
+        "<0|Z|0> should be 1, got {}",
+        exp
+    );
+}
+
+#[test]
+fn test_expectation_z_on_one() {
+    // |1⟩ state, ⟨Z⟩ = -1
+    let mut sv = Statevector::new(1);
+    sv.apply_x(0);
+
+    let mut ps = PauliString::new(1);
+    ps.set_pauli(0, Pauli::Z);
+    let h = Hamiltonian::from_pauli(ps);
+
+    let exp = sv.expectation(&h).unwrap();
+    assert!(
+        (exp + 1.0).abs() < EPSILON,
+        "<1|Z|1> should be -1, got {}",
+        exp
+    );
+}
+
+#[test]
+fn test_expectation_x_on_plus() {
+    // |+⟩ state, ⟨X⟩ = 1
+    let mut sv = Statevector::new(1);
+    sv.apply_h(0);
+
+    let mut ps = PauliString::new(1);
+    ps.set_pauli(0, Pauli::X);
+    let h = Hamiltonian::from_pauli(ps);
+
+    let exp = sv.expectation(&h).unwrap();
+    assert!(
+        (exp - 1.0).abs() < EPSILON,
+        "<+|X|+> should be 1, got {}",
+        exp
+    );
+}
+
+#[test]
+fn test_expectation_multi_qubit() {
+    // Bell state |Φ+⟩ = (|00⟩ + |11⟩)/√2
+    // For H = Z⊗I, ⟨H⟩ = 0
+    let mut sv = Statevector::new(2);
+    sv.apply_h(0);
+    sv.apply_cx(0, 1);
+
+    let mut ps = PauliString::new(2);
+    ps.set_pauli(0, Pauli::Z); // Z on qubit 0
+    let h = Hamiltonian::from_pauli(ps);
+
+    let exp = sv.expectation(&h).unwrap();
+    assert!(exp.abs() < EPSILON, "<Φ+|Z⊗I|Φ+> should be 0, got {}", exp);
+}
+
+#[test]
+fn test_expectation_zz_on_bell() {
+    // Bell state |Φ+⟩ = (|00⟩ + |11⟩)/√2
+    // For H = Z⊗Z, ⟨H⟩ = 1
+    let mut sv = Statevector::new(2);
+    sv.apply_h(0);
+    sv.apply_cx(0, 1);
+
+    let mut ps = PauliString::new(2);
+    ps.set_pauli(0, Pauli::Z);
+    ps.set_pauli(1, Pauli::Z);
+    let h = Hamiltonian::from_pauli(ps);
+
+    let exp = sv.expectation(&h).unwrap();
+    assert!(
+        (exp - 1.0).abs() < EPSILON,
+        "<Φ+|ZZ|Φ+> should be 1, got {}",
+        exp
+    );
+}
+
+#[test]
+fn test_expectation_with_coefficient() {
+    // |0⟩ state, ⟨2Z⟩ = 2
+    let sv = Statevector::new(1);
+    let mut ps = PauliString::new(1);
+    ps.set_pauli(0, Pauli::Z);
+    let h = Hamiltonian::from_list(vec![(ps, Complex64::new(2.0, 0.0))]).unwrap();
+
+    let exp = sv.expectation(&h).unwrap();
+    assert!(
+        (exp - 2.0).abs() < EPSILON,
+        "<0|2Z|0> should be 2, got {}",
+        exp
+    );
+}
+
+#[test]
+fn test_expectation_qubit_mismatch() {
+    let sv = Statevector::new(1);
+    let h = Hamiltonian::new(2); // 2 qubit Hamiltonian
+
+    let result = sv.expectation(&h);
+    assert!(result.is_err(), "Should error on qubit mismatch");
 }

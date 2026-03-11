@@ -30,11 +30,13 @@ use crate::circuit::error::CircuitError;
 use crate::circuit::gate::StandardGate;
 use crate::circuit::gate::instruction::Instruction;
 use crate::circuit::param::CircuitParam;
+use crate::qis::Observable;
+use crate::qis::error::QisError;
 use num_complex::Complex64;
 use rayon::prelude::*;
 use smallvec::{SmallVec, smallvec};
 use std::collections::HashSet;
-use std::f64::consts::FRAC_1_SQRT_2;
+use std::f64::consts::{FRAC_1_SQRT_2, FRAC_PI_2, FRAC_PI_4};
 
 const PARALLEL_THRESHOLD: usize = 7;
 
@@ -143,19 +145,15 @@ impl DensityMatrix {
     ///
     /// # Panics
     /// Panics if the `initial_state` length is incorrect or if it is not normalized.
-    pub fn from_state(num_qubits: usize, initial_state: Vec<Complex64>) -> Self {
+    pub fn from_state(num_qubits: usize, initial_state: Vec<Complex64>) -> Result<Self, QisError> {
         let dim = 1 << num_qubits;
-        assert_eq!(
-            initial_state.len(),
-            dim,
-            "Initial state length must be {}",
-            dim
-        );
+        if initial_state.len() != dim {
+            return Err(QisError::InvalidStateDimension(initial_state.len()));
+        }
         let norm: f64 = initial_state.iter().map(|c| c.norm_sqr()).sum();
-        assert!(
-            (norm - 1.0).abs() < 1e-10,
-            "Initial state must be normalized"
-        );
+        if (norm - 1.0).abs() >= 1e-10 {
+            return Err(QisError::NotNormalized);
+        }
 
         let size = 1 << (2 * num_qubits);
         let mut data = vec![Complex64::new(0.0, 0.0); size];
@@ -173,7 +171,7 @@ impl DensityMatrix {
             data.par_chunks_exact_mut(dim).enumerate().for_each(kernel);
         }
 
-        Self { data, num_qubits }
+        Ok(Self { data, num_qubits })
     }
 
     /// Creates a density matrix directly from a flattened $2^N \times 2^N$ matrix.
@@ -184,25 +182,24 @@ impl DensityMatrix {
     ///
     /// # Panics
     /// Panics if the matrix length is incorrect or if the trace is not equal to 1.
-    pub fn from_density_matrix_state(num_qubits: usize, dm_state: Vec<Complex64>) -> Self {
+    pub fn from_density_matrix_state(
+        num_qubits: usize,
+        dm_state: Vec<Complex64>,
+    ) -> Result<Self, QisError> {
         let size = 1 << (2 * num_qubits);
-        assert_eq!(
-            dm_state.len(),
-            size,
-            "Density matrix state length must be {}",
-            size
-        );
+        if dm_state.len() != size {
+            return Err(QisError::InvalidStateDimension(dm_state.len()));
+        }
 
         let dm = Self {
             data: dm_state,
             num_qubits,
         };
         let tr = dm.trace();
-        assert!(
-            (tr.re - 1.0).abs() < 1e-10 && tr.im.abs() < 1e-10,
-            "Density matrix must have trace 1"
-        );
-        dm
+        if (tr.re - 1.0).abs() >= 1e-10 || tr.im.abs() >= 1e-10 {
+            return Err(QisError::NotNormalized);
+        }
+        Ok(dm)
     }
 
     /// Computes the measurement probability distribution over all computational basis states.
@@ -234,7 +231,7 @@ impl DensityMatrix {
     /// # Returns
     /// * `Ok(DensityMatrix)` - The resulting density matrix after execution.
     /// * `Err(CircuitError)` - If the circuit contains unsupported operations.
-    pub fn from_circuit(circuit: &Circuit) -> Result<Self, CircuitError> {
+    pub fn from_circuit(circuit: &Circuit) -> Result<Self, QisError> {
         let circuit = circuit.decompose()?;
         let mut dm = DensityMatrix::new(circuit.num_qubits());
 
@@ -261,20 +258,20 @@ impl DensityMatrix {
                         .get(*idx as usize)
                         .copied()
                         .flatten()
-                        .ok_or(CircuitError::SymbolicParameterError),
+                        .ok_or(QisError::CircuitError(CircuitError::SymbolicParameterError)),
                 })
-                .collect::<Result<Vec<_>, _>>()?;
+                .collect::<Result<Vec<_>, QisError>>()?;
 
-            let qubit_indices: Vec<usize> = op
-                .qubits
-                .iter()
-                .map(|q| {
-                    qubit_map
-                        .get(q)
-                        .copied()
-                        .expect("Qubit not found in circuit")
-                })
-                .collect();
+            let qubit_indices: Result<Vec<usize>, QisError> =
+                op.qubits
+                    .iter()
+                    .map(|q| {
+                        qubit_map.get(q).copied().ok_or_else(|| {
+                            QisError::CircuitError(CircuitError::QubitNotFound(q.id()))
+                        })
+                    })
+                    .collect();
+            let qubit_indices = qubit_indices?;
 
             match &op.instruction {
                 Instruction::Standard(gate) => {
@@ -295,18 +292,18 @@ impl DensityMatrix {
                             StandardGate::RY => dm.apply_cry(control, target, params[0]),
                             StandardGate::RZ => dm.apply_crz(control, target, params[0]),
                             _ => {
-                                let matrix = mc_gate
-                                    .matrix(&params)
-                                    .map_err(|_| CircuitError::NoMatrixRepresentation)?;
+                                let matrix = mc_gate.matrix(&params).map_err(|_| {
+                                    QisError::CircuitError(CircuitError::NoMatrixRepresentation)
+                                })?;
                                 dm.apply_unitary_gate(&qubit_indices, &matrix);
                             }
                         }
                     } else if num_controls == 2 && *base_gate == StandardGate::X {
                         dm.apply_ccx(qubit_indices[0], qubit_indices[1], qubit_indices[2]);
                     } else {
-                        let matrix = mc_gate
-                            .matrix(&params)
-                            .map_err(|_| CircuitError::NoMatrixRepresentation)?;
+                        let matrix = mc_gate.matrix(&params).map_err(|_| {
+                            QisError::CircuitError(CircuitError::NoMatrixRepresentation)
+                        })?;
                         dm.apply_unitary_gate(&qubit_indices, &matrix);
                     }
                 }
@@ -314,17 +311,17 @@ impl DensityMatrix {
                     if let Some(matrix) = u_gate.matrix() {
                         dm.apply_unitary_gate(&qubit_indices, matrix);
                     } else {
-                        return Err(CircuitError::NoMatrixRepresentation);
+                        return Err(QisError::CircuitError(CircuitError::NoMatrixRepresentation));
                     }
                 }
                 Instruction::CircuitGate(_) => {
-                    return Err(CircuitError::InvalidOperation(
+                    return Err(QisError::CircuitError(CircuitError::InvalidOperation(
                         "CircuitGate should have been decomposed".to_string(),
-                    ));
+                    )));
                 }
                 Instruction::Directive(_) | Instruction::Delay => continue,
                 Instruction::ControlFlowGate(_) => {
-                    return Err(CircuitError::InvalidControlOperation(
+                    return Err(QisError::UnsupportedOperation(
                         "Control flow gates not supported in density matrix simulation".to_string(),
                     ));
                 }
@@ -338,7 +335,7 @@ impl DensityMatrix {
         gate: StandardGate,
         qubits: &[usize],
         params: &[f64],
-    ) -> Result<(), CircuitError> {
+    ) -> Result<(), QisError> {
         match gate {
             StandardGate::I => {}
             StandardGate::X => self.apply_x(qubits[0]),
@@ -572,97 +569,106 @@ impl DensityMatrix {
     // --- Public API ---
 
     /// Applies the Pauli-X (NOT) gate to the specified qubit.
-    pub fn apply_x(&mut self, q: usize) {
-        self.apply_x_kernel(q, self.num_qubits);
-        self.apply_x_kernel(q, 0);
+    pub fn apply_x(&mut self, qubit: usize) {
+        self.apply_x_kernel(qubit, self.num_qubits);
+        self.apply_x_kernel(qubit, 0);
     }
     /// Applies the Pauli-Y gate to the specified qubit.
-    pub fn apply_y(&mut self, q: usize) {
-        self.apply_y_kernel(q, self.num_qubits, false);
-        self.apply_y_kernel(q, 0, true);
+    pub fn apply_y(&mut self, qubit: usize) {
+        self.apply_y_kernel(qubit, self.num_qubits, false);
+        self.apply_y_kernel(qubit, 0, true);
     }
     /// Applies the Pauli-Z gate to the specified qubit.
-    pub fn apply_z(&mut self, q: usize) {
-        self.apply_z_kernel(q, self.num_qubits);
-        self.apply_z_kernel(q, 0);
+    pub fn apply_z(&mut self, qubit: usize) {
+        self.apply_z_kernel(qubit, self.num_qubits);
+        self.apply_z_kernel(qubit, 0);
     }
     /// Applies the Hadamard gate to the specified qubit.
-    pub fn apply_h(&mut self, q: usize) {
-        self.apply_h_kernel(q, self.num_qubits);
-        self.apply_h_kernel(q, 0);
+    pub fn apply_h(&mut self, qubit: usize) {
+        self.apply_h_kernel(qubit, self.num_qubits);
+        self.apply_h_kernel(qubit, 0);
     }
     /// Applies the generic single-qubit U gate with parameters `theta`, `phi`, and `lam`.
-    pub fn apply_u(&mut self, q: usize, t: f64, p: f64, l: f64) {
-        self.apply_u_kernel(q, self.num_qubits, t, p, l, false);
-        self.apply_u_kernel(q, 0, t, p, l, true);
+    pub fn apply_u(&mut self, qubit: usize, theta: f64, phi: f64, lambda: f64) {
+        self.apply_u_kernel(qubit, self.num_qubits, theta, phi, lambda, false);
+        self.apply_u_kernel(qubit, 0, theta, phi, lambda, true);
     }
     /// Applies the single-qubit rotation about the X-axis by angle `theta`.
-    pub fn apply_rx(&mut self, q: usize, t: f64) {
-        self.apply_rx_kernel(q, self.num_qubits, t);
-        self.apply_rx_kernel(q, 0, -t);
+    pub fn apply_rx(&mut self, qubit: usize, theta: f64) {
+        self.apply_rx_kernel(qubit, self.num_qubits, theta);
+        self.apply_rx_kernel(qubit, 0, -theta);
     }
     /// Applies the single-qubit rotation about the Y-axis by angle `theta`.
-    pub fn apply_ry(&mut self, q: usize, t: f64) {
-        self.apply_ry_kernel(q, self.num_qubits, t);
-        self.apply_ry_kernel(q, 0, t);
+    pub fn apply_ry(&mut self, qubit: usize, theta: f64) {
+        self.apply_ry_kernel(qubit, self.num_qubits, theta);
+        self.apply_ry_kernel(qubit, 0, theta);
     }
     /// Applies the single-qubit rotation about the Z-axis by angle `theta`.
-    pub fn apply_rz(&mut self, q: usize, t: f64) {
-        self.apply_p(q, t); /* RZ is equivalent to Phase gate in density matrix */
+    pub fn apply_rz(&mut self, qubit: usize, theta: f64) {
+        self.apply_p(qubit, theta); /* RZ is equivalent to Phase gate in density matrix */
     }
     /// Applies a phase shift of `theta` to the specified qubit.
-    pub fn apply_p(&mut self, q: usize, t: f64) {
-        self.apply_p_kernel(q, self.num_qubits, t);
-        self.apply_p_kernel(q, 0, -t);
+    pub fn apply_p(&mut self, qubit: usize, theta: f64) {
+        self.apply_p_kernel(qubit, self.num_qubits, theta);
+        self.apply_p_kernel(qubit, 0, -theta);
     }
 
     /// Applies the S (Phase) gate to the specified qubit.
-    pub fn apply_s(&mut self, q: usize) {
-        self.apply_p(q, std::f64::consts::FRAC_PI_2);
+    pub fn apply_s(&mut self, qubit: usize) {
+        self.apply_p(qubit, FRAC_PI_2);
     }
     /// Applies the inverse S (SDG) gate to the specified qubit.
-    pub fn apply_sdg(&mut self, q: usize) {
-        self.apply_p(q, -std::f64::consts::FRAC_PI_2);
+    pub fn apply_sdg(&mut self, qubit: usize) {
+        self.apply_p(qubit, -FRAC_PI_2);
     }
     /// Applies the T (Pi/8) gate to the specified qubit.
-    pub fn apply_t(&mut self, q: usize) {
-        self.apply_p(q, std::f64::consts::FRAC_PI_4);
+    pub fn apply_t(&mut self, qubit: usize) {
+        self.apply_p(qubit, FRAC_PI_4);
     }
     /// Applies the inverse T (TDG) gate to the specified qubit.
-    pub fn apply_tdg(&mut self, q: usize) {
-        self.apply_p(q, -std::f64::consts::FRAC_PI_4);
+    pub fn apply_tdg(&mut self, qubit: usize) {
+        self.apply_p(qubit, -FRAC_PI_4);
     }
     /// Applies a +Pi/2 rotation about the X-axis.
-    pub fn apply_x2p(&mut self, q: usize) {
-        self.apply_rx(q, std::f64::consts::FRAC_PI_2);
+    pub fn apply_x2p(&mut self, qubit: usize) {
+        self.apply_rx(qubit, FRAC_PI_2);
     }
     /// Applies a -Pi/2 rotation about the X-axis.
-    pub fn apply_x2m(&mut self, q: usize) {
-        self.apply_rx(q, -std::f64::consts::FRAC_PI_2);
+    pub fn apply_x2m(&mut self, qubit: usize) {
+        self.apply_rx(qubit, -FRAC_PI_2);
     }
     /// Applies a +Pi/2 rotation about the Y-axis.
-    pub fn apply_y2p(&mut self, q: usize) {
-        self.apply_ry(q, std::f64::consts::FRAC_PI_2);
+    pub fn apply_y2p(&mut self, qubit: usize) {
+        self.apply_ry(qubit, FRAC_PI_2);
     }
     /// Applies a -Pi/2 rotation about the Y-axis.
-    pub fn apply_y2m(&mut self, q: usize) {
-        self.apply_ry(q, -std::f64::consts::FRAC_PI_2);
+    pub fn apply_y2m(&mut self, qubit: usize) {
+        self.apply_ry(qubit, -FRAC_PI_2);
     }
     /// Applies the parameterized RXY rotation gate.
-    pub fn apply_rxy(&mut self, q: usize, theta: f64, phi: f64) {
-        use std::f64::consts::FRAC_PI_2;
-        self.apply_u(q, theta, phi - FRAC_PI_2, FRAC_PI_2 - phi);
+    pub fn apply_rxy(&mut self, qubit: usize, theta: f64, phi: f64) {
+        self.apply_u(qubit, theta, phi - FRAC_PI_2, FRAC_PI_2 - phi);
     }
     /// Applies the XY2P gate.
-    pub fn apply_xy2p(&mut self, q: usize, theta: f64) {
-        self.apply_rxy(q, std::f64::consts::FRAC_PI_2, theta);
+    pub fn apply_xy2p(&mut self, qubit: usize, theta: f64) {
+        self.apply_rxy(qubit, FRAC_PI_2, theta);
     }
     /// Applies the XY2M gate.
-    pub fn apply_xy2m(&mut self, q: usize, theta: f64) {
-        self.apply_rxy(q, -std::f64::consts::FRAC_PI_2, theta);
+    pub fn apply_xy2m(&mut self, qubit: usize, theta: f64) {
+        self.apply_rxy(qubit, -FRAC_PI_2, theta);
+    }
+    /// Applies the XY gate.
+    ///
+    /// Matrix: [[0, -i·e^(-iθ)], [-i·e^(iθ), 0]]
+    pub fn apply_xy(&mut self, qubit: usize, theta: f64) {
+        let mat = StandardGate::XY.matrix(&[theta]).unwrap();
+        self.apply_single_qubit_gate(
+            qubit,
+            [[mat[[0, 0]], mat[[0, 1]]], [mat[[1, 0]], mat[[1, 1]]]],
+        );
     }
     /// Applies a global phase (has no observable effect on a density matrix).
-    pub fn apply_gphase(&mut self, _theta: f64) { /* Global phase has no effect on density matrix */
+    pub fn apply_gphase(&mut self, _phi: f64) { /* Global phase has no effect on density matrix */
     }
     fn apply_p_kernel(&mut self, q: usize, off: usize, t: f64) {
         let d = 1 << (q + off);
@@ -674,9 +680,9 @@ impl DensityMatrix {
     }
 
     /// Applies the Controlled-X (CNOT) gate.
-    pub fn apply_cx(&mut self, c: usize, t: usize) {
-        self.apply_cx_kernel(c, t, self.num_qubits);
-        self.apply_cx_kernel(c, t, 0);
+    pub fn apply_cx(&mut self, control: usize, target: usize) {
+        self.apply_cx_kernel(control, target, self.num_qubits);
+        self.apply_cx_kernel(control, target, 0);
     }
     /// Applies the Controlled-Z gate.
     pub fn apply_cz(&mut self, q0: usize, q1: usize) {
@@ -710,15 +716,15 @@ impl DensityMatrix {
     }
 
     /// Applies the Controlled-Y gate.
-    pub fn apply_cy(&mut self, c: usize, t: usize) {
+    pub fn apply_cy(&mut self, control: usize, target: usize) {
         let mat = StandardGate::CY.matrix(&[]).unwrap();
-        self.apply_unitary_gate(&[c, t], &mat);
+        self.apply_unitary_gate(&[control, target], &mat);
     }
 
     /// Applies the Toffoli (Controlled-Controlled-X) gate.
-    pub fn apply_ccx(&mut self, c0: usize, c1: usize, t: usize) {
+    pub fn apply_ccx(&mut self, c0: usize, c1: usize, target: usize) {
         let mat = StandardGate::CCX.matrix(&[]).unwrap();
-        self.apply_unitary_gate(&[c0, c1, t], &mat);
+        self.apply_unitary_gate(&[c0, c1, target], &mat);
     }
 
     /// Applies the parameterized RXX (Ising XX) gate.
@@ -745,28 +751,22 @@ impl DensityMatrix {
         self.apply_unitary_gate(&[q0, q1], &mat);
     }
 
-    /// Applies the XY gate.
-    pub fn apply_xy(&mut self, q: usize, theta: f64) {
-        let mat = StandardGate::XY.matrix(&[theta]).unwrap();
-        self.apply_unitary_gate(&[q], &mat);
-    }
-
     /// Applies the Controlled-RX gate.
-    pub fn apply_crx(&mut self, c: usize, t: usize, theta: f64) {
+    pub fn apply_crx(&mut self, control: usize, target: usize, theta: f64) {
         let mat = StandardGate::CRX.matrix(&[theta]).unwrap();
-        self.apply_unitary_gate(&[c, t], &mat);
+        self.apply_unitary_gate(&[control, target], &mat);
     }
 
     /// Applies the Controlled-RY gate.
-    pub fn apply_cry(&mut self, c: usize, t: usize, theta: f64) {
+    pub fn apply_cry(&mut self, control: usize, target: usize, theta: f64) {
         let mat = StandardGate::CRY.matrix(&[theta]).unwrap();
-        self.apply_unitary_gate(&[c, t], &mat);
+        self.apply_unitary_gate(&[control, target], &mat);
     }
 
     /// Applies the Controlled-RZ gate.
-    pub fn apply_crz(&mut self, c: usize, t: usize, theta: f64) {
+    pub fn apply_crz(&mut self, control: usize, target: usize, theta: f64) {
         let mat = StandardGate::CRZ.matrix(&[theta]).unwrap();
-        self.apply_unitary_gate(&[c, t], &mat);
+        self.apply_unitary_gate(&[control, target], &mat);
     }
 
     /// Applies the Fermionic Simulation (FSIM) gate.
@@ -782,10 +782,10 @@ impl DensityMatrix {
     /// # Arguments
     /// * `qs` - Slice of qubit indices the gate acts on.
     /// * `mat` - The unitary matrix as a $2^n \times 2^n$ `ndarray`.
-    pub fn apply_unitary_gate(&mut self, qs: &[usize], mat: &ndarray::Array2<Complex64>) {
-        let flat: Vec<Complex64> = mat.iter().cloned().collect();
-        self.apply_matrix_kernel(qs, self.num_qubits, &flat, false);
-        self.apply_matrix_kernel(qs, 0, &flat, true);
+    pub fn apply_unitary_gate(&mut self, qubits: &[usize], matrix: &ndarray::Array2<Complex64>) {
+        let flat: Vec<Complex64> = matrix.iter().cloned().collect();
+        self.apply_matrix_kernel(qubits, self.num_qubits, &flat, false);
+        self.apply_matrix_kernel(qubits, 0, &flat, true);
     }
 
     fn apply_matrix_kernel(&mut self, qs: &[usize], off: usize, mat: &[Complex64], conj: bool) {
@@ -932,6 +932,25 @@ impl DensityMatrix {
             *val = sum;
         });
         res
+    }
+
+    /// Computes the expectation value of a Hamiltonian observable.
+    ///
+    /// Calculates Tr(ρ * H) for the current density matrix ρ and a given Hamiltonian H.
+    /// The Hamiltonian is represented as a sum of Pauli strings with coefficients.
+    ///
+    /// # Arguments
+    /// * `h` - The Hamiltonian observable.
+    ///
+    /// # Returns
+    /// The expectation value as a real number (f64), or a `CircuitError` if the
+    /// qubit counts do not match.
+    ///
+    /// # Errors
+    /// Returns `CircuitError::InvalidOperation` if the Hamiltonian acts on a different
+    /// number of qubits than the density matrix.
+    pub fn expectation(&self, h: &dyn Observable) -> Result<f64, QisError> {
+        h.expectation_density_matrix(self)
     }
 }
 
