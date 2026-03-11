@@ -280,6 +280,27 @@ pub extern "C" fn circuit_cx(ptr: *mut CircuitWrapper, ctrl_idx: u32, target_idx
     }
 }
 
+/// Apply CY gate (controlled-Y).
+#[unsafe(no_mangle)]
+pub extern "C" fn circuit_cy(ptr: *mut CircuitWrapper, ctrl_idx: u32, target_idx: u32) -> i32 {
+    if ptr.is_null() {
+        return -1;
+    }
+    let wrapper = unsafe { &mut *ptr };
+    let n = wrapper.inner.num_qubits();
+    if ctrl_idx as usize >= n || target_idx as usize >= n {
+        return -2;
+    }
+
+    match wrapper
+        .inner
+        .cy(Qubit::new(ctrl_idx), Qubit::new(target_idx))
+    {
+        Ok(_) => 0,
+        Err(_) => -3,
+    }
+}
+
 /// Apply CZ gate.
 #[unsafe(no_mangle)]
 pub extern "C" fn circuit_cz(ptr: *mut CircuitWrapper, ctrl_idx: u32, target_idx: u32) -> i32 {
@@ -369,6 +390,282 @@ pub extern "C" fn circuit_rz(ptr: *mut CircuitWrapper, qubit_idx: u32, theta: f6
     }
 
     match wrapper.inner.rz(Qubit::new(qubit_idx), theta) {
+        Ok(_) => 0,
+        Err(_) => -3,
+    }
+}
+
+/// Apply RXY gate with concrete float values.
+#[unsafe(no_mangle)]
+pub extern "C" fn circuit_rxy(
+    ptr: *mut CircuitWrapper,
+    qubit_idx: u32,
+    theta: f64,
+    phi: f64,
+) -> i32 {
+    if ptr.is_null() {
+        return -1;
+    }
+    let wrapper = unsafe { &mut *ptr };
+    if qubit_idx as usize >= wrapper.inner.num_qubits() {
+        return -2;
+    }
+
+    match wrapper.inner.rxy(Qubit::new(qubit_idx), theta, phi) {
+        Ok(_) => 0,
+        Err(_) => -3,
+    }
+}
+
+/// Apply RXX gate with concrete float value.
+#[unsafe(no_mangle)]
+pub extern "C" fn circuit_rxx(
+    ptr: *mut CircuitWrapper,
+    a: u32,
+    b: u32,
+    theta: f64,
+) -> i32 {
+    if ptr.is_null() {
+        return -1;
+    }
+    let wrapper = unsafe { &mut *ptr };
+    let n = wrapper.inner.num_qubits();
+    if a as usize >= n || b as usize >= n {
+        return -2;
+    }
+
+    match wrapper.inner.rxx(Qubit::new(a), Qubit::new(b), theta) {
+        Ok(_) => 0,
+        Err(_) => -3,
+    }
+}
+
+/// Apply RYY gate with concrete float value.
+#[unsafe(no_mangle)]
+pub extern "C" fn circuit_ryy(
+    ptr: *mut CircuitWrapper,
+    a: u32,
+    b: u32,
+    theta: f64,
+) -> i32 {
+    if ptr.is_null() {
+        return -1;
+    }
+    let wrapper = unsafe { &mut *ptr };
+    let n = wrapper.inner.num_qubits();
+    if a as usize >= n || b as usize >= n {
+        return -2;
+    }
+
+    match wrapper.inner.ryy(Qubit::new(a), Qubit::new(b), theta) {
+        Ok(_) => 0,
+        Err(_) => -3,
+    }
+}
+
+/// Apply RZZ gate with concrete float value.
+#[unsafe(no_mangle)]
+pub extern "C" fn circuit_rzz(
+    ptr: *mut CircuitWrapper,
+    a: u32,
+    b: u32,
+    theta: f64,
+) -> i32 {
+    if ptr.is_null() {
+        return -1;
+    }
+    let wrapper = unsafe { &mut *ptr };
+    let n = wrapper.inner.num_qubits();
+    if a as usize >= n || b as usize >= n {
+        return -2;
+    }
+
+    match wrapper.inner.rzz(Qubit::new(a), Qubit::new(b), theta) {
+        Ok(_) => 0,
+        Err(_) => -3,
+    }
+}
+
+/// Apply RZX gate with concrete float value.
+#[unsafe(no_mangle)]
+pub extern "C" fn circuit_rzx(
+    ptr: *mut CircuitWrapper,
+    a: u32,
+    b: u32,
+    theta: f64,
+) -> i32 {
+    if ptr.is_null() {
+        return -1;
+    }
+    let wrapper = unsafe { &mut *ptr };
+    let n = wrapper.inner.num_qubits();
+    if a as usize >= n || b as usize >= n {
+        return -2;
+    }
+
+    match wrapper.inner.rzx(Qubit::new(a), Qubit::new(b), theta) {
+        Ok(_) => 0,
+        Err(_) => -3,
+    }
+}
+
+/// Apply CRX gate with concrete float value.
+#[unsafe(no_mangle)]
+pub extern "C" fn circuit_crx(
+    ptr: *mut CircuitWrapper,
+    ctrl_idx: u32,
+    target_idx: u32,
+    theta: f64,
+) -> i32 {
+    if ptr.is_null() {
+        return -1;
+    }
+    let wrapper = unsafe { &mut *ptr };
+    let n = wrapper.inner.num_qubits();
+    if ctrl_idx as usize >= n || target_idx as usize >= n {
+        return -2;
+    }
+
+    match wrapper
+        .inner
+        .crx(Qubit::new(ctrl_idx), Qubit::new(target_idx), theta)
+    {
+        Ok(_) => 0,
+        Err(_) => -3,
+    }
+}
+
+/// Apply CRY gate with concrete float value.
+#[unsafe(no_mangle)]
+pub extern "C" fn circuit_cry(
+    ptr: *mut CircuitWrapper,
+    ctrl_idx: u32,
+    target_idx: u32,
+    theta: f64,
+) -> i32 {
+    if ptr.is_null() {
+        return -1;
+    }
+    let wrapper = unsafe { &mut *ptr };
+    let n = wrapper.inner.num_qubits();
+    if ctrl_idx as usize >= n || target_idx as usize >= n {
+        return -2;
+    }
+
+    match wrapper
+        .inner
+        .cry(Qubit::new(ctrl_idx), Qubit::new(target_idx), theta)
+    {
+        Ok(_) => 0,
+        Err(_) => -3,
+    }
+}
+
+/// Apply CRZ gate with concrete float value.
+#[unsafe(no_mangle)]
+pub extern "C" fn circuit_crz(
+    ptr: *mut CircuitWrapper,
+    ctrl_idx: u32,
+    target_idx: u32,
+    theta: f64,
+) -> i32 {
+    if ptr.is_null() {
+        return -1;
+    }
+    let wrapper = unsafe { &mut *ptr };
+    let n = wrapper.inner.num_qubits();
+    if ctrl_idx as usize >= n || target_idx as usize >= n {
+        return -2;
+    }
+
+    match wrapper
+        .inner
+        .crz(Qubit::new(ctrl_idx), Qubit::new(target_idx), theta)
+    {
+        Ok(_) => 0,
+        Err(_) => -3,
+    }
+}
+
+/// Apply fSim gate with concrete floats.
+#[unsafe(no_mangle)]
+pub extern "C" fn circuit_fsim(
+    ptr: *mut CircuitWrapper,
+    a: u32,
+    b: u32,
+    theta: f64,
+    phi: f64,
+) -> i32 {
+    if ptr.is_null() {
+        return -1;
+    }
+    let wrapper = unsafe { &mut *ptr };
+    let n = wrapper.inner.num_qubits();
+    if a as usize >= n || b as usize >= n {
+        return -2;
+    }
+
+    match wrapper.inner.fsim(Qubit::new(a), Qubit::new(b), theta, phi) {
+        Ok(_) => 0,
+        Err(_) => -3,
+    }
+}
+
+/// Apply CCX (Toffoli) gate.
+#[unsafe(no_mangle)]
+pub extern "C" fn circuit_ccx(
+    ptr: *mut CircuitWrapper,
+    ctrl1: u32,
+    ctrl2: u32,
+    target: u32,
+) -> i32 {
+    if ptr.is_null() {
+        return -1;
+    }
+    let wrapper = unsafe { &mut *ptr };
+    let n = wrapper.inner.num_qubits();
+    if ctrl1 as usize >= n || ctrl2 as usize >= n || target as usize >= n {
+        return -2;
+    }
+
+    match wrapper
+        .inner
+        .ccx(Qubit::new(ctrl1), Qubit::new(ctrl2), Qubit::new(target))
+    {
+        Ok(_) => 0,
+        Err(_) => -3,
+    }
+}
+
+/// Measure a qubit (directive).
+#[unsafe(no_mangle)]
+pub extern "C" fn circuit_measure(ptr: *mut CircuitWrapper, qubit_idx: u32) -> i32 {
+    if ptr.is_null() {
+        return -1;
+    }
+    let wrapper = unsafe { &mut *ptr };
+    if qubit_idx as usize >= wrapper.inner.num_qubits() {
+        return -2;
+    }
+
+    match wrapper.inner.measure(Qubit::new(qubit_idx)) {
+        Ok(_) => 0,
+        Err(_) => -3,
+    }
+}
+
+/// Reset a qubit to |0> state.
+#[unsafe(no_mangle)]
+pub extern "C" fn circuit_reset(ptr: *mut CircuitWrapper, qubit_idx: u32) -> i32 {
+    if ptr.is_null() {
+        return -1;
+    }
+    let wrapper = unsafe { &mut *ptr };
+    if qubit_idx as usize >= wrapper.inner.num_qubits() {
+        return -2;
+    }
+
+    match wrapper.inner.reset(Qubit::new(qubit_idx)) {
         Ok(_) => 0,
         Err(_) => -3,
     }
@@ -536,6 +833,237 @@ pub extern "C" fn circuit_rz_param(
     let param_value = ParameterValue::Param(param.clone());
 
     match wrapper.inner.rz(Qubit::new(qubit_idx), param_value) {
+        Ok(_) => 0,
+        Err(_) => -3,
+    }
+}
+
+// Additional parameterized gate wrappers
+
+/// Apply RXY gate with symbolic parameters.
+#[unsafe(no_mangle)]
+pub extern "C" fn circuit_rxy_param(
+    ptr: *mut CircuitWrapper,
+    qubit_idx: u32,
+    theta_ptr: *const ParameterWrapper,
+    phi_ptr: *const ParameterWrapper,
+) -> i32 {
+    if ptr.is_null() || theta_ptr.is_null() || phi_ptr.is_null() {
+        return -1;
+    }
+    let wrapper = unsafe { &mut *ptr };
+    if qubit_idx as usize >= wrapper.inner.num_qubits() {
+        return -2;
+    }
+    let theta = unsafe { &(*theta_ptr).inner };
+    let phi = unsafe { &(*phi_ptr).inner };
+    let tval = ParameterValue::Param(theta.clone());
+    let pval = ParameterValue::Param(phi.clone());
+    match wrapper.inner.rxy(Qubit::new(qubit_idx), tval, pval) {
+        Ok(_) => 0,
+        Err(_) => -3,
+    }
+}
+
+/// Apply RXX gate with symbolic parameter.
+#[unsafe(no_mangle)]
+pub extern "C" fn circuit_rxx_param(
+    ptr: *mut CircuitWrapper,
+    a: u32,
+    b: u32,
+    theta_ptr: *const ParameterWrapper,
+) -> i32 {
+    if ptr.is_null() || theta_ptr.is_null() {
+        return -1;
+    }
+    let wrapper = unsafe { &mut *ptr };
+    let n = wrapper.inner.num_qubits();
+    if a as usize >= n || b as usize >= n {
+        return -2;
+    }
+    let theta = unsafe { &(*theta_ptr).inner };
+    let tval = ParameterValue::Param(theta.clone());
+    match wrapper.inner.rxx(Qubit::new(a), Qubit::new(b), tval) {
+        Ok(_) => 0,
+        Err(_) => -3,
+    }
+}
+
+/// Apply RYY gate with symbolic parameter.
+#[unsafe(no_mangle)]
+pub extern "C" fn circuit_ryy_param(
+    ptr: *mut CircuitWrapper,
+    a: u32,
+    b: u32,
+    theta_ptr: *const ParameterWrapper,
+) -> i32 {
+    if ptr.is_null() || theta_ptr.is_null() {
+        return -1;
+    }
+    let wrapper = unsafe { &mut *ptr };
+    let n = wrapper.inner.num_qubits();
+    if a as usize >= n || b as usize >= n {
+        return -2;
+    }
+    let theta = unsafe { &(*theta_ptr).inner };
+    let tval = ParameterValue::Param(theta.clone());
+    match wrapper.inner.ryy(Qubit::new(a), Qubit::new(b), tval) {
+        Ok(_) => 0,
+        Err(_) => -3,
+    }
+}
+
+/// Apply RZZ gate with symbolic parameter.
+#[unsafe(no_mangle)]
+pub extern "C" fn circuit_rzz_param(
+    ptr: *mut CircuitWrapper,
+    a: u32,
+    b: u32,
+    theta_ptr: *const ParameterWrapper,
+) -> i32 {
+    if ptr.is_null() || theta_ptr.is_null() {
+        return -1;
+    }
+    let wrapper = unsafe { &mut *ptr };
+    let n = wrapper.inner.num_qubits();
+    if a as usize >= n || b as usize >= n {
+        return -2;
+    }
+    let theta = unsafe { &(*theta_ptr).inner };
+    let tval = ParameterValue::Param(theta.clone());
+    match wrapper.inner.rzz(Qubit::new(a), Qubit::new(b), tval) {
+        Ok(_) => 0,
+        Err(_) => -3,
+    }
+}
+
+/// Apply RZX gate with symbolic parameter.
+#[unsafe(no_mangle)]
+pub extern "C" fn circuit_rzx_param(
+    ptr: *mut CircuitWrapper,
+    a: u32,
+    b: u32,
+    theta_ptr: *const ParameterWrapper,
+) -> i32 {
+    if ptr.is_null() || theta_ptr.is_null() {
+        return -1;
+    }
+    let wrapper = unsafe { &mut *ptr };
+    let n = wrapper.inner.num_qubits();
+    if a as usize >= n || b as usize >= n {
+        return -2;
+    }
+    let theta = unsafe { &(*theta_ptr).inner };
+    let tval = ParameterValue::Param(theta.clone());
+    match wrapper.inner.rzx(Qubit::new(a), Qubit::new(b), tval) {
+        Ok(_) => 0,
+        Err(_) => -3,
+    }
+}
+
+/// Apply CRX gate with symbolic parameter.
+#[unsafe(no_mangle)]
+pub extern "C" fn circuit_crx_param(
+    ptr: *mut CircuitWrapper,
+    ctrl_idx: u32,
+    target_idx: u32,
+    theta_ptr: *const ParameterWrapper,
+) -> i32 {
+    if ptr.is_null() || theta_ptr.is_null() {
+        return -1;
+    }
+    let wrapper = unsafe { &mut *ptr };
+    let n = wrapper.inner.num_qubits();
+    if ctrl_idx as usize >= n || target_idx as usize >= n {
+        return -2;
+    }
+    let theta = unsafe { &(*theta_ptr).inner };
+    let tval = ParameterValue::Param(theta.clone());
+    match wrapper
+        .inner
+        .crx(Qubit::new(ctrl_idx), Qubit::new(target_idx), tval)
+    {
+        Ok(_) => 0,
+        Err(_) => -3,
+    }
+}
+
+/// Apply CRY gate with symbolic parameter.
+#[unsafe(no_mangle)]
+pub extern "C" fn circuit_cry_param(
+    ptr: *mut CircuitWrapper,
+    ctrl_idx: u32,
+    target_idx: u32,
+    theta_ptr: *const ParameterWrapper,
+) -> i32 {
+    if ptr.is_null() || theta_ptr.is_null() {
+        return -1;
+    }
+    let wrapper = unsafe { &mut *ptr };
+    let n = wrapper.inner.num_qubits();
+    if ctrl_idx as usize >= n || target_idx as usize >= n {
+        return -2;
+    }
+    let theta = unsafe { &(*theta_ptr).inner };
+    let tval = ParameterValue::Param(theta.clone());
+    match wrapper
+        .inner
+        .cry(Qubit::new(ctrl_idx), Qubit::new(target_idx), tval)
+    {
+        Ok(_) => 0,
+        Err(_) => -3,
+    }
+}
+
+/// Apply CRZ gate with symbolic parameter.
+#[unsafe(no_mangle)]
+pub extern "C" fn circuit_crz_param(
+    ptr: *mut CircuitWrapper,
+    ctrl_idx: u32,
+    target_idx: u32,
+    theta_ptr: *const ParameterWrapper,
+) -> i32 {
+    if ptr.is_null() || theta_ptr.is_null() {
+        return -1;
+    }
+    let wrapper = unsafe { &mut *ptr };
+    let n = wrapper.inner.num_qubits();
+    if ctrl_idx as usize >= n || target_idx as usize >= n {
+        return -2;
+    }
+    let theta = unsafe { &(*theta_ptr).inner };
+    let tval = ParameterValue::Param(theta.clone());
+    match wrapper
+        .inner
+        .crz(Qubit::new(ctrl_idx), Qubit::new(target_idx), tval)
+    {
+        Ok(_) => 0,
+        Err(_) => -3,
+    }
+}
+
+/// Apply fSim gate with symbolic parameters.
+#[unsafe(no_mangle)]
+pub extern "C" fn circuit_fsim_param(
+    ptr: *mut CircuitWrapper,
+    a: u32,
+    b: u32,
+    theta_ptr: *const ParameterWrapper,
+    phi_ptr: *const ParameterWrapper,
+) -> i32 {
+    if ptr.is_null() || theta_ptr.is_null() || phi_ptr.is_null() {
+        return -1;
+    }
+    let wrapper = unsafe { &mut *ptr };
+    let n = wrapper.inner.num_qubits();
+    if a as usize >= n || b as usize >= n {
+        return -2;
+    }
+    let theta = unsafe { &(*theta_ptr).inner };
+    let phi = unsafe { &(*phi_ptr).inner };
+    let tval = ParameterValue::Param(theta.clone());
+    let pval = ParameterValue::Param(phi.clone());
+    match wrapper.inner.fsim(Qubit::new(a), Qubit::new(b), tval, pval) {
         Ok(_) => 0,
         Err(_) => -3,
     }
