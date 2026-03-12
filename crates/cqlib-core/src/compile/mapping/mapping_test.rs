@@ -1104,6 +1104,87 @@ fn test_map_with_ga_basic_success() {
 }
 
 #[test]
+fn test_map_with_ga_routes_if_else_and_continuation() {
+    let topology = line_topology(&[0, 1, 2]);
+    let mut circuit = Circuit::new(3);
+    circuit.measure(Qubit::new(0)).unwrap();
+    circuit
+        .if_else(
+            ConditionView::new(Qubit::new(0), 1),
+            vec![Operation {
+                instruction: Instruction::Standard(StandardGate::CX),
+                qubits: smallvec![Qubit::new(0), Qubit::new(1)],
+                params: smallvec![],
+                label: None,
+            }],
+            Some(vec![Operation {
+                instruction: Instruction::Standard(StandardGate::CX),
+                qubits: smallvec![Qubit::new(1), Qubit::new(2)],
+                params: smallvec![],
+                label: None,
+            }]),
+        )
+        .unwrap();
+    circuit.cx(Qubit::new(0), Qubit::new(2)).unwrap();
+
+    let mapped = map_with_ga(&circuit, &topology, &fast_ga_config(77), None, None).unwrap();
+
+    assert_mapped_2q_edges(&mapped, &topology);
+    assert!(matches!(
+        &mapped.operations()[1].instruction,
+        Instruction::ControlFlowGate(ControlFlow::IfElse(_))
+    ));
+    assert!(count_swaps(&mapped) > 0);
+    assert!(matches!(
+        &mapped.operations().last().unwrap().instruction,
+        Instruction::Standard(StandardGate::CX)
+    ));
+}
+
+#[test]
+fn test_map_with_ga_routes_while_loop_and_continuation() {
+    let topology = line_topology(&[0, 1, 2]);
+    let mut circuit = Circuit::new(3);
+    circuit.measure(Qubit::new(0)).unwrap();
+    circuit
+        .while_loop(
+            ConditionView::new(Qubit::new(0), 1),
+            vec![
+                Operation {
+                    instruction: Instruction::Standard(StandardGate::CX),
+                    qubits: smallvec![Qubit::new(0), Qubit::new(1)],
+                    params: smallvec![],
+                    label: None,
+                },
+                Operation {
+                    instruction: Instruction::Standard(StandardGate::CX),
+                    qubits: smallvec![Qubit::new(1), Qubit::new(2)],
+                    params: smallvec![],
+                    label: None,
+                },
+                Operation {
+                    instruction: Instruction::Standard(StandardGate::CX),
+                    qubits: smallvec![Qubit::new(0), Qubit::new(2)],
+                    params: smallvec![],
+                    label: None,
+                },
+            ],
+        )
+        .unwrap();
+    circuit.cx(Qubit::new(0), Qubit::new(2)).unwrap();
+
+    let mapped = map_with_ga(&circuit, &topology, &fast_ga_config(78), None, None).unwrap();
+
+    assert_mapped_2q_edges(&mapped, &topology);
+    match &mapped.operations()[1].instruction {
+        Instruction::ControlFlowGate(ControlFlow::WhileLoop(gate)) => {
+            assert!(gate.body().len() > 3);
+        }
+        _ => panic!("expected mapped while_loop operation"),
+    }
+}
+
+#[test]
 fn test_map_with_ga_invalid_qubits_avoidance() {
     let topology = line_topology(&[0, 1, 2, 3, 4, 5]);
     let circuit = test_circuit(3);

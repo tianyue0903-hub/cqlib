@@ -17,17 +17,17 @@
 //! assistance for initial layout quality.
 //!
 //! High-level flow:
-//! 1. Preprocess and validate source circuit (1q/2q only, no control flow).
+//! 1. Preprocess and validate source circuit into linear or structured form.
 //! 2. Build gate dependency DAG and maintain front-layer execution state.
 //! 3. Score SWAP candidates using distance, fidelity, and decay terms.
 //! 4. Emit mapped operations and reconstruct a topology-compliant circuit.
 
 use super::vf2::{Vf2CandidateOptions, Vf2Mapping, Vf2ScoreWeights};
 use super::{
-    build_if_else_operation, build_output_circuit_from_source, build_while_loop_operation, is_cx,
-    map_operation_qubits, normalize_index_pair, preprocess_circuit, preprocess_program,
     FidelityMap, PreparedCircuit, PreparedIfElse, PreparedPassthroughOp, PreparedProgram,
     PreparedProgramItem, PreparedSegment, PreparedWhileLoop, TopologyAdapter,
+    build_if_else_operation, build_output_circuit_from_source, build_while_loop_operation, is_cx,
+    map_operation_qubits, normalize_index_pair, preprocess_circuit, preprocess_program,
 };
 use crate::circuit::gate::control_flow::ConditionView;
 use crate::circuit::gate::{Instruction, StandardGate};
@@ -293,7 +293,11 @@ impl SabreMapping {
         })
     }
 
-    /// Executes SABRE routing on a validated 1q/2q, control-flow-free circuit.
+    /// Executes SABRE routing on a validated 1q/2q circuit.
+    ///
+    /// Linear circuits use the classic forward/backward SABRE refinement path.
+    /// Structured circuits (control flow and supported passthrough directives)
+    /// are routed through the structured helper path.
     pub fn execute(&mut self, circuit: &Circuit) -> Result<Circuit, CompileError> {
         let program = preprocess_program(circuit)?;
         if !program.is_plain_linear() {
@@ -365,15 +369,7 @@ impl SabreMapping {
 
         let best_group = best_group.ok_or(CompileError::SabreRoutingStuck)?;
 
-        self.logic2phy = best_group
-            .final_l2p
-            .iter()
-            .map(|&p| self.topology.physical_qubits[p])
-            .collect();
-        self.phy2logic.clear();
-        for (logical, &physical) in self.logic2phy.iter().enumerate() {
-            self.phy2logic.insert(physical, logical);
-        }
+        self.commit_final_layout(&best_group.final_l2p);
 
         let mapped_ops = self.replay_ops(&prepared, &original_info, &best_group);
         Ok(build_output_circuit_from_source(circuit, mapped_ops))
@@ -416,8 +412,45 @@ impl SabreMapping {
         }
 
         let best_route = best_route.ok_or(CompileError::SabreRoutingStuck)?;
-        self.logic2phy = best_route
-            .exit_l2p
+        self.commit_final_layout(&best_route.exit_l2p);
+
+        Ok(build_output_circuit_from_source(circuit, best_route.ops))
+    }
+
+    fn execute_structured_with_initial_layout(
+        &mut self,
+        circuit: &Circuit,
+        program: &PreparedProgram,
+        initial_mapping: Vec<usize>,
+    ) -> Result<(Circuit, f64), CompileError> {
+        let logical_width = program.logical_qubits.len();
+        let available_nodes = self.usable_nodes();
+
+        if logical_width > available_nodes.len() {
+            return Err(CompileError::TopologyTooSmall {
+                required: logical_width,
+                available: available_nodes.len(),
+            });
+        }
+
+        if initial_mapping.len() != logical_width {
+            return Err(CompileError::Internal(format!(
+                "GA initial mapping size mismatch: expected {}, got {}",
+                logical_width,
+                initial_mapping.len()
+            )));
+        }
+
+        let route = self.route_items(program, &program.items, &initial_mapping)?;
+        self.commit_final_layout(&route.exit_l2p);
+
+        let log_fidelity = route.log_fidelity;
+        let mapped_circuit = build_output_circuit_from_source(circuit, route.ops);
+        Ok((mapped_circuit, log_fidelity))
+    }
+
+    fn commit_final_layout(&mut self, final_l2p: &[usize]) {
+        self.logic2phy = final_l2p
             .iter()
             .map(|&p| self.topology.physical_qubits[p])
             .collect();
@@ -425,8 +458,6 @@ impl SabreMapping {
         for (logical, &physical) in self.logic2phy.iter().enumerate() {
             self.phy2logic.insert(physical, logical);
         }
-
-        Ok(build_output_circuit_from_source(circuit, best_route.ops))
     }
 
     fn route_items(
@@ -831,11 +862,19 @@ impl SabreMapping {
     /// Unlike `execute`, which generates its own initial layouts (via random sampling or VF2),
     /// this function forces the router to start from the provided `initial_mapping`. This is
     /// crucial for the Genetic Algorithm to evaluate the fitness of specific individuals.
+    ///
+    /// Linear circuits keep the existing forward/backward refinement flow. Structured circuits
+    /// reuse the control-flow-aware router with the supplied seed layout and skip backward
+    /// refinement because whole-circuit inversion is not available for control flow.
     pub fn execute_with_genetic_algorithm(
         &mut self,
         circuit: &Circuit,
         initial_mapping: Vec<usize>,
     ) -> Result<(Circuit, f64), CompileError> {
+        let program = preprocess_program(circuit)?;
+        if !program.is_plain_linear() {
+            return self.execute_structured_with_initial_layout(circuit, &program, initial_mapping);
+        }
         let prepared = preprocess_circuit(circuit)?;
         let reverse_circuit = circuit.inverse()?;
         let reverse_prepared = preprocess_circuit(&reverse_circuit)?;
@@ -900,18 +939,7 @@ impl SabreMapping {
         }
 
         let best_group = best_group.ok_or(CompileError::SabreRoutingStuck)?;
-
-        // 5. 更新 Mapper 的内部状态 (Logic -> Physical)
-        self.logic2phy = best_group
-            .final_l2p
-            .iter()
-            .map(|&p| self.topology.physical_qubits[p])
-            .collect();
-
-        self.phy2logic.clear();
-        for (logical, &physical) in self.logic2phy.iter().enumerate() {
-            self.phy2logic.insert(physical, logical);
-        }
+        self.commit_final_layout(&best_group.final_l2p);
 
         // 6. 重建并返回映射后的物理量子线路
         let mapped_ops = self.replay_ops(&prepared, &original_info, &best_group);

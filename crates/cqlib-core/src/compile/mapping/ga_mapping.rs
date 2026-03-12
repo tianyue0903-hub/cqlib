@@ -36,7 +36,8 @@ use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
 
 use super::{FidelityMap, TopologyAdapter};
-use crate::circuit::{Circuit, Instruction, StandardGate};
+use crate::circuit::gate::control_flow::ControlFlow;
+use crate::circuit::{Circuit, Instruction, Operation, StandardGate};
 use crate::compile::error::CompileError;
 use crate::compile::mapping::sabre::{SabreConfig, SabreMapping};
 use crate::device::Topology;
@@ -90,7 +91,6 @@ pub struct GeneticAlgMapping {
     fidelity_map: Option<FidelityMap>,
     config: GaConfig,
 
-    qubit_number: usize,
     is_ideal_topology: bool,
     layout_regions: Vec<Vec<usize>>,
 
@@ -149,7 +149,6 @@ impl GeneticAlgMapping {
             topology: topology_adapter,
             fidelity_map: fidelity_map,
             config: config.clone(),
-            qubit_number: qubit_number,
             is_ideal_topology,
             layout_regions,
             population_space: Vec::with_capacity(config.population),
@@ -470,9 +469,30 @@ impl GeneticAlgMapping {
         let mut swap_counter = 0;
         let mut edge_list_counting: HashMap<(usize, usize), usize> = HashMap::new();
 
-        for op in swaped_circuit.operations() {
+        self.collect_swap_stats(
+            swaped_circuit.operations(),
+            &mut swap_counter,
+            &mut edge_list_counting,
+        );
+
+        let mut swaped_layout: Vec<(usize, usize, usize)> = edge_list_counting
+            .into_iter()
+            .map(|((u, v), count)| (u, v, count))
+            .collect();
+        swaped_layout.sort_by(|a, b| a.2.cmp(&b.2));
+
+        (swap_counter, swaped_layout)
+    }
+
+    fn collect_swap_stats(
+        &self,
+        ops: &[Operation],
+        swap_counter: &mut usize,
+        edge_list_counting: &mut HashMap<(usize, usize), usize>,
+    ) {
+        for op in ops {
             if let Instruction::Standard(StandardGate::SWAP) = op.instruction {
-                swap_counter += 1;
+                *swap_counter += 1;
                 let gate_qubits = &op.qubits;
                 if gate_qubits.len() == 2 {
                     let u = self.topology.qubit_to_index[&gate_qubits[0]];
@@ -490,15 +510,24 @@ impl GeneticAlgMapping {
                     }
                 }
             }
+            if let Instruction::ControlFlowGate(control_flow) = &op.instruction {
+                match control_flow {
+                    ControlFlow::IfElse(gate) => {
+                        self.collect_swap_stats(
+                            gate.true_body(),
+                            swap_counter,
+                            edge_list_counting,
+                        );
+                        if let Some(false_body) = gate.false_body() {
+                            self.collect_swap_stats(false_body, swap_counter, edge_list_counting);
+                        }
+                    }
+                    ControlFlow::WhileLoop(gate) => {
+                        self.collect_swap_stats(gate.body(), swap_counter, edge_list_counting);
+                    }
+                }
+            }
         }
-
-        let mut swaped_layout: Vec<(usize, usize, usize)> = edge_list_counting
-            .into_iter()
-            .map(|((u, v), count)| (u, v, count))
-            .collect();
-        swaped_layout.sort_by(|a, b| a.2.cmp(&b.2));
-
-        (swap_counter, swaped_layout)
     }
 
     /// Internal helper for fitness calculation.
@@ -571,7 +600,9 @@ impl GeneticAlgMapping {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::circuit::{Circuit, Qubit};
+    use crate::circuit::gate::control_flow::{ConditionView, ControlFlow};
+    use crate::circuit::{Circuit, Operation, Qubit};
+    use smallvec::smallvec;
     use std::collections::HashSet;
 
     // auxiliary functions：create a line topology
@@ -715,6 +746,56 @@ mod tests {
         assert_eq!(layout.len(), 2);
 
         // Ensure they are normalized (u < v) and sorted by usage frequency
+        assert_eq!(layout[0], (1, 2, 1));
+        assert_eq!(layout[1], (0, 1, 2));
+    }
+
+    #[test]
+    fn test_post_mapping_analysis_counts_nested_control_flow_swaps() {
+        let topology = line_topology(&[0, 1, 2]);
+        let ga = GeneticAlgMapping::new(topology, GaConfig::default(), None, None).unwrap();
+
+        let nested_while = Operation {
+            instruction: Instruction::ControlFlowGate(ControlFlow::while_loop(
+                ConditionView::new(Qubit::new(2), 1),
+                vec![Operation {
+                    instruction: Instruction::Standard(StandardGate::SWAP),
+                    qubits: smallvec![Qubit::new(0), Qubit::new(1)],
+                    params: smallvec![],
+                    label: None,
+                }],
+            )),
+            qubits: smallvec![Qubit::new(0), Qubit::new(1), Qubit::new(2)],
+            params: smallvec![],
+            label: None,
+        };
+
+        let mut circuit = Circuit::new(3);
+        circuit
+            .if_else(
+                ConditionView::new(Qubit::new(0), 1),
+                vec![
+                    Operation {
+                        instruction: Instruction::Standard(StandardGate::SWAP),
+                        qubits: smallvec![Qubit::new(0), Qubit::new(1)],
+                        params: smallvec![],
+                        label: None,
+                    },
+                    nested_while,
+                ],
+                Some(vec![Operation {
+                    instruction: Instruction::Standard(StandardGate::SWAP),
+                    qubits: smallvec![Qubit::new(1), Qubit::new(2)],
+                    params: smallvec![],
+                    label: None,
+                }]),
+            )
+            .unwrap();
+
+        let (swap_count, layout) = ga.post_mapping_analysis(&circuit);
+
+        assert_eq!(swap_count, 3);
+        assert_eq!(layout.len(), 2);
         assert_eq!(layout[0], (1, 2, 1));
         assert_eq!(layout[1], (0, 1, 2));
     }
