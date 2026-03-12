@@ -48,10 +48,17 @@
 //! ```
 //! use cqlib_core::qis::metrics::{purity_pure, state_fidelity_pure};
 //! use cqlib_core::qis::state::Statevector;
+//! use num_complex::Complex64;
 //!
 //! // Create two orthogonal states
-//! let psi = Statevector::from_vec(vec![1.0, 0.0]).unwrap();
-//! let phi = Statevector::from_vec(vec![0.0, 1.0]).unwrap();
+//! let psi = Statevector::from_state(1, vec![
+//!     Complex64::new(1.0, 0.0),
+//!     Complex64::new(0.0, 0.0),
+//! ]).unwrap();
+//! let phi = Statevector::from_state(1, vec![
+//!     Complex64::new(0.0, 0.0),
+//!     Complex64::new(1.0, 0.0),
+//! ]).unwrap();
 //!
 //! // Calculate purity (should be 1.0 for normalized pure states)
 //! let purity = purity_pure(&psi).unwrap();
