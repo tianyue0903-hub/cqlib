@@ -479,6 +479,62 @@ class Circuit:
         """
         ...
 
+    def add_parameter(self, param: Parameter) -> tuple[int, bool]:
+        """Adds a parameter to the circuit.
+
+        Args:
+            param: A Parameter object to add to the circuit.
+
+        Returns:
+            A tuple of (index, is_new) where:
+                - index: The parameter's index in the circuit's parameter table
+                - is_new: True if the parameter was newly added, False if it already existed
+
+        Example:
+            >>> from cqlib import Circuit, Parameter
+            >>> circuit = Circuit(1)
+            >>> theta = Parameter.symbol("theta")
+            >>> index, is_new = circuit.add_parameter(theta)
+        """
+        ...
+
+    def compose(
+        self,
+        other: "Circuit",
+        qubits_map: Optional[list[int]] = None,
+    ) -> None:
+        """Composes another circuit into this circuit.
+
+        This method merges the operations from `other` circuit into `self`.
+        Qubits from `other` can either be mapped to existing qubits in `self`
+        (via `qubits_map`) or appended as new qubits.
+
+        Args:
+            other: The circuit to compose into this circuit.
+            qubits_map: An optional list mapping qubits from `other` to qubits in `self`.
+                - If `qubits_map` is provided, each qubit in `other` (in their natural
+                  iteration order) is mapped to the corresponding qubit in `qubits_map`.
+                - If `qubits_map` is None, all qubits from `other` are appended as new
+                  qubits to `self`.
+
+        Raises:
+            ValueError: If the mapping is invalid (wrong length or non-existent qubits).
+
+        Example:
+            >>> from cqlib import Circuit
+            >>> # Create first circuit
+            >>> qc1 = Circuit(2)
+            >>> qc1.h(0)
+            >>> # Create second circuit
+            >>> qc2 = Circuit(2)
+            >>> qc2.x(0)
+            >>> # Compose qc2 into qc1 (append as new qubits)
+            >>> qc1.compose(qc2)
+            >>> # Or compose with mapping: map qc2's qubits 0,1 to qc1's qubits 1,0
+            >>> qc1.compose(qc2, [1, 0])
+        """
+        ...
+
     def if_else(
         self,
         condition: ConditionView,
