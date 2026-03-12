@@ -58,6 +58,7 @@
 pub mod error;
 pub mod evolution;
 pub mod hamiltonian;
+pub mod metrics;
 pub mod observable;
 pub mod pauli;
 pub mod state;
