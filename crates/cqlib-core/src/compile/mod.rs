@@ -37,5 +37,7 @@ pub use error::CompileError;
 pub use mapping::{
     FidelityMap, SabreConfig, SabreMapping, Vf2CandidateOptions, Vf2CandidateScore,
     Vf2LayoutCandidate, Vf2Mapping, Vf2Policy, Vf2ScoreWeights, map_with_vf2_sabre,
+    GaConfig, GeneticAlgMapping,
+    map_with_ga,
 };
 pub use optimization::{TemplateMatch, TemplateMatching, TemplateOptimization};

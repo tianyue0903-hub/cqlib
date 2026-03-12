@@ -19,6 +19,8 @@ from .._native import (
     vf2_find_initial_layout_candidates,
     vf2_map,
     map_with_vf2_sabre,
+    GaConfig,
+    map_with_ga,
 )
 
 __all__ = [
@@ -30,4 +32,6 @@ __all__ = [
     "vf2_find_initial_layout_candidates",
     "vf2_map",
     "map_with_vf2_sabre",
+    "GaConfig",
+    "map_with_ga",
 ]

@@ -97,6 +97,8 @@ pub(crate) struct TopologyAdapter {
     pub(crate) fidelity: Vec<Vec<f64>>,
     /// Indices in the largest connected component.
     pub(crate) largest_component: Vec<usize>,
+    /// Physical -> Index mapping.
+    pub(crate) qubit_to_index: HashMap<Qubit, usize>
 }
 
 impl TopologyAdapter {
@@ -199,6 +201,7 @@ impl TopologyAdapter {
             dist,
             fidelity,
             largest_component,
+            qubit_to_index,
         })
     }
 

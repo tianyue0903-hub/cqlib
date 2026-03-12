@@ -158,7 +158,7 @@ impl GeneticAlgMapping {
             circuit_width: 0,
             circuit_size: 0,
             best_individual: Vec::new(),
-            best_score: 0.0,
+            best_score: -1000000.0,
             best_circuit: None,
             rng: StdRng::seed_from_u64(seed),
         })
@@ -237,7 +237,7 @@ impl GeneticAlgMapping {
             self.individual_layouts.push(Vec::new());
             self.population_score.push(0.0);
         }
-
+        
         Ok(())
     }
 
@@ -269,10 +269,10 @@ impl GeneticAlgMapping {
     /// Executes the genetic algorithm mapping on the given circuit.
     pub fn execute(&mut self, circuit: &Circuit) -> Result<Circuit, CompileError> {
         self.initial(circuit)?;
-
+        
         for _ in 0..self.config.update_iters {
             // Parallel evaluation of the population
-            let evaluated_population: Vec<(usize, Vec<usize>, Circuit)> = (0..self
+            let evaluated_population: Vec<(usize, Circuit, f64)> = (0..self
                 .config
                 .population)
                 .into_par_iter()
@@ -285,31 +285,24 @@ impl GeneticAlgMapping {
                     .expect("Failed to initialize Sabre within GA");
 
                     // In a true integration, `execute_with_genetic_algorithm` or a seed layout param is used.
-                    let mapped_circuit = sabre_mapping
+                    let mapped_result = sabre_mapping
                         .execute_with_genetic_algorithm(circuit, self.population_space[idx].clone())
                         .expect("Sabre routing failed during GA evaluation");
-
-                    let im_usize = sabre_mapping
-                        .logic2phy
-                        .into_iter()
-                        .map(|q| q.id() as usize)
-                        .collect::<Vec<usize>>();
-
-                    (idx, im_usize, mapped_circuit)
+                    
+                    (idx, mapped_result.0, mapped_result.1)
                 })
                 .collect();
-
-            for (idx, initial_mapping, mapped_circuit) in evaluated_population {
+            
+            for (idx, mapped_circuit, mapped_fidelity) in evaluated_population {
                 let mapped_info = self.post_mapping_analysis(&mapped_circuit);
-                let mapped_score = self.calculate_fitness_function(mapped_info.0, 1.0);
+                let mapped_score = self.calculate_fitness_function(mapped_info.0, mapped_fidelity);
 
-                self.population_space[idx] = initial_mapping.clone();
                 self.individual_layouts[idx] = mapped_info.1;
                 self.population_score[idx] = mapped_score;
 
                 if mapped_score > self.best_score {
                     self.best_circuit = Some(mapped_circuit.clone());
-                    self.best_individual = initial_mapping.clone();
+                    self.best_individual = self.population_space[idx].clone();
                     self.best_score = mapped_score;
                 }
             }
@@ -482,8 +475,8 @@ impl GeneticAlgMapping {
                 swap_counter += 1;
                 let gate_qubits = &op.qubits;
                 if gate_qubits.len() == 2 {
-                    let u = gate_qubits[0].id() as usize;
-                    let v = gate_qubits[1].id() as usize;
+                    let u = self.topology.qubit_to_index[&gate_qubits[0]];
+                    let v = self.topology.qubit_to_index[&gate_qubits[1]];
 
                     let order_q = (u, v);
                     let inv_order_q = (v, u);
@@ -734,7 +727,15 @@ mod tests {
         // Create a circuit that intentionally requires routing
         // A CX between 0 and 2 on a line topology requires a SWAP
         let mut circuit = Circuit::new(3);
-        circuit.cx(Qubit::new(0), Qubit::new(2)).unwrap();
+        circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
+        circuit.cx(Qubit::new(1), Qubit::new(2)).unwrap();
+
+
+        let mut fidelity = FidelityMap::new();
+        fidelity.insert((Qubit::new(0), Qubit::new(1)), 0.5);
+        fidelity.insert((Qubit::new(1), Qubit::new(2)), 0.99);
+        fidelity.insert((Qubit::new(2), Qubit::new(3)), 0.99);
+        fidelity.insert((Qubit::new(3), Qubit::new(4)), 0.5);
 
         // Configure GA and Sabre for a fast, deterministic test
         let mut sabre_config = SabreConfig::default();
@@ -742,18 +743,17 @@ mod tests {
         sabre_config.seed = 42;
 
         let config = GaConfig {
-            population: 4,
+            population: 10,
             update_iters: 2,
             seed: 42,
             sabre_config,
             ..GaConfig::default()
         };
 
-        let mut ga = GeneticAlgMapping::new(topology, config, None, None).unwrap();
+        let mut ga = GeneticAlgMapping::new(topology, config, Some(fidelity), None).unwrap();
 
         // Execute the GA mapping
         let mapped_circuit = ga.execute(&circuit).expect("GA mapping failed to execute");
-
         // The mapped circuit should have at least the same number of gates as the original
         assert!(mapped_circuit.operations().len() >= circuit.operations().len());
 

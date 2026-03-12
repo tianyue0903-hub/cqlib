@@ -24,7 +24,7 @@ use crate::circuit::gate::{
 };
 use circuit::circuit_to_matrix;
 use circuit::{PyCircuit, PyInstruction, PyOperation, PyParameter, PyQubit};
-use compile::{PySabreConfig, PyTemplateMatching, PyTemplateOptimization};
+use compile::{PySabreConfig, PyTemplateMatching, PyTemplateOptimization, PyGaConfig};
 
 /// A Python module implemented in Rust.
 #[pymodule]
@@ -48,6 +48,7 @@ fn binding_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyDelay>()?;
     m.add_class::<PyTemplateMatching>()?;
     m.add_class::<PyTemplateOptimization>()?;
+    m.add_class::<PyGaConfig>()?;
 
     // Register IR module with qasm2 and qcis submodules
     ir::register_ir_module(m)?;
@@ -65,7 +66,7 @@ fn binding_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     m.add_function(wrap_pyfunction!(compile::py_vf2_map, m)?)?;
     m.add_function(wrap_pyfunction!(compile::py_map_with_vf2_sabre, m)?)?;
-
+    m.add_function(wrap_pyfunction!(compile::py_map_with_ga, m)?)?;
     // Register static gate instances (H, X, etc.) to StandardGate class
     circuit::gate::standard::register_gates(m)?;
 

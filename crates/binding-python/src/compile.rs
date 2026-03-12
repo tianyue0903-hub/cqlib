@@ -27,11 +27,13 @@ use cqlib_core::compile::{
     map_with_vf2_sabre, FidelityMap, SabreConfig, TemplateMatching as CoreTemplateMatching,
     TemplateOptimization as CoreTemplateOptimization, Vf2CandidateOptions, Vf2Mapping, Vf2Policy,
     Vf2ScoreWeights,
+    GaConfig,
+    map_with_ga,
 };
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Python wrapper for SABRE configuration.
 #[pyclass(name = "SabreConfig", module = "cqlib.compiler")]
@@ -161,6 +163,196 @@ impl PySabreConfig {
             self.inner.swap_fidelity_weight,
             self.inner.gate_cost_weight,
             self.inner.predicted_fidelity_weight,
+            self.inner.seed,
+        )
+    }
+}
+
+/// Python wrapper for GA (Genetic Algorithm) configuration.
+#[pyclass(name = "GaConfig", module = "cqlib.compiler")]
+#[derive(Clone, Debug)]
+pub struct PyGaConfig {
+    /// Internal core configuration object.
+    pub(crate) inner: GaConfig,
+}
+
+#[pymethods]
+impl PyGaConfig {
+    /// Creates a GA configuration object.
+    ///
+    /// Args:
+    ///     population (int): Number of individuals in the population.
+    ///     select_prob (float): Probability for an individual to be selected.
+    ///     crossover_prob (float): Probability for crossover operation.
+    ///     mutation_prob (float): Probability for mutation operation.
+    ///     forced_mutation_prob (float): Probability for forced mutation when no valid mutation found.
+    ///     crossover_qubit_number (int): Number of qubits involved in a crossover segment.
+    ///     update_iters (int): Number of generations/iterations to evolve.
+    ///     sabre_config (Optional[SabreConfig]): SABRE config for underlying evaluations.
+    ///     seed (int): RNG seed; `-1` means random seed.
+    #[new]
+    #[pyo3(signature = (
+        population = 10,
+        select_prob = 0.4,
+        crossover_prob = 0.4,
+        mutation_prob = 0.25,
+        forced_mutation_prob = 0.05,
+        crossover_qubit_number = 3,
+        update_iters = 5,
+        sabre_config = None,
+        seed = -1,
+    ))]
+    fn new(
+        population: usize,
+        select_prob: f64,
+        crossover_prob: f64,
+        mutation_prob: f64,
+        forced_mutation_prob: f64,
+        crossover_qubit_number: usize,
+        update_iters: usize,
+        sabre_config: Option<PySabreConfig>,
+        seed: i64,
+    ) -> PyResult<Self> {
+        Ok(Self {
+            inner: GaConfig {
+                population,
+                select_prob,
+                crossover_prob,
+                mutation_prob,
+                forced_mutation_prob,
+                crossover_qubit_number,
+                update_iters,
+                sabre_config: sabre_config.map(|c| c.inner).unwrap_or_default(),
+                seed,
+            },
+        })
+    }
+
+    // ========== Getters ==========
+
+    /// Number of individuals in the population.
+    #[getter]
+    fn population(&self) -> usize {
+        self.inner.population
+    }
+
+    /// Probability for an individual to be selected.
+    #[getter]
+    fn select_prob(&self) -> f64 {
+        self.inner.select_prob
+    }
+
+    /// Probability for crossover operation.
+    #[getter]
+    fn crossover_prob(&self) -> f64 {
+        self.inner.crossover_prob
+    }
+
+    /// Probability for mutation operation.
+    #[getter]
+    fn mutation_prob(&self) -> f64 {
+        self.inner.mutation_prob
+    }
+
+    /// Probability for forced mutation when no valid mutation found.
+    #[getter]
+    fn forced_mutation_prob(&self) -> f64 {
+        self.inner.forced_mutation_prob
+    }
+
+    /// Number of qubits involved in a crossover segment.
+    #[getter]
+    fn crossover_qubit_number(&self) -> usize {
+        self.inner.crossover_qubit_number
+    }
+
+    /// Number of generations/iterations to evolve.
+    #[getter]
+    fn update_iters(&self) -> usize {
+        self.inner.update_iters
+    }
+
+    /// SABRE configuration for underlying evaluations.
+    #[getter]
+    fn sabre_config(&self) -> PySabreConfig {
+        PySabreConfig {
+            inner: self.inner.sabre_config.clone(),
+        }
+    }
+
+    /// Random seed (`-1` means auto-seeded).
+    #[getter]
+    fn seed(&self) -> i64 {
+        self.inner.seed
+    }
+
+    // ========== Setters ==========
+
+    /// Sets the population size.
+    #[setter]
+    fn set_population(&mut self, value: usize) {
+        self.inner.population = value;
+    }
+
+    /// Sets the selection probability.
+    #[setter]
+    fn set_select_prob(&mut self, value: f64) {
+        self.inner.select_prob = value;
+    }
+
+    /// Sets the crossover probability.
+    #[setter]
+    fn set_crossover_prob(&mut self, value: f64) {
+        self.inner.crossover_prob = value;
+    }
+
+    /// Sets the mutation probability.
+    #[setter]
+    fn set_mutation_prob(&mut self, value: f64) {
+        self.inner.mutation_prob = value;
+    }
+
+    /// Sets the forced mutation probability.
+    #[setter]
+    fn set_forced_mutation_prob(&mut self, value: f64) {
+        self.inner.forced_mutation_prob = value;
+    }
+
+    /// Sets the crossover qubit number.
+    #[setter]
+    fn set_crossover_qubit_number(&mut self, value: usize) {
+        self.inner.crossover_qubit_number = value;
+    }
+
+    /// Sets the update iterations.
+    #[setter]
+    fn set_update_iters(&mut self, value: usize) {
+        self.inner.update_iters = value;
+    }
+
+    /// Sets the SABRE configuration.
+    #[setter]
+    fn set_sabre_config(&mut self, value: PySabreConfig) {
+        self.inner.sabre_config = value.inner;
+    }
+
+    /// Sets the random seed.
+    #[setter]
+    fn set_seed(&mut self, value: i64) {
+        self.inner.seed = value;
+    }
+
+    /// Returns a compact debug representation.
+    fn __repr__(&self) -> String {
+        format!(
+            "GaConfig(population={}, select_prob={}, crossover_prob={}, mutation_prob={}, forced_mutation_prob={}, crossover_qubit_number={}, update_iters={}, seed={})",
+            self.inner.population,
+            self.inner.select_prob,
+            self.inner.crossover_prob,
+            self.inner.mutation_prob,
+            self.inner.forced_mutation_prob,
+            self.inner.crossover_qubit_number,
+            self.inner.update_iters,
             self.inner.seed,
         )
     }
@@ -511,6 +703,37 @@ pub fn py_map_with_vf2_sabre(
     let cfg = config.map(|c| c.inner).unwrap_or_default();
 
     map_with_vf2_sabre(&circuit.inner, &topology.inner, fidelity.as_ref(), &cfg)
+        .map(PyCircuit::from)
+        .map_err(|e| PyValueError::new_err(e.to_string()))
+}
+
+/// Runs the Genetic Algorithm mapping flow.
+///
+/// Args:
+///     circuit (Circuit): Logical circuit to map.
+///     topology (Topology): Target hardware topology.
+///     fidelity_map (Optional[Dict[Tuple[int, int], float]]): Optional edge fidelity map.
+///     config (Optional[GaConfig]): GA configuration. Uses defaults if not provided.
+///     invalid_qubits (Optional[List[int]]): Optional list of invalid/broken qubits to exclude.
+///
+/// Returns:
+///     Circuit: Mapped circuit with SWAP gates inserted for routing.
+///
+/// Raises:
+///     ValueError: If mapping fails or topology is too small.
+#[pyfunction(name = "map_with_ga")]
+#[pyo3(signature = (circuit, topology, fidelity_map = None, config = None, invalid_qubits = None))]
+pub fn py_map_with_ga(
+    circuit: &PyCircuit,
+    topology: &PyTopology,
+    fidelity_map: Option<HashMap<(usize, usize), f64>>,
+    config: Option<PyGaConfig>,
+    invalid_qubits: Option<HashSet<usize>>,
+) -> PyResult<PyCircuit> {
+    let fidelity = py_fidelity_to_core(fidelity_map)?;
+    let cfg = config.map(|c| c.inner).unwrap_or_default();
+
+    map_with_ga(&circuit.inner, &topology.inner, &cfg, fidelity.as_ref(), invalid_qubits)
         .map(PyCircuit::from)
         .map_err(|e| PyValueError::new_err(e.to_string()))
 }

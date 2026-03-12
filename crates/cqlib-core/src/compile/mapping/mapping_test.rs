@@ -1255,3 +1255,24 @@ fn test_map_with_ga_all_to_all_heavy_routing() {
     let mapped = result.unwrap();
     assert_mapped_2q_edges(&mapped, &topology);
 }
+
+
+#[test]
+fn test_map_with_ga_non_contiguous_qubit_ids_supported() {
+    let topology = line_topology(&[100, 200, 300, 400]);
+    let mut circuit =
+        Circuit::from_qubits(vec![Qubit::new(10), Qubit::new(30), Qubit::new(70)]).unwrap();
+    circuit.cx(Qubit::new(10), Qubit::new(30)).unwrap();
+    circuit.cx(Qubit::new(30), Qubit::new(70)).unwrap();
+    let config = GaConfig {
+        population: 10,
+        update_iters: 5,
+        seed: 2026,
+        ..fast_ga_config(2026)
+    };
+    
+    let result = map_with_ga(&circuit, &topology, &config, None, None);
+    assert!(result.is_ok(), "GA failed to map non-contiguous qubit IDs");
+    let mapped = result.unwrap();
+    assert_mapped_2q_edges(&mapped, &topology);
+}

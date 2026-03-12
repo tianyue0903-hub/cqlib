@@ -835,7 +835,7 @@ impl SabreMapping {
         &mut self,
         circuit: &Circuit,
         initial_mapping: Vec<usize>,
-    ) -> Result<Circuit, CompileError> {
+    ) -> Result<(Circuit, f64), CompileError> {
         let prepared = preprocess_circuit(circuit)?;
         let reverse_circuit = circuit.inverse()?;
         let reverse_prepared = preprocess_circuit(&reverse_circuit)?;
@@ -915,7 +915,7 @@ impl SabreMapping {
 
         // 6. 重建并返回映射后的物理量子线路
         let mapped_ops = self.replay_ops(&prepared, &original_info, &best_group);
-        Ok(build_output_circuit_from_source(circuit, mapped_ops))
+        Ok((build_output_circuit_from_source(circuit, mapped_ops), best_group.log_fidelity))
     }
 
     /// Internal helper for replay ops.
