@@ -24,6 +24,7 @@
 //! - [`pauli`]: Pauli operators and Pauli strings with symplectic encoding
 //! - [`hamiltonian`]: Hamiltonian construction from Pauli strings
 //! - [`observable`]: Trait for computing expectation values
+//! - [`entropy`]: Entropy measures and entanglement metrics
 //! - [`error`]: Error types for QIS operations
 //!
 //! # Examples
@@ -55,6 +56,7 @@
 //! h.add_term("XX".into(), 0.3.into()).unwrap();
 //! ```
 
+pub mod entropy;
 pub mod error;
 pub mod evolution;
 pub mod hamiltonian;

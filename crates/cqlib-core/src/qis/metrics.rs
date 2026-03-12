@@ -164,7 +164,7 @@ fn to_c64(c: Complex64) -> c64 {
 }
 
 /// Helper to convert a DensityMatrix to a faer Mat<c64>
-fn density_matrix_to_faer(dm: &DensityMatrix) -> Mat<c64> {
+pub fn density_matrix_to_faer(dm: &DensityMatrix) -> Mat<c64> {
     let dim = 1 << dm.num_qubits;
     Mat::from_fn(dim, dim, |row, col| to_c64(dm.data[row * dim + col]))
 }
@@ -301,9 +301,9 @@ pub fn partial_transpose(
     let n = dm.num_qubits;
     for &q in target_qubits {
         if q >= n {
-            return Err(QisError::QubitMismatch {
-                expected: n,
-                actual: q,
+            return Err(QisError::IndexOutOfBounds {
+                index: q,
+                max: n - 1,
             });
         }
     }

@@ -68,6 +68,14 @@ pub enum QisError {
     /// Thrown when a parameter value is invalid.
     #[error("Invalid parameter value: {0}")]
     InvalidParameterValue(String),
+
+    /// Thrown when a subsystem specification is invalid for entanglement calculations.
+    #[error("Invalid subsystem: {0}")]
+    InvalidSubsystem(String),
+
+    /// Thrown when an operation requires a specific dimension that is not met.
+    #[error("Unsupported dimension: expected {expected}, got {actual}")]
+    UnsupportedDimension { expected: usize, actual: usize },
 }
 
 /// Error type for parsing PauliString from a string representation.
