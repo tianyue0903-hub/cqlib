@@ -25,14 +25,29 @@ Test coverage:
 
 import pytest
 
-from cqlib.circuit import Circuit, ConditionView, Qubit, StandardGate
-from cqlib.compiler import GaConfig, SabreConfig, map_with_ga
+from cqlib.circuit import (
+    Circuit,
+    ConditionView,
+    ControlFlow,
+    Directive,
+    Parameter,
+    Qubit,
+    StandardGate,
+)
+
+from cqlib.compiler import (
+    GaConfig,
+    SabreConfig,
+    map_with_ga,
+    map_with_vf2_sabre,
+)
 from cqlib.device import Topology
 
 from . import (
     assert_all_2q_on_topology,
     assert_ops_on_topology_recursive,
     count_swaps_recursive,
+    directive_names_recursive,
 )
 
 
@@ -423,3 +438,135 @@ class TestGaMappingComplexCircuits:
         assert_all_2q_on_topology(mapped, topology)
         single_qubit_count = sum(1 for op in mapped.operations if op.num_qubits == 1)
         assert single_qubit_count == 3  
+
+class TestGaMappingSupportControlFlow:
+    """Tests GA mapping support for control flow operations."""
+
+    def test_hybrid_mapping_supports_if_else(self):
+        """Routes `if_else` bodies and preserves the control-flow structure."""
+        topology = Topology.line([0, 1, 2])
+        circuit = Circuit(3)
+        circuit.measure(0)
+        circuit.if_else(
+            ConditionView(Qubit(0), 1),
+            [(StandardGate.CX, [0, 1])],
+            [(StandardGate.CX, [1, 2])],
+        )
+        circuit.cx(0, 2)
+
+        config = GaConfig(seed=9)
+        mapped = map_with_ga(circuit, topology, config=config)
+
+        mapped_ops = list(mapped.operations)
+        assert_ops_on_topology_recursive(mapped_ops, topology)
+        control_flow = mapped_ops[1].instruction.control_flow
+        assert control_flow is not None
+        assert control_flow.is_if_else
+        assert count_swaps_recursive(mapped_ops) > 0
+
+    def test_hybrid_mapping_supports_while_loop(self):
+        """Routes `while_loop` bodies and preserves the control-flow structure."""
+        topology = Topology.line([0, 1, 2])
+        circuit = Circuit(3)
+        circuit.measure(0)
+        circuit.while_loop(
+            ConditionView(Qubit(0), 1),
+            [
+                (StandardGate.CX, [0, 1]),
+                (StandardGate.CX, [1, 2]),
+                (StandardGate.CX, [0, 2]),
+            ],
+        )
+        circuit.cx(0, 2)
+
+        config = GaConfig(seed=9)
+        mapped = map_with_ga(circuit, topology, config=config)
+
+        mapped_ops = list(mapped.operations)
+        assert_ops_on_topology_recursive(mapped_ops, topology)
+        control_flow = mapped_ops[1].instruction.control_flow
+        assert control_flow is not None
+        assert control_flow.is_while_loop
+        assert len(control_flow.as_while_loop.body) > 3
+
+    def test_hybrid_mapping_preserves_symbolic_global_phase_in_control_flow(self):
+        """Preserves source global phase on routed control-flow circuits."""
+        topology = Topology.line([0, 1, 2])
+        circuit = Circuit(3)
+        theta = Parameter("theta")
+        circuit.set_global_phase(theta)
+        circuit.measure(0)
+        circuit.while_loop(
+            ConditionView(Qubit(0), 1),
+            [
+                (Directive.measure(), [1]),
+                (Directive.reset(), [2]),
+                (StandardGate.CX, [0, 2]),
+            ],
+        )
+        circuit.cx(0, 2)
+
+        config = GaConfig(seed=9)
+        mapped = map_with_ga(circuit, topology, config=config)
+
+        assert mapped.global_phase == theta
+        assert_ops_on_topology_recursive(list(mapped.operations), topology)
+
+    def test_hybrid_mapping_preserves_directives_inside_control_flow_body(self):
+        """Keeps directive operations inside mapped control-flow bodies."""
+        topology = Topology.line([0, 1, 2])
+        circuit = Circuit(3)
+        circuit.measure(0)
+        circuit.while_loop(
+            ConditionView(Qubit(0), 1),
+            [
+                (Directive.measure(), [1]),
+                (Directive.reset(), [2]),
+                (StandardGate.CX, [0, 2]),
+            ],
+        )
+        circuit.cx(0, 2)
+
+        config = GaConfig(seed=9)
+        mapped = map_with_ga(circuit, topology, config=config)
+
+        control_flow = list(mapped.operations)[1].instruction.control_flow
+        assert control_flow is not None
+        assert control_flow.is_while_loop
+        assert directive_names_recursive(control_flow.as_while_loop.body) == [
+            "Measure",
+            "Reset",
+        ]
+
+    def test_hybrid_mapping_supports_nested_control_flow_objects(self):
+        """Preserves nested control-flow bodies exposed by the Python binding."""
+        topology = Topology.line([0, 1, 2])
+
+        inner_loop_body = Circuit(3)
+        inner_loop_body.cx(0, 2)
+        nested_while = ControlFlow.while_loop(
+            ConditionView(Qubit(1), 1),
+            list(inner_loop_body.operations),
+        )
+
+        circuit = Circuit(3)
+        circuit.measure(0)
+        circuit.measure(1)
+        circuit.if_else(
+            ConditionView(Qubit(0), 1),
+            [(nested_while, [0, 1, 2])],
+            [(StandardGate.CX, [1, 2])],
+        )
+        circuit.cx(0, 2)
+
+        config = GaConfig(seed=9)
+        mapped = map_with_ga(circuit, topology, config=config)
+
+        mapped_ops = list(mapped.operations)
+        assert_ops_on_topology_recursive(mapped_ops, topology)
+        control_flow = mapped_ops[2].instruction.control_flow
+        assert control_flow is not None
+        assert control_flow.is_if_else
+        nested = control_flow.as_if_else.true_body[0].instruction.control_flow
+        assert nested is not None
+        assert nested.is_while_loop
