@@ -1337,7 +1337,6 @@ fn test_map_with_ga_all_to_all_heavy_routing() {
     assert_mapped_2q_edges(&mapped, &topology);
 }
 
-
 #[test]
 fn test_map_with_ga_non_contiguous_qubit_ids_supported() {
     let topology = line_topology(&[100, 200, 300, 400]);
@@ -1351,7 +1350,7 @@ fn test_map_with_ga_non_contiguous_qubit_ids_supported() {
         seed: 2026,
         ..fast_ga_config(2026)
     };
-    
+
     let result = map_with_ga(&circuit, &topology, &config, None, None);
     assert!(result.is_ok(), "GA failed to map non-contiguous qubit IDs");
     let mapped = result.unwrap();

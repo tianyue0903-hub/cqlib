@@ -24,7 +24,7 @@ use crate::circuit::gate::{
 };
 use circuit::circuit_to_matrix;
 use circuit::{PyCircuit, PyInstruction, PyOperation, PyParameter, PyQubit};
-use compile::{PySabreConfig, PyTemplateMatching, PyTemplateOptimization, PyGaConfig};
+use compile::{PyGaConfig, PySabreConfig, PyTemplateMatching, PyTemplateOptimization};
 
 /// A Python module implemented in Rust.
 #[pymodule]

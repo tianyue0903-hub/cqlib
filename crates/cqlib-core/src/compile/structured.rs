@@ -10,14 +10,14 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
-//! Structured preprocessing and rebuild helpers for control-flow-aware mapping.
+//! Structured preprocessing and rebuild helpers for control-flow-aware compile passes.
 
-use super::{PreparedCircuit, PreparedOperation};
 use crate::circuit::gate::control_flow::{ConditionView, ControlFlow, IfElseGate, WhileLoopGate};
 use crate::circuit::gate::{Directive, Instruction};
 use crate::circuit::{Circuit, Operation, Parameter, Qubit};
 use crate::compile::error::CompileError;
-use smallvec::{smallvec, SmallVec};
+use crate::compile::prepared::{PreparedCircuit, PreparedOperation};
+use smallvec::{SmallVec, smallvec};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
@@ -295,7 +295,7 @@ fn map_program_items_static(
                         .iter()
                         .map(|&logical| physical_qubits[mapping_idx[logical]])
                         .collect();
-                    mapped.push(super::map_operation_qubits(&prep_op.op, &mapped_qubits));
+                    mapped.push(remap_operation_qubits(&prep_op.op, &mapped_qubits));
                 }
             }
             PreparedProgramItem::Passthrough(op) => {
@@ -304,7 +304,7 @@ fn map_program_items_static(
                     .iter()
                     .map(|&logical| physical_qubits[mapping_idx[logical]])
                     .collect();
-                mapped.push(super::map_operation_qubits(&op.op, &mapped_qubits));
+                mapped.push(remap_operation_qubits(&op.op, &mapped_qubits));
             }
             PreparedProgramItem::IfElse(node) => {
                 let condition = ConditionView::new(
@@ -389,4 +389,10 @@ fn collect_control_flow_qubits(
     }
     out.push(condition_qubit);
     out
+}
+
+fn remap_operation_qubits(op: &Operation, mapped_qubits: &[Qubit]) -> Operation {
+    let mut mapped = op.clone();
+    mapped.qubits = mapped_qubits.iter().copied().collect();
+    mapped
 }

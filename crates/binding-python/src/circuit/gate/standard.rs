@@ -22,8 +22,8 @@
 //! - Static attributes: Gate constants like `StandardGate.H`, `StandardGate.CX`, etc.
 
 use crate::circuit::parameter::PyParameter;
-use cqlib_core::circuit::gate::{Instruction, StandardGate};
 use cqlib_core::circuit::Parameter;
+use cqlib_core::circuit::gate::{Instruction, StandardGate};
 use num_complex::Complex64;
 use numpy::{PyArray2, ToPyArray};
 use pyo3::exceptions::{PyTypeError, PyValueError};

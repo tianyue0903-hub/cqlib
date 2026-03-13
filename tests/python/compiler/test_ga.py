@@ -25,18 +25,31 @@ Test coverage:
 
 import pytest
 
-from cqlib.circuit import Circuit
-from cqlib.compiler import GaConfig, map_with_ga, SabreConfig, map_with_vf2_sabre
+from cqlib.circuit import Circuit, ConditionView, Qubit, StandardGate
+from cqlib.compiler import GaConfig, SabreConfig, map_with_ga
 from cqlib.device import Topology
 
-from . import assert_all_2q_on_topology
-from . import count_gate
+from . import (
+    assert_all_2q_on_topology,
+    assert_ops_on_topology_recursive,
+    count_swaps_recursive,
+)
 
 
 def _ops_signature(circuit: Circuit) -> tuple:
     """Builds a deterministic operation signature for mapped-circuit comparisons."""
     return tuple(
         (op.name, tuple(q.index for q in op.qubits)) for op in circuit.operations
+    )
+
+
+def _control_flow_ga_config(seed: int) -> GaConfig:
+    """Builds a deterministic GA config for structured-control-flow routing tests."""
+    return GaConfig(
+        population=6,
+        update_iters=2,
+        sabre_config=SabreConfig(vf2_policy="initial_only", repeat_iterations=0, seed=seed),
+        seed=seed,
     )
 
 
@@ -269,6 +282,63 @@ class TestGaMappingTopologyVariations:
         mapped = map_with_ga(circuit, topology, config=config)
 
         assert_all_2q_on_topology(mapped, topology)
+
+
+class TestGaMappingControlFlow:
+    """Tests GA mapping on control-flow circuits."""
+
+    def test_map_with_ga_routes_if_else_and_continuation(self):
+        """GA routes `if_else` branches and preserves the control-flow node."""
+        topology = Topology.line([0, 1, 2])
+        circuit = Circuit(3)
+        circuit.measure(0)
+        circuit.if_else(
+            ConditionView(Qubit(0), 1),
+            [(StandardGate.CX, [0, 1])],
+            [(StandardGate.CX, [1, 2])],
+        )
+        circuit.cx(0, 2)
+
+        mapped = map_with_ga(circuit, topology, config=_control_flow_ga_config(seed=11))
+
+        mapped_ops = list(mapped.operations)
+        assert_ops_on_topology_recursive(mapped_ops, topology)
+
+        control_flow_op = next(
+            op for op in mapped_ops if op.instruction.control_flow is not None
+        )
+        control_flow = control_flow_op.instruction.control_flow
+        assert control_flow is not None
+        assert control_flow.is_if_else
+        assert count_swaps_recursive(mapped_ops) > 0
+
+    def test_map_with_ga_routes_while_loop_and_continuation(self):
+        """GA routes `while_loop` bodies and preserves the loop structure."""
+        topology = Topology.line([0, 1, 2])
+        circuit = Circuit(3)
+        circuit.measure(0)
+        circuit.while_loop(
+            ConditionView(Qubit(0), 1),
+            [
+                (StandardGate.CX, [0, 1]),
+                (StandardGate.CX, [1, 2]),
+                (StandardGate.CX, [0, 2]),
+            ],
+        )
+        circuit.cx(0, 2)
+
+        mapped = map_with_ga(circuit, topology, config=_control_flow_ga_config(seed=12))
+
+        mapped_ops = list(mapped.operations)
+        assert_ops_on_topology_recursive(mapped_ops, topology)
+
+        control_flow_op = next(
+            op for op in mapped_ops if op.instruction.control_flow is not None
+        )
+        control_flow = control_flow_op.instruction.control_flow
+        assert control_flow is not None
+        assert control_flow.is_while_loop
+        assert len(control_flow.as_while_loop.body) > 3
 
 
 class TestGaMappingErrorHandling:

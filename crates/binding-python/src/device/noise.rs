@@ -48,8 +48,8 @@
 //! model.add_readout_error(0, readout)
 //! ```
 
-use crate::circuit::bit::PyIntOrQubit;
 use crate::circuit::PyStandardGate;
+use crate::circuit::bit::PyIntOrQubit;
 use crate::qis::pauli::PyPauli;
 use cqlib_core::circuit::Parameter;
 use cqlib_core::device::{NoiseModel, OperationKey, ReadoutError, SingleQubitNoise, TwoQubitNoise};

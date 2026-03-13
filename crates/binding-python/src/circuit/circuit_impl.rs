@@ -58,10 +58,10 @@ use cqlib_core::circuit::param::ParameterValue;
 use cqlib_core::circuit::{Circuit, Operation, Qubit};
 use num_complex::Complex64;
 use numpy::{PyArray2, ToPyArray};
+use pyo3::IntoPyObjectExt;
 use pyo3::exceptions::{PyIndexError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::*;
-use pyo3::IntoPyObjectExt;
 use smallvec::SmallVec;
 use std::collections::HashMap;
 

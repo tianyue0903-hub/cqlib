@@ -22,12 +22,12 @@
 //! - Mathematical functions (trigonometric, exponential, etc.)
 //! - Symbolic differentiation and simplification
 
-use cqlib_core::circuit::parameter::parse_parameter;
 use cqlib_core::circuit::Parameter;
+use cqlib_core::circuit::parameter::parse_parameter;
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
+use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
 /// Python wrapper for `Parameter`.

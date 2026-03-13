@@ -19,14 +19,14 @@
 //!
 //! - [`PyMcGate`]: The main class for multi-controlled quantum gates.
 
-use crate::circuit::parameter::PyParameter;
 use crate::circuit::PyStandardGate;
-use cqlib_core::circuit::gate::MCGate;
+use crate::circuit::parameter::PyParameter;
 use cqlib_core::circuit::Parameter;
+use cqlib_core::circuit::gate::MCGate;
 use num_complex::Complex64;
 use numpy::{PyArray2, ToPyArray};
 use pyo3::prelude::*;
-use pyo3::{pyclass, pymethods, PyResult};
+use pyo3::{PyResult, pyclass, pymethods};
 use std::fmt;
 
 /// Python wrapper for `MCGate`.

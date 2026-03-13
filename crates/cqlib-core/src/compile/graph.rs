@@ -24,7 +24,7 @@
 use crate::circuit::param::CircuitParam;
 use crate::circuit::{Operation, Parameter};
 use crate::compile::error::CompileError;
-use crate::compile::mapping::{PreparedCircuit, PreparedOperation};
+use crate::compile::prepared::{PreparedCircuit, PreparedOperation};
 use ndarray::Array2;
 use num_complex::Complex64;
 use smallvec::SmallVec;
@@ -449,7 +449,7 @@ mod tests {
     use super::*;
     use crate::circuit::gate::{Instruction, StandardGate};
     use crate::circuit::{Circuit, Parameter, Qubit};
-    use crate::compile::mapping::preprocess_circuit;
+    use crate::compile::prepared::preprocess_circuit;
 
     /// Builds a small circuit used by graph tests.
     fn sample_circuit() -> Circuit {
@@ -496,9 +496,9 @@ mod tests {
             .append(
                 Instruction::Standard(StandardGate::RZ),
                 [Qubit::new(0)],
-                [crate::circuit::param::ParameterValue::Param(Parameter::symbol(
-                    "theta",
-                ))],
+                [crate::circuit::param::ParameterValue::Param(
+                    Parameter::symbol("theta"),
+                )],
                 None,
             )
             .unwrap();

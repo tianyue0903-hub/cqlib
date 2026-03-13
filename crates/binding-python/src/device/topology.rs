@@ -40,12 +40,12 @@
 //! topology.neighbors(0)  # [1]
 //! ```
 
-use crate::circuit::bit::{PyIntListOrQubitList, PyIntOrQubit};
 use crate::circuit::PyQubit;
+use crate::circuit::bit::{PyIntListOrQubitList, PyIntOrQubit};
 use cqlib_core::circuit::Qubit;
 use cqlib_core::device::topology::Topology;
 use pyo3::exceptions::PyValueError;
-use pyo3::{pyclass, pymethods, PyResult};
+use pyo3::{PyResult, pyclass, pymethods};
 
 /// A directed coupling graph representing quantum hardware connectivity.
 ///

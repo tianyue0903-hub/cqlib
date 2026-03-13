@@ -22,8 +22,8 @@
 //! - weighted ranking by fidelity, topology distance, and gate distribution
 
 use super::{
-    build_output_circuit_from_source, map_program_static, normalize_index_pair, preprocess_program,
-    FidelityMap, PreparedCircuit, TopologyAdapter,
+    FidelityMap, PreparedCircuit, TopologyAdapter, build_output_circuit_from_source,
+    map_program_static, normalize_index_pair, preprocess_program,
 };
 use crate::circuit::{Circuit, Qubit};
 use crate::compile::error::CompileError;

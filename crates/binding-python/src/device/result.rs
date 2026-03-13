@@ -50,8 +50,8 @@ use crate::circuit::PyQubit;
 use cqlib_core::device::{ExecutionResult, Outcome, Status};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
+use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
 /// Measurement outcome as a compact bitstring.

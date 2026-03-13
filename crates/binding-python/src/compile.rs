@@ -24,11 +24,9 @@
 use crate::circuit::PyCircuit;
 use crate::device::topology::PyTopology;
 use cqlib_core::compile::{
-    map_with_vf2_sabre, FidelityMap, SabreConfig, TemplateMatching as CoreTemplateMatching,
+    FidelityMap, GaConfig, SabreConfig, TemplateMatching as CoreTemplateMatching,
     TemplateOptimization as CoreTemplateOptimization, Vf2CandidateOptions, Vf2Mapping, Vf2Policy,
-    Vf2ScoreWeights,
-    GaConfig,
-    map_with_ga,
+    Vf2ScoreWeights, map_with_ga, map_with_vf2_sabre,
 };
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -733,9 +731,15 @@ pub fn py_map_with_ga(
     let fidelity = py_fidelity_to_core(fidelity_map)?;
     let cfg = config.map(|c| c.inner).unwrap_or_default();
 
-    map_with_ga(&circuit.inner, &topology.inner, &cfg, fidelity.as_ref(), invalid_qubits)
-        .map(PyCircuit::from)
-        .map_err(|e| PyValueError::new_err(e.to_string()))
+    map_with_ga(
+        &circuit.inner,
+        &topology.inner,
+        &cfg,
+        fidelity.as_ref(),
+        invalid_qubits,
+    )
+    .map(PyCircuit::from)
+    .map_err(|e| PyValueError::new_err(e.to_string()))
 }
 
 /// Converts Python fidelity map keys to core `Qubit` keys.

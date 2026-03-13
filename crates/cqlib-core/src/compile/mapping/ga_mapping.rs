@@ -236,7 +236,7 @@ impl GeneticAlgMapping {
             self.individual_layouts.push(Vec::new());
             self.population_score.push(0.0);
         }
-        
+
         Ok(())
     }
 
@@ -268,12 +268,10 @@ impl GeneticAlgMapping {
     /// Executes the genetic algorithm mapping on the given circuit.
     pub fn execute(&mut self, circuit: &Circuit) -> Result<Circuit, CompileError> {
         self.initial(circuit)?;
-        
+
         for _ in 0..self.config.update_iters {
             // Parallel evaluation of the population
-            let evaluated_population: Vec<(usize, Circuit, f64)> = (0..self
-                .config
-                .population)
+            let evaluated_population: Vec<(usize, Circuit, f64)> = (0..self.config.population)
                 .into_par_iter()
                 .map(|idx| {
                     let mut sabre_mapping = SabreMapping::new(
@@ -287,11 +285,11 @@ impl GeneticAlgMapping {
                     let mapped_result = sabre_mapping
                         .execute_with_genetic_algorithm(circuit, self.population_space[idx].clone())
                         .expect("Sabre routing failed during GA evaluation");
-                    
+
                     (idx, mapped_result.0, mapped_result.1)
                 })
                 .collect();
-            
+
             for (idx, mapped_circuit, mapped_fidelity) in evaluated_population {
                 let mapped_info = self.post_mapping_analysis(&mapped_circuit);
                 let mapped_score = self.calculate_fitness_function(mapped_info.0, mapped_fidelity);
@@ -513,11 +511,7 @@ impl GeneticAlgMapping {
             if let Instruction::ControlFlowGate(control_flow) = &op.instruction {
                 match control_flow {
                     ControlFlow::IfElse(gate) => {
-                        self.collect_swap_stats(
-                            gate.true_body(),
-                            swap_counter,
-                            edge_list_counting,
-                        );
+                        self.collect_swap_stats(gate.true_body(), swap_counter, edge_list_counting);
                         if let Some(false_body) = gate.false_body() {
                             self.collect_swap_stats(false_body, swap_counter, edge_list_counting);
                         }
@@ -810,7 +804,6 @@ mod tests {
         let mut circuit = Circuit::new(3);
         circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
         circuit.cx(Qubit::new(1), Qubit::new(2)).unwrap();
-
 
         let mut fidelity = FidelityMap::new();
         fidelity.insert((Qubit::new(0), Qubit::new(1)), 0.5);

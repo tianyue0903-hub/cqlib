@@ -32,12 +32,18 @@ pub(crate) mod graph;
 pub mod mapping;
 /// Template-matching based optimization utilities.
 pub mod optimization;
+/// Shared flat-circuit preparation helpers for compile passes.
+pub(crate) mod prepared;
+/// Shared structured-program helpers for control-flow-aware compile passes.
+pub(crate) mod structured;
 
 pub use error::CompileError;
 pub use mapping::{
-    FidelityMap, SabreConfig, SabreMapping, Vf2CandidateOptions, Vf2CandidateScore,
-    Vf2LayoutCandidate, Vf2Mapping, Vf2Policy, Vf2ScoreWeights, map_with_vf2_sabre,
-    GaConfig, GeneticAlgMapping,
-    map_with_ga,
+    FidelityMap, GaConfig, GeneticAlgMapping, SabreConfig, SabreMapping, Vf2CandidateOptions,
+    Vf2CandidateScore, Vf2LayoutCandidate, Vf2Mapping, Vf2Policy, Vf2ScoreWeights, map_with_ga,
+    map_with_vf2_sabre,
 };
-pub use optimization::{TemplateMatch, TemplateMatching, TemplateOptimization};
+pub use optimization::{
+    TemplateLibrary, TemplateMatch, TemplateMatching, TemplateOptimization,
+    TemplateOptimizationConfig,
+};

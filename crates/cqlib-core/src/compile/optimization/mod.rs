@@ -18,4 +18,7 @@
 /// Template matching and template optimization implementation.
 pub mod template;
 
-pub use template::{TemplateMatch, TemplateMatching, TemplateOptimization};
+pub use template::{
+    TemplateLibrary, TemplateMatch, TemplateMatching, TemplateOptimization,
+    TemplateOptimizationConfig,
+};
