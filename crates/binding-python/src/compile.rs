@@ -24,9 +24,10 @@
 use crate::circuit::PyCircuit;
 use crate::device::topology::PyTopology;
 use cqlib_core::compile::{
-    FidelityMap, GaConfig, SabreConfig, TemplateMatching as CoreTemplateMatching,
-    TemplateOptimization as CoreTemplateOptimization, Vf2CandidateOptions, Vf2Mapping, Vf2Policy,
-    Vf2ScoreWeights, map_with_ga, map_with_vf2_sabre,
+    CliffordRzConfig as CoreCliffordRzConfig, CliffordRzLevel as CoreCliffordRzLevel,
+    CliffordRzOptimization as CoreCliffordRzOptimization, FidelityMap, GaConfig, SabreConfig,
+    TemplateMatching as CoreTemplateMatching, TemplateOptimization as CoreTemplateOptimization,
+    Vf2CandidateOptions, Vf2Mapping, Vf2Policy, Vf2ScoreWeights, map_with_ga, map_with_vf2_sabre,
 };
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -352,6 +353,83 @@ impl PyGaConfig {
             self.inner.crossover_qubit_number,
             self.inner.update_iters,
             self.inner.seed,
+        )
+    }
+}
+
+/// Python wrapper for Clifford+Rz optimization.
+#[pyclass(name = "CliffordRzOptimization", module = "cqlib.compiler")]
+#[derive(Clone, Debug)]
+pub struct PyCliffordRzOptimization {
+    /// Internal optimizer object.
+    pub(crate) inner: CoreCliffordRzOptimization,
+    level: CoreCliffordRzLevel,
+    numeric_tol: f64,
+}
+
+#[pymethods]
+impl PyCliffordRzOptimization {
+    /// Creates a Clifford+Rz optimizer.
+    ///
+    /// Args:
+    ///     level (str): `light` or `heavy`.
+    ///     numeric_tol (float): Numeric tolerance for angle normalization and exact rewrites.
+    ///
+    /// Raises:
+    ///     ValueError: If `level` is not recognized or `numeric_tol` is invalid.
+    #[new]
+    #[pyo3(signature = (level = "light".to_string(), numeric_tol = 1e-10))]
+    fn new(level: String, numeric_tol: f64) -> PyResult<Self> {
+        if !numeric_tol.is_finite() || numeric_tol < 0.0 {
+            return Err(PyValueError::new_err(
+                "numeric_tol must be a finite non-negative float",
+            ));
+        }
+
+        let level = parse_clifford_rz_level(&level)?;
+        let inner = CoreCliffordRzOptimization::new(CoreCliffordRzConfig { level, numeric_tol });
+        Ok(Self {
+            inner,
+            level,
+            numeric_tol,
+        })
+    }
+
+    /// Optimization level.
+    #[getter]
+    fn level(&self) -> String {
+        clifford_rz_level_name(self.level).to_string()
+    }
+
+    /// Numeric tolerance for floating-point comparisons.
+    #[getter]
+    fn numeric_tol(&self) -> f64 {
+        self.numeric_tol
+    }
+
+    /// Executes one Clifford+Rz optimization pass.
+    ///
+    /// Args:
+    ///     circuit (Circuit): Circuit to optimize.
+    ///
+    /// Returns:
+    ///     Circuit: Optimized circuit.
+    ///
+    /// Raises:
+    ///     ValueError: If optimization fails.
+    fn execute(&self, circuit: &PyCircuit) -> PyResult<PyCircuit> {
+        self.inner
+            .execute(&circuit.inner)
+            .map(PyCircuit::from)
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    /// Returns a compact debug representation.
+    fn __repr__(&self) -> String {
+        format!(
+            "CliffordRzOptimization(level='{}', numeric_tol={})",
+            clifford_rz_level_name(self.level),
+            self.numeric_tol,
         )
     }
 }
@@ -769,6 +847,25 @@ fn parse_vf2_policy(policy: &str) -> PyResult<Vf2Policy> {
             "unknown vf2_policy '{}'; expected one of: direct_then_sabre, initial_only, disabled",
             policy
         ))),
+    }
+}
+
+/// Parses user-provided Clifford+Rz optimization level strings into enum values.
+fn parse_clifford_rz_level(level: &str) -> PyResult<CoreCliffordRzLevel> {
+    match level.to_ascii_lowercase().as_str() {
+        "light" => Ok(CoreCliffordRzLevel::Light),
+        "heavy" => Ok(CoreCliffordRzLevel::Heavy),
+        _ => Err(PyValueError::new_err(format!(
+            "unknown CliffordRz level '{}'; expected one of: light, heavy",
+            level
+        ))),
+    }
+}
+
+fn clifford_rz_level_name(level: CoreCliffordRzLevel) -> &'static str {
+    match level {
+        CoreCliffordRzLevel::Light => "light",
+        CoreCliffordRzLevel::Heavy => "heavy",
     }
 }
 

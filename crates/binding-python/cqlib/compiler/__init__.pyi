@@ -275,6 +275,50 @@ class TemplateOptimization:
         ...
 
 
+class CliffordRzOptimization:
+    """Numeric Clifford+Rz optimizer for linear segments and control-flow bodies."""
+
+    def __init__(
+        self,
+        level: str = "light",
+        numeric_tol: float = 1e-10,
+    ) -> None:
+        """Creates a Clifford+Rz optimizer.
+
+        Args:
+            level: Optimization level, either `light` or `heavy`.
+            numeric_tol: Numeric tolerance for floating-point comparisons.
+
+        Raises:
+            ValueError: If inputs are invalid.
+        """
+        ...
+
+    @property
+    def level(self) -> str:
+        """Returns the configured optimization level."""
+        ...
+
+    @property
+    def numeric_tol(self) -> float:
+        """Returns the configured numeric tolerance."""
+        ...
+
+    def execute(self, circuit: Circuit) -> Circuit:
+        """Runs one Clifford+Rz optimization pass.
+
+        Args:
+            circuit: Input circuit.
+
+        Returns:
+            Circuit: Optimized circuit.
+
+        Raises:
+            ValueError: If optimization fails.
+        """
+        ...
+
+
 def vf2_is_subgraph_isomorphic(
     circuit: Circuit,
     topology: Topology,

@@ -11,6 +11,7 @@
 # that they have been altered from the originals.
 
 from .._native import (
+    CliffordRzOptimization,
     SabreConfig,
     TemplateMatching,
     TemplateOptimization,
@@ -24,6 +25,7 @@ from .._native import (
 )
 
 __all__ = [
+    "CliffordRzOptimization",
     "SabreConfig",
     "TemplateMatching",
     "TemplateOptimization",

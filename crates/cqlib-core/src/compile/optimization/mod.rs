@@ -12,12 +12,17 @@
 
 //! Compile-layer optimization algorithms.
 //!
-//! This namespace currently exposes template matching and template-based
-//! optimization for flat 1q/2q circuits accepted by compile preprocessing.
+//! This namespace exposes optimization passes built on the compile
+//! preprocessing stack.
 
+/// Internal Clifford+Rz optimization for control-flow-aware compile pipelines.
+pub(crate) mod clifford_rz;
 /// Template matching and template optimization implementation.
 pub mod template;
 
+#[allow(unused_imports)]
+pub(crate) use clifford_rz::CliffordRzPass;
+pub use clifford_rz::{CliffordRzConfig, CliffordRzLevel, CliffordRzOptimization};
 pub use template::{
     TemplateLibrary, TemplateMatch, TemplateMatching, TemplateOptimization,
     TemplateOptimizationConfig,

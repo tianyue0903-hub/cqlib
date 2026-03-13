@@ -24,7 +24,9 @@ use crate::circuit::gate::{
 };
 use circuit::circuit_to_matrix;
 use circuit::{PyCircuit, PyInstruction, PyOperation, PyParameter, PyQubit};
-use compile::{PyGaConfig, PySabreConfig, PyTemplateMatching, PyTemplateOptimization};
+use compile::{
+    PyCliffordRzOptimization, PyGaConfig, PySabreConfig, PyTemplateMatching, PyTemplateOptimization,
+};
 
 /// A Python module implemented in Rust.
 #[pymodule]
@@ -48,6 +50,7 @@ fn binding_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyDelay>()?;
     m.add_class::<PyTemplateMatching>()?;
     m.add_class::<PyTemplateOptimization>()?;
+    m.add_class::<PyCliffordRzOptimization>()?;
     m.add_class::<PyGaConfig>()?;
 
     // Register IR module with qasm2 and qcis submodules
