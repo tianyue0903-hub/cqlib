@@ -11,8 +11,10 @@
 // that they have been altered from the originals.
 
 use super::canonical::{CanonicalGate, CanonicalOp, approx_zero};
-use super::dag::SegmentDag;
 use std::collections::{HashMap, HashSet};
+
+#[cfg(test)]
+use super::dag::SegmentDag;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct ParityKey(Vec<usize>);
@@ -87,6 +89,42 @@ pub(crate) struct PhasePolynomial {
 }
 
 impl PhasePolynomial {
+    pub(crate) fn optimize_ops(ops: &[CanonicalOp], tol: f64) -> Option<Vec<CanonicalOp>> {
+        if ops.len() < 2 {
+            return None;
+        }
+
+        let poly = Self::build(ops, tol);
+        let rewritten = poly.synthesize_forward(tol);
+        if rewritten.len() < ops.len() {
+            Some(rewritten)
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn relocate_ops(ops: &[CanonicalOp], tol: f64) -> Option<Vec<CanonicalOp>> {
+        if ops.len() < 2 {
+            return None;
+        }
+
+        let poly = Self::build(ops, tol);
+        let forward = poly.synthesize_forward(tol);
+        let backward = synthesize_backward(ops, tol);
+        let rewritten = if backward.len() < forward.len() {
+            backward
+        } else {
+            forward
+        };
+
+        if rewritten.len() < ops.len() {
+            Some(rewritten)
+        } else {
+            None
+        }
+    }
+
+    #[cfg(test)]
     pub(crate) fn optimize_component(
         dag: &SegmentDag,
         component: &[usize],
@@ -96,17 +134,7 @@ impl PhasePolynomial {
             .iter()
             .map(|&node_id| dag.node(node_id).op.clone())
             .collect();
-        if original.len() < 2 {
-            return None;
-        }
-
-        let poly = Self::build(&original, tol);
-        let rewritten = poly.synthesize(tol);
-        if rewritten.len() < original.len() {
-            Some(rewritten)
-        } else {
-            None
-        }
+        Self::optimize_ops(&original, tol)
     }
 
     fn build(component: &[CanonicalOp], tol: f64) -> Self {
@@ -167,7 +195,7 @@ impl PhasePolynomial {
         }
     }
 
-    fn synthesize(&self, tol: f64) -> Vec<CanonicalOp> {
+    fn synthesize_forward(&self, tol: f64) -> Vec<CanonicalOp> {
         if self.phases.is_empty() {
             return self.gates.clone();
         }
@@ -235,6 +263,23 @@ impl PhasePolynomial {
 
         out
     }
+}
+
+fn synthesize_backward(ops: &[CanonicalOp], tol: f64) -> Vec<CanonicalOp> {
+    let inverse = invert_ops(ops);
+    let poly = PhasePolynomial::build(&inverse, tol);
+    let rewritten_inverse = poly.synthesize_forward(tol);
+    invert_ops(&rewritten_inverse)
+}
+
+fn invert_ops(ops: &[CanonicalOp]) -> Vec<CanonicalOp> {
+    ops.iter()
+        .rev()
+        .map(|op| match op.gate {
+            CanonicalGate::RZ => op.clone().with_theta(-op.theta_value()),
+            CanonicalGate::H | CanonicalGate::X | CanonicalGate::CX => op.clone(),
+        })
+        .collect()
 }
 
 fn initial_parities(
@@ -307,6 +352,19 @@ mod tests {
         ];
         let dag = SegmentDag::from_ops(&ops);
         let rewritten = PhasePolynomial::optimize_component(&dag, &[0, 1, 2, 3, 4], 1e-10).unwrap();
+        assert!(rewritten.len() < ops.len());
+    }
+
+    #[test]
+    fn test_phase_polynomial_relocation_moves_rz_later() {
+        let ops = vec![
+            CanonicalOp::rz(0, 0.2),
+            CanonicalOp::cx(0, 1),
+            CanonicalOp::cx(1, 0),
+            CanonicalOp::cx(0, 1),
+            CanonicalOp::rz(1, 0.2),
+        ];
+        let rewritten = PhasePolynomial::relocate_ops(&ops, 1e-10).unwrap();
         assert!(rewritten.len() < ops.len());
     }
 }

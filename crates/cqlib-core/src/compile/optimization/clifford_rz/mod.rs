@@ -21,4 +21,6 @@ mod optimizer;
 mod phase_poly;
 
 pub(crate) use optimizer::CliffordRzPass;
-pub use optimizer::{CliffordRzConfig, CliffordRzLevel, CliffordRzOptimization};
+pub use optimizer::{
+    CliffordRzConfig, CliffordRzLevel, CliffordRzOptimization, CliffordRzStrategy,
+};

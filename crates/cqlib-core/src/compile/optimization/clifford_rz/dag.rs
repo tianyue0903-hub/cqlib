@@ -12,7 +12,7 @@
 
 use super::canonical::{CanonicalGate, CanonicalOp};
 use smallvec::SmallVec;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct WireLink {
@@ -150,50 +150,105 @@ impl SegmentDag {
     }
 
     pub(crate) fn h_free_components(&self) -> Vec<Vec<usize>> {
-        let mut out = Vec::new();
-        let mut visited = HashSet::new();
+        #[derive(Debug, Clone, Copy)]
+        enum WireState {
+            Unused,
+            Open(usize),
+            Blocked,
+        }
 
-        for start in self.topological_ids() {
-            if visited.contains(&start) {
+        fn find_root(parent: &mut [usize], id: usize) -> usize {
+            if parent[id] == id {
+                return id;
+            }
+            let root = find_root(parent, parent[id]);
+            parent[id] = root;
+            root
+        }
+
+        fn merge_roots(
+            parent: &mut [usize],
+            components: &mut [Vec<usize>],
+            left: usize,
+            right: usize,
+        ) -> usize {
+            let left_root = find_root(parent, left);
+            let right_root = find_root(parent, right);
+            if left_root == right_root {
+                return left_root;
+            }
+            let keep = left_root.min(right_root);
+            let drop = left_root.max(right_root);
+            let drained = std::mem::take(&mut components[drop]);
+            components[keep].extend(drained);
+            parent[drop] = keep;
+            keep
+        }
+
+        let mut components: Vec<Vec<usize>> = Vec::new();
+        let mut parent: Vec<usize> = Vec::new();
+        let mut wire_state: HashMap<usize, WireState> = HashMap::new();
+
+        for node_id in self.topological_ids() {
+            let node = &self.nodes[node_id];
+            if node.erased {
                 continue;
             }
-            let node = &self.nodes[start];
+
             if node.op.gate == CanonicalGate::H {
+                for &logical in &node.op.logical_qubits {
+                    wire_state.insert(logical, WireState::Blocked);
+                }
                 continue;
             }
 
-            let mut queue = VecDeque::from([start]);
-            let mut component = Vec::new();
-            visited.insert(start);
-
-            while let Some(current) = queue.pop_front() {
-                component.push(current);
-                let current_node = &self.nodes[current];
-                for link in current_node
-                    .predecessors
-                    .iter()
-                    .chain(current_node.successors.iter())
+            let mut blocked = false;
+            let mut roots = Vec::new();
+            for &logical in &node.op.logical_qubits {
+                match wire_state
+                    .get(&logical)
+                    .copied()
+                    .unwrap_or(WireState::Unused)
                 {
-                    let Some(link) = link else {
-                        continue;
-                    };
-                    let next = link.node_id;
-                    if visited.contains(&next) {
-                        continue;
+                    WireState::Unused => {}
+                    WireState::Blocked => blocked = true,
+                    WireState::Open(component_id) => {
+                        let root = find_root(&mut parent, component_id);
+                        if !roots.contains(&root) {
+                            roots.push(root);
+                        }
                     }
-                    let next_node = &self.nodes[next];
-                    if next_node.erased || next_node.op.gate == CanonicalGate::H {
-                        continue;
-                    }
-                    visited.insert(next);
-                    queue.push_back(next);
                 }
             }
 
+            let component_id = if blocked || roots.is_empty() {
+                let id = components.len();
+                components.push(Vec::new());
+                parent.push(id);
+                id
+            } else {
+                let mut root = roots[0];
+                for &other in &roots[1..] {
+                    root = merge_roots(&mut parent, &mut components, root, other);
+                }
+                root
+            };
+
+            let root = find_root(&mut parent, component_id);
+            components[root].push(node_id);
+            for &logical in &node.op.logical_qubits {
+                wire_state.insert(logical, WireState::Open(root));
+            }
+        }
+
+        let mut out = Vec::new();
+        for (component_id, mut component) in components.into_iter().enumerate() {
+            if find_root(&mut parent, component_id) != component_id || component.is_empty() {
+                continue;
+            }
             component.sort_unstable();
             out.push(component);
         }
-
         out
     }
 }
@@ -223,5 +278,24 @@ mod tests {
         let dag = SegmentDag::from_ops(&ops);
         let components = dag.h_free_components();
         assert_eq!(components, vec![vec![0, 2, 3]]);
+    }
+
+    #[test]
+    fn test_h_free_components_do_not_cross_h_boundary_on_other_wire() {
+        let ops = vec![
+            CanonicalOp::rz(1, -std::f64::consts::FRAC_PI_2),
+            CanonicalOp::cx(0, 1),
+            CanonicalOp::rz(1, std::f64::consts::FRAC_PI_2),
+            CanonicalOp::h(0),
+            CanonicalOp::cx(1, 0),
+            CanonicalOp::h(0),
+            CanonicalOp::cx(0, 1),
+            CanonicalOp::cx(1, 0),
+            CanonicalOp::cx(0, 1),
+            CanonicalOp::rz(0, 0.125),
+        ];
+        let dag = SegmentDag::from_ops(&ops);
+        let components = dag.h_free_components();
+        assert_eq!(components, vec![vec![0, 1, 2], vec![4], vec![6, 7, 8, 9]]);
     }
 }

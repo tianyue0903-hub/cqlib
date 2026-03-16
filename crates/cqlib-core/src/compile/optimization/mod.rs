@@ -22,7 +22,9 @@ pub mod template;
 
 #[allow(unused_imports)]
 pub(crate) use clifford_rz::CliffordRzPass;
-pub use clifford_rz::{CliffordRzConfig, CliffordRzLevel, CliffordRzOptimization};
+pub use clifford_rz::{
+    CliffordRzConfig, CliffordRzLevel, CliffordRzOptimization, CliffordRzStrategy,
+};
 pub use template::{
     TemplateLibrary, TemplateMatch, TemplateMatching, TemplateOptimization,
     TemplateOptimizationConfig,

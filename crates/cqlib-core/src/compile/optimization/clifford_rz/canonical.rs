@@ -35,43 +35,38 @@ pub(crate) struct CanonicalOp {
 }
 
 impl CanonicalOp {
-    #[cfg(test)]
+    pub(crate) fn new(
+        gate: CanonicalGate,
+        logical_qubits: SmallVec<[usize; 2]>,
+        theta: Option<f64>,
+    ) -> Self {
+        Self {
+            gate,
+            logical_qubits,
+            theta,
+            label: None,
+        }
+    }
+
+    pub(crate) fn with_label(mut self, label: Option<Box<str>>) -> Self {
+        self.label = label;
+        self
+    }
+
     pub(crate) fn h(logical: usize) -> Self {
-        Self {
-            gate: CanonicalGate::H,
-            logical_qubits: smallvec![logical],
-            theta: None,
-            label: None,
-        }
+        Self::new(CanonicalGate::H, smallvec![logical], None)
     }
 
-    #[cfg(test)]
     pub(crate) fn x(logical: usize) -> Self {
-        Self {
-            gate: CanonicalGate::X,
-            logical_qubits: smallvec![logical],
-            theta: None,
-            label: None,
-        }
+        Self::new(CanonicalGate::X, smallvec![logical], None)
     }
 
-    #[cfg(test)]
     pub(crate) fn cx(control: usize, target: usize) -> Self {
-        Self {
-            gate: CanonicalGate::CX,
-            logical_qubits: smallvec![control, target],
-            theta: None,
-            label: None,
-        }
+        Self::new(CanonicalGate::CX, smallvec![control, target], None)
     }
 
     pub(crate) fn rz(logical: usize, theta: f64) -> Self {
-        Self {
-            gate: CanonicalGate::RZ,
-            logical_qubits: smallvec![logical],
-            theta: Some(theta),
-            label: None,
-        }
+        Self::new(CanonicalGate::RZ, smallvec![logical], Some(theta))
     }
 
     pub(crate) fn is_rz(&self) -> bool {
@@ -143,106 +138,26 @@ pub(crate) fn canonical_sequence_eq(lhs: &[CanonicalOp], rhs: &[CanonicalOp], to
 pub(crate) fn try_canonicalize(
     prep_op: &PreparedOperation,
     parameter_pool: &[Parameter],
-) -> Result<Option<(CanonicalOp, f64)>, CompileError> {
+) -> Result<Option<(Vec<CanonicalOp>, f64)>, CompileError> {
     let params = match resolve_numeric_params(&prep_op.op, parameter_pool)? {
         Some(params) => params,
         None => return Ok(None),
     };
 
-    let logical_qubits = prep_op.logical_qubits.clone();
-    let label = prep_op.op.label.clone();
-    let op = match &prep_op.op.instruction {
-        Instruction::Standard(StandardGate::H) => Some((
-            CanonicalOp {
-                gate: CanonicalGate::H,
-                logical_qubits,
-                theta: None,
-                label,
-            },
-            0.0,
-        )),
-        Instruction::Standard(StandardGate::X) => Some((
-            CanonicalOp {
-                gate: CanonicalGate::X,
-                logical_qubits,
-                theta: None,
-                label,
-            },
-            0.0,
-        )),
-        Instruction::Standard(StandardGate::CX) => Some((
-            CanonicalOp {
-                gate: CanonicalGate::CX,
-                logical_qubits,
-                theta: None,
-                label,
-            },
-            0.0,
-        )),
-        Instruction::Standard(StandardGate::RZ) => {
-            if params.len() != 1 {
-                return Err(CompileError::Internal(
-                    "RZ gate must resolve to exactly one numeric parameter".to_string(),
-                ));
-            }
-            Some((
-                CanonicalOp {
-                    gate: CanonicalGate::RZ,
-                    logical_qubits,
-                    theta: Some(params[0]),
-                    label,
-                },
-                0.0,
-            ))
+    let sequence = match &prep_op.op.instruction {
+        Instruction::Standard(gate) => {
+            canonicalize_standard_gate(*gate, &prep_op.logical_qubits, &params)?
         }
-        Instruction::Standard(StandardGate::Z) => Some((
-            CanonicalOp {
-                gate: CanonicalGate::RZ,
-                logical_qubits,
-                theta: Some(PI),
-                label,
-            },
-            PI / 2.0,
-        )),
-        Instruction::Standard(StandardGate::S) => Some((
-            CanonicalOp {
-                gate: CanonicalGate::RZ,
-                logical_qubits,
-                theta: Some(PI / 2.0),
-                label,
-            },
-            PI / 4.0,
-        )),
-        Instruction::Standard(StandardGate::SDG) => Some((
-            CanonicalOp {
-                gate: CanonicalGate::RZ,
-                logical_qubits,
-                theta: Some(-PI / 2.0),
-                label,
-            },
-            -PI / 4.0,
-        )),
-        Instruction::Standard(StandardGate::T) => Some((
-            CanonicalOp {
-                gate: CanonicalGate::RZ,
-                logical_qubits,
-                theta: Some(PI / 4.0),
-                label,
-            },
-            PI / 8.0,
-        )),
-        Instruction::Standard(StandardGate::TDG) => Some((
-            CanonicalOp {
-                gate: CanonicalGate::RZ,
-                logical_qubits,
-                theta: Some(-PI / 4.0),
-                label,
-            },
-            -PI / 8.0,
-        )),
-        _ => None,
+        _ => return Ok(None),
     };
-    Ok(op)
+
+    let Some((mut ops, phase)) = sequence else {
+        return Ok(None);
+    };
+    if let Some(first) = ops.first_mut() {
+        first.label = prep_op.op.label.clone();
+    }
+    Ok(Some((ops, phase)))
 }
 
 pub(crate) fn exact_rz_rewrite(theta: f64, tol: f64) -> Option<(Option<StandardGate>, f64)> {
@@ -268,6 +183,119 @@ pub(crate) fn exact_rz_rewrite(theta: f64, tol: f64) -> Option<(Option<StandardG
         15 => Some((Some(StandardGate::TDG), PI / 8.0)),
         _ => None,
     }
+}
+
+fn canonicalize_standard_gate(
+    gate: StandardGate,
+    logical_qubits: &SmallVec<[usize; 2]>,
+    params: &[f64],
+) -> Result<Option<(Vec<CanonicalOp>, f64)>, CompileError> {
+    let seq = match gate {
+        StandardGate::I => Some((Vec::new(), 0.0)),
+        StandardGate::H => Some((vec![CanonicalOp::h(logical_qubits[0])], 0.0)),
+        StandardGate::X => Some((vec![CanonicalOp::x(logical_qubits[0])], 0.0)),
+        StandardGate::Y => Some((
+            vec![
+                CanonicalOp::x(logical_qubits[0]),
+                CanonicalOp::rz(logical_qubits[0], PI),
+            ],
+            0.0,
+        )),
+        StandardGate::Z => Some((vec![CanonicalOp::rz(logical_qubits[0], PI)], PI / 2.0)),
+        StandardGate::S => Some((vec![CanonicalOp::rz(logical_qubits[0], PI / 2.0)], PI / 4.0)),
+        StandardGate::SDG => Some((
+            vec![CanonicalOp::rz(logical_qubits[0], -PI / 2.0)],
+            -PI / 4.0,
+        )),
+        StandardGate::T => Some((vec![CanonicalOp::rz(logical_qubits[0], PI / 4.0)], PI / 8.0)),
+        StandardGate::TDG => Some((
+            vec![CanonicalOp::rz(logical_qubits[0], -PI / 4.0)],
+            -PI / 8.0,
+        )),
+        StandardGate::X2P => Some((
+            vec![
+                CanonicalOp::h(logical_qubits[0]),
+                CanonicalOp::rz(logical_qubits[0], PI / 2.0),
+                CanonicalOp::h(logical_qubits[0]),
+            ],
+            0.0,
+        )),
+        StandardGate::X2M => Some((
+            vec![
+                CanonicalOp::h(logical_qubits[0]),
+                CanonicalOp::rz(logical_qubits[0], -PI / 2.0),
+                CanonicalOp::h(logical_qubits[0]),
+            ],
+            0.0,
+        )),
+        StandardGate::Y2P => Some((
+            vec![
+                CanonicalOp::rz(logical_qubits[0], -PI / 2.0),
+                CanonicalOp::h(logical_qubits[0]),
+                CanonicalOp::rz(logical_qubits[0], PI / 2.0),
+                CanonicalOp::h(logical_qubits[0]),
+                CanonicalOp::rz(logical_qubits[0], PI / 2.0),
+            ],
+            0.0,
+        )),
+        StandardGate::Y2M => Some((
+            vec![
+                CanonicalOp::rz(logical_qubits[0], -PI / 2.0),
+                CanonicalOp::h(logical_qubits[0]),
+                CanonicalOp::rz(logical_qubits[0], -PI / 2.0),
+                CanonicalOp::h(logical_qubits[0]),
+                CanonicalOp::rz(logical_qubits[0], PI / 2.0),
+            ],
+            0.0,
+        )),
+        StandardGate::CX => Some((
+            vec![CanonicalOp::cx(logical_qubits[0], logical_qubits[1])],
+            0.0,
+        )),
+        StandardGate::CY => Some((
+            vec![
+                CanonicalOp::rz(logical_qubits[1], -PI / 2.0),
+                CanonicalOp::cx(logical_qubits[0], logical_qubits[1]),
+                CanonicalOp::rz(logical_qubits[1], PI / 2.0),
+            ],
+            0.0,
+        )),
+        StandardGate::CZ => Some((
+            vec![
+                CanonicalOp::h(logical_qubits[1]),
+                CanonicalOp::cx(logical_qubits[0], logical_qubits[1]),
+                CanonicalOp::h(logical_qubits[1]),
+            ],
+            0.0,
+        )),
+        StandardGate::SWAP => Some((
+            vec![
+                CanonicalOp::cx(logical_qubits[0], logical_qubits[1]),
+                CanonicalOp::cx(logical_qubits[1], logical_qubits[0]),
+                CanonicalOp::cx(logical_qubits[0], logical_qubits[1]),
+            ],
+            0.0,
+        )),
+        StandardGate::RZ => {
+            let theta = expect_one_numeric_param(gate, params)?;
+            Some((vec![CanonicalOp::rz(logical_qubits[0], theta)], 0.0))
+        }
+        StandardGate::Phase => {
+            let theta = expect_one_numeric_param(gate, params)?;
+            Some((vec![CanonicalOp::rz(logical_qubits[0], theta)], theta / 2.0))
+        }
+        _ => None,
+    };
+    Ok(seq)
+}
+
+fn expect_one_numeric_param(gate: StandardGate, params: &[f64]) -> Result<f64, CompileError> {
+    if params.len() != 1 {
+        return Err(CompileError::Internal(format!(
+            "{gate} gate must resolve to exactly one numeric parameter"
+        )));
+    }
+    Ok(params[0])
 }
 
 fn resolve_numeric_params(
@@ -299,8 +327,95 @@ fn resolve_numeric_params(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::circuit::circuit_to_matrix;
+    use crate::circuit::param::ParameterValue;
     use crate::circuit::{Circuit, Qubit};
     use crate::compile::prepared::preprocess_circuit;
+    use num_complex::Complex64;
+
+    fn matrix_with_global_phase(circuit: &Circuit) -> ndarray::Array2<Complex64> {
+        let mut matrix = circuit_to_matrix(circuit, None).unwrap();
+        let phase = circuit.global_phase().evaluate(&None).unwrap();
+        let factor = Complex64::from_polar(1.0, phase);
+        matrix.mapv_inplace(|value| factor * value);
+        matrix
+    }
+
+    fn assert_matrix_eq(lhs: &Circuit, rhs: &Circuit) {
+        let left = matrix_with_global_phase(lhs);
+        let right = matrix_with_global_phase(rhs);
+        assert_eq!(left.dim(), right.dim());
+        for (a, b) in left.iter().zip(right.iter()) {
+            assert!(
+                (*a - *b).norm() <= 1e-9,
+                "matrix mismatch: lhs={:?}, rhs={:?}",
+                a,
+                b
+            );
+        }
+    }
+
+    fn canonicalized_single_gate(
+        gate: StandardGate,
+        qubits: &[u32],
+        params: &[f64],
+    ) -> (Circuit, Circuit) {
+        let num_qubits = qubits
+            .iter()
+            .copied()
+            .max()
+            .map(|value| value + 1)
+            .unwrap_or(1) as usize;
+        let mut circuit = Circuit::new(num_qubits);
+        let values = params
+            .iter()
+            .copied()
+            .map(ParameterValue::Fixed)
+            .collect::<Vec<_>>();
+        circuit
+            .append(
+                Instruction::Standard(gate),
+                qubits.iter().copied().map(Qubit::new),
+                values,
+                None,
+            )
+            .unwrap();
+
+        let prepared = preprocess_circuit(&circuit).unwrap();
+        let (ops, phase) =
+            try_canonicalize(&prepared.operations[0], prepared.parameters.as_slice())
+                .unwrap()
+                .unwrap();
+
+        let mut rewritten = Circuit::new(num_qubits);
+        for op in ops {
+            rewritten
+                .append_operation(op.to_operation(&rewritten.qubits()))
+                .unwrap();
+        }
+        rewritten.set_global_phase(Parameter::from(phase));
+        (circuit, rewritten)
+    }
+
+    trait AppendOperationExt {
+        fn append_operation(&mut self, op: Operation) -> Result<(), crate::circuit::CircuitError>;
+    }
+
+    impl AppendOperationExt for Circuit {
+        fn append_operation(&mut self, op: Operation) -> Result<(), crate::circuit::CircuitError> {
+            use crate::circuit::param::ParameterValue;
+
+            let params = op
+                .params
+                .iter()
+                .map(|param| match param {
+                    CircuitParam::Fixed(value) => ParameterValue::Fixed(*value),
+                    CircuitParam::Index(_) => unreachable!("canonical ops do not carry indices"),
+                })
+                .collect::<Vec<_>>();
+            self.append(op.instruction, op.qubits, params, op.label.as_deref())
+        }
+    }
 
     #[test]
     fn test_exact_rz_rewrite_pi_maps_to_z() {
@@ -314,11 +429,65 @@ mod tests {
         let mut circuit = Circuit::new(1);
         circuit.t(Qubit::new(0)).unwrap();
         let prepared = preprocess_circuit(&circuit).unwrap();
-        let (op, phase) = try_canonicalize(&prepared.operations[0], prepared.parameters.as_slice())
-            .unwrap()
-            .unwrap();
-        assert_eq!(op.gate, CanonicalGate::RZ);
-        assert!((op.theta_value() - PI / 4.0).abs() < 1e-10);
+        let (ops, phase) =
+            try_canonicalize(&prepared.operations[0], prepared.parameters.as_slice())
+                .unwrap()
+                .unwrap();
+        assert_eq!(ops, vec![CanonicalOp::rz(0, PI / 4.0)]);
         assert!((phase - PI / 8.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_canonicalize_phase_gate_to_rz_and_phase() {
+        let (source, rewritten) = canonicalized_single_gate(StandardGate::Phase, &[0], &[0.3]);
+        assert_matrix_eq(&source, &rewritten);
+    }
+
+    #[test]
+    fn test_canonicalize_y_gate_matrix() {
+        let (source, rewritten) = canonicalized_single_gate(StandardGate::Y, &[0], &[]);
+        assert_matrix_eq(&source, &rewritten);
+    }
+
+    #[test]
+    fn test_canonicalize_x2p_gate_matrix() {
+        let (source, rewritten) = canonicalized_single_gate(StandardGate::X2P, &[0], &[]);
+        assert_matrix_eq(&source, &rewritten);
+    }
+
+    #[test]
+    fn test_canonicalize_x2m_gate_matrix() {
+        let (source, rewritten) = canonicalized_single_gate(StandardGate::X2M, &[0], &[]);
+        assert_matrix_eq(&source, &rewritten);
+    }
+
+    #[test]
+    fn test_canonicalize_y2p_gate_matrix() {
+        let (source, rewritten) = canonicalized_single_gate(StandardGate::Y2P, &[0], &[]);
+        assert_matrix_eq(&source, &rewritten);
+    }
+
+    #[test]
+    fn test_canonicalize_y2m_gate_matrix() {
+        let (source, rewritten) = canonicalized_single_gate(StandardGate::Y2M, &[0], &[]);
+        assert_matrix_eq(&source, &rewritten);
+    }
+
+    #[test]
+    fn test_canonicalize_cy_gate_matrix() {
+        let (source, rewritten) = canonicalized_single_gate(StandardGate::CY, &[0, 1], &[]);
+        assert_matrix_eq(&source, &rewritten);
+    }
+
+    #[test]
+    fn test_canonicalize_cz_gate_matrix() {
+        let (source, rewritten) = canonicalized_single_gate(StandardGate::CZ, &[0, 1], &[]);
+        assert_matrix_eq(&source, &rewritten);
+    }
+
+    #[test]
+    fn test_canonicalize_swap_gate_matrix() {
+        let (source, rewritten) = canonicalized_single_gate(StandardGate::SWAP, &[0, 1], &[]);
+        assert_matrix_eq(&source, &rewritten);
     }
 }

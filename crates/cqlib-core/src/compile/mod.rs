@@ -44,6 +44,6 @@ pub use mapping::{
     map_with_vf2_sabre,
 };
 pub use optimization::{
-    CliffordRzConfig, CliffordRzLevel, CliffordRzOptimization, TemplateLibrary, TemplateMatch,
-    TemplateMatching, TemplateOptimization, TemplateOptimizationConfig,
+    CliffordRzConfig, CliffordRzLevel, CliffordRzOptimization, CliffordRzStrategy, TemplateLibrary,
+    TemplateMatch, TemplateMatching, TemplateOptimization, TemplateOptimizationConfig,
 };

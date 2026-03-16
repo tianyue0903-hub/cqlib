@@ -282,12 +282,14 @@ class CliffordRzOptimization:
         self,
         level: str = "light",
         numeric_tol: float = 1e-10,
+        strategies: Optional[List[str]] = None,
     ) -> None:
         """Creates a Clifford+Rz optimizer.
 
         Args:
-            level: Optimization level, either `light` or `heavy`.
+            level: Optimization level, one of `light`, `heavy`, or `custom`.
             numeric_tol: Numeric tolerance for floating-point comparisons.
+            strategies: Ordered custom strategy list when `level='custom'`.
 
         Raises:
             ValueError: If inputs are invalid.
@@ -302,6 +304,11 @@ class CliffordRzOptimization:
     @property
     def numeric_tol(self) -> float:
         """Returns the configured numeric tolerance."""
+        ...
+
+    @property
+    def strategies(self) -> List[str]:
+        """Returns the effective ordered strategy list."""
         ...
 
     def execute(self, circuit: Circuit) -> Circuit:

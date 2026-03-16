@@ -25,7 +25,8 @@ use crate::circuit::PyCircuit;
 use crate::device::topology::PyTopology;
 use cqlib_core::compile::{
     CliffordRzConfig as CoreCliffordRzConfig, CliffordRzLevel as CoreCliffordRzLevel,
-    CliffordRzOptimization as CoreCliffordRzOptimization, FidelityMap, GaConfig, SabreConfig,
+    CliffordRzOptimization as CoreCliffordRzOptimization,
+    CliffordRzStrategy as CoreCliffordRzStrategy, FidelityMap, GaConfig, SabreConfig,
     TemplateMatching as CoreTemplateMatching, TemplateOptimization as CoreTemplateOptimization,
     Vf2CandidateOptions, Vf2Mapping, Vf2Policy, Vf2ScoreWeights, map_with_ga, map_with_vf2_sabre,
 };
@@ -363,8 +364,9 @@ impl PyGaConfig {
 pub struct PyCliffordRzOptimization {
     /// Internal optimizer object.
     pub(crate) inner: CoreCliffordRzOptimization,
-    level: CoreCliffordRzLevel,
+    level_name: String,
     numeric_tol: f64,
+    strategies: Vec<String>,
 }
 
 #[pymethods]
@@ -372,39 +374,89 @@ impl PyCliffordRzOptimization {
     /// Creates a Clifford+Rz optimizer.
     ///
     /// Args:
-    ///     level (str): `light` or `heavy`.
+    ///     level (str): `light`, `heavy`, or `custom`.
     ///     numeric_tol (float): Numeric tolerance for angle normalization and exact rewrites.
+    ///     strategies (Optional[List[str]]): Ordered custom strategy list when `level='custom'`.
     ///
     /// Raises:
-    ///     ValueError: If `level` is not recognized or `numeric_tol` is invalid.
+    ///     ValueError: If arguments are invalid.
     #[new]
-    #[pyo3(signature = (level = "light".to_string(), numeric_tol = 1e-10))]
-    fn new(level: String, numeric_tol: f64) -> PyResult<Self> {
+    #[pyo3(signature = (level = "light".to_string(), numeric_tol = 1e-10, strategies = None))]
+    fn new(level: String, numeric_tol: f64, strategies: Option<Vec<String>>) -> PyResult<Self> {
         if !numeric_tol.is_finite() || numeric_tol < 0.0 {
             return Err(PyValueError::new_err(
                 "numeric_tol must be a finite non-negative float",
             ));
         }
 
-        let level = parse_clifford_rz_level(&level)?;
-        let inner = CoreCliffordRzOptimization::new(CoreCliffordRzConfig { level, numeric_tol });
+        let provided_strategies = strategies.unwrap_or_default();
+        let (inner, level_name, effective_strategies) = match level.as_str() {
+            "light" | "heavy" => {
+                if !provided_strategies.is_empty() {
+                    return Err(PyValueError::new_err(
+                        "strategies can only be provided when level='custom'",
+                    ));
+                }
+                let parsed_level = parse_clifford_rz_level(&level)?;
+                (
+                    CoreCliffordRzOptimization::new(CoreCliffordRzConfig {
+                        level: parsed_level,
+                        numeric_tol,
+                    }),
+                    level,
+                    built_in_clifford_rz_strategy_names(parsed_level)
+                        .into_iter()
+                        .map(str::to_string)
+                        .collect::<Vec<_>>(),
+                )
+            }
+            "custom" => {
+                if provided_strategies.is_empty() {
+                    return Err(PyValueError::new_err(
+                        "level='custom' requires a non-empty strategies list",
+                    ));
+                }
+                let parsed = provided_strategies
+                    .iter()
+                    .map(|strategy| parse_clifford_rz_strategy(strategy))
+                    .collect::<PyResult<Vec<_>>>()?;
+                (
+                    CoreCliffordRzOptimization::with_custom_flow(parsed, numeric_tol),
+                    level,
+                    provided_strategies,
+                )
+            }
+            _ => {
+                return Err(PyValueError::new_err(format!(
+                    "unknown CliffordRz level '{}'; expected one of: light, heavy, custom",
+                    level
+                )));
+            }
+        };
         Ok(Self {
             inner,
-            level,
+            level_name,
             numeric_tol,
+            strategies: effective_strategies,
         })
     }
 
     /// Optimization level.
     #[getter]
     fn level(&self) -> String {
-        clifford_rz_level_name(self.level).to_string()
+        self.level_name.clone()
     }
 
     /// Numeric tolerance for floating-point comparisons.
     #[getter]
     fn numeric_tol(&self) -> f64 {
         self.numeric_tol
+    }
+
+    /// Ordered effective strategy list.
+    #[getter]
+    fn strategies(&self) -> Vec<String> {
+        self.strategies.clone()
     }
 
     /// Executes one Clifford+Rz optimization pass.
@@ -426,11 +478,17 @@ impl PyCliffordRzOptimization {
 
     /// Returns a compact debug representation.
     fn __repr__(&self) -> String {
-        format!(
-            "CliffordRzOptimization(level='{}', numeric_tol={})",
-            clifford_rz_level_name(self.level),
-            self.numeric_tol,
-        )
+        if self.level_name == "custom" {
+            format!(
+                "CliffordRzOptimization(level='{}', numeric_tol={}, strategies={:?})",
+                self.level_name, self.numeric_tol, self.strategies
+            )
+        } else {
+            format!(
+                "CliffordRzOptimization(level='{}', numeric_tol={})",
+                self.level_name, self.numeric_tol,
+            )
+        }
     }
 }
 
@@ -862,10 +920,32 @@ fn parse_clifford_rz_level(level: &str) -> PyResult<CoreCliffordRzLevel> {
     }
 }
 
-fn clifford_rz_level_name(level: CoreCliffordRzLevel) -> &'static str {
+fn parse_clifford_rz_strategy(strategy: &str) -> PyResult<CoreCliffordRzStrategy> {
+    match strategy {
+        "hadamard" => Ok(CoreCliffordRzStrategy::Hadamard),
+        "single_qubit" => Ok(CoreCliffordRzStrategy::SingleQubit),
+        "two_qubit" => Ok(CoreCliffordRzStrategy::TwoQubit),
+        "phase_polynomial" => Ok(CoreCliffordRzStrategy::PhasePolynomial),
+        "global_rz" => Ok(CoreCliffordRzStrategy::GlobalRz),
+        _ => Err(PyValueError::new_err(format!(
+            "unknown CliffordRz strategy '{}'; expected one of: hadamard, single_qubit, two_qubit, phase_polynomial, global_rz",
+            strategy
+        ))),
+    }
+}
+
+fn built_in_clifford_rz_strategy_names(level: CoreCliffordRzLevel) -> Vec<&'static str> {
     match level {
-        CoreCliffordRzLevel::Light => "light",
-        CoreCliffordRzLevel::Heavy => "heavy",
+        CoreCliffordRzLevel::Light => vec!["hadamard", "single_qubit", "two_qubit"],
+        CoreCliffordRzLevel::Heavy => vec![
+            "hadamard",
+            "single_qubit",
+            "two_qubit",
+            "phase_polynomial",
+            "global_rz",
+            "single_qubit",
+            "two_qubit",
+        ],
     }
 }
 
