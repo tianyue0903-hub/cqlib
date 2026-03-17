@@ -198,6 +198,62 @@ impl ExprNode {
                 if let (Some(a), Some(b)) = (as_constant(&l), as_constant(&r)) {
                     return ExprNode::Float(a * b);
                 }
+
+                // Canonicalize: x * c -> c * x
+                let (l, r) = if as_constant(&l).is_none() && as_constant(&r).is_some() {
+                    (r, l)
+                } else {
+                    (l, r)
+                };
+
+                // c1 * (c2 * x) -> (c1 * c2) * x
+                if let (Some(c1), ExprNode::Mul(c2_node, x)) = (as_constant(&l), &r) {
+                    if let Some(c2) = as_constant(c2_node) {
+                        return ExprNode::Mul(Arc::new(ExprNode::Float(c1 * c2)), x.clone());
+                    }
+                }
+
+                // c1 * (x * c2) -> (c1 * c2) * x
+                if let (Some(c1), ExprNode::Mul(x, c2_node)) = (as_constant(&l), &r) {
+                    if let Some(c2) = as_constant(c2_node) {
+                        return ExprNode::Mul(Arc::new(ExprNode::Float(c1 * c2)), x.clone());
+                    }
+                }
+
+                // x^a * x^b -> x^(a+b)
+                if let (ExprNode::Pow(base1, exp1), ExprNode::Pow(base2, exp2)) = (&l, &r) {
+                    if base1 == base2 {
+                        return ExprNode::Pow(
+                            base1.clone(),
+                            Arc::new(ExprNode::Add(exp1.clone(), exp2.clone()).simplify(2)),
+                        );
+                    }
+                }
+                // x * x^a -> x^(a+1)
+                if let ExprNode::Pow(base2, exp2) = &r {
+                    if &l == base2.as_ref() {
+                        return ExprNode::Pow(
+                            base2.clone(),
+                            Arc::new(
+                                ExprNode::Add(exp2.clone(), Arc::new(ExprNode::Integer(1)))
+                                    .simplify(2),
+                            ),
+                        );
+                    }
+                }
+                // x^a * x -> x^(a+1)
+                if let ExprNode::Pow(base1, exp1) = &l {
+                    if &r == base1.as_ref() {
+                        return ExprNode::Pow(
+                            base1.clone(),
+                            Arc::new(
+                                ExprNode::Add(exp1.clone(), Arc::new(ExprNode::Integer(1)))
+                                    .simplify(2),
+                            ),
+                        );
+                    }
+                }
+
                 // rhs is Float
                 if let Some(_rc) = as_constant(&r) {
                     return ExprNode::Mul(Arc::new(r), Arc::new(l));
@@ -206,6 +262,8 @@ impl ExprNode {
                 ExprNode::Mul(Arc::new(l), Arc::new(r))
             }
 
+            // 0 / x = 0
+            ExprNode::Div(lhs, _) if lhs.is_zero() => ExprNode::Integer(0),
             // x / 1 = x
             ExprNode::Div(lhs, rhs) if rhs.is_one() => lhs.simplify(2),
             // x / x = 1
@@ -222,7 +280,62 @@ impl ExprNode {
                     }
                 }
 
+                // (c * x) / x -> c
+                if let ExprNode::Mul(c_node, x) = &l {
+                    if x.as_ref() == &r {
+                        return c_node.as_ref().clone();
+                    }
+                }
+                // (x * c) / x -> c
+                if let ExprNode::Mul(x, c_node) = &l {
+                    if x.as_ref() == &r {
+                        return c_node.as_ref().clone();
+                    }
+                }
+
+                // x^a / x^b -> x^(a-b)
+                if let (ExprNode::Pow(base1, exp1), ExprNode::Pow(base2, exp2)) = (&l, &r) {
+                    if base1 == base2 {
+                        return ExprNode::Pow(
+                            base1.clone(),
+                            Arc::new(ExprNode::Sub(exp1.clone(), exp2.clone()).simplify(2)),
+                        );
+                    }
+                }
+                // x^a / x -> x^(a-1)
+                if let ExprNode::Pow(base1, exp1) = &l {
+                    if &r == base1.as_ref() {
+                        return ExprNode::Pow(
+                            base1.clone(),
+                            Arc::new(
+                                ExprNode::Sub(exp1.clone(), Arc::new(ExprNode::Integer(1)))
+                                    .simplify(2),
+                            ),
+                        );
+                    }
+                }
+
                 ExprNode::Div(Arc::new(l), Arc::new(r))
+            }
+
+            // 0 % x = 0
+            ExprNode::Mod(lhs, _) if lhs.is_zero() => ExprNode::Integer(0),
+            // x % 1 = 0
+            ExprNode::Mod(_, rhs) if rhs.is_one() => ExprNode::Integer(0),
+            // x % x = 0
+            ExprNode::Mod(lhs, rhs) if lhs == rhs => ExprNode::Integer(0),
+
+            ExprNode::Mod(lhs, rhs) => {
+                let l = lhs.simplify(2);
+                let r = rhs.simplify(2);
+
+                if let (Some(a), Some(b)) = (as_constant(&l), as_constant(&r)) {
+                    if b.abs() > f64::EPSILON {
+                        return ExprNode::Float(a % b);
+                    }
+                }
+
+                ExprNode::Mod(Arc::new(l), Arc::new(r))
             }
 
             // x^0 = 1
@@ -239,6 +352,23 @@ impl ExprNode {
                 // 2^3 = 8
                 if let (Some(base_val), Some(exp_val)) = (as_constant(&b), as_constant(&e)) {
                     return ExprNode::Float(base_val.powf(exp_val));
+                }
+
+                // (-x)^even = x^even
+                if let ExprNode::Neg(inner_b) = &b {
+                    if let Some(exp_val) = as_constant(&e) {
+                        if (exp_val % 2.0).abs() < f64::EPSILON {
+                            return ExprNode::Pow(inner_b.clone(), Arc::new(e)).simplify(2);
+                        }
+                    }
+                }
+
+                // (x^a)^b -> x^(a*b)
+                if let ExprNode::Pow(inner_base, inner_exp) = &b {
+                    return ExprNode::Pow(
+                        inner_base.clone(),
+                        Arc::new(ExprNode::Mul(inner_exp.clone(), Arc::new(e)).simplify(2)),
+                    );
                 }
 
                 ExprNode::Pow(Arc::new(b), Arc::new(e))
@@ -280,6 +410,12 @@ impl ExprNode {
                 if let Some(val) = as_constant(&simplified) {
                     return ExprNode::Float(val.exp());
                 }
+
+                // e^(ln(x)) = x
+                if let ExprNode::Ln(arg) = &simplified {
+                    return arg.as_ref().clone();
+                }
+
                 ExprNode::Exp(Arc::new(simplified))
             }
 
@@ -297,10 +433,27 @@ impl ExprNode {
                         return ExprNode::Float(val.ln());
                     }
                 }
+
+                // ln(e^x) = x
+                if let ExprNode::Exp(arg) = &simplified {
+                    return arg.as_ref().clone();
+                }
+
+                // ln(x^a) = a * ln(x)
+                if let ExprNode::Pow(base, exp) = &simplified {
+                    return ExprNode::Mul(exp.clone(), Arc::new(ExprNode::Ln(base.clone())))
+                        .simplify(2);
+                }
+
                 ExprNode::Ln(Arc::new(simplified))
             }
             ExprNode::Sin(inner) => {
                 let simplified = inner.simplify(2);
+
+                // sin(-x) = -sin(x)
+                if let ExprNode::Neg(arg) = &simplified {
+                    return ExprNode::Neg(Arc::new(ExprNode::Sin(arg.clone()))).simplify(2);
+                }
 
                 // sin(0) = 0
                 if let Some(val) = as_constant(&simplified) {
@@ -311,6 +464,16 @@ impl ExprNode {
             ExprNode::ASin(inner) => {
                 let simplified = inner.simplify(2);
 
+                // asin(-x) = -asin(x)
+                if let ExprNode::Neg(arg) = &simplified {
+                    return ExprNode::Neg(Arc::new(ExprNode::ASin(arg.clone()))).simplify(2);
+                }
+
+                // asin(sin(x)) = x
+                if let ExprNode::Sin(arg) = &simplified {
+                    return arg.as_ref().clone();
+                }
+
                 // asin(0)
                 if let Some(val) = as_constant(&simplified) {
                     return ExprNode::Float(val.asin());
@@ -319,6 +482,11 @@ impl ExprNode {
             }
             ExprNode::Cos(inner) => {
                 let simplified = inner.simplify(2);
+
+                // cos(-x) = cos(x)
+                if let ExprNode::Neg(arg) = &simplified {
+                    return ExprNode::Cos(arg.clone()).simplify(2);
+                }
 
                 // cos(0) = 1
                 if let Some(val) = as_constant(&simplified) {
@@ -338,6 +506,11 @@ impl ExprNode {
             ExprNode::Tan(inner) => {
                 let simplified = inner.simplify(2);
 
+                // tan(-x) = -tan(x)
+                if let ExprNode::Neg(arg) = &simplified {
+                    return ExprNode::Neg(Arc::new(ExprNode::Tan(arg.clone()))).simplify(2);
+                }
+
                 // tan(0) = 0
                 if let Some(val) = as_constant(&simplified) {
                     return ExprNode::Float(val.tan());
@@ -347,7 +520,12 @@ impl ExprNode {
             ExprNode::ATan(inner) => {
                 let simplified = inner.simplify(2);
 
-                // tan(0) = 0
+                // atan(-x) = -atan(x)
+                if let ExprNode::Neg(arg) = &simplified {
+                    return ExprNode::Neg(Arc::new(ExprNode::ATan(arg.clone()))).simplify(2);
+                }
+
+                // atan(0) = 0
                 if let Some(val) = as_constant(&simplified) {
                     return ExprNode::Float(val.atan());
                 }
@@ -372,6 +550,32 @@ impl ExprNode {
     /// - **Unsafe (Skipped)**: `asin(sin(x))` is NOT simplified to `x` because it is periodic.
     ///   Simplifying it would erase domain constraints and potentially hide bugs.
     pub fn simplify_trig(&self) -> ExprNode {
+        // Pythagorean Identity Check: sin(x)^2 + cos(x)^2 = 1
+        if let ExprNode::Add(lhs, rhs) = self {
+            if let (ExprNode::Pow(l_base, l_exp), ExprNode::Pow(r_base, r_exp)) =
+                (lhs.as_ref(), rhs.as_ref())
+            {
+                if let (Some(l_c), Some(r_c)) = (as_constant(l_exp), as_constant(r_exp)) {
+                    if (l_c - 2.0).abs() < f64::EPSILON && (r_c - 2.0).abs() < f64::EPSILON {
+                        if let (ExprNode::Sin(s_arg), ExprNode::Cos(c_arg)) =
+                            (l_base.as_ref(), r_base.as_ref())
+                        {
+                            if s_arg == c_arg {
+                                return ExprNode::Integer(1);
+                            }
+                        }
+                        if let (ExprNode::Cos(c_arg), ExprNode::Sin(s_arg)) =
+                            (l_base.as_ref(), r_base.as_ref())
+                        {
+                            if s_arg == c_arg {
+                                return ExprNode::Integer(1);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         match self {
             ExprNode::Sin(inner) => {
                 let simplified = inner.simplify(2);
@@ -428,6 +632,28 @@ impl ExprNode {
                 // tan(arctan(x)) = x
                 if let ExprNode::ATan(arg) = &simplified {
                     return arg.as_ref().clone();
+                }
+
+                // tan(arcsin(x)) = x / sqrt(1 - x²)
+                if let ExprNode::ASin(arg) = &simplified {
+                    return ExprNode::Div(
+                        arg.clone(),
+                        Arc::new(ExprNode::Sqrt(Arc::new(ExprNode::Sub(
+                            Arc::new(ExprNode::Integer(1)),
+                            Arc::new(ExprNode::Pow(arg.clone(), Arc::new(ExprNode::Integer(2)))),
+                        )))),
+                    );
+                }
+
+                // tan(arccos(x)) = sqrt(1 - x²) / x
+                if let ExprNode::ACos(arg) = &simplified {
+                    return ExprNode::Div(
+                        Arc::new(ExprNode::Sqrt(Arc::new(ExprNode::Sub(
+                            Arc::new(ExprNode::Integer(1)),
+                            Arc::new(ExprNode::Pow(arg.clone(), Arc::new(ExprNode::Integer(2)))),
+                        )))),
+                        arg.clone(),
+                    );
                 }
 
                 ExprNode::Tan(Arc::new(simplified))
@@ -548,3 +774,7 @@ fn as_constant(node: &ExprNode) -> Option<f64> {
         _ => None,
     }
 }
+
+#[cfg(test)]
+#[path = "simplify_test.rs"]
+mod simplify_test;

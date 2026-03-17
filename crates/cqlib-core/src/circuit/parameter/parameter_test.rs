@@ -186,6 +186,28 @@ fn test_parameter_get_symbols() {
 }
 
 #[test]
+fn test_parameter_get_symbols_poison() {
+    use std::thread;
+
+    let x = Parameter::try_from("x").unwrap();
+    let expr: Parameter = x.clone() * 2.0;
+
+    // Poison the lock by deliberately panicking while holding the write lock
+    let expr_clone = expr.clone();
+    let _ = thread::spawn(move || {
+        let _lock = expr_clone.symbols_cache.write().unwrap();
+        panic!("Intentionally poison the RwLock");
+    })
+    .join();
+
+    // The lock is now poisoned.
+    // In the old implementation (using unwrap), this will panic.
+    // In the new implementation (using unwrap_or_else), it will succeed.
+    let symbols = expr.get_symbols();
+    assert_eq!(symbols, vec!["x"]);
+}
+
+#[test]
 fn test_parameter_simplify() {
     let x = Parameter::try_from("x").unwrap();
 
@@ -205,7 +227,7 @@ fn test_parameter_derivative() {
     let x = Parameter::try_from("x").unwrap();
     // d(x^2)/dx = 2*x
     let expr = x.pow(&Parameter::from(2.0));
-    let deriv = expr.derivative("x").simplify(None);
+    let deriv = expr.derivative("x").unwrap().simplify(None);
 
     // x^2 -> 2 * x^(2-1) * 1 = 2 * x
     // Exact string match might depend on simplification order, checking evaluation
@@ -217,11 +239,35 @@ fn test_parameter_derivative() {
 
 #[test]
 fn test_parameter_replace() {
-    let mut p = Parameter::try_from("x").unwrap() + Parameter::try_from("y").unwrap();
+    let p = Parameter::try_from("x").unwrap() + Parameter::try_from("y").unwrap();
     let z = Parameter::try_from("z").unwrap();
 
     let new_p = p.replace("x", &z);
     assert_eq!(new_p.to_string(), "z + y");
+}
+
+#[test]
+fn test_parameter_replace_edge_cases() {
+    let x = Parameter::try_from("x").unwrap();
+    let y = Parameter::try_from("y").unwrap();
+    let z = Parameter::try_from("z").unwrap();
+
+    // 1. Replace non-existent symbol
+    let expr1 = x.clone() + y.clone();
+    let res1 = expr1.replace("z", &Parameter::from(1.0));
+    assert_eq!(res1.to_string(), "x + y");
+
+    // 2. Self-referential/recursive replacement (x -> x + 1)
+    let expr2 = x.clone();
+    let res2 = expr2.replace("x", &(x.clone() + 1.0));
+    assert_eq!(res2.to_string(), "x + 1");
+
+    // 3. Deeply nested expression replacement
+    // expr3 = sin(cos(x * y)) + exp(x)
+    let expr3 = (x.clone() * y.clone()).cos().sin() + x.clone().exp();
+    let res3 = expr3.replace("x", &z);
+    // x should be replaced by z everywhere
+    assert_eq!(res3.to_string(), "sin(cos(z * y)) + exp(z)");
 }
 
 #[test]

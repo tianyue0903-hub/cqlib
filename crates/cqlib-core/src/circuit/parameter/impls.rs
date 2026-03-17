@@ -55,11 +55,12 @@
 //!
 //! // 4. Symbolic Differentiation
 //! // d(sin(theta) + 2*phi) / d(theta) = cos(theta)
-//! let deriv = expr.derivative("theta");
+//! let deriv = expr.derivative("theta").unwrap();
 //! // Note: Display format might vary slightly depending on simplification
 //! println!("Derivative: {}", deriv);
 //! ```
 
+use crate::circuit::error::DerivativeError;
 use crate::circuit::error::EvalError;
 use crate::circuit::parameter::expr_node::ExprNode;
 use crate::circuit::parameter::parse::parse_parameter;
@@ -322,8 +323,8 @@ impl Parameter {
     ///
     /// # Returns
     /// New Parameter object representing the derivative expression
-    pub fn derivative(&self, var: &str) -> Self {
-        Self::new(self.node.derivative(var))
+    pub fn derivative(&self, var: &str) -> Result<Self, DerivativeError> {
+        Ok(Self::new(self.node.derivative(var)?))
     }
 
     /// Retrieves all unique symbols (variables) used in this parameter expression.
@@ -340,7 +341,7 @@ impl Parameter {
     pub fn get_symbols(&self) -> Vec<String> {
         // Fast path: read lock to check cache
         {
-            let cache = self.symbols_cache.read().unwrap();
+            let cache = self.symbols_cache.read().unwrap_or_else(|e| e.into_inner());
             if let Some(ref symbols) = *cache {
                 return symbols.clone();
             }
@@ -353,7 +354,10 @@ impl Parameter {
 
         // Write to cache
         {
-            let mut cache = self.symbols_cache.write().unwrap();
+            let mut cache = self
+                .symbols_cache
+                .write()
+                .unwrap_or_else(|e| e.into_inner());
             *cache = Some(symbols.clone());
         }
 
@@ -480,7 +484,7 @@ impl Parameter {
     ///
     /// // Create expression: x + 2
     /// let x = Parameter::symbol("x");
-    /// let mut expr = x.clone() + Parameter::from(2.0);
+    /// let expr = x.clone() + Parameter::from(2.0);
     ///
     /// // Replace x with y * 3
     /// let y = Parameter::symbol("y");
@@ -490,7 +494,7 @@ impl Parameter {
     /// // Result: (y * 3) + 2
     /// assert_eq!(new_expr.to_string(), "y * 3 + 2");
     /// ```
-    pub fn replace(&mut self, symbol: &str, param: &Parameter) -> Self {
+    pub fn replace(&self, symbol: &str, param: &Parameter) -> Self {
         Self {
             node: Arc::new(self.node.replace(symbol, &param.node)),
             symbols_cache: Arc::new(RwLock::new(None)),

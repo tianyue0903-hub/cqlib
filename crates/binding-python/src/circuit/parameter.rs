@@ -184,10 +184,12 @@ impl PyParameter {
     /// # Returns
     ///
     /// A new parameter representing the derivative.
-    fn derivative(&self, var: String) -> Self {
-        PyParameter {
-            inner: self.inner.derivative(&var),
-        }
+    fn derivative(&self, var: String) -> PyResult<Self> {
+        let inner = self
+            .inner
+            .derivative(&var)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        Ok(PyParameter { inner })
     }
 
     /// Returns the power of this parameter raised to the given exponent.
@@ -494,10 +496,8 @@ impl PyParameter {
     /// # Result: (y * 3) + 2
     /// ```
     fn replace(&self, symbol: String, param: PyParameter) -> Self {
-        // Need to clone self to get mutable reference, but we use replace which returns new
-        let mut inner_clone = self.inner.clone();
         PyParameter {
-            inner: inner_clone.replace(&symbol, &param.inner),
+            inner: self.inner.replace(&symbol, &param.inner),
         }
     }
 }

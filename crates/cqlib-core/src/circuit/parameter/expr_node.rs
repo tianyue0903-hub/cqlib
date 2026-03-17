@@ -969,7 +969,11 @@ impl Hash for ExprNode {
         std::mem::discriminant(self).hash(state);
         match self {
             ExprNode::Integer(i) => i.hash(state),
-            ExprNode::Float(f) => f.to_bits().hash(state),
+            ExprNode::Float(f) => {
+                // Normalize -0.0 to 0.0 to ensure Hash and PartialEq consistency
+                let normalized = if *f == 0.0 { 0.0 } else { *f };
+                normalized.to_bits().hash(state)
+            }
             ExprNode::Symbol(s) => s.hash(state),
             ExprNode::Sign(inner) => inner.hash(state),
             ExprNode::Pi => {} // Discriminant already hashed

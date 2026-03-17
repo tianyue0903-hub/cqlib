@@ -15,6 +15,29 @@ use std::collections::HashMap;
 use std::f64::consts;
 
 #[test]
+fn test_hash_negative_zero() {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let node_zero = ExprNode::Float(0.0);
+    let node_neg_zero = ExprNode::Float(-0.0);
+
+    // They must be considered equal
+    assert_eq!(node_zero, node_neg_zero);
+
+    let mut hasher1 = DefaultHasher::new();
+    node_zero.hash(&mut hasher1);
+    let hash1 = hasher1.finish();
+
+    let mut hasher2 = DefaultHasher::new();
+    node_neg_zero.hash(&mut hasher2);
+    let hash2 = hasher2.finish();
+
+    // Their hashes must match
+    assert_eq!(hash1, hash2, "0.0 and -0.0 must have the same hash");
+}
+
+#[test]
 fn test_sin() {
     let x = ExprNode::Symbol("x".to_string());
     let sin_x = ExprNode::Sin(Arc::from(x));

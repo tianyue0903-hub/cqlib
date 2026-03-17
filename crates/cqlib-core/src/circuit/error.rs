@@ -55,6 +55,14 @@ pub enum EvalError {
     MaxRecursionDepthExceeded(usize),
 }
 
+/// Errors that can occur during symbolic differentiation.
+#[derive(Debug, Error)]
+pub enum DerivativeError {
+    /// Indicates that an expression is not differentiable with respect to a given variable.
+    #[error("Cannot differentiate expression: {0}")]
+    NonDifferentiable(String),
+}
+
 /// A comprehensive error type for operations involving Quantum Circuits.
 ///
 /// This enum aggregates errors from circuit construction, validation, and manipulation.

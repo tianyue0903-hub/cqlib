@@ -210,3 +210,95 @@ fn test_tan() {
     let exp = s.simplify(None);
     assert_eq!(exp.to_string(), "x");
 }
+
+#[test]
+fn test_simplify_div_mod() {
+    let x = Parameter::try_from("x").unwrap();
+    let zero = Parameter::from(0);
+    let one = Parameter::from(1);
+
+    // 0 / x = 0
+    let expr1 = zero.clone() / x.clone();
+    assert_eq!(expr1.simplify(None), zero);
+
+    // x / 1 = x
+    let expr2 = x.clone() / one.clone();
+    assert_eq!(expr2.simplify(None), x);
+
+    // x / x = 1
+    let expr3 = x.clone() / x.clone();
+    assert_eq!(expr3.simplify(None), one);
+
+    // 0 % x = 0
+    let expr4 = zero.clone() % x.clone();
+    assert_eq!(expr4.simplify(None), zero);
+
+    // x % 1 = 0
+    let expr5 = x.clone() % one.clone();
+    assert_eq!(expr5.simplify(None), zero);
+
+    // x % x = 0
+    let expr6 = x.clone() % x.clone();
+    assert_eq!(expr6.simplify(None), zero);
+}
+
+#[test]
+fn test_simplify_rational_polynomial() {
+    let x = Parameter::try_from("x").unwrap();
+
+    // c1 * (c2 * x) -> (c1 * c2) * x
+    let expr1 = Parameter::from(2.0) * (Parameter::from(3.0) * x.clone());
+    assert_eq!(expr1.simplify(None), Parameter::from(6.0) * x.clone());
+
+    // x^2 * x^3 -> x^5
+    let expr2 = x.clone().pow(&Parameter::from(2)) * x.clone().pow(&Parameter::from(3));
+    assert_eq!(expr2.simplify(None), x.clone().pow(&Parameter::from(5.0)));
+
+    // (c * x) / x -> c
+    let expr3 = (Parameter::from(4.0) * x.clone()) / x.clone();
+    assert_eq!(expr3.simplify(None), Parameter::from(4.0));
+
+    // x^5 / x^2 -> x^3
+    let expr4 = x.clone().pow(&Parameter::from(5)) / x.clone().pow(&Parameter::from(2));
+    assert_eq!(expr4.simplify(None), x.clone().pow(&Parameter::from(3.0)));
+
+    // (x^2)^3 -> x^6
+    let expr5 = x.clone().pow(&Parameter::from(2)).pow(&Parameter::from(3));
+    assert_eq!(expr5.simplify(None), x.clone().pow(&Parameter::from(6.0)));
+}
+
+#[test]
+fn test_simplify_trig_parity_pythagorean() {
+    let x = Parameter::try_from("x").unwrap();
+    let neg_x = Parameter::new(ExprNode::Neg(x.node.clone()));
+
+    // sin(-x) = -sin(x)
+    assert_eq!(
+        neg_x.sin().simplify(None),
+        Parameter::new(ExprNode::Neg(x.sin().node.clone()))
+    );
+
+    // cos(-x) = cos(x)
+    assert_eq!(neg_x.cos().simplify(None), x.cos());
+
+    // sin^2(x) + cos^2(x) = 1
+    let expr_pythagorean = x.sin().pow(&Parameter::from(2)) + x.cos().pow(&Parameter::from(2));
+    assert_eq!(expr_pythagorean.simplify(None), Parameter::from(1));
+}
+
+#[test]
+fn test_simplify_exp_log() {
+    let x = Parameter::try_from("x").unwrap();
+
+    // e^(ln(x)) = x
+    let expr1 = x.ln().exp();
+    assert_eq!(expr1.simplify(None), x);
+
+    // ln(e^x) = x
+    let expr2 = x.exp().ln();
+    assert_eq!(expr2.simplify(None), x);
+
+    // ln(x^3) = 3*ln(x)
+    let expr3 = x.clone().pow(&Parameter::from(3)).ln();
+    assert_eq!(expr3.simplify(None), Parameter::from(3) * x.ln());
+}
