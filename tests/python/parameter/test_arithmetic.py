@@ -23,7 +23,6 @@ Test coverage:
 - Mixed expressions
 """
 
-import pytest
 from cqlib.circuit import Parameter
 
 
@@ -59,8 +58,8 @@ class TestAddition:
 
     def test_add_two_floats(self):
         """Add two float parameters."""
-        p1 = Parameter.from_float(2.0)
-        p2 = Parameter.from_float(3.0)
+        p1 = Parameter(2.0)
+        p2 = Parameter(3.0)
         result = p1 + p2
         # Simplify to evaluate the addition
         assert str(result.simplify()) == "5"
@@ -176,27 +175,27 @@ class TestPower:
     def test_power_float(self):
         """Raise a symbol to a float power."""
         theta = Parameter("theta")
-        result = theta ** 2
+        result = theta**2
         assert str(result) == "theta^2"
 
     def test_power_symbol(self):
         """Raise a symbol to another symbol's power."""
         theta = Parameter("theta")
         phi = Parameter("phi")
-        result = theta ** phi
+        result = theta**phi
         assert str(result) == "theta^phi"
 
     def test_power_zero(self):
         """Raise a symbol to power zero."""
         theta = Parameter("theta")
-        result = theta ** 0
+        result = theta**0
         # theta^0 simplifies to 1
         assert str(result.simplify()) == "1"
 
     def test_power_one(self):
         """Raise a symbol to power one."""
         theta = Parameter("theta")
-        result = theta ** 1
+        result = theta**1
         # theta^1 simplifies to theta
         assert str(result.simplify()) == "theta"
 
@@ -212,7 +211,7 @@ class TestNegation:
 
     def test_negate_float(self):
         """Negate a float parameter."""
-        p = Parameter.from_float(5.0)
+        p = Parameter(5.0)
         result = -p
         # Negation result needs simplify() to evaluate
         assert str(result.simplify()) == "-5"
@@ -238,7 +237,7 @@ class TestComplexExpressions:
     def test_polynomial(self):
         """Test polynomial expression."""
         theta = Parameter("theta")
-        result = theta ** 2 + 2 * theta + 1
+        result = theta**2 + 2 * theta + 1
         assert str(result) == "theta^2 + theta * 2 + 1"
 
     def test_nested_operations(self):
@@ -251,5 +250,5 @@ class TestComplexExpressions:
     def test_mixed_expression(self):
         """Test mixed arithmetic expression."""
         theta = Parameter("theta")
-        result = theta ** 2 / 2 + 3 * theta - 1
+        result = theta**2 / 2 + 3 * theta - 1
         assert str(result) == "theta^2 / 2 + theta * 3 - 1"
