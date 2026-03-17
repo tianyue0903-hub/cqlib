@@ -20,6 +20,7 @@ from .gates.unitary import UnitaryGate
 from .gates.circuit_gate import CircuitGate
 from .gates.mc_gate import McGate
 from .gates.control_flow import ConditionView
+from ..qis import PauliString
 
 # Type alias for qubit list in control flow operations
 # Supports list[int] or list[Qubit]
@@ -446,6 +447,44 @@ class Circuit:
             >>> matrix = circuit.to_matrix()
             >>> matrix.shape
             (2, 2)
+        """
+        ...
+
+    def pauli_evolution(
+        self,
+        pauli: PauliString,
+        angle: float,
+        qubits: list[int] | list[Qubit],
+    ) -> None:
+        """Applies a Pauli evolution gate exp(-i * angle/2 * PauliString) to the circuit.
+
+        This method synthesizes a unitary evolution of a Pauli operator and
+        appends the corresponding operations to the circuit.
+
+        Algorithm:
+            The rotation e^(-iθ/2 · P) is implemented as follows:
+            1. Phase Validation: The PauliString's internal phase must be ±1.
+            2. Basis Transformation: Convert non-Z Paulis to Z basis.
+            3. CNOT Chain: Accumulate parity along the chain to the last qubit.
+            4. Core Rotation: Apply RZ(θ) on the last qubit.
+            5. Reverse CNOT Ladder: Uncompute parity.
+            6. Inverse Transformation: Restore the original basis.
+
+        Args:
+            pauli: The Pauli string representing the generator of evolution.
+            angle: The evolution angle.
+            qubits: The target qubits on which the Pauli operator acts.
+
+        Raises:
+            ValueError: If the number of qubits doesn't match the Pauli string length,
+                or if the Pauli string phase is invalid (not ±1).
+
+        Examples:
+            >>> from cqlib import Circuit
+            >>> from cqlib.qis import PauliString
+            >>> circuit = Circuit(3)
+            >>> pauli = PauliString.from_str("XZI")
+            >>> circuit.pauli_evolution(pauli, 3.14159/2, [0, 1, 2])
         """
         ...
 

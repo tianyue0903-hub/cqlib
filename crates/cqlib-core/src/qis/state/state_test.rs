@@ -42,8 +42,8 @@ fn test_single_qubit_x_gate() {
     let mut sv = Statevector::new(1);
     let mut dm = DensityMatrix::new(1);
 
-    sv.apply_x(0);
-    dm.apply_x(0);
+    sv.apply_x(0).unwrap();
+    dm.apply_x(0).unwrap();
 
     compare_probs(&sv.probabilities(), &dm.probabilities(), "X gate");
 }
@@ -53,8 +53,8 @@ fn test_single_qubit_y_gate() {
     let mut sv = Statevector::new(1);
     let mut dm = DensityMatrix::new(1);
 
-    sv.apply_y(0);
-    dm.apply_y(0);
+    sv.apply_y(0).unwrap();
+    dm.apply_y(0).unwrap();
 
     compare_probs(&sv.probabilities(), &dm.probabilities(), "Y gate");
 }
@@ -64,11 +64,11 @@ fn test_single_qubit_z_gate() {
     let mut sv = Statevector::new(1);
     let mut dm = DensityMatrix::new(1);
 
-    sv.apply_h(0);
-    sv.apply_z(0);
+    sv.apply_h(0).unwrap();
+    sv.apply_z(0).unwrap();
 
-    dm.apply_h(0);
-    dm.apply_z(0);
+    dm.apply_h(0).unwrap();
+    dm.apply_z(0).unwrap();
 
     compare_probs(&sv.probabilities(), &dm.probabilities(), "Z gate");
 }
@@ -78,8 +78,8 @@ fn test_single_qubit_h_gate() {
     let mut sv = Statevector::new(1);
     let mut dm = DensityMatrix::new(1);
 
-    sv.apply_h(0);
-    dm.apply_h(0);
+    sv.apply_h(0).unwrap();
+    dm.apply_h(0).unwrap();
 
     compare_probs(&sv.probabilities(), &dm.probabilities(), "H gate");
 }
@@ -89,11 +89,11 @@ fn test_single_qubit_s_gate() {
     let mut sv = Statevector::new(1);
     let mut dm = DensityMatrix::new(1);
 
-    sv.apply_h(0);
-    sv.apply_s(0);
+    sv.apply_h(0).unwrap();
+    sv.apply_s(0).unwrap();
 
-    dm.apply_h(0);
-    dm.apply_s(0);
+    dm.apply_h(0).unwrap();
+    dm.apply_s(0).unwrap();
 
     compare_probs(&sv.probabilities(), &dm.probabilities(), "S gate");
 }
@@ -103,11 +103,11 @@ fn test_single_qubit_sdg_gate() {
     let mut sv = Statevector::new(1);
     let mut dm = DensityMatrix::new(1);
 
-    sv.apply_h(0);
-    sv.apply_sdg(0);
+    sv.apply_h(0).unwrap();
+    sv.apply_sdg(0).unwrap();
 
-    dm.apply_h(0);
-    dm.apply_sdg(0);
+    dm.apply_h(0).unwrap();
+    dm.apply_sdg(0).unwrap();
 
     compare_probs(&sv.probabilities(), &dm.probabilities(), "SDG gate");
 }
@@ -117,11 +117,11 @@ fn test_single_qubit_t_gate() {
     let mut sv = Statevector::new(1);
     let mut dm = DensityMatrix::new(1);
 
-    sv.apply_h(0);
-    sv.apply_t(0);
+    sv.apply_h(0).unwrap();
+    sv.apply_t(0).unwrap();
 
-    dm.apply_h(0);
-    dm.apply_t(0);
+    dm.apply_h(0).unwrap();
+    dm.apply_t(0).unwrap();
 
     compare_probs(&sv.probabilities(), &dm.probabilities(), "T gate");
 }
@@ -131,11 +131,11 @@ fn test_single_qubit_tdg_gate() {
     let mut sv = Statevector::new(1);
     let mut dm = DensityMatrix::new(1);
 
-    sv.apply_h(0);
-    sv.apply_tdg(0);
+    sv.apply_h(0).unwrap();
+    sv.apply_tdg(0).unwrap();
 
-    dm.apply_h(0);
-    dm.apply_tdg(0);
+    dm.apply_h(0).unwrap();
+    dm.apply_tdg(0).unwrap();
 
     compare_probs(&sv.probabilities(), &dm.probabilities(), "TDG gate");
 }
@@ -145,8 +145,8 @@ fn test_single_qubit_rx_gate() {
     let mut sv = Statevector::new(1);
     let mut dm = DensityMatrix::new(1);
 
-    sv.apply_rx(0, PI / 3.0);
-    dm.apply_rx(0, PI / 3.0);
+    sv.apply_rx(0, PI / 3.0).unwrap();
+    dm.apply_rx(0, PI / 3.0).unwrap();
 
     compare_probs(&sv.probabilities(), &dm.probabilities(), "RX gate");
 }
@@ -156,8 +156,8 @@ fn test_single_qubit_ry_gate() {
     let mut sv = Statevector::new(1);
     let mut dm = DensityMatrix::new(1);
 
-    sv.apply_ry(0, PI / 4.0);
-    dm.apply_ry(0, PI / 4.0);
+    sv.apply_ry(0, PI / 4.0).unwrap();
+    dm.apply_ry(0, PI / 4.0).unwrap();
 
     compare_probs(&sv.probabilities(), &dm.probabilities(), "RY gate");
 }
@@ -167,11 +167,11 @@ fn test_single_qubit_rz_gate() {
     let mut sv = Statevector::new(1);
     let mut dm = DensityMatrix::new(1);
 
-    sv.apply_h(0);
-    sv.apply_rz(0, PI / 6.0);
+    sv.apply_h(0).unwrap();
+    sv.apply_rz(0, PI / 6.0).unwrap();
 
-    dm.apply_h(0);
-    dm.apply_rz(0, PI / 6.0);
+    dm.apply_h(0).unwrap();
+    dm.apply_rz(0, PI / 6.0).unwrap();
 
     compare_probs(&sv.probabilities(), &dm.probabilities(), "RZ gate");
 }
@@ -181,11 +181,11 @@ fn test_single_qubit_p_gate() {
     let mut sv = Statevector::new(1);
     let mut dm = DensityMatrix::new(1);
 
-    sv.apply_h(0);
-    sv.apply_p(0, PI / 3.0);
+    sv.apply_h(0).unwrap();
+    sv.apply_p(0, PI / 3.0).unwrap();
 
-    dm.apply_h(0);
-    dm.apply_p(0, PI / 3.0);
+    dm.apply_h(0).unwrap();
+    dm.apply_p(0, PI / 3.0).unwrap();
 
     compare_probs(&sv.probabilities(), &dm.probabilities(), "P gate");
 }
@@ -195,8 +195,8 @@ fn test_single_qubit_x2p_gate() {
     let mut sv = Statevector::new(1);
     let mut dm = DensityMatrix::new(1);
 
-    sv.apply_x2p(0);
-    dm.apply_x2p(0);
+    sv.apply_x2p(0).unwrap();
+    dm.apply_x2p(0).unwrap();
 
     compare_probs(&sv.probabilities(), &dm.probabilities(), "X2P gate");
 }
@@ -206,8 +206,8 @@ fn test_single_qubit_x2m_gate() {
     let mut sv = Statevector::new(1);
     let mut dm = DensityMatrix::new(1);
 
-    sv.apply_x2m(0);
-    dm.apply_x2m(0);
+    sv.apply_x2m(0).unwrap();
+    dm.apply_x2m(0).unwrap();
 
     compare_probs(&sv.probabilities(), &dm.probabilities(), "X2M gate");
 }
@@ -217,8 +217,8 @@ fn test_single_qubit_y2p_gate() {
     let mut sv = Statevector::new(1);
     let mut dm = DensityMatrix::new(1);
 
-    sv.apply_y2p(0);
-    dm.apply_y2p(0);
+    sv.apply_y2p(0).unwrap();
+    dm.apply_y2p(0).unwrap();
 
     compare_probs(&sv.probabilities(), &dm.probabilities(), "Y2P gate");
 }
@@ -228,8 +228,8 @@ fn test_single_qubit_y2m_gate() {
     let mut sv = Statevector::new(1);
     let mut dm = DensityMatrix::new(1);
 
-    sv.apply_y2m(0);
-    dm.apply_y2m(0);
+    sv.apply_y2m(0).unwrap();
+    dm.apply_y2m(0).unwrap();
 
     compare_probs(&sv.probabilities(), &dm.probabilities(), "Y2M gate");
 }
@@ -239,8 +239,8 @@ fn test_single_qubit_xy_gate() {
     let mut sv = Statevector::new(1);
     let mut dm = DensityMatrix::new(1);
 
-    sv.apply_xy(0, PI / 4.0);
-    dm.apply_xy(0, PI / 4.0);
+    sv.apply_xy(0, PI / 4.0).unwrap();
+    dm.apply_xy(0, PI / 4.0).unwrap();
 
     compare_probs(&sv.probabilities(), &dm.probabilities(), "XY gate");
 }
@@ -250,8 +250,8 @@ fn test_single_qubit_xy2p_gate() {
     let mut sv = Statevector::new(1);
     let mut dm = DensityMatrix::new(1);
 
-    sv.apply_xy2p(0, PI / 4.0);
-    dm.apply_xy2p(0, PI / 4.0);
+    sv.apply_xy2p(0, PI / 4.0).unwrap();
+    dm.apply_xy2p(0, PI / 4.0).unwrap();
 
     compare_probs(&sv.probabilities(), &dm.probabilities(), "XY2P gate");
 }
@@ -261,8 +261,8 @@ fn test_single_qubit_xy2m_gate() {
     let mut sv = Statevector::new(1);
     let mut dm = DensityMatrix::new(1);
 
-    sv.apply_xy2m(0, PI / 4.0);
-    dm.apply_xy2m(0, PI / 4.0);
+    sv.apply_xy2m(0, PI / 4.0).unwrap();
+    dm.apply_xy2m(0, PI / 4.0).unwrap();
 
     compare_probs(&sv.probabilities(), &dm.probabilities(), "XY2M gate");
 }
@@ -272,8 +272,8 @@ fn test_single_qubit_rxy_gate() {
     let mut sv = Statevector::new(1);
     let mut dm = DensityMatrix::new(1);
 
-    sv.apply_rxy(0, PI / 3.0, PI / 6.0);
-    dm.apply_rxy(0, PI / 3.0, PI / 6.0);
+    sv.apply_rxy(0, PI / 3.0, PI / 6.0).unwrap();
+    dm.apply_rxy(0, PI / 3.0, PI / 6.0).unwrap();
 
     compare_probs(&sv.probabilities(), &dm.probabilities(), "RXY gate");
 }
@@ -283,11 +283,11 @@ fn test_two_qubit_cx_gate() {
     let mut sv = Statevector::new(2);
     let mut dm = DensityMatrix::new(2);
 
-    sv.apply_h(0);
-    sv.apply_cx(0, 1);
+    sv.apply_h(0).unwrap();
+    sv.apply_cx(0, 1).unwrap();
 
-    dm.apply_h(0);
-    dm.apply_cx(0, 1);
+    dm.apply_h(0).unwrap();
+    dm.apply_cx(0, 1).unwrap();
 
     compare_probs(&sv.probabilities(), &dm.probabilities(), "CX gate");
 }
@@ -297,11 +297,11 @@ fn test_two_qubit_cy_gate() {
     let mut sv = Statevector::new(2);
     let mut dm = DensityMatrix::new(2);
 
-    sv.apply_h(0);
-    sv.apply_cy(0, 1);
+    sv.apply_h(0).unwrap();
+    sv.apply_cy(0, 1).unwrap();
 
-    dm.apply_h(0);
-    dm.apply_cy(0, 1);
+    dm.apply_h(0).unwrap();
+    dm.apply_cy(0, 1).unwrap();
 
     compare_probs(&sv.probabilities(), &dm.probabilities(), "CY gate");
 }
@@ -311,13 +311,13 @@ fn test_two_qubit_cz_gate() {
     let mut sv = Statevector::new(2);
     let mut dm = DensityMatrix::new(2);
 
-    sv.apply_h(0);
-    sv.apply_h(1);
-    sv.apply_cz(0, 1);
+    sv.apply_h(0).unwrap();
+    sv.apply_h(1).unwrap();
+    sv.apply_cz(0, 1).unwrap();
 
-    dm.apply_h(0);
-    dm.apply_h(1);
-    dm.apply_cz(0, 1);
+    dm.apply_h(0).unwrap();
+    dm.apply_h(1).unwrap();
+    dm.apply_cz(0, 1).unwrap();
 
     compare_probs(&sv.probabilities(), &dm.probabilities(), "CZ gate");
 }
@@ -327,11 +327,11 @@ fn test_two_qubit_swap_gate() {
     let mut sv = Statevector::new(2);
     let mut dm = DensityMatrix::new(2);
 
-    sv.apply_x(0);
-    sv.apply_swap(0, 1);
+    sv.apply_x(0).unwrap();
+    sv.apply_swap(0, 1).unwrap();
 
-    dm.apply_x(0);
-    dm.apply_swap(0, 1);
+    dm.apply_x(0).unwrap();
+    dm.apply_swap(0, 1).unwrap();
 
     compare_probs(&sv.probabilities(), &dm.probabilities(), "SWAP gate");
 }
@@ -341,11 +341,11 @@ fn test_two_qubit_crx_gate() {
     let mut sv = Statevector::new(2);
     let mut dm = DensityMatrix::new(2);
 
-    sv.apply_h(0);
-    sv.apply_crx(0, 1, PI / 3.0);
+    sv.apply_h(0).unwrap();
+    sv.apply_crx(0, 1, PI / 3.0).unwrap();
 
-    dm.apply_h(0);
-    dm.apply_crx(0, 1, PI / 3.0);
+    dm.apply_h(0).unwrap();
+    dm.apply_crx(0, 1, PI / 3.0).unwrap();
 
     compare_probs(&sv.probabilities(), &dm.probabilities(), "CRX gate");
 }
@@ -355,11 +355,11 @@ fn test_two_qubit_cry_gate() {
     let mut sv = Statevector::new(2);
     let mut dm = DensityMatrix::new(2);
 
-    sv.apply_h(0);
-    sv.apply_cry(0, 1, PI / 4.0);
+    sv.apply_h(0).unwrap();
+    sv.apply_cry(0, 1, PI / 4.0).unwrap();
 
-    dm.apply_h(0);
-    dm.apply_cry(0, 1, PI / 4.0);
+    dm.apply_h(0).unwrap();
+    dm.apply_cry(0, 1, PI / 4.0).unwrap();
 
     compare_probs(&sv.probabilities(), &dm.probabilities(), "CRY gate");
 }
@@ -369,13 +369,13 @@ fn test_two_qubit_crz_gate() {
     let mut sv = Statevector::new(2);
     let mut dm = DensityMatrix::new(2);
 
-    sv.apply_h(0);
-    sv.apply_h(1);
-    sv.apply_crz(0, 1, PI / 6.0);
+    sv.apply_h(0).unwrap();
+    sv.apply_h(1).unwrap();
+    sv.apply_crz(0, 1, PI / 6.0).unwrap();
 
-    dm.apply_h(0);
-    dm.apply_h(1);
-    dm.apply_crz(0, 1, PI / 6.0);
+    dm.apply_h(0).unwrap();
+    dm.apply_h(1).unwrap();
+    dm.apply_crz(0, 1, PI / 6.0).unwrap();
 
     compare_probs(&sv.probabilities(), &dm.probabilities(), "CRZ gate");
 }
@@ -385,13 +385,13 @@ fn test_two_qubit_rxx_gate() {
     let mut sv = Statevector::new(2);
     let mut dm = DensityMatrix::new(2);
 
-    sv.apply_h(0);
-    sv.apply_h(1);
-    sv.apply_rxx(0, 1, PI / 3.0);
+    sv.apply_h(0).unwrap();
+    sv.apply_h(1).unwrap();
+    sv.apply_rxx(0, 1, PI / 3.0).unwrap();
 
-    dm.apply_h(0);
-    dm.apply_h(1);
-    dm.apply_rxx(0, 1, PI / 3.0);
+    dm.apply_h(0).unwrap();
+    dm.apply_h(1).unwrap();
+    dm.apply_rxx(0, 1, PI / 3.0).unwrap();
 
     compare_probs(&sv.probabilities(), &dm.probabilities(), "RXX gate");
 }
@@ -401,13 +401,13 @@ fn test_two_qubit_ryy_gate() {
     let mut sv = Statevector::new(2);
     let mut dm = DensityMatrix::new(2);
 
-    sv.apply_h(0);
-    sv.apply_h(1);
-    sv.apply_ryy(0, 1, PI / 4.0);
+    sv.apply_h(0).unwrap();
+    sv.apply_h(1).unwrap();
+    sv.apply_ryy(0, 1, PI / 4.0).unwrap();
 
-    dm.apply_h(0);
-    dm.apply_h(1);
-    dm.apply_ryy(0, 1, PI / 4.0);
+    dm.apply_h(0).unwrap();
+    dm.apply_h(1).unwrap();
+    dm.apply_ryy(0, 1, PI / 4.0).unwrap();
 
     compare_probs(&sv.probabilities(), &dm.probabilities(), "RYY gate");
 }
@@ -417,13 +417,13 @@ fn test_two_qubit_rzz_gate() {
     let mut sv = Statevector::new(2);
     let mut dm = DensityMatrix::new(2);
 
-    sv.apply_h(0);
-    sv.apply_h(1);
-    sv.apply_rzz(0, 1, PI / 6.0);
+    sv.apply_h(0).unwrap();
+    sv.apply_h(1).unwrap();
+    sv.apply_rzz(0, 1, PI / 6.0).unwrap();
 
-    dm.apply_h(0);
-    dm.apply_h(1);
-    dm.apply_rzz(0, 1, PI / 6.0);
+    dm.apply_h(0).unwrap();
+    dm.apply_h(1).unwrap();
+    dm.apply_rzz(0, 1, PI / 6.0).unwrap();
 
     compare_probs(&sv.probabilities(), &dm.probabilities(), "RZZ gate");
 }
@@ -433,13 +433,13 @@ fn test_two_qubit_rzx_gate() {
     let mut sv = Statevector::new(2);
     let mut dm = DensityMatrix::new(2);
 
-    sv.apply_h(0);
-    sv.apply_h(1);
-    sv.apply_rzx(0, 1, PI / 3.0);
+    sv.apply_h(0).unwrap();
+    sv.apply_h(1).unwrap();
+    sv.apply_rzx(0, 1, PI / 3.0).unwrap();
 
-    dm.apply_h(0);
-    dm.apply_h(1);
-    dm.apply_rzx(0, 1, PI / 3.0);
+    dm.apply_h(0).unwrap();
+    dm.apply_h(1).unwrap();
+    dm.apply_rzx(0, 1, PI / 3.0).unwrap();
 
     compare_probs(&sv.probabilities(), &dm.probabilities(), "RZX gate");
 }
@@ -449,13 +449,13 @@ fn test_two_qubit_fsim_gate() {
     let mut sv = Statevector::new(2);
     let mut dm = DensityMatrix::new(2);
 
-    sv.apply_h(0);
-    sv.apply_h(1);
-    sv.apply_fsim(0, 1, PI / 4.0, PI / 8.0);
+    sv.apply_h(0).unwrap();
+    sv.apply_h(1).unwrap();
+    sv.apply_fsim(0, 1, PI / 4.0, PI / 8.0).unwrap();
 
-    dm.apply_h(0);
-    dm.apply_h(1);
-    dm.apply_fsim(0, 1, PI / 4.0, PI / 8.0);
+    dm.apply_h(0).unwrap();
+    dm.apply_h(1).unwrap();
+    dm.apply_fsim(0, 1, PI / 4.0, PI / 8.0).unwrap();
 
     compare_probs(&sv.probabilities(), &dm.probabilities(), "FSIM gate");
 }
@@ -465,13 +465,13 @@ fn test_three_qubit_ccx_gate() {
     let mut sv = Statevector::new(3);
     let mut dm = DensityMatrix::new(3);
 
-    sv.apply_h(0);
-    sv.apply_h(1);
-    sv.apply_ccx(0, 1, 2);
+    sv.apply_h(0).unwrap();
+    sv.apply_h(1).unwrap();
+    sv.apply_ccx(0, 1, 2).unwrap();
 
-    dm.apply_h(0);
-    dm.apply_h(1);
-    dm.apply_ccx(0, 1, 2);
+    dm.apply_h(0).unwrap();
+    dm.apply_h(1).unwrap();
+    dm.apply_ccx(0, 1, 2).unwrap();
 
     compare_probs(&sv.probabilities(), &dm.probabilities(), "CCX gate");
 }
@@ -482,11 +482,11 @@ fn test_bell_state_circuit() {
     let mut dm = DensityMatrix::new(2);
 
     // Create Bell state
-    sv.apply_h(0);
-    sv.apply_cx(0, 1);
+    sv.apply_h(0).unwrap();
+    sv.apply_cx(0, 1).unwrap();
 
-    dm.apply_h(0);
-    dm.apply_cx(0, 1);
+    dm.apply_h(0).unwrap();
+    dm.apply_cx(0, 1).unwrap();
 
     compare_probs(&sv.probabilities(), &dm.probabilities(), "Bell state");
 }
@@ -497,13 +497,13 @@ fn test_ghz_state_circuit() {
     let mut dm = DensityMatrix::new(3);
 
     // Create GHZ state
-    sv.apply_h(0);
-    sv.apply_cx(0, 1);
-    sv.apply_cx(1, 2);
+    sv.apply_h(0).unwrap();
+    sv.apply_cx(0, 1).unwrap();
+    sv.apply_cx(1, 2).unwrap();
 
-    dm.apply_h(0);
-    dm.apply_cx(0, 1);
-    dm.apply_cx(1, 2);
+    dm.apply_h(0).unwrap();
+    dm.apply_cx(0, 1).unwrap();
+    dm.apply_cx(1, 2).unwrap();
 
     compare_probs(&sv.probabilities(), &dm.probabilities(), "GHZ state");
 }
@@ -513,19 +513,19 @@ fn test_complex_circuit_native_gates() {
     let mut sv = Statevector::new(3);
     let mut dm = DensityMatrix::new(3);
 
-    sv.apply_x2p(0);
-    sv.apply_y2m(1);
-    sv.apply_xy2p(2, PI / 4.0);
-    sv.apply_cz(0, 1);
-    sv.apply_rz(0, PI / 3.0);
-    sv.apply_swap(1, 2);
+    sv.apply_x2p(0).unwrap();
+    sv.apply_y2m(1).unwrap();
+    sv.apply_xy2p(2, PI / 4.0).unwrap();
+    sv.apply_cz(0, 1).unwrap();
+    sv.apply_rz(0, PI / 3.0).unwrap();
+    sv.apply_swap(1, 2).unwrap();
 
-    dm.apply_x2p(0);
-    dm.apply_y2m(1);
-    dm.apply_xy2p(2, PI / 4.0);
-    dm.apply_cz(0, 1);
-    dm.apply_rz(0, PI / 3.0);
-    dm.apply_swap(1, 2);
+    dm.apply_x2p(0).unwrap();
+    dm.apply_y2m(1).unwrap();
+    dm.apply_xy2p(2, PI / 4.0).unwrap();
+    dm.apply_cz(0, 1).unwrap();
+    dm.apply_rz(0, PI / 3.0).unwrap();
+    dm.apply_swap(1, 2).unwrap();
 
     compare_probs(
         &sv.probabilities(),
@@ -555,15 +555,15 @@ fn test_zero_angle_rotations() {
     let mut sv = Statevector::new(1);
     let mut dm = DensityMatrix::new(1);
 
-    sv.apply_h(0);
-    sv.apply_rx(0, 0.0);
-    sv.apply_ry(0, 0.0);
-    sv.apply_rz(0, 0.0);
+    sv.apply_h(0).unwrap();
+    sv.apply_rx(0, 0.0).unwrap();
+    sv.apply_ry(0, 0.0).unwrap();
+    sv.apply_rz(0, 0.0).unwrap();
 
-    dm.apply_h(0);
-    dm.apply_rx(0, 0.0);
-    dm.apply_ry(0, 0.0);
-    dm.apply_rz(0, 0.0);
+    dm.apply_h(0).unwrap();
+    dm.apply_rx(0, 0.0).unwrap();
+    dm.apply_ry(0, 0.0).unwrap();
+    dm.apply_rz(0, 0.0).unwrap();
 
     compare_probs(
         &sv.probabilities(),
@@ -577,11 +577,11 @@ fn test_pi_angle_rotations() {
     let mut sv = Statevector::new(1);
     let mut dm = DensityMatrix::new(1);
 
-    sv.apply_rx(0, PI);
-    sv.apply_ry(0, PI);
+    sv.apply_rx(0, PI).unwrap();
+    sv.apply_ry(0, PI).unwrap();
 
-    dm.apply_rx(0, PI);
-    dm.apply_ry(0, PI);
+    dm.apply_rx(0, PI).unwrap();
+    dm.apply_ry(0, PI).unwrap();
 
     compare_probs(
         &sv.probabilities(),
@@ -597,17 +597,17 @@ fn test_sequential_single_qubit_gates() {
 
     // Apply many gates in sequence
     for _ in 0..10 {
-        sv.apply_h(0);
-        sv.apply_x(1);
-        sv.apply_y(0);
-        sv.apply_z(1);
+        sv.apply_h(0).unwrap();
+        sv.apply_x(1).unwrap();
+        sv.apply_y(0).unwrap();
+        sv.apply_z(1).unwrap();
     }
 
     for _ in 0..10 {
-        dm.apply_h(0);
-        dm.apply_x(1);
-        dm.apply_y(0);
-        dm.apply_z(1);
+        dm.apply_h(0).unwrap();
+        dm.apply_x(1).unwrap();
+        dm.apply_y(0).unwrap();
+        dm.apply_z(1).unwrap();
     }
 
     compare_probs(&sv.probabilities(), &dm.probabilities(), "Sequential gates");
@@ -619,29 +619,29 @@ fn test_multiple_entangling_gates() {
     let mut dm = DensityMatrix::new(3);
 
     // Layer 1: Entangle
-    sv.apply_h(0);
-    sv.apply_cx(0, 1);
-    sv.apply_cx(1, 2);
+    sv.apply_h(0).unwrap();
+    sv.apply_cx(0, 1).unwrap();
+    sv.apply_cx(1, 2).unwrap();
 
-    dm.apply_h(0);
-    dm.apply_cx(0, 1);
-    dm.apply_cx(1, 2);
+    dm.apply_h(0).unwrap();
+    dm.apply_cx(0, 1).unwrap();
+    dm.apply_cx(1, 2).unwrap();
 
     // Layer 2: Single-qubit rotations
-    sv.apply_rx(0, PI / 4.0);
-    sv.apply_ry(1, PI / 3.0);
-    sv.apply_rz(2, PI / 6.0);
+    sv.apply_rx(0, PI / 4.0).unwrap();
+    sv.apply_ry(1, PI / 3.0).unwrap();
+    sv.apply_rz(2, PI / 6.0).unwrap();
 
-    dm.apply_rx(0, PI / 4.0);
-    dm.apply_ry(1, PI / 3.0);
-    dm.apply_rz(2, PI / 6.0);
+    dm.apply_rx(0, PI / 4.0).unwrap();
+    dm.apply_ry(1, PI / 3.0).unwrap();
+    dm.apply_rz(2, PI / 6.0).unwrap();
 
     // Layer 3: More entanglement
-    sv.apply_cz(0, 2);
-    sv.apply_swap(0, 1);
+    sv.apply_cz(0, 2).unwrap();
+    sv.apply_swap(0, 1).unwrap();
 
-    dm.apply_cz(0, 2);
-    dm.apply_swap(0, 1);
+    dm.apply_cz(0, 2).unwrap();
+    dm.apply_swap(0, 1).unwrap();
 
     compare_probs(
         &sv.probabilities(),

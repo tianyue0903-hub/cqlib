@@ -12,10 +12,15 @@
 
 //! Python bindings for cqlib-core Pauli module.
 
+use crate::qis::state::density_matrix::PyDensityMatrix;
+use crate::qis::state::statevector::PyStatevector;
+use cqlib_core::qis::Observable;
 use cqlib_core::qis::pauli::{Pauli, PauliString, Phase};
 use numpy::PyArray2;
+use pyo3::exceptions::{PyIndexError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::PyComplex;
+use pyo3::types::{PyComplex, PyDict, PyTuple};
+use std::collections::HashMap;
 use std::fmt;
 
 /// Phase factor in the Pauli group, isomorphic to Z4 (the cyclic group of order 4).
@@ -275,6 +280,33 @@ impl PyPauliString {
         }
     }
 
+    /// Creates a PauliString from a string representation.
+    ///
+    /// The format is: `[+|-][i|j]<pauli operators>` where pauli operators are I, X, Y, or Z.
+    ///
+    /// Qubits are in reverse order: the first character corresponds to the highest qubit index.
+    ///
+    /// Args:
+    ///     s: String representation like "XZI", "-iXYZ", "+ZII"
+    ///
+    /// Returns:
+    ///     A new PauliString instance
+    ///
+    /// Raises:
+    ///     ValueError: If the string format is invalid
+    ///
+    /// Examples:
+    ///     >>> PauliString.from_str("XZI")      # +XZI
+    ///     >>> PauliString.from_str("-iZII")    # -iZII
+    ///     >>> PauliString.from_str("+XYZ")     # +XYZ
+    #[staticmethod]
+    fn from_str(s: &str) -> PyResult<Self> {
+        let inner = s
+            .parse::<PauliString>()
+            .map_err(|e| PyValueError::new_err(format!("Invalid PauliString format: {}", e)))?;
+        Ok(Self { inner })
+    }
+
     /// Sets the Pauli operator at the specified qubit index.
     ///
     /// Args:
@@ -285,7 +317,7 @@ impl PyPauliString {
     ///     IndexError: If idx >= num_qubits
     fn set_pauli(&mut self, idx: usize, pauli: &PyPauli) -> PyResult<()> {
         if idx >= self.inner.num_qubits {
-            return Err(PyErr::new::<pyo3::exceptions::PyIndexError, _>(format!(
+            return Err(PyIndexError::new_err(format!(
                 "Index {} out of bounds for {} qubits",
                 idx, self.inner.num_qubits
             )));
@@ -303,7 +335,7 @@ impl PyPauliString {
     ///     The Pauli operator at the specified index
     fn get_pauli(&self, idx: usize) -> PyResult<PyPauli> {
         if idx >= self.inner.num_qubits {
-            return Err(PyErr::new::<pyo3::exceptions::PyIndexError, _>(format!(
+            return Err(PyIndexError::new_err(format!(
                 "Index {} out of bounds for {} qubits",
                 idx, self.inner.num_qubits
             )));
@@ -351,22 +383,129 @@ impl PyPauliString {
         self.inner.z.iter().map(|b| *b).collect()
     }
 
+    /// Returns the X-component as an integer mask.
+    #[getter]
+    fn x_mask(&self) -> usize {
+        self.inner.x_mask()
+    }
+
+    /// Returns the Z-component as an integer mask.
+    #[getter]
+    fn z_mask(&self) -> usize {
+        self.inner.z_mask()
+    }
+
+    /// Computes the phase factor contributed by Y operators.
+    ///
+    /// Y = iXZ, so n Y operators contribute i^n phase.
+    ///
+    /// Returns:
+    ///     A Python complex number (1, i, -1, or -i)
+    fn y_phase<'py>(&self, py: Python<'py>) -> Bound<'py, PyComplex> {
+        let c = self.inner.y_phase();
+        PyComplex::from_doubles(py, c.re, c.im)
+    }
+
     /// Checks if this Pauli string commutes with another.
     ///
     /// Two Pauli strings commute if their symplectic inner product is 0 (mod 2).
     fn commutes_with(&self, other: &PyPauliString) -> PyResult<bool> {
         if self.inner.num_qubits != other.inner.num_qubits {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            return Err(PyValueError::new_err(
                 "Pauli strings must have the same number of qubits",
             ));
         }
         Ok(self.inner.commutes_with(&other.inner))
     }
 
+    /// Computes the expectation value given a probability distribution.
+    ///
+    /// This calculates ⟨P⟩ = Σ_s p(s) ⟨s|P|s⟩, where p(s) is the probability of basis state |s⟩.
+    ///
+    /// Important: The state keys use little-endian convention: the rightmost character
+    /// corresponds to qubit 0. For example, "01" means qubit 0 = 1, qubit 1 = 0.
+    ///
+    /// If this Pauli string contains X or Y operators (non-diagonal), the expectation
+    /// value is 0 for any probability distribution over computational basis states.
+    ///
+    /// Args:
+    ///     probs: A dict mapping state strings (e.g., "00", "01") to their probabilities.
+    ///            The string uses little-endian: index 0 (leftmost) is qubit n-1.
+    ///
+    /// Returns:
+    ///     The expectation value as a float.
+    ///
+    /// Raises:
+    ///     ValueError: If state string length doesn't match num_qubits or contains invalid chars.
+    ///
+    /// Examples:
+    ///     >>> ps = PauliString.from_str("IZ")  # Z on qubit 0
+    ///     >>> probs = {"00": 0.5, "01": 0.5}    # 50% |00⟩, 50% |01⟩
+    ///     >>> exp = ps.expectation(probs)       # ⟨Z⟩ = 0.5*1 + 0.5*(-1) = 0
+    fn expectation(&self, probs: &Bound<'_, PyDict>) -> PyResult<f64> {
+        let mut rust_probs: HashMap<String, f64> = HashMap::new();
+        for (key, value) in probs.iter() {
+            let key_str: String = key.extract()?;
+            let val_f64: f64 = value.extract()?;
+            rust_probs.insert(key_str, val_f64);
+        }
+
+        self.inner
+            .expectation(&rust_probs)
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    /// Computes the expectation value for a statevector.
+    fn expectation_statevector(&self, sv: &PyStatevector) -> PyResult<f64> {
+        self.inner
+            .expectation_statevector(&sv.inner)
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    /// Computes the expectation value for a density matrix.
+    fn expectation_density_matrix(&self, dm: &PyDensityMatrix) -> PyResult<f64> {
+        self.inner
+            .expectation_density_matrix(&dm.inner)
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    /// Computes the expectation value from measurement probabilities.
+    fn expectation_probs(&self, measurements: &Bound<'_, PyAny>) -> PyResult<f64> {
+        let mut rust_measurements = Vec::new();
+        for item in measurements.try_iter()? {
+            let item = item?;
+            let tuple = item.cast::<PyTuple>().map_err(|_| {
+                PyValueError::new_err("Each measurement must be a tuple (PauliString, dict)")
+            })?;
+            if tuple.len() != 2 {
+                return Err(PyValueError::new_err(
+                    "Each measurement must be a tuple (PauliString, dict)",
+                ));
+            }
+            let pauli: PyPauliString = tuple.get_item(0)?.extract()?;
+            let probs_dict: Bound<'_, PyDict> = tuple.get_item(1)?.cast_into()?;
+
+            let mut rust_probs = std::collections::HashMap::new();
+            for (k, v) in probs_dict.iter() {
+                let k_str: String = k.extract()?;
+                let v_f64: f64 = v.extract()?;
+                rust_probs.insert(k_str, v_f64);
+            }
+            rust_measurements.push((pauli.inner, rust_probs));
+        }
+
+        self.inner
+            .expectation_probs(&rust_measurements)
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
     /// Returns a new Pauli string that is the product of this and another.
+    ///
+    /// Raises:
+    ///     ValueError: If Pauli strings have different number of qubits
     fn __mul__(&self, other: &PyPauliString) -> PyResult<Self> {
         if self.inner.num_qubits != other.inner.num_qubits {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            return Err(PyValueError::new_err(
                 "Pauli strings must have the same number of qubits",
             ));
         }
@@ -375,9 +514,12 @@ impl PyPauliString {
     }
 
     /// In-place multiplication with another Pauli string.
+    ///
+    /// Raises:
+    ///     ValueError: If Pauli strings have different number of qubits
     fn __imul__(&mut self, other: &PyPauliString) -> PyResult<()> {
         if self.inner.num_qubits != other.inner.num_qubits {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            return Err(PyValueError::new_err(
                 "Pauli strings must have the same number of qubits",
             ));
         }

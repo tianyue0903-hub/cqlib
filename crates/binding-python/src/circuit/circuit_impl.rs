@@ -49,10 +49,12 @@ use super::gate::{PyCircuitGate, PyConditionView, PyMcGate, PyStandardGate, PyUn
 use super::operation::PyOperation;
 use super::parameter::PyParameter;
 use crate::circuit::operation::PyOperationIter;
+use crate::qis::pauli::PyPauliString;
 use cqlib_core::circuit::gate::Instruction;
 use cqlib_core::circuit::param::CircuitParam;
 use cqlib_core::circuit::param::ParameterValue;
 use cqlib_core::circuit::{Circuit, Operation, Qubit};
+use cqlib_core::qis::evolution::PauliEvolution;
 use num_complex::Complex64;
 use numpy::{PyArray2, ToPyArray};
 use pyo3::IntoPyObjectExt;
@@ -1272,6 +1274,55 @@ impl PyCircuit {
         self.inner
             .while_loop(condition.inner, body_core)
             .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    /// Appends a Pauli evolution gate e^(-iθ/2 · P) to the circuit.
+    ///
+    /// This method implements the Pauli rotation using basis transformation
+    /// and CNOT ladder algorithm.
+    ///
+    /// Args:
+    ///     pauli: The Pauli string operator P to exponentiate. Must be Hermitian
+    ///         (i.e., its phase must be ±1) for the evolution to be unitary.
+    ///     angle: The rotation angle θ (in radians).
+    ///     qubits: The qubits to apply the operation on. Must match pauli.num_qubits.
+    ///
+    /// Returns:
+    ///     self (for method chaining)
+    ///
+    /// Raises:
+    ///     ValueError: If qubit count mismatch, PauliString has non-Hermitian
+    ///         phase (±i), or other error occurs.
+    ///
+    /// Algorithm:
+    ///     The rotation e^(-iθ/2 · P) is implemented as follows:
+    ///     1. Phase Validation: The PauliString's internal phase must be ±1.
+    ///     2. Basis Transformation: Convert non-Z Paulis to Z basis.
+    ///     3. CNOT Chain: Accumulate parity along the chain to the last qubit.
+    ///     4. Core Rotation: Apply RZ(θ) on the last qubit.
+    ///     5. Reverse CNOT Ladder: Uncompute parity.
+    ///     6. Inverse Transformation: Restore the original basis.
+    ///
+    /// Examples:
+    ///     >>> from cqlib import Circuit
+    ///     >>> from cqlib.qis import PauliString
+    ///     >>> circuit = Circuit(3)
+    ///     >>> pauli = PauliString.from_str("XZI")
+    ///     >>> circuit.pauli_evolution(pauli, 3.14159/2, [0, 1, 2])
+    fn pauli_evolution(
+        &mut self,
+        pauli: &PyPauliString,
+        angle: f64,
+        qubits: Vec<PyIntOrQubit>,
+    ) -> PyResult<()> {
+        // Convert Python qubit indices to Qubit objects
+        let qubits_core: Vec<Qubit> = qubits.into_iter().map(|q| q.into()).collect();
+
+        self.inner
+            .pauli_evolution(&pauli.inner, angle, &qubits_core)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+
+        Ok(())
     }
 }
 

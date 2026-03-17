@@ -14,15 +14,32 @@
 
 use pyo3::prelude::*;
 
+pub mod entropy;
+pub mod evolution;
+pub mod hamiltonian;
+pub mod metrics;
 pub mod pauli;
+pub mod state;
 
 /// Register the qis submodule.
 pub fn register_qis_module(parent: &Bound<'_, PyModule>) -> PyResult<()> {
     let qis_module = PyModule::new(parent.py(), "qis")?;
 
+    // Register evolution types
+    qis_module.add_class::<evolution::PyTrotterMode>()?;
+
+    // Register Hamiltonian and Pauli types
+    qis_module.add_class::<hamiltonian::PyHamiltonian>()?;
     qis_module.add_class::<pauli::PyPhase>()?;
     qis_module.add_class::<pauli::PyPauli>()?;
     qis_module.add_class::<pauli::PyPauliString>()?;
+
+    // Register state submodule
+    state::register_state_module(&qis_module)?;
+
+    // Register entropy and metrics submodules
+    entropy::register_entropy_module(&qis_module)?;
+    metrics::register_metrics_module(&qis_module)?;
 
     parent.add_submodule(&qis_module)?;
     Ok(())
