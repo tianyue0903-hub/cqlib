@@ -298,9 +298,9 @@ pub fn state_fidelity_mixed(dm1: &DensityMatrix, dm2: &DensityMatrix) -> Result<
 ///
 /// # Notes
 ///
-/// The indexing convention assumes `idx = (bra << n) | ket`, where `bra` is the
-/// column index and `ket` is the row index. This is consistent with the
-/// flattened representation where the upper `n` bits encode the bra state.
+/// The indexing convention assumes `idx = (ket << n) | bra`, where `ket` is the
+/// row index and `bra` is the column index. This is consistent with the standard
+/// row-major flattened representation where the upper `n` bits encode the ket state.
 pub fn partial_transpose(
     dm: &DensityMatrix,
     target_qubits: &[usize],

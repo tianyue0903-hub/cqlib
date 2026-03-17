@@ -311,8 +311,6 @@ fn test_pauli_evolution_three_qubit_zzz() {
     assert_eq!(ops[4].qubits[1], qubits[1]); // target
 }
 
-// ==================== Trotterization Tests ====================
-
 use crate::qis::Hamiltonian;
 use crate::qis::evolution::TrotterMode;
 

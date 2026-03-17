@@ -193,7 +193,9 @@ impl PauliEvolution for Circuit {
         // For Hermitian operators, phase must be real (±1)
         // If phase is ±i, the operator is not Hermitian
         if phase_complex.im.abs() > 1e-10 {
-            return Err(CircuitError::InvalidParameterValue(0, f64::NAN));
+            return Err(CircuitError::InvalidOperation(
+                "Pauli string phase must be Hermitian (±1)".to_string(),
+            ));
         }
 
         // Absorb PauliString's phase into the rotation angle
@@ -403,6 +405,12 @@ impl Hamiltonian {
         // Simplify the Hamiltonian to combine identical terms
         let mut simplified_h = self.clone();
         simplified_h.simplify();
+
+        for (_, coeff) in &simplified_h.terms {
+            if coeff.im.abs() > 1e-10 {
+                return Err(QisError::NotHermitian);
+            }
+        }
 
         // Create the circuit
         let mut circuit = Circuit::new(simplified_h.num_qubits);

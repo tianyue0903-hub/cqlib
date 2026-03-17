@@ -122,6 +122,50 @@ impl std::ops::AddAssign for DensityMatrix {
 }
 
 impl DensityMatrix {
+    /// Validates that a single qubit index is within bounds.
+    #[inline]
+    fn validate_qubit(&self, qubit: usize) -> Result<(), QisError> {
+        if qubit >= self.num_qubits {
+            return Err(QisError::IndexOutOfBounds {
+                index: qubit,
+                max: self.num_qubits.saturating_sub(1),
+            });
+        }
+        Ok(())
+    }
+
+    /// Validates that two qubit indices are within bounds.
+    #[inline]
+    fn validate_two_qubits(&self, q0: usize, q1: usize) -> Result<(), QisError> {
+        if q0 >= self.num_qubits {
+            return Err(QisError::IndexOutOfBounds {
+                index: q0,
+                max: self.num_qubits.saturating_sub(1),
+            });
+        }
+        if q1 >= self.num_qubits {
+            return Err(QisError::IndexOutOfBounds {
+                index: q1,
+                max: self.num_qubits.saturating_sub(1),
+            });
+        }
+        Ok(())
+    }
+
+    /// Validates that all qubit indices in a slice are within bounds.
+    #[inline]
+    fn validate_qubits(&self, qubits: &[usize]) -> Result<(), QisError> {
+        for &q in qubits {
+            if q >= self.num_qubits {
+                return Err(QisError::IndexOutOfBounds {
+                    index: q,
+                    max: self.num_qubits.saturating_sub(1),
+                });
+            }
+        }
+        Ok(())
+    }
+
     /// Creates a new density matrix initialized to the pure state $|0\dots 0\rangle\langle 0\dots 0|$.
     ///
     /// # Arguments
@@ -285,31 +329,31 @@ impl DensityMatrix {
                         let control = qubit_indices[0];
                         let target = qubit_indices[1];
                         match base_gate {
-                            StandardGate::X => dm.apply_cx(control, target),
-                            StandardGate::Y => dm.apply_cy(control, target),
-                            StandardGate::Z => dm.apply_cz(control, target),
-                            StandardGate::RX => dm.apply_crx(control, target, params[0]),
-                            StandardGate::RY => dm.apply_cry(control, target, params[0]),
-                            StandardGate::RZ => dm.apply_crz(control, target, params[0]),
+                            StandardGate::X => dm.apply_cx(control, target)?,
+                            StandardGate::Y => dm.apply_cy(control, target)?,
+                            StandardGate::Z => dm.apply_cz(control, target)?,
+                            StandardGate::RX => dm.apply_crx(control, target, params[0])?,
+                            StandardGate::RY => dm.apply_cry(control, target, params[0])?,
+                            StandardGate::RZ => dm.apply_crz(control, target, params[0])?,
                             _ => {
                                 let matrix = mc_gate.matrix(&params).map_err(|_| {
                                     QisError::CircuitError(CircuitError::NoMatrixRepresentation)
                                 })?;
-                                dm.apply_unitary_gate(&qubit_indices, &matrix);
+                                dm.apply_unitary_gate(&qubit_indices, &matrix)?;
                             }
                         }
                     } else if num_controls == 2 && *base_gate == StandardGate::X {
-                        dm.apply_ccx(qubit_indices[0], qubit_indices[1], qubit_indices[2]);
+                        dm.apply_ccx(qubit_indices[0], qubit_indices[1], qubit_indices[2])?;
                     } else {
                         let matrix = mc_gate.matrix(&params).map_err(|_| {
                             QisError::CircuitError(CircuitError::NoMatrixRepresentation)
                         })?;
-                        dm.apply_unitary_gate(&qubit_indices, &matrix);
+                        dm.apply_unitary_gate(&qubit_indices, &matrix)?;
                     }
                 }
                 Instruction::UnitaryGate(u_gate) => {
                     if let Some(matrix) = u_gate.matrix() {
-                        dm.apply_unitary_gate(&qubit_indices, matrix);
+                        dm.apply_unitary_gate(&qubit_indices, matrix)?;
                     } else {
                         return Err(QisError::CircuitError(CircuitError::NoMatrixRepresentation));
                     }
@@ -338,45 +382,45 @@ impl DensityMatrix {
     ) -> Result<(), QisError> {
         match gate {
             StandardGate::I => {}
-            StandardGate::X => self.apply_x(qubits[0]),
-            StandardGate::Y => self.apply_y(qubits[0]),
-            StandardGate::Z => self.apply_z(qubits[0]),
-            StandardGate::H => self.apply_h(qubits[0]),
-            StandardGate::S => self.apply_s(qubits[0]),
-            StandardGate::SDG => self.apply_sdg(qubits[0]),
-            StandardGate::T => self.apply_t(qubits[0]),
-            StandardGate::TDG => self.apply_tdg(qubits[0]),
-            StandardGate::RX => self.apply_rx(qubits[0], params[0]),
-            StandardGate::RY => self.apply_ry(qubits[0], params[0]),
-            StandardGate::RZ => self.apply_rz(qubits[0], params[0]),
-            StandardGate::Phase => self.apply_p(qubits[0], params[0]),
-            StandardGate::X2P => self.apply_x2p(qubits[0]),
-            StandardGate::X2M => self.apply_x2m(qubits[0]),
-            StandardGate::Y2P => self.apply_y2p(qubits[0]),
-            StandardGate::Y2M => self.apply_y2m(qubits[0]),
-            StandardGate::RXY => self.apply_rxy(qubits[0], params[0], params[1]),
-            StandardGate::XY => self.apply_xy(qubits[0], params[0]),
-            StandardGate::XY2P => self.apply_xy2p(qubits[0], params[0]),
-            StandardGate::XY2M => self.apply_xy2m(qubits[0], params[0]),
-            StandardGate::U => self.apply_u(qubits[0], params[0], params[1], params[2]),
+            StandardGate::X => self.apply_x(qubits[0])?,
+            StandardGate::Y => self.apply_y(qubits[0])?,
+            StandardGate::Z => self.apply_z(qubits[0])?,
+            StandardGate::H => self.apply_h(qubits[0])?,
+            StandardGate::S => self.apply_s(qubits[0])?,
+            StandardGate::SDG => self.apply_sdg(qubits[0])?,
+            StandardGate::T => self.apply_t(qubits[0])?,
+            StandardGate::TDG => self.apply_tdg(qubits[0])?,
+            StandardGate::RX => self.apply_rx(qubits[0], params[0])?,
+            StandardGate::RY => self.apply_ry(qubits[0], params[0])?,
+            StandardGate::RZ => self.apply_rz(qubits[0], params[0])?,
+            StandardGate::Phase => self.apply_p(qubits[0], params[0])?,
+            StandardGate::X2P => self.apply_x2p(qubits[0])?,
+            StandardGate::X2M => self.apply_x2m(qubits[0])?,
+            StandardGate::Y2P => self.apply_y2p(qubits[0])?,
+            StandardGate::Y2M => self.apply_y2m(qubits[0])?,
+            StandardGate::RXY => self.apply_rxy(qubits[0], params[0], params[1])?,
+            StandardGate::XY => self.apply_xy(qubits[0], params[0])?,
+            StandardGate::XY2P => self.apply_xy2p(qubits[0], params[0])?,
+            StandardGate::XY2M => self.apply_xy2m(qubits[0], params[0])?,
+            StandardGate::U => self.apply_u(qubits[0], params[0], params[1], params[2])?,
             StandardGate::GPhase => self.apply_gphase(params[0]),
 
-            StandardGate::CX => self.apply_cx(qubits[0], qubits[1]),
-            StandardGate::CY => self.apply_cy(qubits[0], qubits[1]),
-            StandardGate::CZ => self.apply_cz(qubits[0], qubits[1]),
-            StandardGate::SWAP => self.apply_swap(qubits[0], qubits[1]),
-            StandardGate::RXX => self.apply_rxx(qubits[0], qubits[1], params[0]),
-            StandardGate::RYY => self.apply_ryy(qubits[0], qubits[1], params[0]),
-            StandardGate::RZZ => self.apply_rzz(qubits[0], qubits[1], params[0]),
-            StandardGate::RZX => self.apply_rzx(qubits[0], qubits[1], params[0]),
+            StandardGate::CX => self.apply_cx(qubits[0], qubits[1])?,
+            StandardGate::CY => self.apply_cy(qubits[0], qubits[1])?,
+            StandardGate::CZ => self.apply_cz(qubits[0], qubits[1])?,
+            StandardGate::SWAP => self.apply_swap(qubits[0], qubits[1])?,
+            StandardGate::RXX => self.apply_rxx(qubits[0], qubits[1], params[0])?,
+            StandardGate::RYY => self.apply_ryy(qubits[0], qubits[1], params[0])?,
+            StandardGate::RZZ => self.apply_rzz(qubits[0], qubits[1], params[0])?,
+            StandardGate::RZX => self.apply_rzx(qubits[0], qubits[1], params[0])?,
 
-            StandardGate::CRX => self.apply_crx(qubits[0], qubits[1], params[0]),
-            StandardGate::CRY => self.apply_cry(qubits[0], qubits[1], params[0]),
-            StandardGate::CRZ => self.apply_crz(qubits[0], qubits[1], params[0]),
+            StandardGate::CRX => self.apply_crx(qubits[0], qubits[1], params[0])?,
+            StandardGate::CRY => self.apply_cry(qubits[0], qubits[1], params[0])?,
+            StandardGate::CRZ => self.apply_crz(qubits[0], qubits[1], params[0])?,
 
-            StandardGate::CCX => self.apply_ccx(qubits[0], qubits[1], qubits[2]),
+            StandardGate::CCX => self.apply_ccx(qubits[0], qubits[1], qubits[2])?,
 
-            StandardGate::FSIM => self.apply_fsim(qubits[0], qubits[1], params[0], params[1]),
+            StandardGate::FSIM => self.apply_fsim(qubits[0], qubits[1], params[0], params[1])?,
         }
         Ok(())
     }
@@ -414,8 +458,6 @@ impl DensityMatrix {
                 .sum()
         }
     }
-
-    // --- Specialized Bitwise Kernels ---
 
     fn apply_x_kernel(&mut self, q: usize, off: usize) {
         let d = 1 << (q + off);
@@ -525,8 +567,6 @@ impl DensityMatrix {
         with_maybe_par!(self.num_qubits, self.data, 2 * d, kernel);
     }
 
-    // --- Two-Qubit Kernels ---
-
     fn apply_cx_kernel(&mut self, ctrl: usize, tgt: usize, off: usize) {
         let (c, t) = (ctrl + off, tgt + off);
         let (q_min, q_max) = if c < t { (c, t) } else { (t, c) };
@@ -566,106 +606,143 @@ impl DensityMatrix {
         with_maybe_par!(self.num_qubits, self.data, 2 * d_max, kernel);
     }
 
-    // --- Public API ---
-
     /// Applies the Pauli-X (NOT) gate to the specified qubit.
-    pub fn apply_x(&mut self, qubit: usize) {
+    ///
+    /// # Errors
+    /// Returns `QisError::IndexOutOfBounds` if qubit >= num_qubits.
+    pub fn apply_x(&mut self, qubit: usize) -> Result<(), QisError> {
+        self.validate_qubit(qubit)?;
         self.apply_x_kernel(qubit, self.num_qubits);
         self.apply_x_kernel(qubit, 0);
+        Ok(())
     }
     /// Applies the Pauli-Y gate to the specified qubit.
-    pub fn apply_y(&mut self, qubit: usize) {
+    pub fn apply_y(&mut self, qubit: usize) -> Result<(), QisError> {
+        self.validate_qubit(qubit)?;
         self.apply_y_kernel(qubit, self.num_qubits, false);
         self.apply_y_kernel(qubit, 0, true);
+        Ok(())
     }
     /// Applies the Pauli-Z gate to the specified qubit.
-    pub fn apply_z(&mut self, qubit: usize) {
+    pub fn apply_z(&mut self, qubit: usize) -> Result<(), QisError> {
+        self.validate_qubit(qubit)?;
         self.apply_z_kernel(qubit, self.num_qubits);
         self.apply_z_kernel(qubit, 0);
+        Ok(())
     }
     /// Applies the Hadamard gate to the specified qubit.
-    pub fn apply_h(&mut self, qubit: usize) {
+    pub fn apply_h(&mut self, qubit: usize) -> Result<(), QisError> {
+        self.validate_qubit(qubit)?;
         self.apply_h_kernel(qubit, self.num_qubits);
         self.apply_h_kernel(qubit, 0);
+        Ok(())
     }
     /// Applies the generic single-qubit U gate with parameters `theta`, `phi`, and `lam`.
-    pub fn apply_u(&mut self, qubit: usize, theta: f64, phi: f64, lambda: f64) {
+    pub fn apply_u(
+        &mut self,
+        qubit: usize,
+        theta: f64,
+        phi: f64,
+        lambda: f64,
+    ) -> Result<(), QisError> {
+        self.validate_qubit(qubit)?;
         self.apply_u_kernel(qubit, self.num_qubits, theta, phi, lambda, false);
         self.apply_u_kernel(qubit, 0, theta, phi, lambda, true);
+        Ok(())
     }
     /// Applies the single-qubit rotation about the X-axis by angle `theta`.
-    pub fn apply_rx(&mut self, qubit: usize, theta: f64) {
+    pub fn apply_rx(&mut self, qubit: usize, theta: f64) -> Result<(), QisError> {
+        self.validate_qubit(qubit)?;
         self.apply_rx_kernel(qubit, self.num_qubits, theta);
         self.apply_rx_kernel(qubit, 0, -theta);
+        Ok(())
     }
     /// Applies the single-qubit rotation about the Y-axis by angle `theta`.
-    pub fn apply_ry(&mut self, qubit: usize, theta: f64) {
+    pub fn apply_ry(&mut self, qubit: usize, theta: f64) -> Result<(), QisError> {
+        self.validate_qubit(qubit)?;
         self.apply_ry_kernel(qubit, self.num_qubits, theta);
         self.apply_ry_kernel(qubit, 0, theta);
+        Ok(())
     }
     /// Applies the single-qubit rotation about the Z-axis by angle `theta`.
-    pub fn apply_rz(&mut self, qubit: usize, theta: f64) {
-        self.apply_p(qubit, theta); /* RZ is equivalent to Phase gate in density matrix */
+    pub fn apply_rz(&mut self, qubit: usize, theta: f64) -> Result<(), QisError> {
+        self.apply_p(qubit, theta)?; /* RZ is equivalent to Phase gate in density matrix */
+        Ok(())
     }
     /// Applies a phase shift of `theta` to the specified qubit.
-    pub fn apply_p(&mut self, qubit: usize, theta: f64) {
+    pub fn apply_p(&mut self, qubit: usize, theta: f64) -> Result<(), QisError> {
+        self.validate_qubit(qubit)?;
         self.apply_p_kernel(qubit, self.num_qubits, theta);
         self.apply_p_kernel(qubit, 0, -theta);
+        Ok(())
     }
 
     /// Applies the S (Phase) gate to the specified qubit.
-    pub fn apply_s(&mut self, qubit: usize) {
-        self.apply_p(qubit, FRAC_PI_2);
+    pub fn apply_s(&mut self, qubit: usize) -> Result<(), QisError> {
+        self.apply_p(qubit, FRAC_PI_2)?;
+        Ok(())
     }
     /// Applies the inverse S (SDG) gate to the specified qubit.
-    pub fn apply_sdg(&mut self, qubit: usize) {
-        self.apply_p(qubit, -FRAC_PI_2);
+    pub fn apply_sdg(&mut self, qubit: usize) -> Result<(), QisError> {
+        self.apply_p(qubit, -FRAC_PI_2)?;
+        Ok(())
     }
     /// Applies the T (Pi/8) gate to the specified qubit.
-    pub fn apply_t(&mut self, qubit: usize) {
-        self.apply_p(qubit, FRAC_PI_4);
+    pub fn apply_t(&mut self, qubit: usize) -> Result<(), QisError> {
+        self.apply_p(qubit, FRAC_PI_4)?;
+        Ok(())
     }
     /// Applies the inverse T (TDG) gate to the specified qubit.
-    pub fn apply_tdg(&mut self, qubit: usize) {
-        self.apply_p(qubit, -FRAC_PI_4);
+    pub fn apply_tdg(&mut self, qubit: usize) -> Result<(), QisError> {
+        self.apply_p(qubit, -FRAC_PI_4)?;
+        Ok(())
     }
     /// Applies a +Pi/2 rotation about the X-axis.
-    pub fn apply_x2p(&mut self, qubit: usize) {
-        self.apply_rx(qubit, FRAC_PI_2);
+    pub fn apply_x2p(&mut self, qubit: usize) -> Result<(), QisError> {
+        self.apply_rx(qubit, FRAC_PI_2)?;
+        Ok(())
     }
     /// Applies a -Pi/2 rotation about the X-axis.
-    pub fn apply_x2m(&mut self, qubit: usize) {
-        self.apply_rx(qubit, -FRAC_PI_2);
+    pub fn apply_x2m(&mut self, qubit: usize) -> Result<(), QisError> {
+        self.apply_rx(qubit, -FRAC_PI_2)?;
+        Ok(())
     }
     /// Applies a +Pi/2 rotation about the Y-axis.
-    pub fn apply_y2p(&mut self, qubit: usize) {
-        self.apply_ry(qubit, FRAC_PI_2);
+    pub fn apply_y2p(&mut self, qubit: usize) -> Result<(), QisError> {
+        self.apply_ry(qubit, FRAC_PI_2)?;
+        Ok(())
     }
     /// Applies a -Pi/2 rotation about the Y-axis.
-    pub fn apply_y2m(&mut self, qubit: usize) {
-        self.apply_ry(qubit, -FRAC_PI_2);
+    pub fn apply_y2m(&mut self, qubit: usize) -> Result<(), QisError> {
+        self.apply_ry(qubit, -FRAC_PI_2)?;
+        Ok(())
     }
     /// Applies the parameterized RXY rotation gate.
-    pub fn apply_rxy(&mut self, qubit: usize, theta: f64, phi: f64) {
-        self.apply_u(qubit, theta, phi - FRAC_PI_2, FRAC_PI_2 - phi);
+    pub fn apply_rxy(&mut self, qubit: usize, theta: f64, phi: f64) -> Result<(), QisError> {
+        self.apply_u(qubit, theta, phi - FRAC_PI_2, FRAC_PI_2 - phi)?;
+        Ok(())
     }
     /// Applies the XY2P gate.
-    pub fn apply_xy2p(&mut self, qubit: usize, theta: f64) {
-        self.apply_rxy(qubit, FRAC_PI_2, theta);
+    pub fn apply_xy2p(&mut self, qubit: usize, theta: f64) -> Result<(), QisError> {
+        self.apply_rxy(qubit, FRAC_PI_2, theta)?;
+        Ok(())
     }
     /// Applies the XY2M gate.
-    pub fn apply_xy2m(&mut self, qubit: usize, theta: f64) {
-        self.apply_rxy(qubit, -FRAC_PI_2, theta);
+    pub fn apply_xy2m(&mut self, qubit: usize, theta: f64) -> Result<(), QisError> {
+        self.apply_rxy(qubit, -FRAC_PI_2, theta)?;
+        Ok(())
     }
     /// Applies the XY gate.
     ///
     /// Matrix: [[0, -i·e^(-iθ)], [-i·e^(iθ), 0]]
-    pub fn apply_xy(&mut self, qubit: usize, theta: f64) {
+    pub fn apply_xy(&mut self, qubit: usize, theta: f64) -> Result<(), QisError> {
+        self.validate_qubit(qubit)?;
         let mat = StandardGate::XY.matrix(&[theta]).unwrap();
         self.apply_single_qubit_gate(
             qubit,
             [[mat[[0, 0]], mat[[0, 1]]], [mat[[1, 0]], mat[[1, 1]]]],
-        );
+        )?;
+        Ok(())
     }
     /// Applies a global phase (has no observable effect on a density matrix).
     pub fn apply_gphase(&mut self, _phi: f64) { /* Global phase has no effect on density matrix */
@@ -680,25 +757,41 @@ impl DensityMatrix {
     }
 
     /// Applies the Controlled-X (CNOT) gate.
-    pub fn apply_cx(&mut self, control: usize, target: usize) {
+    pub fn apply_cx(&mut self, control: usize, target: usize) -> Result<(), QisError> {
+        self.validate_two_qubits(control, target)?;
         self.apply_cx_kernel(control, target, self.num_qubits);
         self.apply_cx_kernel(control, target, 0);
+        Ok(())
     }
     /// Applies the Controlled-Z gate.
-    pub fn apply_cz(&mut self, q0: usize, q1: usize) {
+    pub fn apply_cz(&mut self, q0: usize, q1: usize) -> Result<(), QisError> {
+        self.validate_two_qubits(q0, q1)?;
         self.apply_cz_kernel(q0, q1, self.num_qubits);
         self.apply_cz_kernel(q0, q1, 0);
+        Ok(())
     }
 
     /// Applies an arbitrary 2x2 unitary matrix to a single qubit.
-    pub fn apply_single_qubit_gate(&mut self, qubit: usize, matrix: [[Complex64; 2]; 2]) {
+    pub fn apply_single_qubit_gate(
+        &mut self,
+        qubit: usize,
+        matrix: [[Complex64; 2]; 2],
+    ) -> Result<(), QisError> {
+        self.validate_qubit(qubit)?;
         let flat = vec![matrix[0][0], matrix[0][1], matrix[1][0], matrix[1][1]];
         self.apply_matrix_kernel(&[qubit], self.num_qubits, &flat, false);
         self.apply_matrix_kernel(&[qubit], 0, &flat, true);
+        Ok(())
     }
 
     /// Applies an arbitrary 4x4 unitary matrix to two qubits.
-    pub fn apply_double_qubits_gate(&mut self, q0: usize, q1: usize, matrix: [[Complex64; 4]; 4]) {
+    pub fn apply_double_qubits_gate(
+        &mut self,
+        q0: usize,
+        q1: usize,
+        matrix: [[Complex64; 4]; 4],
+    ) -> Result<(), QisError> {
+        self.validate_two_qubits(q0, q1)?;
         let mut flat = Vec::with_capacity(16);
         for row in &matrix {
             for &val in row {
@@ -707,72 +800,101 @@ impl DensityMatrix {
         }
         self.apply_matrix_kernel(&[q0, q1], self.num_qubits, &flat, false);
         self.apply_matrix_kernel(&[q0, q1], 0, &flat, true);
+        Ok(())
     }
 
     /// Applies the SWAP gate between two qubits.
-    pub fn apply_swap(&mut self, q0: usize, q1: usize) {
+    pub fn apply_swap(&mut self, q0: usize, q1: usize) -> Result<(), QisError> {
+        self.validate_two_qubits(q0, q1)?;
         let mat = StandardGate::SWAP.matrix(&[]).unwrap();
-        self.apply_unitary_gate(&[q0, q1], &mat);
+        self.apply_unitary_gate(&[q0, q1], &mat)?;
+        Ok(())
     }
 
     /// Applies the Controlled-Y gate.
-    pub fn apply_cy(&mut self, control: usize, target: usize) {
+    pub fn apply_cy(&mut self, control: usize, target: usize) -> Result<(), QisError> {
+        self.validate_two_qubits(control, target)?;
         let mat = StandardGate::CY.matrix(&[]).unwrap();
-        self.apply_unitary_gate(&[control, target], &mat);
+        self.apply_unitary_gate(&[control, target], &mat)?;
+        Ok(())
     }
 
     /// Applies the Toffoli (Controlled-Controlled-X) gate.
-    pub fn apply_ccx(&mut self, c0: usize, c1: usize, target: usize) {
+    pub fn apply_ccx(&mut self, c0: usize, c1: usize, target: usize) -> Result<(), QisError> {
+        self.validate_qubits(&[c0, c1, target])?;
         let mat = StandardGate::CCX.matrix(&[]).unwrap();
-        self.apply_unitary_gate(&[c0, c1, target], &mat);
+        self.apply_unitary_gate(&[c0, c1, target], &mat)?;
+        Ok(())
     }
 
     /// Applies the parameterized RXX (Ising XX) gate.
-    pub fn apply_rxx(&mut self, q0: usize, q1: usize, theta: f64) {
+    pub fn apply_rxx(&mut self, q0: usize, q1: usize, theta: f64) -> Result<(), QisError> {
+        self.validate_two_qubits(q0, q1)?;
         let mat = StandardGate::RXX.matrix(&[theta]).unwrap();
-        self.apply_unitary_gate(&[q0, q1], &mat);
+        self.apply_unitary_gate(&[q0, q1], &mat)?;
+        Ok(())
     }
 
     /// Applies the parameterized RYY (Ising YY) gate.
-    pub fn apply_ryy(&mut self, q0: usize, q1: usize, theta: f64) {
+    pub fn apply_ryy(&mut self, q0: usize, q1: usize, theta: f64) -> Result<(), QisError> {
+        self.validate_two_qubits(q0, q1)?;
         let mat = StandardGate::RYY.matrix(&[theta]).unwrap();
-        self.apply_unitary_gate(&[q0, q1], &mat);
+        self.apply_unitary_gate(&[q0, q1], &mat)?;
+        Ok(())
     }
 
     /// Applies the parameterized RZZ (Ising ZZ) gate.
-    pub fn apply_rzz(&mut self, q0: usize, q1: usize, theta: f64) {
+    pub fn apply_rzz(&mut self, q0: usize, q1: usize, theta: f64) -> Result<(), QisError> {
+        self.validate_two_qubits(q0, q1)?;
         let mat = StandardGate::RZZ.matrix(&[theta]).unwrap();
-        self.apply_unitary_gate(&[q0, q1], &mat);
+        self.apply_unitary_gate(&[q0, q1], &mat)?;
+        Ok(())
     }
 
     /// Applies the parameterized RZX gate.
-    pub fn apply_rzx(&mut self, q0: usize, q1: usize, theta: f64) {
+    pub fn apply_rzx(&mut self, q0: usize, q1: usize, theta: f64) -> Result<(), QisError> {
+        self.validate_two_qubits(q0, q1)?;
         let mat = StandardGate::RZX.matrix(&[theta]).unwrap();
-        self.apply_unitary_gate(&[q0, q1], &mat);
+        self.apply_unitary_gate(&[q0, q1], &mat)?;
+        Ok(())
     }
 
     /// Applies the Controlled-RX gate.
-    pub fn apply_crx(&mut self, control: usize, target: usize, theta: f64) {
+    pub fn apply_crx(&mut self, control: usize, target: usize, theta: f64) -> Result<(), QisError> {
+        self.validate_two_qubits(control, target)?;
         let mat = StandardGate::CRX.matrix(&[theta]).unwrap();
-        self.apply_unitary_gate(&[control, target], &mat);
+        self.apply_unitary_gate(&[control, target], &mat)?;
+        Ok(())
     }
 
     /// Applies the Controlled-RY gate.
-    pub fn apply_cry(&mut self, control: usize, target: usize, theta: f64) {
+    pub fn apply_cry(&mut self, control: usize, target: usize, theta: f64) -> Result<(), QisError> {
+        self.validate_two_qubits(control, target)?;
         let mat = StandardGate::CRY.matrix(&[theta]).unwrap();
-        self.apply_unitary_gate(&[control, target], &mat);
+        self.apply_unitary_gate(&[control, target], &mat)?;
+        Ok(())
     }
 
     /// Applies the Controlled-RZ gate.
-    pub fn apply_crz(&mut self, control: usize, target: usize, theta: f64) {
+    pub fn apply_crz(&mut self, control: usize, target: usize, theta: f64) -> Result<(), QisError> {
+        self.validate_two_qubits(control, target)?;
         let mat = StandardGate::CRZ.matrix(&[theta]).unwrap();
-        self.apply_unitary_gate(&[control, target], &mat);
+        self.apply_unitary_gate(&[control, target], &mat)?;
+        Ok(())
     }
 
     /// Applies the Fermionic Simulation (FSIM) gate.
-    pub fn apply_fsim(&mut self, q0: usize, q1: usize, theta: f64, phi: f64) {
+    pub fn apply_fsim(
+        &mut self,
+        q0: usize,
+        q1: usize,
+        theta: f64,
+        phi: f64,
+    ) -> Result<(), QisError> {
+        self.validate_two_qubits(q0, q1)?;
         let mat = StandardGate::FSIM.matrix(&[theta, phi]).unwrap();
-        self.apply_unitary_gate(&[q0, q1], &mat);
+        self.apply_unitary_gate(&[q0, q1], &mat)?;
+        Ok(())
     }
 
     /// Applies an arbitrary n-qubit unitary gate.
@@ -782,10 +904,16 @@ impl DensityMatrix {
     /// # Arguments
     /// * `qs` - Slice of qubit indices the gate acts on.
     /// * `mat` - The unitary matrix as a $2^n \times 2^n$ `ndarray`.
-    pub fn apply_unitary_gate(&mut self, qubits: &[usize], matrix: &ndarray::Array2<Complex64>) {
+    pub fn apply_unitary_gate(
+        &mut self,
+        qubits: &[usize],
+        matrix: &ndarray::Array2<Complex64>,
+    ) -> Result<(), QisError> {
+        self.validate_qubits(qubits)?;
         let flat: Vec<Complex64> = matrix.iter().cloned().collect();
         self.apply_matrix_kernel(qubits, self.num_qubits, &flat, false);
         self.apply_matrix_kernel(qubits, 0, &flat, true);
+        Ok(())
     }
 
     fn apply_matrix_kernel(&mut self, qs: &[usize], off: usize, mat: &[Complex64], conj: bool) {
@@ -851,7 +979,8 @@ impl DensityMatrix {
     /// # Arguments
     /// * `ops` - A slice of Kraus operators, where each operator is represented as a flattened vector of `Complex64`.
     /// * `qs` - The target qubit indices the channel acts upon.
-    pub fn apply_kraus(&mut self, ops: &[Vec<Complex64>], qs: &[usize]) {
+    pub fn apply_kraus(&mut self, ops: &[Vec<Complex64>], qs: &[usize]) -> Result<(), QisError> {
+        self.validate_qubits(qs)?;
         let source_data = self.data.clone();
 
         for val in self.data.iter_mut() {
@@ -893,6 +1022,7 @@ impl DensityMatrix {
             let tr = self.trace();
             debug_assert!((tr.re - 1.0).abs() < 1e-10, "Trace error: {}", tr);
         }
+        Ok(())
     }
 
     /// Computes the partial trace over a set of qubits.

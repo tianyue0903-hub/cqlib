@@ -483,10 +483,6 @@ fn test_commutation_relation_xyz() {
     // Actually: iZ - (-iZ) = 2iZ, so XY and YX have opposite signs
 }
 
-// ============================================================================
-// Expectation value tests with probability distributions
-// ============================================================================
-
 use std::collections::HashMap;
 
 #[test]

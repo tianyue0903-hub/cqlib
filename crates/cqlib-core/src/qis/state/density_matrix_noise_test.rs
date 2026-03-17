@@ -17,6 +17,7 @@ use crate::device::noise::{ReadoutError, SingleQubitNoise, TwoQubitNoise};
 use crate::qis::pauli::Pauli;
 use ndarray::array;
 use num_complex::Complex64;
+use std::f64::consts::PI;
 
 #[test]
 fn test_bit_flip_noise() {
@@ -30,7 +31,7 @@ fn test_bit_flip_noise() {
         .unwrap();
 
     let mut sim = DensityMatrixNoise::new(1, Some(noise_model));
-    sim.apply_x(0);
+    sim.apply_x(0).unwrap();
 
     let probs = sim.probabilities_with_readout(&[0]);
     assert!((probs[1] - 0.9).abs() < 1e-6, "P(|1>) was {}", probs[1]);
@@ -60,9 +61,9 @@ fn test_readout_error() {
 #[test]
 fn test_ccx() {
     let mut sim = DensityMatrixNoise::new(3, None);
-    sim.apply_x(0);
-    sim.apply_x(1);
-    sim.apply_ccx(0, 1, 2);
+    sim.apply_x(0).unwrap();
+    sim.apply_x(1).unwrap();
+    sim.apply_ccx(0, 1, 2).unwrap();
     let probs = sim.probabilities_with_readout(&[2]);
     let p1: f64 = probs
         .iter()
@@ -86,7 +87,7 @@ fn test_apply_kraus_memory() {
 
     let mut sim = DensityMatrixNoise::new(1, Some(noise_model));
     for _ in 0..100 {
-        sim.apply_x(0);
+        sim.apply_x(0).unwrap();
     }
     let probs = sim.probabilities_with_readout(&[0]);
     assert!(probs[0] > 0.0);
@@ -126,8 +127,8 @@ fn test_phase_flip_noise_exact() {
         .unwrap();
 
     let mut sim = DensityMatrixNoise::new(1, Some(noise_model));
-    sim.apply_h(0);
-    sim.apply_h(0);
+    sim.apply_h(0).unwrap();
+    sim.apply_h(0).unwrap();
 
     let probs = sim.probabilities_with_readout(&[0]);
     assert!((probs[1] - 0.1).abs() < 1e-6, "P(|1>) was {}", probs[1]);
@@ -146,7 +147,7 @@ fn test_amplitude_damping_noise() {
         .unwrap();
 
     let mut sim = DensityMatrixNoise::new(1, Some(noise_model));
-    sim.apply_x(0);
+    sim.apply_x(0).unwrap();
 
     let probs = sim.probabilities_with_readout(&[0]);
     assert!((probs[1] - 0.8).abs() < 1e-6, "P(|1>) was {}", probs[1]);
@@ -165,8 +166,8 @@ fn test_phase_damping_noise() {
         .unwrap();
 
     let mut sim = DensityMatrixNoise::new(1, Some(noise_model));
-    sim.apply_h(0);
-    sim.apply_h(0);
+    sim.apply_h(0).unwrap();
+    sim.apply_h(0).unwrap();
 
     let probs = sim.probabilities_with_readout(&[0]);
     let expected_p0 = 0.5 * (1.0 + 0.8f64.sqrt());
@@ -199,7 +200,7 @@ fn test_pauli_noise() {
         .unwrap();
 
     let mut sim = DensityMatrixNoise::new(1, Some(noise_model));
-    sim.apply_x(0);
+    sim.apply_x(0).unwrap();
 
     let probs = sim.probabilities_with_readout(&[0]);
     assert!((probs[0] - 0.3).abs() < 1e-6, "P(|0>) was {}", probs[0]);
@@ -218,7 +219,7 @@ fn test_depolarizing_1q_noise() {
         .unwrap();
 
     let mut sim = DensityMatrixNoise::new(1, Some(noise_model));
-    sim.apply_x(0);
+    sim.apply_x(0).unwrap();
 
     let probs = sim.probabilities_with_readout(&[0]);
     assert!((probs[1] - 0.8).abs() < 1e-6, "P(|1>) was {}", probs[1]);
@@ -242,7 +243,7 @@ fn test_two_qubit_correlated_pauli_noise() {
         .unwrap();
 
     let mut sim = DensityMatrixNoise::new(2, Some(noise_model));
-    sim.apply_cx(0, 1);
+    sim.apply_cx(0, 1).unwrap();
 
     let probs = sim.probabilities_with_readout(&[0, 1]);
     assert!((probs[0] - 0.8).abs() < 1e-6, "P(|00>) was {}", probs[0]);
@@ -267,7 +268,7 @@ fn test_two_qubit_independent_noise() {
         .unwrap();
 
     let mut sim = DensityMatrixNoise::new(2, Some(noise_model));
-    sim.apply_cx(0, 1);
+    sim.apply_cx(0, 1).unwrap();
 
     let probs = sim.probabilities_with_readout(&[0, 1]);
     assert!((probs[0] - 0.72).abs() < 1e-6, "P(|00>) was {}", probs[0]);
@@ -289,8 +290,8 @@ fn test_two_qubit_depolarizing_noise() {
         .unwrap();
 
     let mut sim = DensityMatrixNoise::new(2, Some(noise_model));
-    sim.apply_x(0);
-    sim.apply_cx(0, 1);
+    sim.apply_x(0).unwrap();
+    sim.apply_cx(0, 1).unwrap();
 
     let probs = sim.probabilities_with_readout(&[0, 1]);
     let sum: f64 = probs.iter().sum();
@@ -326,7 +327,7 @@ fn test_multi_qubit_readout_error() {
         .unwrap();
 
     let mut sim = DensityMatrixNoise::new(2, Some(noise_model));
-    sim.apply_x(0);
+    sim.apply_x(0).unwrap();
 
     let probs = sim.probabilities_with_readout(&[0, 1]);
     assert!((probs[0] - 0.06).abs() < 1e-6, "P(|00>) was {}", probs[0]);
@@ -340,9 +341,7 @@ fn test_from_circuit_complex() {
     let mut circuit = Circuit::new(3);
 
     circuit.h(Qubit::new(0)).unwrap();
-    circuit
-        .rx(Qubit::new(1), std::f64::consts::PI / 2.0)
-        .unwrap();
+    circuit.rx(Qubit::new(1), PI / 2.0).unwrap();
     circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
     circuit
         .ccx(Qubit::new(0), Qubit::new(1), Qubit::new(2))
@@ -407,8 +406,8 @@ fn test_x2p_y2m_noise() {
         .unwrap();
 
     let mut sim = DensityMatrixNoise::new(1, Some(noise_model));
-    sim.apply_x2p(0);
-    sim.apply_y2m(0);
+    sim.apply_x2p(0).unwrap();
+    sim.apply_y2m(0).unwrap();
 
     let probs = sim.probabilities_with_readout(&[0]);
     assert!(probs[0] >= 0.0);
@@ -429,9 +428,9 @@ fn test_cz_xy2p_rz_noise() {
         .unwrap();
 
     let mut sim = DensityMatrixNoise::new(2, Some(noise_model));
-    sim.apply_rz(0, std::f64::consts::PI / 2.0);
-    sim.apply_xy2p(1, std::f64::consts::PI);
-    sim.apply_cz(0, 1);
+    sim.apply_rz(0, PI / 2.0).unwrap();
+    sim.apply_xy2p(1, PI).unwrap();
+    sim.apply_cz(0, 1).unwrap();
 
     let probs = sim.probabilities_with_readout(&[0, 1]);
     let sum: f64 = probs.iter().sum();
@@ -444,15 +443,11 @@ fn test_complex_circuit_with_native_gates() {
 
     circuit.x2p(Qubit::new(0)).unwrap();
     circuit.y2m(Qubit::new(1)).unwrap();
-    circuit
-        .xy2p(Qubit::new(0), std::f64::consts::PI / 4.0)
-        .unwrap();
+    circuit.xy2p(Qubit::new(0), PI / 4.0).unwrap();
     circuit.cz(Qubit::new(0), Qubit::new(1)).unwrap();
-    circuit.rz(Qubit::new(2), std::f64::consts::PI).unwrap();
+    circuit.rz(Qubit::new(2), PI).unwrap();
     // xy is a single-qubit gate, not two-qubit
-    circuit
-        .xy(Qubit::new(1), std::f64::consts::PI / 2.0)
-        .unwrap();
+    circuit.xy(Qubit::new(1), PI / 2.0).unwrap();
     circuit.cz(Qubit::new(1), Qubit::new(2)).unwrap();
 
     let mut noise_model = NoiseModel::new();
@@ -493,7 +488,7 @@ fn test_x2p_gate_noise() {
         .unwrap();
 
     let mut sim = DensityMatrixNoise::new(1, Some(noise_model));
-    sim.apply_x2p(0);
+    sim.apply_x2p(0).unwrap();
 
     // X2P + X2P = X (approximately, without noise)
     // With bit-flip noise after X2P, we expect some probability in |0>
@@ -503,7 +498,7 @@ fn test_x2p_gate_noise() {
     assert!((probs[0] + probs[1] - 1.0).abs() < 1e-6);
 
     // Apply second X2P to complete X rotation
-    sim.apply_x2p(0);
+    sim.apply_x2p(0).unwrap();
     let probs = sim.probabilities_with_readout(&[0]);
     // After two X2P gates with bit-flip noise, P(|0>) should be around 0.1
     assert!(probs[0] > 0.0, "P(|0>) should be > 0 due to noise");
@@ -523,10 +518,10 @@ fn test_x2m_gate_noise() {
     let mut sim = DensityMatrixNoise::new(1, Some(noise_model));
 
     // Start in |1>
-    sim.apply_x(0);
+    sim.apply_x(0).unwrap();
 
     // X2M rotates around X axis by -pi/2
-    sim.apply_x2m(0);
+    sim.apply_x2m(0).unwrap();
 
     let probs = sim.probabilities_with_readout(&[0]);
     assert!(probs[0] >= 0.0);
@@ -546,7 +541,7 @@ fn test_y2p_gate_noise() {
         .unwrap();
 
     let mut sim = DensityMatrixNoise::new(1, Some(noise_model));
-    sim.apply_y2p(0);
+    sim.apply_y2p(0).unwrap();
 
     let probs = sim.probabilities_with_readout(&[0]);
     assert!(probs[0] >= 0.0);
@@ -568,10 +563,10 @@ fn test_y2m_gate_noise() {
     let mut sim = DensityMatrixNoise::new(1, Some(noise_model));
 
     // Start in |+>
-    sim.apply_h(0);
+    sim.apply_h(0).unwrap();
 
     // Y2M rotates around Y axis by -pi/2
-    sim.apply_y2m(0);
+    sim.apply_y2m(0).unwrap();
 
     let probs = sim.probabilities_with_readout(&[0]);
     assert!(probs[0] >= 0.0);
@@ -593,11 +588,11 @@ fn test_xy2p_gate_noise() {
     let mut sim = DensityMatrixNoise::new(1, Some(noise_model));
 
     // Start in |1>
-    sim.apply_x(0);
+    sim.apply_x(0).unwrap();
 
     // XY2P is a sqrt(XY) gate, theta=pi creates superposition
     // |1> -> (i|0> + |1>)/sqrt(2), so P(|0>) = 0.5 without noise
-    sim.apply_xy2p(0, std::f64::consts::PI);
+    sim.apply_xy2p(0, PI).unwrap();
 
     let probs = sim.probabilities_with_readout(&[0]);
     // With bit-flip noise, we expect P(|0>) around 0.5 (with some noise variation)
@@ -622,11 +617,11 @@ fn test_xy2m_gate_noise() {
     let mut sim = DensityMatrixNoise::new(1, Some(noise_model));
 
     // Start in |1>
-    sim.apply_x(0);
+    sim.apply_x(0).unwrap();
 
     // XY2M is sqrt(XY)^dagger, theta=pi creates superposition
     // |1> -> (-i|0> + |1>)/sqrt(2), so P(|0>) = 0.5 without noise
-    sim.apply_xy2m(0, std::f64::consts::PI);
+    sim.apply_xy2m(0, PI).unwrap();
 
     let probs = sim.probabilities_with_readout(&[0]);
     // With bit-flip noise, we expect P(|0>) around 0.5 (with some noise variation)
@@ -655,11 +650,11 @@ fn test_cz_gate_noise() {
     let mut sim = DensityMatrixNoise::new(2, Some(noise_model));
 
     // Prepare |11>
-    sim.apply_x(0);
-    sim.apply_x(1);
+    sim.apply_x(0).unwrap();
+    sim.apply_x(1).unwrap();
 
     // Apply CZ
-    sim.apply_cz(0, 1);
+    sim.apply_cz(0, 1).unwrap();
 
     // CZ adds a phase to |11> but doesn't change probabilities
     let probs = sim.probabilities_with_readout(&[0, 1]);
@@ -684,10 +679,10 @@ fn test_rz_gate_noise() {
     let mut sim = DensityMatrixNoise::new(1, Some(noise_model));
 
     // Prepare |+>
-    sim.apply_h(0);
+    sim.apply_h(0).unwrap();
 
     // Apply RZ(pi)
-    sim.apply_rz(0, std::f64::consts::PI);
+    sim.apply_rz(0, PI).unwrap();
 
     // RZ(pi) on |+> gives |->
     // With phase flip noise during RZ, we expect some |+> component
@@ -709,17 +704,17 @@ fn test_rz_gate_multiple_rotations() {
     let mut sim = DensityMatrixNoise::new(1, Some(noise_model));
 
     // Start in |+>
-    sim.apply_h(0);
+    sim.apply_h(0).unwrap();
 
     // Apply multiple RZ gates
-    sim.apply_rz(0, std::f64::consts::PI / 4.0);
-    sim.apply_rz(0, std::f64::consts::PI / 4.0);
-    sim.apply_rz(0, std::f64::consts::PI / 4.0);
-    sim.apply_rz(0, std::f64::consts::PI / 4.0);
+    sim.apply_rz(0, PI / 4.0).unwrap();
+    sim.apply_rz(0, PI / 4.0).unwrap();
+    sim.apply_rz(0, PI / 4.0).unwrap();
+    sim.apply_rz(0, PI / 4.0).unwrap();
 
     // Total rotation is pi, should give |->
     // Measure in X basis by applying H first
-    sim.apply_h(0);
+    sim.apply_h(0).unwrap();
 
     let probs = sim.probabilities_with_readout(&[0]);
     // With phase damping, P(|1>) should be around 0.5
@@ -756,17 +751,13 @@ fn test_native_gates_combination() {
     let mut sim = DensityMatrixNoise::new(1, Some(noise_model));
 
     // X2P + Y2P + RZ(pi) sequence
-    sim.apply_x2p(0);
-    sim.apply_y2p(0);
-    sim.apply_rz(0, std::f64::consts::PI);
+    sim.apply_x2p(0).unwrap();
+    sim.apply_y2p(0).unwrap();
+    sim.apply_rz(0, PI).unwrap();
 
     let probs = sim.probabilities_with_readout(&[0]);
     assert!((probs[0] + probs[1] - 1.0).abs() < 1e-6);
 }
-
-// ============================================================================
-// Complex circuit tests
-// ============================================================================
 
 #[test]
 fn test_complex_circuit_native_gates_with_cz() {
@@ -782,26 +773,14 @@ fn test_complex_circuit_native_gates_with_cz() {
     circuit.cz(Qubit::new(1), Qubit::new(2)).unwrap();
 
     // Layer 3: Single-qubit rotations with RZ
-    circuit
-        .rz(Qubit::new(0), std::f64::consts::PI / 3.0)
-        .unwrap();
-    circuit
-        .rz(Qubit::new(1), std::f64::consts::PI / 2.0)
-        .unwrap();
-    circuit
-        .rz(Qubit::new(2), std::f64::consts::PI / 4.0)
-        .unwrap();
+    circuit.rz(Qubit::new(0), PI / 3.0).unwrap();
+    circuit.rz(Qubit::new(1), PI / 2.0).unwrap();
+    circuit.rz(Qubit::new(2), PI / 4.0).unwrap();
 
     // Layer 4: XY gates
-    circuit
-        .xy2p(Qubit::new(0), std::f64::consts::PI / 6.0)
-        .unwrap();
-    circuit
-        .xy2m(Qubit::new(1), std::f64::consts::PI / 6.0)
-        .unwrap();
-    circuit
-        .xy(Qubit::new(2), std::f64::consts::PI / 3.0)
-        .unwrap();
+    circuit.xy2p(Qubit::new(0), PI / 6.0).unwrap();
+    circuit.xy2m(Qubit::new(1), PI / 6.0).unwrap();
+    circuit.xy(Qubit::new(2), PI / 3.0).unwrap();
 
     // Layer 5: Final CZ
     circuit.cz(Qubit::new(0), Qubit::new(2)).unwrap();
@@ -851,18 +830,10 @@ fn test_complex_circuit_entanglement_with_noise() {
     circuit.cz(Qubit::new(2), Qubit::new(3)).unwrap();
 
     // Apply rotations
-    circuit
-        .rz(Qubit::new(0), std::f64::consts::PI / 4.0)
-        .unwrap();
-    circuit
-        .rz(Qubit::new(1), std::f64::consts::PI / 4.0)
-        .unwrap();
-    circuit
-        .rz(Qubit::new(2), std::f64::consts::PI / 4.0)
-        .unwrap();
-    circuit
-        .rz(Qubit::new(3), std::f64::consts::PI / 4.0)
-        .unwrap();
+    circuit.rz(Qubit::new(0), PI / 4.0).unwrap();
+    circuit.rz(Qubit::new(1), PI / 4.0).unwrap();
+    circuit.rz(Qubit::new(2), PI / 4.0).unwrap();
+    circuit.rz(Qubit::new(3), PI / 4.0).unwrap();
 
     // Additional entanglement
     circuit.cz(Qubit::new(0), Qubit::new(3)).unwrap();
@@ -927,25 +898,15 @@ fn test_complex_circuit_all_native_gates() {
     circuit.x2m(Qubit::new(0)).unwrap();
     circuit.y2p(Qubit::new(1)).unwrap();
     circuit.y2m(Qubit::new(1)).unwrap();
-    circuit
-        .xy(Qubit::new(0), std::f64::consts::PI / 2.0)
-        .unwrap();
-    circuit
-        .xy2p(Qubit::new(1), std::f64::consts::PI / 4.0)
-        .unwrap();
-    circuit
-        .xy2m(Qubit::new(2), std::f64::consts::PI / 4.0)
-        .unwrap();
+    circuit.xy(Qubit::new(0), PI / 2.0).unwrap();
+    circuit.xy2p(Qubit::new(1), PI / 4.0).unwrap();
+    circuit.xy2m(Qubit::new(2), PI / 4.0).unwrap();
     circuit.cz(Qubit::new(0), Qubit::new(1)).unwrap();
-    circuit
-        .rz(Qubit::new(0), std::f64::consts::PI / 3.0)
-        .unwrap();
-    circuit
-        .rz(Qubit::new(1), std::f64::consts::PI / 2.0)
-        .unwrap();
-    circuit.rz(Qubit::new(2), std::f64::consts::PI).unwrap();
+    circuit.rz(Qubit::new(0), PI / 3.0).unwrap();
+    circuit.rz(Qubit::new(1), PI / 2.0).unwrap();
+    circuit.rz(Qubit::new(2), PI).unwrap();
     circuit.cz(Qubit::new(1), Qubit::new(2)).unwrap();
-    circuit.xy(Qubit::new(2), std::f64::consts::PI).unwrap();
+    circuit.xy(Qubit::new(2), PI).unwrap();
 
     let mut noise_model = NoiseModel::new();
 
@@ -1043,12 +1004,8 @@ fn test_complex_circuit_with_readout_and_gate_noise() {
     circuit.cz(Qubit::new(0), Qubit::new(1)).unwrap();
 
     // Rotate to superposition
-    circuit
-        .rz(Qubit::new(0), std::f64::consts::PI / 2.0)
-        .unwrap();
-    circuit
-        .xy(Qubit::new(1), std::f64::consts::PI / 2.0)
-        .unwrap();
+    circuit.rz(Qubit::new(0), PI / 2.0).unwrap();
+    circuit.xy(Qubit::new(1), PI / 2.0).unwrap();
 
     // Another CZ
     circuit.cz(Qubit::new(0), Qubit::new(1)).unwrap();
@@ -1159,10 +1116,10 @@ fn test_native_gates_pauli_noise() {
     let mut sim = DensityMatrixNoise::new(1, Some(noise_model));
 
     // Sequence of native gates
-    sim.apply_x2p(0);
-    sim.apply_y2p(0);
-    sim.apply_rz(0, std::f64::consts::PI / 2.0);
-    sim.apply_xy2p(0, std::f64::consts::PI / 4.0);
+    sim.apply_x2p(0).unwrap();
+    sim.apply_y2p(0).unwrap();
+    sim.apply_rz(0, PI / 2.0).unwrap();
+    sim.apply_xy2p(0, PI / 4.0).unwrap();
 
     let probs = sim.probabilities_with_readout(&[0]);
     assert!((probs[0] + probs[1] - 1.0).abs() < 1e-6);
@@ -1186,10 +1143,10 @@ fn test_native_gates_amplitude_damping() {
     let mut sim = DensityMatrixNoise::new(1, Some(noise_model));
 
     // Start in |1>
-    sim.apply_x(0);
+    sim.apply_x(0).unwrap();
 
     // Apply X2P with amplitude damping
-    sim.apply_x2p(0);
+    sim.apply_x2p(0).unwrap();
 
     let probs = sim.probabilities_with_readout(&[0]);
     assert!((probs[0] + probs[1] - 1.0).abs() < 1e-6);

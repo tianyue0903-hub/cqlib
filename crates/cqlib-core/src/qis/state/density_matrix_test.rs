@@ -40,7 +40,7 @@ fn test_from_state_not_normalized() {
 #[test]
 fn test_probabilities() {
     let mut dm = DensityMatrix::new(1);
-    dm.apply_h(0);
+    dm.apply_h(0).unwrap();
 
     let probs = dm.probabilities();
     assert_eq!(probs.len(), 2);
@@ -53,11 +53,11 @@ fn test_rz_phase_correction() {
     // Before fix, apply_rz(PI) applied PI/2.
     // Now apply_rz(PI) applies PI, which should flip the sign of off-diagonals perfectly.
     let mut dm = DensityMatrix::new(1);
-    dm.apply_h(0); // |+> state -> [[0.5, 0.5], [0.5, 0.5]]
+    dm.apply_h(0).unwrap(); // |+> state -> [[0.5, 0.5], [0.5, 0.5]]
 
     // Apply RZ(PI). |+> goes to |->.
     // Density matrix for |-> is [[0.5, -0.5], [-0.5, 0.5]]
-    dm.apply_rz(0, PI);
+    dm.apply_rz(0, PI).unwrap();
 
     assert_relative_eq!(dm.data[0].re, 0.5); // |0><0|
     assert_relative_eq!(dm.data[1].re, -0.5); // |0><1| (flat index 1)
@@ -76,8 +76,8 @@ fn test_from_circuit_bell_state() {
 
     // Equivalent manual preparation
     let mut dm_manual = DensityMatrix::new(2);
-    dm_manual.apply_h(0);
-    dm_manual.apply_cx(0, 1);
+    dm_manual.apply_h(0).unwrap();
+    dm_manual.apply_cx(0, 1).unwrap();
 
     for i in 0..16 {
         assert_relative_eq!(dm.data[i].re, dm_manual.data[i].re);
@@ -89,12 +89,12 @@ fn test_from_circuit_bell_state() {
 fn test_ccx_gate() {
     // Prepare |110> state
     let mut dm = DensityMatrix::new(3);
-    dm.apply_x(0); // ctrl 1
-    dm.apply_x(1); // ctrl 2
+    dm.apply_x(0).unwrap(); // ctrl 1
+    dm.apply_x(1).unwrap(); // ctrl 2
     // target 2 is 0
 
     // Apply CCX
-    dm.apply_ccx(0, 1, 2);
+    dm.apply_ccx(0, 1, 2).unwrap();
 
     let probs = dm.probabilities();
     // |111> is index 7 (in 0,1,2 little-endian mapping, 1*1 + 1*2 + 1*4 = 7)
@@ -104,9 +104,9 @@ fn test_ccx_gate() {
 #[test]
 fn test_swap_gate() {
     let mut dm = DensityMatrix::new(2);
-    dm.apply_x(0); // state |10>
+    dm.apply_x(0).unwrap(); // state |10>
 
-    dm.apply_swap(0, 1); // should become |01>
+    dm.apply_swap(0, 1).unwrap(); // should become |01>
 
     let probs = dm.probabilities();
     assert_relative_eq!(probs[1], 0.0); // |10> -> 0
@@ -138,8 +138,8 @@ fn test_from_density_matrix_state_invalid_trace() {
 #[test]
 fn test_partial_trace_bell_state() {
     let mut dm = DensityMatrix::new(2);
-    dm.apply_h(0);
-    dm.apply_cx(0, 1);
+    dm.apply_h(0).unwrap();
+    dm.apply_cx(0, 1).unwrap();
 
     // Tracing out qubit 1 should leave qubit 0 in a maximally mixed state: I/2.
     let reduced_dm = dm.partial_trace(&[0]);
@@ -166,8 +166,8 @@ fn test_partial_trace_out_of_bounds() {
 #[test]
 fn test_partial_trace_duplicate_qubits() {
     let mut dm = DensityMatrix::new(2);
-    dm.apply_h(0);
-    dm.apply_cx(0, 1);
+    dm.apply_h(0).unwrap();
+    dm.apply_cx(0, 1).unwrap();
 
     // Should behave same as &[0] due to deduplication
     let reduced_dm = dm.partial_trace(&[0, 0]);
@@ -194,7 +194,7 @@ fn test_apply_kraus_bit_flip() {
 
     let mut dm = DensityMatrix::new(1);
     // Initial state |0><0|
-    dm.apply_kraus(&[k0, k1], &[0]);
+    dm.apply_kraus(&[k0, k1], &[0]).unwrap();
 
     let probs = dm.probabilities();
     assert_relative_eq!(probs[0], 1.0 - p); // |0><0| probability
@@ -220,20 +220,20 @@ fn test_single_qubit_gates() {
     let mut dm = DensityMatrix::new(1);
 
     // Test X gate
-    dm.apply_x(0);
+    dm.apply_x(0).unwrap();
     assert_relative_eq!(dm.probabilities()[1], 1.0);
 
     // Test Y gate (|1> -> -i|0>) => density matrix is |0><0|
-    dm.apply_y(0);
+    dm.apply_y(0).unwrap();
     assert_relative_eq!(dm.probabilities()[0], 1.0);
 
     // Test Z gate (|0> -> |0>)
-    dm.apply_z(0);
+    dm.apply_z(0).unwrap();
     assert_relative_eq!(dm.probabilities()[0], 1.0);
 
     // Test S gate
-    dm.apply_h(0);
-    dm.apply_s(0);
+    dm.apply_h(0).unwrap();
+    dm.apply_s(0).unwrap();
     // |+> -> (|0> + i|1>)/sqrt(2)
     // dm.data[1] is |0><1| = (1/sqrt(2)) * (-i/sqrt(2)) = -0.5 i
     // dm.data[2] is |1><0| = (i/sqrt(2)) * (1/sqrt(2)) = 0.5 i
@@ -244,10 +244,10 @@ fn test_single_qubit_gates() {
 #[test]
 fn test_two_qubit_gates_cz() {
     let mut dm = DensityMatrix::new(2);
-    dm.apply_h(0);
-    dm.apply_h(1);
+    dm.apply_h(0).unwrap();
+    dm.apply_h(1).unwrap();
 
-    dm.apply_cz(0, 1);
+    dm.apply_cz(0, 1).unwrap();
     // State is |++> -> (|00> + |01> + |10> - |11>)/2
     let probs = dm.probabilities();
     for p in probs {
@@ -276,7 +276,7 @@ fn test_expectation_z_on_zero() {
 fn test_expectation_z_on_one() {
     // |1⟩ state, ⟨Z⟩ = -1
     let mut dm = DensityMatrix::new(1);
-    dm.apply_x(0);
+    dm.apply_x(0).unwrap();
 
     let mut ps = PauliString::new(1);
     ps.set_pauli(0, Pauli::Z);
@@ -290,7 +290,7 @@ fn test_expectation_z_on_one() {
 fn test_expectation_x_on_plus() {
     // |+⟩ state, ⟨X⟩ = 1
     let mut dm = DensityMatrix::new(1);
-    dm.apply_h(0);
+    dm.apply_h(0).unwrap();
 
     let mut ps = PauliString::new(1);
     ps.set_pauli(0, Pauli::X);
@@ -305,8 +305,8 @@ fn test_expectation_multi_qubit() {
     // Bell state |Φ+⟩ = (|00⟩ + |11⟩)/√2
     // For H = Z⊗I, ⟨H⟩ = 0
     let mut dm = DensityMatrix::new(2);
-    dm.apply_h(0);
-    dm.apply_cx(0, 1);
+    dm.apply_h(0).unwrap();
+    dm.apply_cx(0, 1).unwrap();
 
     let mut ps = PauliString::new(2);
     ps.set_pauli(0, Pauli::Z); // Z on qubit 0
@@ -321,8 +321,8 @@ fn test_expectation_zz_on_bell() {
     // Bell state |Φ+⟩ = (|00⟩ + |11⟩)/√2
     // For H = Z⊗Z, ⟨H⟩ = 1
     let mut dm = DensityMatrix::new(2);
-    dm.apply_h(0);
-    dm.apply_cx(0, 1);
+    dm.apply_h(0).unwrap();
+    dm.apply_cx(0, 1).unwrap();
 
     let mut ps = PauliString::new(2);
     ps.set_pauli(0, Pauli::Z);
@@ -360,12 +360,12 @@ fn test_expectation_sv_dm_consistency() {
 
     // Create the same state in both simulators
     let mut sv = Statevector::new(2);
-    sv.apply_h(0);
-    sv.apply_cx(0, 1);
+    sv.apply_h(0).unwrap();
+    sv.apply_cx(0, 1).unwrap();
 
     let mut dm = DensityMatrix::new(2);
-    dm.apply_h(0);
-    dm.apply_cx(0, 1);
+    dm.apply_h(0).unwrap();
+    dm.apply_cx(0, 1).unwrap();
 
     // Create Hamiltonian H = X⊗X + Z⊗Z
     let mut ps_xx = PauliString::new(2);

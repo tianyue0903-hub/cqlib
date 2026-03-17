@@ -38,8 +38,8 @@ fn test_linear_entropy_pure_state() {
 fn test_linear_entropy_bell_state() {
     // Bell state |Φ+⟩ is pure, linear entropy = 0
     let mut dm = DensityMatrix::new(2);
-    dm.apply_h(0);
-    dm.apply_cx(0, 1);
+    dm.apply_h(0).unwrap();
+    dm.apply_cx(0, 1).unwrap();
     let s_l = linear_entropy(&dm).unwrap();
     assert!(
         s_l.abs() < EPSILON,
@@ -137,7 +137,7 @@ fn test_renyi_entropy_pure_state() {
 fn test_renyi_entropy_graceful_degradation() {
     // When α is very close to 1, should smoothly degrade to Von Neumann entropy
     let mut dm = DensityMatrix::new(1);
-    dm.apply_h(0); // |+⟩ state
+    dm.apply_h(0).unwrap(); // |+⟩ state
 
     // Von Neumann entropy should be 0 for pure state
     let vn_entropy = crate::qis::metrics::entropy(&dm).unwrap();
@@ -185,8 +185,8 @@ fn test_renyi_entropy_partially_mixed() {
     // For p = 0.5, eigenvalues are: (3/8, 1/8, 1/8, 1/8)
     let p = 0.5;
     let mut dm = DensityMatrix::new(2);
-    dm.apply_h(0);
-    dm.apply_cx(0, 1);
+    dm.apply_h(0).unwrap();
+    dm.apply_cx(0, 1).unwrap();
 
     // Scale by p
     for val in &mut dm.data {
@@ -250,8 +250,8 @@ fn test_entanglement_entropy_bell_state() {
     // Reduced density matrix for either qubit is maximally mixed
     // So entanglement entropy = 1.0
     let mut sv = Statevector::new(2);
-    sv.apply_h(0);
-    sv.apply_cx(0, 1);
+    sv.apply_h(0).unwrap();
+    sv.apply_cx(0, 1).unwrap();
 
     // Test subsystem A = [0]
     let ee_0 = entanglement_entropy_pure(&sv, &[0]).unwrap();
@@ -274,7 +274,7 @@ fn test_entanglement_entropy_bell_state() {
 fn test_entanglement_entropy_separable_state() {
     // Product state |+0⟩ = |+⟩ ⊗ |0⟩ - no entanglement
     let mut sv = Statevector::new(2);
-    sv.apply_h(0); // Only acts on qubit 0
+    sv.apply_h(0).unwrap(); // Only acts on qubit 0
 
     let ee = entanglement_entropy_pure(&sv, &[0]).unwrap();
     assert!(
@@ -289,9 +289,9 @@ fn test_entanglement_entropy_ghz_state() {
     // GHZ state |GHZ⟩ = (|000⟩ + |111⟩)/√2
     // Reduced density matrix for any single qubit is maximally mixed
     let mut sv = Statevector::new(3);
-    sv.apply_h(0);
-    sv.apply_cx(0, 1);
-    sv.apply_cx(0, 2);
+    sv.apply_h(0).unwrap();
+    sv.apply_cx(0, 1).unwrap();
+    sv.apply_cx(0, 2).unwrap();
 
     // Single qubit subsystem
     let ee_single = entanglement_entropy_pure(&sv, &[0]).unwrap();
@@ -367,8 +367,8 @@ fn test_entanglement_entropy_partially_entangled() {
 fn test_negativity_bell_state() {
     // Bell state |Φ+⟩ has negativity = 0.5
     let mut dm = DensityMatrix::new(2);
-    dm.apply_h(0);
-    dm.apply_cx(0, 1);
+    dm.apply_h(0).unwrap();
+    dm.apply_cx(0, 1).unwrap();
 
     let neg = negativity(&dm, &[0]).unwrap();
     assert!(
@@ -419,8 +419,8 @@ fn test_negativity_werner_state() {
     // Test entangled case (p = 0.5)
     let p = 0.5;
     let mut dm = DensityMatrix::new(2);
-    dm.apply_h(0);
-    dm.apply_cx(0, 1);
+    dm.apply_h(0).unwrap();
+    dm.apply_cx(0, 1).unwrap();
 
     for val in &mut dm.data {
         *val = *val * p;
@@ -440,8 +440,8 @@ fn test_negativity_werner_state() {
     // Test separable case (p = 0.2)
     let p_sep = 0.2;
     let mut dm_sep = DensityMatrix::new(2);
-    dm_sep.apply_h(0);
-    dm_sep.apply_cx(0, 1);
+    dm_sep.apply_h(0).unwrap();
+    dm_sep.apply_cx(0, 1).unwrap();
 
     for val in &mut dm_sep.data {
         *val = *val * p_sep;
@@ -463,8 +463,8 @@ fn test_negativity_werner_state() {
 fn test_negativity_different_subsystems() {
     // Test negativity on different subsystems for Bell state
     let mut dm = DensityMatrix::new(2);
-    dm.apply_h(0);
-    dm.apply_cx(0, 1);
+    dm.apply_h(0).unwrap();
+    dm.apply_cx(0, 1).unwrap();
 
     // Subsystem [0]
     let neg_0 = negativity(&dm, &[0]).unwrap();
@@ -479,9 +479,9 @@ fn test_negativity_different_subsystems() {
 fn test_negativity_ghz_state() {
     // GHZ state has bipartite negativity = 0.5 for any bipartition
     let mut dm = DensityMatrix::new(3);
-    dm.apply_h(0);
-    dm.apply_cx(0, 1);
-    dm.apply_cx(0, 2);
+    dm.apply_h(0).unwrap();
+    dm.apply_cx(0, 1).unwrap();
+    dm.apply_cx(0, 2).unwrap();
 
     // Single qubit vs rest
     let neg = negativity(&dm, &[0]).unwrap();
@@ -648,8 +648,8 @@ fn test_concurrence_werner_state() {
     let expected_c = (3.0 * p - 1.0) / 2.0;
 
     let mut dm = DensityMatrix::new(2);
-    dm.apply_h(0);
-    dm.apply_cx(0, 1);
+    dm.apply_h(0).unwrap();
+    dm.apply_cx(0, 1).unwrap();
 
     for val in &mut dm.data {
         *val = *val * p;
@@ -672,8 +672,8 @@ fn test_concurrence_werner_state() {
     // Separable case (p = 0.2)
     let p_sep = 0.2;
     let mut dm_sep = DensityMatrix::new(2);
-    dm_sep.apply_h(0);
-    dm_sep.apply_cx(0, 1);
+    dm_sep.apply_h(0).unwrap();
+    dm_sep.apply_cx(0, 1).unwrap();
 
     for val in &mut dm_sep.data {
         *val = *val * p_sep;
@@ -696,8 +696,8 @@ fn test_concurrence_werner_state() {
 fn test_eof_bell_states() {
     // All Bell states have EOF = 1.0
     let mut dm = DensityMatrix::new(2);
-    dm.apply_h(0);
-    dm.apply_cx(0, 1);
+    dm.apply_h(0).unwrap();
+    dm.apply_cx(0, 1).unwrap();
 
     let eof = entanglement_of_formation(&dm).unwrap();
     assert!(
@@ -770,8 +770,8 @@ fn test_eof_concurrence_relationship() {
     // Verify that EOF(C=1) = 1 and EOF(C=0) = 0
     // Bell state (C=1)
     let mut dm_bell = DensityMatrix::new(2);
-    dm_bell.apply_h(0);
-    dm_bell.apply_cx(0, 1);
+    dm_bell.apply_h(0).unwrap();
+    dm_bell.apply_cx(0, 1).unwrap();
 
     let c_bell = concurrence(&dm_bell).unwrap();
     let eof_bell = entanglement_of_formation(&dm_bell).unwrap();

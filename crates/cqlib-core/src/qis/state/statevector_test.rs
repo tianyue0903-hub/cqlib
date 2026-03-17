@@ -74,7 +74,7 @@ fn test_probabilities() {
         [c(FRAC_1_SQRT_2, 0.0), c(FRAC_1_SQRT_2, 0.0)],
         [c(FRAC_1_SQRT_2, 0.0), c(-FRAC_1_SQRT_2, 0.0)],
     ];
-    sv.apply_single_qubit_gate(0, h_matrix);
+    sv.apply_single_qubit_gate(0, h_matrix).unwrap();
 
     let probs = sv.probabilities();
     assert_eq!(probs.len(), 4);
@@ -90,20 +90,20 @@ fn test_probabilities() {
 fn test_apply_x() {
     // |0⟩ -> |1⟩
     let mut sv = Statevector::new(1);
-    sv.apply_x(0);
+    sv.apply_x(0).unwrap();
 
     assert_complex_eq(sv.data[0], c(0.0, 0.0), "X|0⟩[0] should be 0");
     assert_complex_eq(sv.data[1], c(1.0, 0.0), "X|0⟩[1] should be 1");
 
     // X * X = I
     let mut sv2 = Statevector::new(2);
-    sv2.apply_x(0);
-    sv2.apply_x(0);
+    sv2.apply_x(0).unwrap();
+    sv2.apply_x(0).unwrap();
     assert_complex_eq(sv2.data[0], c(1.0, 0.0), "XX|00⟩ should be |00⟩");
 
     // Test on higher qubit in multi-qubit system
     let mut sv3 = Statevector::new(2);
-    sv3.apply_x(1); // Flip qubit 1 (second qubit): |00⟩ -> |10⟩
+    sv3.apply_x(1).unwrap(); // Flip qubit 1 (second qubit): |00⟩ -> |10⟩
     assert_complex_eq(sv3.data[0], c(0.0, 0.0), "X[1]|00⟩[0] should be 0");
     assert_complex_eq(sv3.data[1], c(0.0, 0.0), "X[1]|00⟩[1] should be 0");
     assert_complex_eq(sv3.data[2], c(1.0, 0.0), "X[1]|00⟩[2] should be 1");
@@ -114,7 +114,7 @@ fn test_apply_x() {
 fn test_apply_y() {
     // |0⟩ -> i|1⟩
     let mut sv = Statevector::new(1);
-    sv.apply_y(0);
+    sv.apply_y(0).unwrap();
 
     assert_complex_eq(sv.data[0], c(0.0, 0.0), "Y|0⟩[0] should be 0");
     assert_complex_eq(sv.data[1], c(0.0, 1.0), "Y|0⟩[1] should be i");
@@ -122,7 +122,7 @@ fn test_apply_y() {
     // Y^4 = I
     let mut sv2 = Statevector::new(1);
     for _ in 0..4 {
-        sv2.apply_y(0);
+        sv2.apply_y(0).unwrap();
     }
     assert_complex_eq(sv2.data[0], c(1.0, 0.0), "Y^4|0⟩ should be |0⟩");
     assert_complex_eq(sv2.data[1], c(0.0, 0.0), "Y^4|0⟩[1] should be 0");
@@ -132,22 +132,22 @@ fn test_apply_y() {
 fn test_apply_z() {
     // Z|0⟩ = |0⟩
     let mut sv = Statevector::new(1);
-    sv.apply_z(0);
+    sv.apply_z(0).unwrap();
     assert_complex_eq(sv.data[0], c(1.0, 0.0), "Z|0⟩ should be |0⟩");
     assert_complex_eq(sv.data[1], c(0.0, 0.0), "Z|0⟩[1] should be 0");
 
     // Z|1⟩ = -|1⟩
     let mut sv2 = Statevector::new(1);
-    sv2.apply_x(0);
-    sv2.apply_z(0);
+    sv2.apply_x(0).unwrap();
+    sv2.apply_z(0).unwrap();
     assert_complex_eq(sv2.data[0], c(0.0, 0.0), "ZX|0⟩[0] should be 0");
     assert_complex_eq(sv2.data[1], c(-1.0, 0.0), "ZX|0⟩ should be -|1⟩");
 
     // Z^2 = I
     let mut sv3 = Statevector::new(2);
-    sv3.apply_x(0);
-    sv3.apply_z(0);
-    sv3.apply_z(0);
+    sv3.apply_x(0).unwrap();
+    sv3.apply_z(0).unwrap();
+    sv3.apply_z(0).unwrap();
     assert_complex_eq(sv3.data[1], c(1.0, 0.0), "Z^2|01⟩ should be |01⟩");
 }
 
@@ -161,15 +161,15 @@ fn test_apply_hadamard() {
 
     // H|0⟩ = (|0⟩ + |1⟩)/√2
     let mut sv = Statevector::new(1);
-    sv.apply_single_qubit_gate(0, h_matrix);
+    sv.apply_single_qubit_gate(0, h_matrix).unwrap();
 
     assert_complex_eq(sv.data[0], c(FRAC_1_SQRT_2, 0.0), "H|0⟩[0] should be 1/√2");
     assert_complex_eq(sv.data[1], c(FRAC_1_SQRT_2, 0.0), "H|0⟩[1] should be 1/√2");
 
     // H|1⟩ = (|0⟩ - |1⟩)/√2
     let mut sv2 = Statevector::new(1);
-    sv2.apply_x(0);
-    sv2.apply_single_qubit_gate(0, h_matrix);
+    sv2.apply_x(0).unwrap();
+    sv2.apply_single_qubit_gate(0, h_matrix).unwrap();
 
     assert_complex_eq(sv2.data[0], c(FRAC_1_SQRT_2, 0.0), "H|1⟩[0] should be 1/√2");
     assert_complex_eq(
@@ -180,8 +180,8 @@ fn test_apply_hadamard() {
 
     // H^2 = I
     let mut sv3 = Statevector::new(1);
-    sv3.apply_single_qubit_gate(0, h_matrix);
-    sv3.apply_single_qubit_gate(0, h_matrix);
+    sv3.apply_single_qubit_gate(0, h_matrix).unwrap();
+    sv3.apply_single_qubit_gate(0, h_matrix).unwrap();
     assert_complex_eq(sv3.data[0], c(1.0, 0.0), "H^2|0⟩ should be |0⟩");
     assert_complex_eq(sv3.data[1], c(0.0, 0.0), "H^2|0⟩[1] should be 0");
 }
@@ -190,20 +190,20 @@ fn test_apply_hadamard() {
 fn test_apply_s_gate() {
     // S|0⟩ = |0⟩
     let mut sv = Statevector::new(1);
-    sv.apply_s(0);
+    sv.apply_s(0).unwrap();
     assert_complex_eq(sv.data[0], c(1.0, 0.0), "S|0⟩ should be |0⟩");
 
     // S|1⟩ = i|1⟩
     let mut sv2 = Statevector::new(1);
-    sv2.apply_x(0);
-    sv2.apply_s(0);
+    sv2.apply_x(0).unwrap();
+    sv2.apply_s(0).unwrap();
     assert_complex_eq(sv2.data[1], c(0.0, 1.0), "S|1⟩ should be i|1⟩");
 
     // S^2 = Z
     let mut sv3 = Statevector::new(1);
-    sv3.apply_x(0);
-    sv3.apply_s(0);
-    sv3.apply_s(0);
+    sv3.apply_x(0).unwrap();
+    sv3.apply_s(0).unwrap();
+    sv3.apply_s(0).unwrap();
     assert_complex_eq(sv3.data[1], c(-1.0, 0.0), "S^2|1⟩ should be -|1⟩");
 }
 
@@ -211,21 +211,21 @@ fn test_apply_s_gate() {
 fn test_apply_t_gate() {
     // T|0⟩ = |0⟩
     let mut sv = Statevector::new(1);
-    sv.apply_t(0);
+    sv.apply_t(0).unwrap();
     assert_complex_eq(sv.data[0], c(1.0, 0.0), "T|0⟩ should be |0⟩");
 
     // T|1⟩ = e^(iπ/4)|1⟩
     let mut sv2 = Statevector::new(1);
-    sv2.apply_x(0);
-    sv2.apply_t(0);
+    sv2.apply_x(0).unwrap();
+    sv2.apply_t(0).unwrap();
     let expected_phase = c(FRAC_1_SQRT_2, FRAC_1_SQRT_2);
     assert_complex_eq(sv2.data[1], expected_phase, "T|1⟩ should be e^(iπ/4)|1⟩");
 
     // T^2 = S
     let mut sv3 = Statevector::new(1);
-    sv3.apply_x(0);
-    sv3.apply_t(0);
-    sv3.apply_t(0);
+    sv3.apply_x(0).unwrap();
+    sv3.apply_t(0).unwrap();
+    sv3.apply_t(0).unwrap();
     assert_complex_eq(sv3.data[1], c(0.0, 1.0), "T^2|1⟩ should be i|1⟩ = S|1⟩");
 }
 
@@ -233,18 +233,18 @@ fn test_apply_t_gate() {
 fn test_apply_rx() {
     // Rx(π)|0⟩ = -i|1⟩
     let mut sv = Statevector::new(1);
-    sv.apply_rx(0, PI);
+    sv.apply_rx(0, PI).unwrap();
     assert_complex_eq(sv.data[0], c(0.0, 0.0), "Rx(π)|0⟩[0] should be 0");
     assert_complex_eq(sv.data[1], c(0.0, -1.0), "Rx(π)|0⟩ should be -i|1⟩");
 
     // Rx(2π) = -I (global phase -1)
     let mut sv2 = Statevector::new(1);
-    sv2.apply_rx(0, 2.0 * PI);
+    sv2.apply_rx(0, 2.0 * PI).unwrap();
     assert_complex_eq(sv2.data[0], c(-1.0, 0.0), "Rx(2π)|0⟩ should be -|0⟩");
 
     // Rx(0) = I
     let mut sv3 = Statevector::new(1);
-    sv3.apply_rx(0, 0.0);
+    sv3.apply_rx(0, 0.0).unwrap();
     assert_complex_eq(sv3.data[0], c(1.0, 0.0), "Rx(0)|0⟩ should be |0⟩");
 }
 
@@ -252,13 +252,13 @@ fn test_apply_rx() {
 fn test_apply_ry() {
     // Ry(π)|0⟩ = |1⟩
     let mut sv = Statevector::new(1);
-    sv.apply_ry(0, PI);
+    sv.apply_ry(0, PI).unwrap();
     assert_complex_eq(sv.data[0], c(0.0, 0.0), "Ry(π)|0⟩[0] should be 0");
     assert_complex_eq(sv.data[1], c(1.0, 0.0), "Ry(π)|0⟩ should be |1⟩");
 
     // Ry(π/2)|0⟩ = (|0⟩ + |1⟩)/√2
     let mut sv2 = Statevector::new(1);
-    sv2.apply_ry(0, PI / 2.0);
+    sv2.apply_ry(0, PI / 2.0).unwrap();
     assert_complex_eq(
         sv2.data[0],
         c(FRAC_1_SQRT_2, 0.0),
@@ -275,18 +275,18 @@ fn test_apply_ry() {
 fn test_apply_rz() {
     // Rz(θ)|0⟩ = e^(-iθ/2)|0⟩
     let mut sv = Statevector::new(1);
-    sv.apply_rz(0, PI);
+    sv.apply_rz(0, PI).unwrap();
     assert_complex_eq(sv.data[0], c(0.0, -1.0), "Rz(π)|0⟩ should be -i|0⟩");
 
     // Rz(θ)|1⟩ = e^(iθ/2)|1⟩
     let mut sv2 = Statevector::new(1);
-    sv2.apply_x(0);
-    sv2.apply_rz(0, PI);
+    sv2.apply_x(0).unwrap();
+    sv2.apply_rz(0, PI).unwrap();
     assert_complex_eq(sv2.data[1], c(0.0, 1.0), "Rz(π)|1⟩ should be i|1⟩");
 
     // Rz(2π) = -I
     let mut sv3 = Statevector::new(1);
-    sv3.apply_rz(0, 2.0 * PI);
+    sv3.apply_rz(0, 2.0 * PI).unwrap();
     assert_complex_eq(sv3.data[0], c(-1.0, 0.0), "Rz(2π)|0⟩ should be -|0⟩");
 }
 
@@ -294,18 +294,18 @@ fn test_apply_rz() {
 fn test_y2p_y2m() {
     // Y2P = Ry(π/2)
     let mut sv1 = Statevector::new(1);
-    sv1.apply_y2p(0);
+    sv1.apply_y2p(0).unwrap();
 
     let mut sv2 = Statevector::new(1);
-    sv2.apply_ry(0, PI / 2.0);
+    sv2.apply_ry(0, PI / 2.0).unwrap();
 
     assert_complex_eq(sv1.data[0], sv2.data[0], "Y2P[0] should equal Ry(π/2)[0]");
     assert_complex_eq(sv1.data[1], sv2.data[1], "Y2P[1] should equal Ry(π/2)[1]");
 
     // Y2P * Y2M = I (approximately)
     let mut sv3 = Statevector::new(1);
-    sv3.apply_y2p(0);
-    sv3.apply_y2m(0);
+    sv3.apply_y2p(0).unwrap();
+    sv3.apply_y2m(0).unwrap();
     assert_complex_eq(sv3.data[0], c(1.0, 0.0), "Y2P * Y2M should be I");
 }
 
@@ -313,18 +313,18 @@ fn test_y2p_y2m() {
 fn test_x2p_x2m() {
     // X2P = Rx(π/2)
     let mut sv1 = Statevector::new(1);
-    sv1.apply_x2p(0);
+    sv1.apply_x2p(0).unwrap();
 
     let mut sv2 = Statevector::new(1);
-    sv2.apply_rx(0, PI / 2.0);
+    sv2.apply_rx(0, PI / 2.0).unwrap();
 
     assert_complex_eq(sv1.data[0], sv2.data[0], "X2P[0] should equal Rx(π/2)[0]");
     assert_complex_eq(sv1.data[1], sv2.data[1], "X2P[1] should equal Rx(π/2)[1]");
 
     // X2P * X2M = I
     let mut sv3 = Statevector::new(1);
-    sv3.apply_x2p(0);
-    sv3.apply_x2m(0);
+    sv3.apply_x2p(0).unwrap();
+    sv3.apply_x2m(0).unwrap();
     assert_complex_eq(sv3.data[0], c(1.0, 0.0), "X2P * X2M should be I");
 }
 
@@ -332,19 +332,19 @@ fn test_x2p_x2m() {
 fn test_apply_p_gate() {
     // P(0) = I
     let mut sv1 = Statevector::new(1);
-    sv1.apply_p(0, 0.0);
+    sv1.apply_p(0, 0.0).unwrap();
     assert_complex_eq(sv1.data[0], c(1.0, 0.0), "P(0)|0⟩ should be |0⟩");
 
     // P(π)|1⟩ = -|1⟩
     let mut sv2 = Statevector::new(1);
-    sv2.apply_x(0);
-    sv2.apply_p(0, PI);
+    sv2.apply_x(0).unwrap();
+    sv2.apply_p(0, PI).unwrap();
     assert_complex_eq(sv2.data[1], c(-1.0, 0.0), "P(π)|1⟩ should be -|1⟩");
 
     // P(π/2)|1⟩ = i|1⟩
     let mut sv3 = Statevector::new(1);
-    sv3.apply_x(0);
-    sv3.apply_p(0, PI / 2.0);
+    sv3.apply_x(0).unwrap();
+    sv3.apply_p(0, PI / 2.0).unwrap();
     assert_complex_eq(sv3.data[1], c(0.0, 1.0), "P(π/2)|1⟩ should be i|1⟩");
 }
 
@@ -358,14 +358,14 @@ fn test_cx_control_lt_target() {
     // CX(0,1): if qubit0=1, flip qubit1
     // |10⟩: qubit0=0, so no change -> |10⟩
     let mut sv = Statevector::new(2);
-    sv.apply_x(1); // |00⟩ -> |10⟩ (index 2)
-    sv.apply_cx(0, 1);
+    sv.apply_x(1).unwrap(); // |00⟩ -> |10⟩ (index 2)
+    sv.apply_cx(0, 1).unwrap();
     assert_complex_eq(sv.data[2], c(1.0, 0.0), "CX(0,1)|10⟩ should be |10⟩");
 
     // |01⟩: qubit0=1, flip qubit1: |01⟩ -> |11⟩
     let mut sv2 = Statevector::new(2);
-    sv2.apply_x(0); // |00⟩ -> |01⟩ (index 1)
-    sv2.apply_cx(0, 1);
+    sv2.apply_x(0).unwrap(); // |00⟩ -> |01⟩ (index 1)
+    sv2.apply_cx(0, 1).unwrap();
     assert_complex_eq(sv2.data[0], c(0.0, 0.0), "CX(0,1)|01⟩[0] should be 0");
     assert_complex_eq(sv2.data[1], c(0.0, 0.0), "CX(0,1)|01⟩[1] should be 0");
     assert_complex_eq(sv2.data[2], c(0.0, 0.0), "CX(0,1)|01⟩[2] should be 0");
@@ -377,14 +377,14 @@ fn test_cx_control_gt_target() {
     // CX(1, 0): control=1 (high), target=0 (low)
     // |01⟩: qubit1=0, no flip
     let mut sv = Statevector::new(2);
-    sv.apply_x(0); // |00⟩ -> |01⟩ (index 1)
-    sv.apply_cx(1, 0);
+    sv.apply_x(0).unwrap(); // |00⟩ -> |01⟩ (index 1)
+    sv.apply_cx(1, 0).unwrap();
     assert_complex_eq(sv.data[1], c(1.0, 0.0), "CX(1,0)|01⟩ should be |01⟩");
 
     // |10⟩: qubit1=1, flip qubit0: |10⟩ -> |11⟩
     let mut sv2 = Statevector::new(2);
-    sv2.apply_x(1); // |00⟩ -> |10⟩ (index 2)
-    sv2.apply_cx(1, 0);
+    sv2.apply_x(1).unwrap(); // |00⟩ -> |10⟩ (index 2)
+    sv2.apply_cx(1, 0).unwrap();
     assert_complex_eq(sv2.data[3], c(1.0, 0.0), "CX(1,0)|10⟩ should be |11⟩");
 }
 
@@ -398,10 +398,10 @@ fn test_cx_bell_state() {
         [c(FRAC_1_SQRT_2, 0.0), c(FRAC_1_SQRT_2, 0.0)],
         [c(FRAC_1_SQRT_2, 0.0), c(-FRAC_1_SQRT_2, 0.0)],
     ];
-    sv.apply_single_qubit_gate(0, h_matrix);
+    sv.apply_single_qubit_gate(0, h_matrix).unwrap();
 
     // Apply CX(0, 1)
-    sv.apply_cx(0, 1);
+    sv.apply_cx(0, 1).unwrap();
 
     // Result should be (|00⟩ + |11⟩)/√2
     assert_complex_eq(sv.data[0], c(FRAC_1_SQRT_2, 0.0), "Bell state |00⟩ amp");
@@ -416,9 +416,9 @@ fn test_cx_bell_state() {
 fn test_cx_cx_identity() {
     // CX * CX = I
     let mut sv = Statevector::new(2);
-    sv.apply_x(0);
-    sv.apply_cx(0, 1);
-    sv.apply_cx(0, 1);
+    sv.apply_x(0).unwrap();
+    sv.apply_cx(0, 1).unwrap();
+    sv.apply_cx(0, 1).unwrap();
     assert_complex_eq(sv.data[1], c(1.0, 0.0), "CX^2 should be I");
 }
 
@@ -428,15 +428,15 @@ fn test_cz_symmetric() {
 
     // CZ(0,1) on |11⟩
     let mut sv1 = Statevector::new(2);
-    sv1.apply_x(0);
-    sv1.apply_x(1);
-    sv1.apply_cz(0, 1);
+    sv1.apply_x(0).unwrap();
+    sv1.apply_x(1).unwrap();
+    sv1.apply_cz(0, 1).unwrap();
 
     // CZ(1,0) on |11⟩
     let mut sv2 = Statevector::new(2);
-    sv2.apply_x(0);
-    sv2.apply_x(1);
-    sv2.apply_cz(1, 0);
+    sv2.apply_x(0).unwrap();
+    sv2.apply_x(1).unwrap();
+    sv2.apply_cz(1, 0).unwrap();
 
     assert_complex_eq(sv1.data[3], sv2.data[3], "CZ should be symmetric");
     assert_complex_eq(sv1.data[3], c(-1.0, 0.0), "CZ|11⟩ should be -|11⟩");
@@ -452,13 +452,13 @@ fn test_cz_phases() {
     for i in 0..4 {
         let mut sv = Statevector::new(2);
         if i & 1 != 0 {
-            sv.apply_x(0);
+            sv.apply_x(0).unwrap();
         }
         if i & 2 != 0 {
-            sv.apply_x(1);
+            sv.apply_x(1).unwrap();
         }
 
-        sv.apply_cz(0, 1);
+        sv.apply_cz(0, 1).unwrap();
 
         let expected_phase = if i == 3 { c(-1.0, 0.0) } else { c(1.0, 0.0) };
         assert_complex_eq(sv.data[i], expected_phase, &format!("CZ|{:02b}⟩", i));
@@ -469,38 +469,38 @@ fn test_cz_phases() {
 fn test_swap() {
     // SWAP|01⟩ = |10⟩
     let mut sv = Statevector::new(2);
-    sv.apply_x(0); // |01⟩ (index 1)
-    sv.apply_swap(0, 1);
+    sv.apply_x(0).unwrap(); // |01⟩ (index 1)
+    sv.apply_swap(0, 1).unwrap();
     assert_complex_eq(sv.data[2], c(1.0, 0.0), "SWAP|01⟩ should be |10⟩");
 
     // SWAP|10⟩ = |01⟩
     let mut sv2 = Statevector::new(2);
-    sv2.apply_x(1); // |10⟩ (index 2)
-    sv2.apply_swap(0, 1);
+    sv2.apply_x(1).unwrap(); // |10⟩ (index 2)
+    sv2.apply_swap(0, 1).unwrap();
     assert_complex_eq(sv2.data[1], c(1.0, 0.0), "SWAP|10⟩ should be |01⟩");
 
     // SWAP|11⟩ = |11⟩
     let mut sv3 = Statevector::new(2);
-    sv3.apply_x(0);
-    sv3.apply_x(1); // |11⟩ (index 3)
-    sv3.apply_swap(0, 1);
+    sv3.apply_x(0).unwrap();
+    sv3.apply_x(1).unwrap(); // |11⟩ (index 3)
+    sv3.apply_swap(0, 1).unwrap();
     assert_complex_eq(sv3.data[3], c(1.0, 0.0), "SWAP|11⟩ should be |11⟩");
 
     // SWAP * SWAP = I
     let mut sv4 = Statevector::new(2);
-    sv4.apply_x(0);
-    sv4.apply_swap(0, 1);
-    sv4.apply_swap(0, 1);
+    sv4.apply_x(0).unwrap();
+    sv4.apply_swap(0, 1).unwrap();
+    sv4.apply_swap(0, 1).unwrap();
     assert_complex_eq(sv4.data[1], c(1.0, 0.0), "SWAP^2 should be I");
 }
 
 #[test]
+#[should_panic(expected = "InvalidParameterValue")]
 fn test_swap_same_qubit() {
-    // SWAP(q, q) should be a no-op
+    // SWAP(q, q) should panic with InvalidParameterValue
     let mut sv = Statevector::new(2);
-    sv.apply_x(0);
-    sv.apply_swap(0, 0);
-    assert_complex_eq(sv.data[1], c(1.0, 0.0), "SWAP(0,0) should be no-op");
+    sv.apply_x(0).unwrap();
+    sv.apply_swap(0, 0).unwrap();
 }
 
 #[test]
@@ -512,9 +512,9 @@ fn test_cy() {
     // |11⟩ (q0=1, q1=1): control=1, so apply Y to target
     // Y|q1=1⟩ = -i|q1=0⟩, so result is q0=1, q1=0 = |01⟩
     let mut sv = Statevector::new(2);
-    sv.apply_x(0);
-    sv.apply_x(1); // |11⟩
-    sv.apply_cy(0, 1);
+    sv.apply_x(0).unwrap();
+    sv.apply_x(1).unwrap(); // |11⟩
+    sv.apply_cy(0, 1).unwrap();
 
     assert_complex_eq(sv.data[3], c(0.0, 0.0), "CY|11⟩[11] should be 0");
     assert_complex_eq(sv.data[1], c(0.0, -1.0), "CY(0,1)|11⟩ should be -i|01⟩");
@@ -522,14 +522,14 @@ fn test_cy() {
     // |01⟩ (q0=1, q1=0): control=1, apply Y to target
     // Y|q1=0⟩ = i|q1=1⟩, so result is q0=1, q1=1 = |11⟩
     let mut sv3 = Statevector::new(2);
-    sv3.apply_x(0); // |01⟩
-    sv3.apply_cy(0, 1);
+    sv3.apply_x(0).unwrap(); // |01⟩
+    sv3.apply_cy(0, 1).unwrap();
     assert_complex_eq(sv3.data[3], c(0.0, 1.0), "CY(0,1)|01⟩ should be i|11⟩");
 
     // |10⟩: control=0, no change (but due to bug, might be affected)
     let mut sv2 = Statevector::new(2);
-    sv2.apply_x(1); // |10⟩
-    sv2.apply_cy(0, 1);
+    sv2.apply_x(1).unwrap(); // |10⟩
+    sv2.apply_cy(0, 1).unwrap();
     assert_complex_eq(sv2.data[2], c(1.0, 0.0), "CY|10⟩ should be unchanged");
 }
 
@@ -540,8 +540,8 @@ fn test_cy_control_gt_target() {
     // |10⟩: q1=1 (control), q0=0 (target) -> Y|0⟩ = i|1⟩
     // Result: q1=1, q0=1 -> |11⟩
     let mut sv = Statevector::new(2);
-    sv.apply_x(1); // |10⟩
-    sv.apply_cy(1, 0);
+    sv.apply_x(1).unwrap(); // |10⟩
+    sv.apply_cy(1, 0).unwrap();
     assert_complex_eq(sv.data[3], c(0.0, 1.0), "CY(1,0)|10⟩ should be i|11⟩");
 }
 
@@ -560,8 +560,8 @@ fn test_double_qubit_gate_cnot() {
     // For CNOT with q0 as control, q1 as target
     // This should be equivalent to CX(0,1)
     let mut sv1 = Statevector::new(2);
-    sv1.apply_x(0); // |01⟩ (control=1, target=0)
-    sv1.apply_double_qubits_gate(0, 1, cnot_matrix);
+    sv1.apply_x(0).unwrap(); // |01⟩ (control=1, target=0)
+    sv1.apply_double_qubits_gate(0, 1, cnot_matrix).unwrap();
     // CNOT|01⟩ should be |01⟩ if q0 is control, q1 is target (target was 0, flips to 1?)
     // Wait: |01⟩ = q0=1, q1=0. If q0 is control, q1 is target, target flips to 1
     // Result: |11⟩
@@ -574,8 +574,8 @@ fn test_double_qubit_gate_cnot() {
     // Test with control > target (q0=1, q1=0)
     // CNOT with q0=1 as control, q1=0 as target
     let mut sv2 = Statevector::new(2);
-    sv2.apply_x(1); // |10⟩ (q0=0, q1=1)
-    sv2.apply_double_qubits_gate(1, 0, cnot_matrix);
+    sv2.apply_x(1).unwrap(); // |10⟩ (q0=0, q1=1)
+    sv2.apply_double_qubits_gate(1, 0, cnot_matrix).unwrap();
     // |10⟩: q0=0, q1=1. If q0 is target, q1 is control, q1=1 so q0 flips to 1
     // Result: |11⟩
     assert_complex_eq(
@@ -590,14 +590,14 @@ fn test_three_qubit_cx() {
     // Test CX on non-adjacent qubits: CX(0, 2) on 3-qubit system
     // |001⟩: qubit0=1, flip qubit2 -> |101⟩ (index 5)
     let mut sv = Statevector::new(3);
-    sv.apply_x(0); // |001⟩ (index 1)
-    sv.apply_cx(0, 2);
+    sv.apply_x(0).unwrap(); // |001⟩ (index 1)
+    sv.apply_cx(0, 2).unwrap();
     assert_complex_eq(sv.data[5], c(1.0, 0.0), "CX(0,2)|001⟩ should be |101⟩");
 
     // Test CX(2, 0): |100⟩ -> |101⟩
     let mut sv2 = Statevector::new(3);
-    sv2.apply_x(2); // |100⟩ (index 4)
-    sv2.apply_cx(2, 0);
+    sv2.apply_x(2).unwrap(); // |100⟩ (index 4)
+    sv2.apply_cx(2, 0).unwrap();
     assert_complex_eq(sv2.data[5], c(1.0, 0.0), "CX(2,0)|100⟩ should be |101⟩");
 }
 
@@ -606,8 +606,8 @@ fn test_three_qubit_swap() {
     // SWAP(0, 2) on 3-qubit system
     // |001⟩ -> |100⟩ (swap qubit 0 and qubit 2)
     let mut sv = Statevector::new(3);
-    sv.apply_x(0); // |001⟩ (index 1)
-    sv.apply_swap(0, 2);
+    sv.apply_x(0).unwrap(); // |001⟩ (index 1)
+    sv.apply_swap(0, 2).unwrap();
     assert_complex_eq(sv.data[4], c(1.0, 0.0), "SWAP(0,2)|001⟩ should be |100⟩");
 }
 
@@ -621,11 +621,11 @@ fn test_ghz_state() {
         [c(FRAC_1_SQRT_2, 0.0), c(FRAC_1_SQRT_2, 0.0)],
         [c(FRAC_1_SQRT_2, 0.0), c(-FRAC_1_SQRT_2, 0.0)],
     ];
-    sv.apply_single_qubit_gate(0, h_matrix);
+    sv.apply_single_qubit_gate(0, h_matrix).unwrap();
 
     // Apply CX(0, 1) and CX(0, 2)
-    sv.apply_cx(0, 1);
-    sv.apply_cx(0, 2);
+    sv.apply_cx(0, 1).unwrap();
+    sv.apply_cx(0, 2).unwrap();
 
     // Result should be (|000⟩ + |111⟩)/√2
     assert_complex_eq(sv.data[0], c(FRAC_1_SQRT_2, 0.0), "GHZ |000⟩ amp");
@@ -643,35 +643,35 @@ fn test_ghz_state() {
 }
 
 #[test]
-#[should_panic(expected = "Qubit index 2 out of bounds")]
+#[should_panic(expected = "IndexOutOfBounds")]
 fn test_single_qubit_out_of_bounds() {
     let mut sv = Statevector::new(2); // qubits 0, 1
     let h_matrix = [
         [c(FRAC_1_SQRT_2, 0.0), c(FRAC_1_SQRT_2, 0.0)],
         [c(FRAC_1_SQRT_2, 0.0), c(-FRAC_1_SQRT_2, 0.0)],
     ];
-    sv.apply_single_qubit_gate(2, h_matrix);
+    sv.apply_single_qubit_gate(2, h_matrix).unwrap();
 }
 
 #[test]
-#[should_panic(expected = "Control and target cannot be the same")]
+#[should_panic(expected = "InvalidParameterValue")]
 fn test_cx_same_qubit() {
     let mut sv = Statevector::new(2);
-    sv.apply_cx(0, 0);
+    sv.apply_cx(0, 0).unwrap();
 }
 
 #[test]
-#[should_panic(expected = "Control and target qubits must be different")]
+#[should_panic(expected = "InvalidParameterValue")]
 fn test_cy_same_qubit() {
     let mut sv = Statevector::new(2);
-    sv.apply_cy(0, 0);
+    sv.apply_cy(0, 0).unwrap();
 }
 
 #[test]
-#[should_panic(expected = "Qubits cannot be the same")]
+#[should_panic(expected = "InvalidParameterValue")]
 fn test_cz_same_qubit() {
     let mut sv = Statevector::new(2);
-    sv.apply_cz(0, 0);
+    sv.apply_cz(0, 0).unwrap();
 }
 
 #[test]
@@ -685,13 +685,13 @@ fn test_hadamard_unitary() {
 
     // Test on a 2-qubit system with random initial state
     let mut sv = Statevector::new(2);
-    sv.apply_ry(0, 0.7);
-    sv.apply_rx(1, 1.2);
+    sv.apply_ry(0, 0.7).unwrap();
+    sv.apply_rx(1, 1.2).unwrap();
 
     let original: Vec<Complex64> = sv.data.clone();
 
-    sv.apply_single_qubit_gate(0, h_matrix);
-    sv.apply_single_qubit_gate(0, h_matrix);
+    sv.apply_single_qubit_gate(0, h_matrix).unwrap();
+    sv.apply_single_qubit_gate(0, h_matrix).unwrap();
 
     for (i, (a, b)) in sv.data.iter().zip(original.iter()).enumerate() {
         assert_complex_eq(*a, *b, &format!("H^2 should be I at index {}", i));
@@ -702,11 +702,11 @@ fn test_hadamard_unitary() {
 fn test_cz_unitary() {
     // CZ^2 = I
     let mut sv = Statevector::new(2);
-    sv.apply_x(0);
-    sv.apply_x(1); // |11⟩
+    sv.apply_x(0).unwrap();
+    sv.apply_x(1).unwrap(); // |11⟩
 
-    sv.apply_cz(0, 1);
-    sv.apply_cz(0, 1);
+    sv.apply_cz(0, 1).unwrap();
+    sv.apply_cz(0, 1).unwrap();
 
     assert_complex_eq(sv.data[3], c(1.0, 0.0), "CZ^2 should be I");
 }
@@ -717,12 +717,12 @@ fn test_rx_ry_rz_unitarity() {
     let mut sv = Statevector::new(3);
 
     // Apply random rotations
-    sv.apply_rx(0, 1.23);
-    sv.apply_ry(1, 2.34);
-    sv.apply_rz(2, 3.45);
-    sv.apply_cx(0, 1);
-    sv.apply_cz(1, 2);
-    sv.apply_swap(0, 2);
+    sv.apply_rx(0, 1.23).unwrap();
+    sv.apply_ry(1, 2.34).unwrap();
+    sv.apply_rz(2, 3.45).unwrap();
+    sv.apply_cx(0, 1).unwrap();
+    sv.apply_cz(1, 2).unwrap();
+    sv.apply_swap(0, 2).unwrap();
 
     assert_normalized(&sv);
 }
@@ -732,9 +732,9 @@ fn test_sdg_gate() {
     // S† = S^3, S† * S = I
     // S|1⟩ = i|1⟩, S†|1⟩ = -i|1⟩
     let mut sv = Statevector::new(1);
-    sv.apply_x(0);
-    sv.apply_s(0);
-    sv.apply_sdg(0);
+    sv.apply_x(0).unwrap();
+    sv.apply_s(0).unwrap();
+    sv.apply_sdg(0).unwrap();
     assert_complex_eq(sv.data[1], c(1.0, 0.0), "S†S|1⟩ should be |1⟩");
 }
 
@@ -742,9 +742,9 @@ fn test_sdg_gate() {
 fn test_tdg_gate() {
     // T† * T = I
     let mut sv = Statevector::new(1);
-    sv.apply_x(0);
-    sv.apply_t(0);
-    sv.apply_tdg(0);
+    sv.apply_x(0).unwrap();
+    sv.apply_t(0).unwrap();
+    sv.apply_tdg(0).unwrap();
     assert_complex_eq(sv.data[1], c(1.0, 0.0), "T†T|1⟩ should be |1⟩");
 }
 
@@ -752,20 +752,20 @@ fn test_tdg_gate() {
 fn test_xy2p_xy2m() {
     // XY2P * XY2M should be approximately I
     let mut sv = Statevector::new(1);
-    sv.apply_ry(0, 0.5); // Some arbitrary rotation
-    sv.apply_xy2p(0, 1.0);
-    sv.apply_xy2m(0, 1.0);
+    sv.apply_ry(0, 0.5).unwrap(); // Some arbitrary rotation
+    sv.apply_xy2p(0, 1.0).unwrap();
+    sv.apply_xy2m(0, 1.0).unwrap();
 
     // Since XY2P and XY2M are inverses, result should be close to original
     // Actually XY2M(θ) should be the inverse of XY2P(θ)
     // Let's verify with a simpler test
     let mut sv2 = Statevector::new(1);
-    sv2.apply_x(0);
+    sv2.apply_x(0).unwrap();
 
     let original = sv2.data.clone();
 
-    sv2.apply_xy2p(0, 0.5);
-    sv2.apply_xy2m(0, 0.5);
+    sv2.apply_xy2p(0, 0.5).unwrap();
+    sv2.apply_xy2m(0, 0.5).unwrap();
 
     assert_complex_eq(sv2.data[1], original[1], "XY2M should invert XY2P");
 }
@@ -786,10 +786,10 @@ fn test_rxy_gate() {
 
     // Test RXY(θ, 0) = Rx(θ)
     let mut sv1 = Statevector::new(1);
-    sv1.apply_rxy(0, PI / 2.0, 0.0);
+    sv1.apply_rxy(0, PI / 2.0, 0.0).unwrap();
 
     let mut sv2 = Statevector::new(1);
-    sv2.apply_rx(0, PI / 2.0);
+    sv2.apply_rx(0, PI / 2.0).unwrap();
 
     assert_complex_eq(
         sv1.data[0],
@@ -804,10 +804,10 @@ fn test_rxy_gate() {
 
     // Test RXY(θ, π/2) = Ry(θ)
     let mut sv3 = Statevector::new(1);
-    sv3.apply_rxy(0, PI / 2.0, PI / 2.0);
+    sv3.apply_rxy(0, PI / 2.0, PI / 2.0).unwrap();
 
     let mut sv4 = Statevector::new(1);
-    sv4.apply_ry(0, PI / 2.0);
+    sv4.apply_ry(0, PI / 2.0).unwrap();
 
     assert_complex_eq(
         sv3.data[0],
@@ -822,7 +822,7 @@ fn test_rxy_gate() {
 
     // Verify normalization for arbitrary phi
     let mut sv5 = Statevector::new(1);
-    sv5.apply_rxy(0, PI / 2.0, PI / 4.0);
+    sv5.apply_rxy(0, PI / 2.0, PI / 4.0).unwrap();
     assert_normalized(&sv5);
 }
 
@@ -834,10 +834,10 @@ fn test_cascade_cx() {
     // CX(0,1): q0=1, flip q1: q1 goes 1->0, result |001⟩
     // CX(1,2): q1=0, no flip, result |001⟩
     let mut sv = Statevector::new(3);
-    sv.apply_x(0);
-    sv.apply_x(1); // |011⟩ (index 3)
-    sv.apply_cx(0, 1);
-    sv.apply_cx(1, 2);
+    sv.apply_x(0).unwrap();
+    sv.apply_x(1).unwrap(); // |011⟩ (index 3)
+    sv.apply_cx(0, 1).unwrap();
+    sv.apply_cx(1, 2).unwrap();
     assert_complex_eq(sv.data[1], c(1.0, 0.0), "Cascade CX result should be |001⟩");
 }
 
@@ -851,8 +851,8 @@ fn test_single_qubit_system() {
         [c(FRAC_1_SQRT_2, 0.0), c(FRAC_1_SQRT_2, 0.0)],
         [c(FRAC_1_SQRT_2, 0.0), c(-FRAC_1_SQRT_2, 0.0)],
     ];
-    sv.apply_single_qubit_gate(0, h_matrix);
-    sv.apply_x(0);
+    sv.apply_single_qubit_gate(0, h_matrix).unwrap();
+    sv.apply_x(0).unwrap();
 
     // H|0⟩ = (|0⟩+|1⟩)/√2, X((|0⟩+|1⟩)/√2) = (|1⟩+|0⟩)/√2 = same
     assert_complex_eq(sv.data[0], c(FRAC_1_SQRT_2, 0.0), "XH|0⟩[0] should be 1/√2");
@@ -865,13 +865,13 @@ fn test_max_qubits_edge_case() {
     let mut sv = Statevector::new(4);
 
     // Create superposition on qubit 3 (highest)
-    sv.apply_ry(3, PI / 2.0);
+    sv.apply_ry(3, PI / 2.0).unwrap();
 
     // Verify normalization
     assert_normalized(&sv);
 
     // Apply CX from qubit 3 to qubit 0 (non-adjacent)
-    sv.apply_cx(3, 0);
+    sv.apply_cx(3, 0).unwrap();
 
     assert_normalized(&sv);
 }
@@ -880,13 +880,13 @@ fn test_max_qubits_edge_case() {
 fn test_zero_angle_rotations() {
     // All rotation gates with angle 0 should be identity
     let mut sv = Statevector::new(2);
-    sv.apply_x(0); // |01⟩
+    sv.apply_x(0).unwrap(); // |01⟩
 
-    sv.apply_rx(0, 0.0);
-    sv.apply_ry(0, 0.0);
-    sv.apply_rz(0, 0.0);
-    sv.apply_p(0, 0.0);
-    sv.apply_rxy(0, 0.0, 1.0);
+    sv.apply_rx(0, 0.0).unwrap();
+    sv.apply_ry(0, 0.0).unwrap();
+    sv.apply_rz(0, 0.0).unwrap();
+    sv.apply_p(0, 0.0).unwrap();
+    sv.apply_rxy(0, 0.0, 1.0).unwrap();
 
     assert_complex_eq(sv.data[1], c(1.0, 0.0), "Zero angle rotations should be I");
 }
@@ -896,7 +896,7 @@ fn test_global_phase() {
     // Test that global phases work correctly
     // Rz(2π)|0⟩ = -|0⟩ (global phase -1)
     let mut sv = Statevector::new(1);
-    sv.apply_rz(0, 2.0 * PI);
+    sv.apply_rz(0, 2.0 * PI).unwrap();
     assert_complex_eq(sv.data[0], c(-1.0, 0.0), "Rz(2π)|0⟩ should be -|0⟩");
 
     // Verify probability is still 1
@@ -916,8 +916,8 @@ fn test_relative_phase() {
         [c(FRAC_1_SQRT_2, 0.0), c(FRAC_1_SQRT_2, 0.0)],
         [c(FRAC_1_SQRT_2, 0.0), c(-FRAC_1_SQRT_2, 0.0)],
     ];
-    sv.apply_single_qubit_gate(0, h_matrix);
-    sv.apply_s(0);
+    sv.apply_single_qubit_gate(0, h_matrix).unwrap();
+    sv.apply_s(0).unwrap();
 
     assert_complex_eq(sv.data[0], c(FRAC_1_SQRT_2, 0.0), "SH|0⟩[0] should be 1/√2");
     assert_complex_eq(sv.data[1], c(0.0, FRAC_1_SQRT_2), "SH|0⟩[1] should be i/√2");
@@ -932,15 +932,15 @@ fn test_relative_phase() {
 fn test_apply_h() {
     // H|0⟩ = (|0⟩ + |1⟩)/√2
     let mut sv = Statevector::new(1);
-    sv.apply_h(0);
+    sv.apply_h(0).unwrap();
 
     assert_complex_eq(sv.data[0], c(FRAC_1_SQRT_2, 0.0), "H|0⟩[0] should be 1/√2");
     assert_complex_eq(sv.data[1], c(FRAC_1_SQRT_2, 0.0), "H|0⟩[1] should be 1/√2");
 
     // H|1⟩ = (|0⟩ - |1⟩)/√2
     let mut sv2 = Statevector::new(1);
-    sv2.apply_x(0);
-    sv2.apply_h(0);
+    sv2.apply_x(0).unwrap();
+    sv2.apply_h(0).unwrap();
 
     assert_complex_eq(sv2.data[0], c(FRAC_1_SQRT_2, 0.0), "H|1⟩[0] should be 1/√2");
     assert_complex_eq(
@@ -951,8 +951,8 @@ fn test_apply_h() {
 
     // H^2 = I
     let mut sv3 = Statevector::new(1);
-    sv3.apply_h(0);
-    sv3.apply_h(0);
+    sv3.apply_h(0).unwrap();
+    sv3.apply_h(0).unwrap();
     assert_complex_eq(sv3.data[0], c(1.0, 0.0), "H^2|0⟩ should be |0⟩");
     assert_complex_eq(sv3.data[1], c(0.0, 0.0), "H^2|0⟩[1] should be 0");
 }
@@ -963,10 +963,10 @@ fn test_apply_u() {
     //
     // Test: U(θ, 0, 0) = [[cos(θ/2), -sin(θ/2)], [sin(θ/2), cos(θ/2)]] = Ry(θ)
     let mut sv1 = Statevector::new(1);
-    sv1.apply_u(0, PI, 0.0, 0.0);
+    sv1.apply_u(0, PI, 0.0, 0.0).unwrap();
 
     let mut sv2 = Statevector::new(1);
-    sv2.apply_ry(0, PI);
+    sv2.apply_ry(0, PI).unwrap();
 
     assert_complex_eq(sv1.data[0], sv2.data[0], "U(π,0,0) should equal Ry(π)[0]");
     assert_complex_eq(sv1.data[1], sv2.data[1], "U(π,0,0) should equal Ry(π)[1]");
@@ -974,21 +974,21 @@ fn test_apply_u() {
     // Test: U(0, 0, λ) should be equivalent to P(λ) (phase gate) up to global phase
     // U(0, 0, λ) = [[1, 0], [0, e^(iλ)]]
     let mut sv3 = Statevector::new(1);
-    sv3.apply_x(0);
-    sv3.apply_u(0, 0.0, 0.0, PI / 2.0);
+    sv3.apply_x(0).unwrap();
+    sv3.apply_u(0, 0.0, 0.0, PI / 2.0).unwrap();
 
     let mut sv4 = Statevector::new(1);
-    sv4.apply_x(0);
-    sv4.apply_p(0, PI / 2.0);
+    sv4.apply_x(0).unwrap();
+    sv4.apply_p(0, PI / 2.0).unwrap();
 
     assert_complex_eq(sv3.data[1], sv4.data[1], "U(0,0,λ)|1⟩ should equal P(λ)|1⟩");
 
     // Test: U(π/2, 0, 0) = Ry(π/2)
     let mut sv5 = Statevector::new(1);
-    sv5.apply_u(0, PI / 2.0, 0.0, 0.0);
+    sv5.apply_u(0, PI / 2.0, 0.0, 0.0).unwrap();
 
     let mut sv6 = Statevector::new(1);
-    sv6.apply_ry(0, PI / 2.0);
+    sv6.apply_ry(0, PI / 2.0).unwrap();
 
     assert_complex_eq(
         sv5.data[0],
@@ -1005,10 +1005,10 @@ fn test_apply_u() {
     // cos(π/2)=0, sin(π/2)=1
     // [[0, -e^(iπ/2)], [e^(-iπ/2), 0]] = [[0, -i], [-i, 0]] = -iX
     let mut sv7 = Statevector::new(1);
-    sv7.apply_u(0, PI, -PI / 2.0, PI / 2.0);
+    sv7.apply_u(0, PI, -PI / 2.0, PI / 2.0).unwrap();
 
     let mut sv8 = Statevector::new(1);
-    sv8.apply_rx(0, PI);
+    sv8.apply_rx(0, PI).unwrap();
 
     assert_complex_eq(
         sv7.data[0],
@@ -1023,8 +1023,8 @@ fn test_apply_u() {
 
     // Verify unitarity for random parameters
     let mut sv9 = Statevector::new(2);
-    sv9.apply_ry(0, 0.7);
-    sv9.apply_u(1, 1.2, 0.5, 0.3);
+    sv9.apply_ry(0, 0.7).unwrap();
+    sv9.apply_u(1, 1.2, 0.5, 0.3).unwrap();
     assert_normalized(&sv9);
 }
 
@@ -1034,17 +1034,17 @@ fn test_apply_ccx() {
 
     // |110⟩: controls=1,1, target=0 → flips to |111⟩
     let mut sv = Statevector::new(3);
-    sv.apply_x(1);
-    sv.apply_x(2); // |110⟩ (index 6)
-    sv.apply_ccx(1, 2, 0);
+    sv.apply_x(1).unwrap();
+    sv.apply_x(2).unwrap(); // |110⟩ (index 6)
+    sv.apply_ccx(1, 2, 0).unwrap();
     assert_complex_eq(sv.data[7], c(1.0, 0.0), "CCX|110⟩ should be |111⟩");
 
     // |111⟩: controls=1,1, target=1 → flips to |110⟩
     let mut sv2 = Statevector::new(3);
-    sv2.apply_x(0);
-    sv2.apply_x(1);
-    sv2.apply_x(2); // |111⟩ (index 7)
-    sv2.apply_ccx(0, 1, 2);
+    sv2.apply_x(0).unwrap();
+    sv2.apply_x(1).unwrap();
+    sv2.apply_x(2).unwrap(); // |111⟩ (index 7)
+    sv2.apply_ccx(0, 1, 2).unwrap();
     assert_complex_eq(
         sv2.data[3],
         c(1.0, 0.0),
@@ -1053,24 +1053,24 @@ fn test_apply_ccx() {
 
     // |101⟩: one control is 0, no flip
     let mut sv3 = Statevector::new(3);
-    sv3.apply_x(0);
-    sv3.apply_x(2); // |101⟩ (index 5)
-    sv3.apply_ccx(0, 1, 2);
+    sv3.apply_x(0).unwrap();
+    sv3.apply_x(2).unwrap(); // |101⟩ (index 5)
+    sv3.apply_ccx(0, 1, 2).unwrap();
     assert_complex_eq(sv3.data[5], c(1.0, 0.0), "CCX|101⟩ should be unchanged");
 
     // |011⟩: one control is 0, no flip
     let mut sv4 = Statevector::new(3);
-    sv4.apply_x(0);
-    sv4.apply_x(1); // |011⟩ (index 3)
-    sv4.apply_ccx(1, 2, 0);
+    sv4.apply_x(0).unwrap();
+    sv4.apply_x(1).unwrap(); // |011⟩ (index 3)
+    sv4.apply_ccx(1, 2, 0).unwrap();
     assert_complex_eq(sv4.data[3], c(1.0, 0.0), "CCX|011⟩ should be unchanged");
 
     // CCX is self-inverse: CCX^2 = I
     let mut sv5 = Statevector::new(3);
-    sv5.apply_x(0);
-    sv5.apply_x(1); // |011⟩ (controls=1,1, target=0)
-    sv5.apply_ccx(0, 1, 2);
-    sv5.apply_ccx(0, 1, 2);
+    sv5.apply_x(0).unwrap();
+    sv5.apply_x(1).unwrap(); // |011⟩ (controls=1,1, target=0)
+    sv5.apply_ccx(0, 1, 2).unwrap();
+    sv5.apply_ccx(0, 1, 2).unwrap();
     assert_complex_eq(sv5.data[3], c(1.0, 0.0), "CCX^2 should be I");
 }
 
@@ -1079,26 +1079,26 @@ fn test_apply_rxx() {
     // RXX(π)|00⟩ should give something non-trivial
     // RXX(0) = I
     let mut sv1 = Statevector::new(2);
-    sv1.apply_rxx(0, 1, 0.0);
+    sv1.apply_rxx(0, 1, 0.0).unwrap();
     assert_complex_eq(sv1.data[0], c(1.0, 0.0), "RXX(0) should be I");
 
     // RXX(π)|00⟩ = -i|11⟩ approximately (when θ=π, cos=0, sin=1)
     let mut sv2 = Statevector::new(2);
-    sv2.apply_rxx(0, 1, PI);
+    sv2.apply_rxx(0, 1, PI).unwrap();
     assert_complex_eq(sv2.data[0], c(0.0, 0.0), "RXX(π)|00⟩[0] should be 0");
     assert_complex_eq(sv2.data[3], c(0.0, -1.0), "RXX(π)|00⟩ should be -i|11⟩");
 
     // RXX^2 = I for θ=π (up to global phase)
     let mut sv3 = Statevector::new(2);
-    sv3.apply_x(0); // |01⟩
-    sv3.apply_rxx(0, 1, PI);
-    sv3.apply_rxx(0, 1, PI);
+    sv3.apply_x(0).unwrap(); // |01⟩
+    sv3.apply_rxx(0, 1, PI).unwrap();
+    sv3.apply_rxx(0, 1, PI).unwrap();
     assert_complex_eq(sv3.data[1], c(-1.0, 0.0), "RXX(π)^2 should be -I");
 
     // Verify normalization
     let mut sv4 = Statevector::new(3);
-    sv4.apply_h(0);
-    sv4.apply_rxx(0, 2, 0.7);
+    sv4.apply_h(0).unwrap();
+    sv4.apply_rxx(0, 2, 0.7).unwrap();
     assert_normalized(&sv4);
 }
 
@@ -1106,19 +1106,19 @@ fn test_apply_rxx() {
 fn test_apply_ryy() {
     // RYY(0) = I
     let mut sv1 = Statevector::new(2);
-    sv1.apply_ryy(0, 1, 0.0);
+    sv1.apply_ryy(0, 1, 0.0).unwrap();
     assert_complex_eq(sv1.data[0], c(1.0, 0.0), "RYY(0) should be I");
 
     // RYY(π)|00⟩ = i|11⟩
     let mut sv2 = Statevector::new(2);
-    sv2.apply_ryy(0, 1, PI);
+    sv2.apply_ryy(0, 1, PI).unwrap();
     assert_complex_eq(sv2.data[0], c(0.0, 0.0), "RYY(π)|00⟩[0] should be 0");
     assert_complex_eq(sv2.data[3], c(0.0, 1.0), "RYY(π)|00⟩ should be i|11⟩");
 
     // Verify normalization
     let mut sv3 = Statevector::new(3);
-    sv3.apply_h(0);
-    sv3.apply_ryy(1, 2, 0.7);
+    sv3.apply_h(0).unwrap();
+    sv3.apply_ryy(1, 2, 0.7).unwrap();
     assert_normalized(&sv3);
 }
 
@@ -1126,26 +1126,26 @@ fn test_apply_ryy() {
 fn test_apply_rzz() {
     // RZZ(0) = I
     let mut sv1 = Statevector::new(2);
-    sv1.apply_rzz(0, 1, 0.0);
+    sv1.apply_rzz(0, 1, 0.0).unwrap();
     assert_complex_eq(sv1.data[0], c(1.0, 0.0), "RZZ(0) should be I");
 
     // RZZ adds phases based on parity
     // RZZ(π)|00⟩ = e^(-iπ/2)|00⟩ = -i|00⟩
     let mut sv2 = Statevector::new(2);
-    sv2.apply_rzz(0, 1, PI);
+    sv2.apply_rzz(0, 1, PI).unwrap();
     assert_complex_eq(sv2.data[0], c(0.0, -1.0), "RZZ(π)|00⟩ should be -i|00⟩");
 
     // RZZ(π)|01⟩ = e^(iπ/2)|01⟩ = i|01⟩
     let mut sv3 = Statevector::new(2);
-    sv3.apply_x(0);
-    sv3.apply_rzz(0, 1, PI);
+    sv3.apply_x(0).unwrap();
+    sv3.apply_rzz(0, 1, PI).unwrap();
     assert_complex_eq(sv3.data[1], c(0.0, 1.0), "RZZ(π)|01⟩ should be i|01⟩");
 
     // RZZ is diagonal, so RZZ^2 ≠ I but adds phases
     // Verify normalization
     let mut sv4 = Statevector::new(3);
-    sv4.apply_h(0);
-    sv4.apply_rzz(0, 2, 0.7);
+    sv4.apply_h(0).unwrap();
+    sv4.apply_rzz(0, 2, 0.7).unwrap();
     assert_normalized(&sv4);
 }
 
@@ -1153,13 +1153,13 @@ fn test_apply_rzz() {
 fn test_apply_rzx() {
     // RZX(0) = I
     let mut sv1 = Statevector::new(2);
-    sv1.apply_rzx(0, 1, 0.0);
+    sv1.apply_rzx(0, 1, 0.0).unwrap();
     assert_complex_eq(sv1.data[0], c(1.0, 0.0), "RZX(0) should be I");
 
     // RZX(π)|00⟩ with q0<q1 (Z on q0, X on q1)
     // |00⟩ -> 0 (cos(π/2)=0) + something
     let mut sv2 = Statevector::new(2);
-    sv2.apply_rzx(0, 1, PI);
+    sv2.apply_rzx(0, 1, PI).unwrap();
     // When theta=π: cos=0, sin=1
     // |00⟩ -> -i|10⟩
     assert_complex_eq(sv2.data[0], c(0.0, 0.0), "RZX(π)|00⟩[0]");
@@ -1167,13 +1167,13 @@ fn test_apply_rzx() {
 
     // Verify normalization
     let mut sv3 = Statevector::new(3);
-    sv3.apply_h(0);
-    sv3.apply_rzx(0, 2, 0.7);
+    sv3.apply_h(0).unwrap();
+    sv3.apply_rzx(0, 2, 0.7).unwrap();
     assert_normalized(&sv3);
 
     // Test q0 > q1 case (Z on q1, X on q0)
     let mut sv4 = Statevector::new(2);
-    sv4.apply_rzx(1, 0, PI);
+    sv4.apply_rzx(1, 0, PI).unwrap();
     // X on q0, Z on q1
     // |00⟩ -> -i|01⟩
     assert_complex_eq(sv4.data[0], c(0.0, 0.0), "RZX(π, rev)|00⟩[0]");
@@ -1188,24 +1188,24 @@ fn test_apply_rzx() {
 fn test_apply_crx() {
     // CRX(0) = I
     let mut sv1 = Statevector::new(2);
-    sv1.apply_crx(0, 1, 0.0);
+    sv1.apply_crx(0, 1, 0.0).unwrap();
     assert_complex_eq(sv1.data[0], c(1.0, 0.0), "CRX(0) should be I");
 
     // CRX(π)|11⟩ with control=0, target=1:
     // Control=1, so apply RX(π) to target
     // RX(π)|1⟩ = -i|0⟩, so |11⟩ -> -i|01⟩
     let mut sv2 = Statevector::new(2);
-    sv2.apply_x(0);
-    sv2.apply_x(1); // |11⟩
-    sv2.apply_crx(0, 1, PI);
+    sv2.apply_x(0).unwrap();
+    sv2.apply_x(1).unwrap(); // |11⟩
+    sv2.apply_crx(0, 1, PI).unwrap();
     assert_complex_eq(sv2.data[3], c(0.0, 0.0), "CRX(π)|11⟩[11] should be 0");
     assert_complex_eq(sv2.data[1], c(0.0, -1.0), "CRX(π)|11⟩ should be -i|01⟩");
 
     // CRX(π)|10⟩ with control=0, target=1:
     // Control=0, so no change
     let mut sv2b = Statevector::new(2);
-    sv2b.apply_x(1); // |10⟩
-    sv2b.apply_crx(0, 1, PI);
+    sv2b.apply_x(1).unwrap(); // |10⟩
+    sv2b.apply_crx(0, 1, PI).unwrap();
     assert_complex_eq(
         sv2b.data[2],
         c(1.0, 0.0),
@@ -1215,22 +1215,22 @@ fn test_apply_crx() {
     // |01⟩: control=1, so apply RX(π)|0⟩ = -i|1⟩
     // |01⟩ -> -i|11⟩
     let mut sv3 = Statevector::new(2);
-    sv3.apply_x(0); // |01⟩
-    sv3.apply_crx(0, 1, PI);
+    sv3.apply_x(0).unwrap(); // |01⟩
+    sv3.apply_crx(0, 1, PI).unwrap();
     assert_complex_eq(sv3.data[1], c(0.0, 0.0), "CRX(π)|01⟩[01] should be 0");
     assert_complex_eq(sv3.data[3], c(0.0, -1.0), "CRX(π)|01⟩ should be -i|11⟩");
 
     // Verify normalization
     let mut sv4 = Statevector::new(3);
-    sv4.apply_h(0);
-    sv4.apply_crx(0, 2, 0.7);
+    sv4.apply_h(0).unwrap();
+    sv4.apply_crx(0, 2, 0.7).unwrap();
     assert_normalized(&sv4);
 
     // Test control < target with |10⟩ (control=0, should be unchanged)
     // This tests the specific bug where control < target logic was inverted
     let mut sv5 = Statevector::new(2);
-    sv5.apply_x(1); // |10⟩: control=0, target=1
-    sv5.apply_crx(0, 1, PI);
+    sv5.apply_x(1).unwrap(); // |10⟩: control=0, target=1
+    sv5.apply_crx(0, 1, PI).unwrap();
     assert_complex_eq(
         sv5.data[2],
         c(1.0, 0.0),
@@ -1239,8 +1239,8 @@ fn test_apply_crx() {
 
     // Test control > target with |10⟩ (control=1, target should flip)
     let mut sv6 = Statevector::new(2);
-    sv6.apply_x(1); // |10⟩: q0=0, q1=1
-    sv6.apply_crx(1, 0, PI); // control=1, target=0
+    sv6.apply_x(1).unwrap(); // |10⟩: q0=0, q1=1
+    sv6.apply_crx(1, 0, PI).unwrap(); // control=1, target=0
     // control=1, so apply RX(π) to target |0⟩ -> -i|1⟩
     // |10⟩ -> -i|11⟩
     assert_complex_eq(sv6.data[2], c(0.0, 0.0), "CRX(1,0,π)|10⟩[10] should be 0");
@@ -1255,38 +1255,38 @@ fn test_apply_crx() {
 fn test_apply_cry() {
     // CRY(0) = I
     let mut sv1 = Statevector::new(2);
-    sv1.apply_cry(0, 1, 0.0);
+    sv1.apply_cry(0, 1, 0.0).unwrap();
     assert_complex_eq(sv1.data[0], c(1.0, 0.0), "CRY(0) should be I");
 
     // CRY(π)|11⟩ with control=0, target=1:
     // Control=1, so apply RY(π) to target
     // RY(π)|1⟩ = -|0⟩, so |11⟩ -> -|01⟩
     let mut sv2 = Statevector::new(2);
-    sv2.apply_x(0);
-    sv2.apply_x(1); // |11⟩
-    sv2.apply_cry(0, 1, PI);
+    sv2.apply_x(0).unwrap();
+    sv2.apply_x(1).unwrap(); // |11⟩
+    sv2.apply_cry(0, 1, PI).unwrap();
     assert_complex_eq(sv2.data[3], c(0.0, 0.0), "CRY(π)|11⟩[11] should be 0");
     assert_complex_eq(sv2.data[1], c(-1.0, 0.0), "CRY(π)|11⟩ should be -|01⟩");
 
     // CRY(π)|10⟩ with control=0, target=1:
     // Control=0, so no change
     let mut sv2b = Statevector::new(2);
-    sv2b.apply_x(1); // |10⟩
-    sv2b.apply_cry(0, 1, PI);
+    sv2b.apply_x(1).unwrap(); // |10⟩
+    sv2b.apply_cry(0, 1, PI).unwrap();
     assert_complex_eq(sv2b.data[2], c(1.0, 0.0), "CRY(π)|10⟩ should be unchanged");
 
     // |01⟩: control=1, target flips |0⟩ -> |1⟩ with phase
     // RY(π)|0⟩ = |1⟩, so |01⟩ -> |11⟩
     let mut sv3 = Statevector::new(2);
-    sv3.apply_x(0); // |01⟩
-    sv3.apply_cry(0, 1, PI);
+    sv3.apply_x(0).unwrap(); // |01⟩
+    sv3.apply_cry(0, 1, PI).unwrap();
     assert_complex_eq(sv3.data[1], c(0.0, 0.0), "CRY(π)|01⟩[01] should be 0");
     assert_complex_eq(sv3.data[3], c(1.0, 0.0), "CRY(π)|01⟩ should be |11⟩");
 
     // Verify normalization
     let mut sv4 = Statevector::new(3);
-    sv4.apply_h(0);
-    sv4.apply_cry(0, 2, 0.7);
+    sv4.apply_h(0).unwrap();
+    sv4.apply_cry(0, 2, 0.7).unwrap();
     assert_normalized(&sv4);
 
     // Test control > target: CRY(1, 0, π)|11⟩
@@ -1295,9 +1295,9 @@ fn test_apply_cry() {
     // Apply RY(π) to target |1⟩ = -|0⟩
     // Result: -|10⟩ (q1=1, q0=0 with phase)
     let mut sv5 = Statevector::new(2);
-    sv5.apply_x(0);
-    sv5.apply_x(1); // |11⟩
-    sv5.apply_cry(1, 0, PI);
+    sv5.apply_x(0).unwrap();
+    sv5.apply_x(1).unwrap(); // |11⟩
+    sv5.apply_cry(1, 0, PI).unwrap();
     assert_complex_eq(sv5.data[3], c(0.0, 0.0), "CRY(1,0,π)|11⟩[11] should be 0");
     assert_complex_eq(sv5.data[2], c(-1.0, 0.0), "CRY(1,0,π)|11⟩ should be -|10⟩");
 }
@@ -1306,7 +1306,7 @@ fn test_apply_cry() {
 fn test_apply_crz() {
     // CRZ(0) = I
     let mut sv1 = Statevector::new(2);
-    sv1.apply_crz(0, 1, 0.0);
+    sv1.apply_crz(0, 1, 0.0).unwrap();
     assert_complex_eq(sv1.data[0], c(1.0, 0.0), "CRZ(0) should be I");
 
     // CRZ(π)|11⟩ with control=0, target=1:
@@ -1314,17 +1314,17 @@ fn test_apply_crz() {
     // RZ(π)|1⟩ = i|1⟩
     // |11⟩ -> i|11⟩
     let mut sv2 = Statevector::new(2);
-    sv2.apply_x(0);
-    sv2.apply_x(1); // |11⟩
-    sv2.apply_crz(0, 1, PI);
+    sv2.apply_x(0).unwrap();
+    sv2.apply_x(1).unwrap(); // |11⟩
+    sv2.apply_crz(0, 1, PI).unwrap();
     assert_complex_eq(sv2.data[3], c(0.0, 1.0), "CRZ(π)|11⟩ should be i|11⟩");
 
     // CRZ(π)|10⟩ with control=0, target=1:
     // Control=0, so no change
     // |10⟩ should remain |10⟩
     let mut sv2b = Statevector::new(2);
-    sv2b.apply_x(1); // |10⟩
-    sv2b.apply_crz(0, 1, PI);
+    sv2b.apply_x(1).unwrap(); // |10⟩
+    sv2b.apply_crz(0, 1, PI).unwrap();
     assert_complex_eq(
         sv2b.data[2],
         c(1.0, 0.0),
@@ -1334,19 +1334,19 @@ fn test_apply_crz() {
     // |01⟩: control=1, target=0, apply RZ(π)|0⟩ = -i|0⟩
     // |01⟩ -> -i|01⟩
     let mut sv3 = Statevector::new(2);
-    sv3.apply_x(0); // |01⟩
-    sv3.apply_crz(0, 1, PI);
+    sv3.apply_x(0).unwrap(); // |01⟩
+    sv3.apply_crz(0, 1, PI).unwrap();
     assert_complex_eq(sv3.data[1], c(0.0, -1.0), "CRZ(π)|01⟩ should be -i|01⟩");
 
     // |00⟩: control=0, no change
     let mut sv4 = Statevector::new(2);
-    sv4.apply_crz(0, 1, PI);
+    sv4.apply_crz(0, 1, PI).unwrap();
     assert_complex_eq(sv4.data[0], c(1.0, 0.0), "CRZ(π)|00⟩ should be unchanged");
 
     // Verify normalization
     let mut sv5 = Statevector::new(3);
-    sv5.apply_h(0);
-    sv5.apply_crz(0, 2, 0.7);
+    sv5.apply_h(0).unwrap();
+    sv5.apply_crz(0, 2, 0.7).unwrap();
     assert_normalized(&sv5);
 
     // Test control > target: CRZ(1, 0, π)|10⟩
@@ -1355,8 +1355,8 @@ fn test_apply_crz() {
     // Apply RZ(π)|0⟩ = -i|0⟩
     // Result: -i|10⟩
     let mut sv6 = Statevector::new(2);
-    sv6.apply_x(1); // |10⟩
-    sv6.apply_crz(1, 0, PI);
+    sv6.apply_x(1).unwrap(); // |10⟩
+    sv6.apply_crz(1, 0, PI).unwrap();
     assert_complex_eq(sv6.data[2], c(0.0, -1.0), "CRZ(1,0,π)|10⟩ should be -i|10⟩");
 }
 
@@ -1364,14 +1364,14 @@ fn test_apply_crz() {
 fn test_apply_fsim() {
     // fSim(0, 0) = I
     let mut sv1 = Statevector::new(2);
-    sv1.apply_fsim(0, 1, 0.0, 0.0);
+    sv1.apply_fsim(0, 1, 0.0, 0.0).unwrap();
     assert_complex_eq(sv1.data[0], c(1.0, 0.0), "fSim(0,0) should be I");
 
     // fSim(π/2, 0) = iSWAP (approximately)
     // |01⟩ -> -i|10⟩ when θ=π/2
     let mut sv2 = Statevector::new(2);
-    sv2.apply_x(0); // |01⟩
-    sv2.apply_fsim(0, 1, PI / 2.0, 0.0);
+    sv2.apply_x(0).unwrap(); // |01⟩
+    sv2.apply_fsim(0, 1, PI / 2.0, 0.0).unwrap();
     assert_complex_eq(sv2.data[1], c(0.0, 0.0), "fSim(π/2,0)|01⟩[01] should be 0");
     assert_complex_eq(
         sv2.data[2],
@@ -1381,9 +1381,9 @@ fn test_apply_fsim() {
 
     // |11⟩ gets phase e^(-iφ)
     let mut sv3 = Statevector::new(2);
-    sv3.apply_x(0);
-    sv3.apply_x(1); // |11⟩
-    sv3.apply_fsim(0, 1, 0.0, PI / 2.0);
+    sv3.apply_x(0).unwrap();
+    sv3.apply_x(1).unwrap(); // |11⟩
+    sv3.apply_fsim(0, 1, 0.0, PI / 2.0).unwrap();
     assert_complex_eq(
         sv3.data[3],
         c(0.0, -1.0),
@@ -1392,8 +1392,8 @@ fn test_apply_fsim() {
 
     // Verify normalization
     let mut sv4 = Statevector::new(3);
-    sv4.apply_h(0);
-    sv4.apply_fsim(0, 2, 0.5, 0.3);
+    sv4.apply_h(0).unwrap();
+    sv4.apply_fsim(0, 2, 0.5, 0.3).unwrap();
     assert_normalized(&sv4);
 }
 
@@ -1401,8 +1401,8 @@ fn test_apply_fsim() {
 fn test_apply_gphase() {
     // Global phase doesn't affect probabilities
     let mut sv1 = Statevector::new(2);
-    sv1.apply_h(0);
-    sv1.apply_gphase(PI);
+    sv1.apply_h(0).unwrap();
+    sv1.apply_gphase(PI).unwrap();
 
     let probs1 = sv1.probabilities();
     assert!((probs1[0] - 0.5).abs() < EPSILON, "P(|00⟩) should be 0.5");
@@ -1410,13 +1410,13 @@ fn test_apply_gphase() {
 
     // GPhase(π)|0⟩ = -|0⟩
     let mut sv2 = Statevector::new(1);
-    sv2.apply_gphase(PI);
+    sv2.apply_gphase(PI).unwrap();
     assert_complex_eq(sv2.data[0], c(-1.0, 0.0), "GPhase(π)|0⟩ should be -|0⟩");
 
     // GPhase(2π) = I
     let mut sv3 = Statevector::new(1);
-    sv3.apply_x(0);
-    sv3.apply_gphase(2.0 * PI);
+    sv3.apply_x(0).unwrap();
+    sv3.apply_gphase(2.0 * PI).unwrap();
     assert_complex_eq(sv3.data[1], c(1.0, 0.0), "GPhase(2π) should be I");
 }
 
@@ -1532,11 +1532,11 @@ fn test_ccx_target_middle() {
     // Initial state |101⟩ (q0=1, q1=0, q2=1). Indices: 1 + 0 + 4 = 5.
     // Expected result: Target flips 0->1 => |111⟩ (Index 7).
     let mut sv = Statevector::new(3);
-    sv.apply_x(0);
-    sv.apply_x(2); // Set |101⟩
+    sv.apply_x(0).unwrap();
+    sv.apply_x(2).unwrap(); // Set |101⟩
 
     // Apply CCX(c0=0, c1=2, target=1)
-    sv.apply_ccx(0, 2, 1);
+    sv.apply_ccx(0, 2, 1).unwrap();
 
     assert_complex_eq(
         sv.data[5],
@@ -1584,14 +1584,14 @@ fn test_apply_unitary_asymmetric() {
     .unwrap();
 
     let mut sv = Statevector::new(2);
-    sv.apply_x(0); // Start with |01⟩ (q0=1, q1=0) -> Logic |01⟩?
+    sv.apply_x(0).unwrap(); // Start with |01⟩ (q0=1, q1=0) -> Logic |01⟩?
     // Wait, Statevector index logic:
     // index 1 = binary 01 => q1=0, q0=1.
     // If apply_unitary_gate uses logic [q1, q0], then |01⟩ is index 1.
 
     // Apply V to q1, q0 (Logic order |q1 q0⟩)
     // Input |01⟩ should become i|10⟩ (index 2, with phase i)
-    sv.apply_unitary_gate(&[1, 0], &matrix);
+    sv.apply_unitary_gate(&[1, 0], &matrix).unwrap();
 
     assert_complex_eq(sv.data[1], c(0.0, 0.0), "Old state |01⟩ should be empty");
     assert_complex_eq(sv.data[2], c(0.0, 1.0), "New state should be i|10⟩");
@@ -1617,7 +1617,7 @@ fn test_expectation_z_on_zero() {
 fn test_expectation_z_on_one() {
     // |1⟩ state, ⟨Z⟩ = -1
     let mut sv = Statevector::new(1);
-    sv.apply_x(0);
+    sv.apply_x(0).unwrap();
 
     let mut ps = PauliString::new(1);
     ps.set_pauli(0, Pauli::Z);
@@ -1635,7 +1635,7 @@ fn test_expectation_z_on_one() {
 fn test_expectation_x_on_plus() {
     // |+⟩ state, ⟨X⟩ = 1
     let mut sv = Statevector::new(1);
-    sv.apply_h(0);
+    sv.apply_h(0).unwrap();
 
     let mut ps = PauliString::new(1);
     ps.set_pauli(0, Pauli::X);
@@ -1654,8 +1654,8 @@ fn test_expectation_multi_qubit() {
     // Bell state |Φ+⟩ = (|00⟩ + |11⟩)/√2
     // For H = Z⊗I, ⟨H⟩ = 0
     let mut sv = Statevector::new(2);
-    sv.apply_h(0);
-    sv.apply_cx(0, 1);
+    sv.apply_h(0).unwrap();
+    sv.apply_cx(0, 1).unwrap();
 
     let mut ps = PauliString::new(2);
     ps.set_pauli(0, Pauli::Z); // Z on qubit 0
@@ -1670,8 +1670,8 @@ fn test_expectation_zz_on_bell() {
     // Bell state |Φ+⟩ = (|00⟩ + |11⟩)/√2
     // For H = Z⊗Z, ⟨H⟩ = 1
     let mut sv = Statevector::new(2);
-    sv.apply_h(0);
-    sv.apply_cx(0, 1);
+    sv.apply_h(0).unwrap();
+    sv.apply_cx(0, 1).unwrap();
 
     let mut ps = PauliString::new(2);
     ps.set_pauli(0, Pauli::Z);
