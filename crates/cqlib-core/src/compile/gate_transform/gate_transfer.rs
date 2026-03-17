@@ -3,14 +3,13 @@ use std::collections::HashMap;
 use indexmap::IndexSet;
 use ndarray::prelude::*;
 use num::complex::Complex;
-use rayon::prelude::*;
 use smallvec::{SmallVec, smallvec};
 
 use crate::circuit::circuit_impl::Circuit;
 use crate::circuit::dag::CircuitDag;
 use crate::circuit::gate::StandardGate;
 use crate::circuit::gate::instruction::Instruction;
-use crate::circuit::param::CircuitParam;
+use crate::circuit::param::{CircuitParam, ParameterValue};
 use crate::circuit::parameter::Parameter;
 use crate::circuit::{Operation, Qubit};
 use crate::compile::gate_transform::transform_rules::double_qubit_rule::{
@@ -36,28 +35,18 @@ impl GateTransform {
 
     /// Execute the gate transform on the input circuit.
     /// Returns a new circuit expressed entirely in the instruction set's gates.
-    /// Uses CircuitDag and parallel processing for improved performance.
+    /// Symbolic parameter preservation currently requires mutable parameter interning
+    /// during block processing, so blocks are handled sequentially here.
     pub fn execute(&mut self, circuit: &Circuit) -> Circuit {
         let mut dag = CircuitDag::from_circuit(circuit).expect("Failed to create CircuitDag");
 
         let block_indices: Vec<_> = dag.blocks().map(|(idx, _)| idx).collect();
-        let instruction_set = self.instruction_set.clone();
-        let parameters = circuit.parameters().clone();
-        let processed_results: Vec<_> = block_indices
-            .par_iter()
-            .map(|&idx| {
-                let operations = dag.data[idx].operations.clone();
-
-                let mut gt = GateTransform::new(instruction_set.clone());
-                let decomposed = gt.multi_qubit_decompose(&operations, &parameters);
-                let transformed = gt.oneq_transform(&decomposed, &parameters);
-
-                (idx, transformed)
-            })
-            .collect();
-
-        for (idx, new_operations) in processed_results {
-            dag.data[idx].operations = new_operations;
+        for idx in block_indices {
+            let operations = dag.data[idx].operations.clone();
+            let decomposed =
+                self.multi_qubit_decompose(&operations, &mut dag.parameters, &mut dag.symbols);
+            let transformed = self.oneq_transform(&decomposed, &dag.parameters);
+            dag.data[idx].operations = transformed;
         }
 
         dag.to_circuit()
@@ -66,6 +55,60 @@ impl GateTransform {
 }
 
 impl GateTransform {
+    /// Convert a stored circuit parameter into a rule-level `Parameter`.
+    ///
+    /// Fixed values become constant expressions, and indexed values are cloned from
+    /// the circuit parameter pool so transform rules can preserve symbolic algebra.
+    fn circuit_param_to_parameter(
+        param: &CircuitParam,
+        parameters: &IndexSet<Parameter>,
+    ) -> Parameter {
+        match param {
+            CircuitParam::Fixed(val) => Parameter::from(*val),
+            CircuitParam::Index(idx) => parameters[*idx as usize].clone(),
+        }
+    }
+
+    /// Convert a rule-level `Parameter` back into compact circuit storage.
+    ///
+    /// Constant expressions collapse to `CircuitParam::Fixed`; symbolic expressions
+    /// are interned into the circuit parameter pool and returned as `Index` values.
+    fn parameter_to_circuit_param(
+        param: Parameter,
+        parameters: &mut IndexSet<Parameter>,
+        symbols: &mut IndexSet<String>,
+    ) -> CircuitParam {
+        match ParameterValue::from(param.clone()) {
+            ParameterValue::Fixed(value) => CircuitParam::Fixed(value),
+            ParameterValue::Param(param) => {
+                let (index, is_new) = parameters.insert_full(param.clone());
+                if is_new {
+                    for sym in param.get_symbols() {
+                        symbols.insert(sym);
+                    }
+                }
+                CircuitParam::Index(index as u32)
+            }
+        }
+    }
+
+    /// Try to resolve a parameter list into concrete numeric values.
+    ///
+    /// Returns `Some(Vec<f64>)` only when every parameter can be evaluated without
+    /// external bindings; otherwise returns `None` so symbolic gates can be preserved.
+    fn try_resolve_numeric_params(
+        params: &SmallVec<[CircuitParam; 1]>,
+        parameters: &IndexSet<Parameter>,
+    ) -> Option<Vec<f64>> {
+        params
+            .iter()
+            .map(|p| match p {
+                CircuitParam::Fixed(val) => Some(*val),
+                CircuitParam::Index(idx) => parameters[*idx as usize].evaluate(&None).ok(),
+            })
+            .collect()
+    }
+
     /// Decompose a gate into the instruction set's target gates.
     /// Handles CCX, SWAP.
     fn gate_decompose(&self, gate: &StandardGate) -> Vec<(StandardGate, SmallVec<[usize; 2]>)> {
@@ -106,7 +149,8 @@ impl GateTransform {
     fn multi_qubit_decompose(
         &mut self,
         ops: &[Operation],
-        parameters: &IndexSet<Parameter>,
+        parameters: &mut IndexSet<Parameter>,
+        symbols: &mut IndexSet<String>,
     ) -> Vec<Operation> {
         let mut new_operations: Vec<Operation> = Vec::new();
 
@@ -126,9 +170,12 @@ impl GateTransform {
                 Instruction::UnitaryGate(ugate) => {
                     if let Some(circuit_ref) = ugate.circuit() {
                         let subcircuit = circuit_ref.circuit();
+                        let mut sub_parameters = subcircuit.parameters().clone();
+                        let mut sub_symbols = subcircuit.symbols().clone();
                         let transformed_subcircuit = self.multi_qubit_decompose(
                             subcircuit.operations(),
-                            subcircuit.parameters(),
+                            &mut sub_parameters,
+                            &mut sub_symbols,
                         );
                         // Decompose the transformed subcircuit operations directly
                         // instead of wrapping them in a new UnitaryGate
@@ -159,6 +206,8 @@ impl GateTransform {
                                     gate_inst,
                                     &smallvec![],
                                     &decomp_qubits,
+                                    parameters,
+                                    symbols,
                                 );
                                 if let Some(ops) = transformed_ops {
                                     new_operations.extend(ops);
@@ -187,24 +236,18 @@ impl GateTransform {
                         // Convert CircuitParam to ParameterValue for append
                         new_operations.push(op.clone());
                     } else if sgate.num_qubits() == 2 {
-                        let param_values: SmallVec<[f64; 3]> = params
+                        let param_values: SmallVec<[Parameter; 3]> = params
                             .iter()
-                            .map(|p| match p {
-                                CircuitParam::Fixed(val) => *val,
-                                CircuitParam::Index(idx) => {
-                                    let param = parameters[*idx as usize].clone();
-                                    if let Ok(val) = param.evaluate(&None) {
-                                        val
-                                    } else {
-                                        // If evaluation fails, use 0.0 as default
-                                        0.0
-                                    }
-                                }
-                            })
-                            .collect::<SmallVec<[f64; 3]>>();
+                            .map(|p| Self::circuit_param_to_parameter(p, parameters))
+                            .collect::<SmallVec<[Parameter; 3]>>();
                         // Two-qubit gates: transform to target gate
-                        let transformed_ops =
-                            self.append_two_qubit_transformed(sgate, &param_values, &qubits);
+                        let transformed_ops = self.append_two_qubit_transformed(
+                            sgate,
+                            &param_values,
+                            &qubits,
+                            parameters,
+                            symbols,
+                        );
                         if let Some(ops) = transformed_ops {
                             new_operations.extend(ops);
                         } else {
@@ -221,8 +264,13 @@ impl GateTransform {
                 Instruction::CircuitGate(cgate) => {
                     let frozen_circuit = cgate.circuit();
                     let subcircuit = frozen_circuit.circuit();
-                    let transformed_subcircuit = self
-                        .multi_qubit_decompose(subcircuit.operations(), subcircuit.parameters());
+                    let mut sub_parameters = subcircuit.parameters().clone();
+                    let mut sub_symbols = subcircuit.symbols().clone();
+                    let transformed_subcircuit = self.multi_qubit_decompose(
+                        subcircuit.operations(),
+                        &mut sub_parameters,
+                        &mut sub_symbols,
+                    );
                     for sub_cir_op in &transformed_subcircuit {
                         let mapped_qubits = sub_cir_op
                             .qubits
@@ -257,8 +305,10 @@ impl GateTransform {
     fn append_two_qubit_transformed(
         &mut self,
         gate: &StandardGate,
-        params: &SmallVec<[f64; 3]>,
+        params: &SmallVec<[Parameter; 3]>,
         qubits: &[Qubit],
+        parameters: &mut IndexSet<Parameter>,
+        symbols: &mut IndexSet<String>,
     ) -> Option<Vec<Operation>> {
         let mut new_dg_operations: Vec<Operation> = Vec::new();
         let steps = self
@@ -273,11 +323,12 @@ impl GateTransform {
 
         // Apply the transformation chain
         // We need to track current gates, their parameters, and qubits
-        let mut current_gates: Vec<(StandardGate, SmallVec<[f64; 3]>, Vec<i32>)> = Vec::new();
+        let mut current_gates: Vec<(StandardGate, SmallVec<[Parameter; 3]>, Vec<i32>)> = Vec::new();
         current_gates.push((gate.clone(), params.clone(), Vec::from([0, 1])));
 
         for step in &steps {
-            let mut next_gates: Vec<(StandardGate, SmallVec<[f64; 3]>, Vec<i32>)> = Vec::new();
+            let mut next_gates: Vec<(StandardGate, SmallVec<[Parameter; 3]>, Vec<i32>)> =
+                Vec::new();
             for (g, gate_params, qs) in &current_gates {
                 if *g == step.source_gate {
                     // Apply the rule
@@ -310,7 +361,7 @@ impl GateTransform {
         for (g, gate_params, qs) in current_gates {
             let mut circuit_params: SmallVec<[CircuitParam; 1]> = SmallVec::new();
             for param in gate_params {
-                circuit_params.push(CircuitParam::Fixed(param));
+                circuit_params.push(Self::parameter_to_circuit_param(param, parameters, symbols));
             }
             let mut mapped_qs: SmallVec<[Qubit; 3]> = SmallVec::new();
             for q in qs {
@@ -330,9 +381,8 @@ impl GateTransform {
     fn apply_rule(
         rule_name: &str,
         gate: &StandardGate,
-        params: &SmallVec<[f64; 3]>,
+        params: &SmallVec<[Parameter; 3]>,
     ) -> DecomposedTwoQubitGate {
-        // Convert ParameterValue to SmallVec<[f64; 3]>
         match rule_name {
             // Between categories
             "cx2rzz_rule" => DoubleQubitRule::cx2rzz_rule(gate, params),
@@ -390,25 +440,22 @@ impl GateTransform {
             let instruction = &op.instruction;
             let qubits = &op.qubits;
             let params = &op.params;
-            let param_values: Vec<_> = params
-                .iter()
-                .map(|p| match p {
-                    CircuitParam::Fixed(val) => *val,
-                    CircuitParam::Index(idx) => {
-                        let param = parameters[*idx as usize].clone();
-                        if let Ok(val) = param.evaluate(&None) {
-                            val
-                        } else {
-                            // If evaluation fails, use 0.0 as default
-                            0.0
-                        }
-                    }
-                })
-                .collect();
 
             match instruction {
                 Instruction::Standard(sgate) => {
                     if sgate.num_qubits() == 1 {
+                        let Some(param_values) = Self::try_resolve_numeric_params(params, parameters)
+                        else {
+                            let q = qubits[0];
+                            let front_layer_operator =
+                                self.flush_front_layer(&mut front_layer, q.id(), &single_qubit_rule);
+                            if !front_layer_operator.is_empty() {
+                                new_operations.extend(front_layer_operator);
+                            }
+                            new_operations.push(op.clone());
+                            continue;
+                        };
+
                         // Single-qubit gate: accumulate into front layer
                         let q = qubits[0];
                         let gate_matrix: Array2<Complex<f64>> =
@@ -508,11 +555,11 @@ impl GateTransform {
 mod tests {
     use super::*;
     use crate::circuit::Qubit;
-    use crate::circuit::dag::{BasicBlock, FlowEdge, Terminator};
     use crate::circuit::gate::MCGate;
-    use crate::circuit::gate::control_flow::{ConditionView, IfElseGate, WhileLoopGate};
+    use crate::circuit::gate::control_flow::ConditionView;
     use crate::circuit::gate::{CircuitGate, FrozenCircuit, UnitaryGate};
     use crate::circuit::param::ParameterValue;
+    use crate::circuit::parameter::impls::Parameter;
     use num::complex::Complex;
     use num::complex::ComplexFloat;
     use std::sync::Arc;
@@ -752,6 +799,26 @@ mod tests {
         );
     }
 
+    fn gate_transfer_symbolic_circuit_test(
+        iset: &InstructionSet,
+        circuit: &Circuit,
+        bindings: HashMap<String, f64>,
+    ) {
+        let mut gt = GateTransform::new(iset.clone());
+        let result = gt.execute(circuit);
+
+        let bound_result = result.assign_parameters(&Some(bindings.clone())).unwrap();
+        let bound_circuit = circuit.assign_parameters(&Some(bindings)).unwrap();
+
+        let result_matrix = bound_result.to_matrix(None);
+        let circuit_matrix = bound_circuit.to_matrix(None);
+
+        assert!(
+            is_matrix_differ_by_phase(&result_matrix, &circuit_matrix),
+            "Symbolic gate transfer should preserve circuit semantics"
+        );
+    }
+
     #[test]
     fn test_gate_transfer_full_circuit_with_cx() {
         let iset = InstructionSet::new(
@@ -937,7 +1004,7 @@ mod tests {
 
         let cgate = CircuitGate::new(
             "TestCircuit",
-            FrozenCircuit::new({ generate_full_circuit() }),
+            FrozenCircuit::new(generate_full_circuit()),
         )
         .unwrap();
 
@@ -1148,5 +1215,34 @@ mod tests {
                 result.operations().len()
             );
         }
+    }
+
+    #[test]
+    fn test_gate_transform_preserves_symbolic_rzz_parameters() {
+        let iset = InstructionSet::new(
+            vec![StandardGate::RZ, StandardGate::RX],
+            vec![StandardGate::CX],
+            None,
+        );
+
+        let mut circuit = Circuit::new(2);
+        let q0 = Qubit::new(0);
+        let q1 = Qubit::new(1);
+        let theta = Parameter::symbol("theta");
+
+        circuit.rzz(q0, q1, theta).unwrap();
+
+        let mut gt = GateTransform::new(iset.clone());
+        let result = gt.execute(&circuit);
+
+        assert!(result.symbols().contains("theta"));
+        assert!(result
+            .operations()
+            .iter()
+            .any(|op| op.params.iter().any(|param| matches!(param, CircuitParam::Index(_)))));
+
+        let mut bindings = HashMap::new();
+        bindings.insert("theta".to_string(), 0.37);
+        gate_transfer_symbolic_circuit_test(&iset, &circuit, bindings);
     }
 }
