@@ -35,19 +35,19 @@ class TestConstantEvaluation:
 
     def test_evaluate_float(self):
         """Evaluate float constant."""
-        p = Parameter.from_float(3.14)
+        p = Parameter(3.14)
         result = p.evaluate()
         assert np.isclose(result, 3.14)
 
     def test_evaluate_zero(self):
         """Evaluate zero constant."""
-        p = Parameter.from_float(0.0)
+        p = Parameter(0.0)
         result = p.evaluate({})
         assert np.isclose(result, 0.0)
 
     def test_evaluate_negative(self):
         """Evaluate negative constant."""
-        p = Parameter.from_float(-5.5)
+        p = Parameter(-5.5)
         result = p.evaluate({})
         assert np.isclose(result, -5.5)
 

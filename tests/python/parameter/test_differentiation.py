@@ -24,7 +24,6 @@ Test coverage:
 - Higher order derivatives
 """
 
-import pytest
 import numpy as np
 from cqlib.circuit import Parameter
 
@@ -46,7 +45,7 @@ class TestBasicDifferentiation:
 
     def test_derivative_of_constant(self):
         """Derivative of constant is 0."""
-        c = Parameter.from_float(5.0)
+        c = Parameter(5.0)
         deriv = c.derivative("theta")
         assert np.isclose(deriv.evaluate({}), 0.0)
 
@@ -94,7 +93,7 @@ class TestPolynomialDifferentiation:
     def test_derivative_of_quadratic(self):
         """Derivative of quadratic function."""
         theta = Parameter("theta")
-        expr = theta ** 2
+        expr = theta**2
         deriv = expr.derivative("theta")
         # d(theta^2)/d(theta) = 2*theta
         result = deriv.evaluate({"theta": 3.0})
@@ -103,7 +102,7 @@ class TestPolynomialDifferentiation:
     def test_derivative_of_cubic(self):
         """Derivative of cubic function."""
         theta = Parameter("theta")
-        expr = theta ** 3
+        expr = theta**3
         deriv = expr.derivative("theta")
         # d(theta^3)/d(theta) = 3*theta^2
         result = deriv.evaluate({"theta": 2.0})
@@ -112,7 +111,7 @@ class TestPolynomialDifferentiation:
     def test_derivative_of_polynomial(self):
         """Derivative of polynomial expression."""
         theta = Parameter("theta")
-        expr = theta ** 2 + 3 * theta + 2
+        expr = theta**2 + 3 * theta + 2
         deriv = expr.derivative("theta")
         # d(theta^2 + 3*theta + 2)/d(theta) = 2*theta + 3
         result = deriv.evaluate({"theta": 1.0})
@@ -270,7 +269,7 @@ class TestHigherOrderDerivatives:
     def test_second_derivative_of_quadratic(self):
         """Second derivative of quadratic is constant."""
         theta = Parameter("theta")
-        expr = theta ** 2
+        expr = theta**2
         first = expr.derivative("theta")  # 2*theta
         second = first.derivative("theta")  # 2
         # Needs simplify() to get constant 2
@@ -280,7 +279,7 @@ class TestHigherOrderDerivatives:
     def test_second_derivative_of_cubic(self):
         """Second derivative of cubic."""
         theta = Parameter("theta")
-        expr = theta ** 3
+        expr = theta**3
         first = expr.derivative("theta")  # 3*theta^2
         second = first.derivative("theta")  # 6*theta
         result = second.evaluate({"theta": 2.0})
@@ -289,7 +288,7 @@ class TestHigherOrderDerivatives:
     def test_third_derivative(self):
         """Third derivative."""
         theta = Parameter("theta")
-        expr = theta ** 3
+        expr = theta**3
         first = expr.derivative("theta")  # 3*theta^2
         second = first.derivative("theta")  # 6*theta
         third = second.derivative("theta")  # 6

@@ -14,6 +14,7 @@
 
 import pytest
 
+from cqlib import Qubit
 from cqlib.device import ExecutionResult, Outcome, Status
 
 
@@ -64,7 +65,7 @@ class TestExecutionResult:
         """ExecutionResult should follow queued->running->completed flow."""
         result = ExecutionResult(
             task_id="task-1",
-            qubits=[0, 1],
+            qubits=[Qubit(0), Qubit(1)],
             shots=100,
             num_qubits=2,
             backend="sim",
@@ -91,16 +92,16 @@ class TestExecutionResult:
 
     def test_execution_result_failure_paths(self):
         """ExecutionResult should support fail/cancel transitions and validation."""
-        failed = ExecutionResult("task-fail", [0], 10, 1, None)
+        failed = ExecutionResult("task-fail", [Qubit(0)], 10, 1, None)
         failed.fail("backend down", 42)
         assert failed.status.kind == "failed"
         assert failed.status.error_msg == "backend down"
         assert failed.status.error_code == 42
 
-        cancelled = ExecutionResult("task-cancel", [0], 10, 1, None)
+        cancelled = ExecutionResult("task-cancel", [Qubit(0)], 10, 1, None)
         cancelled.cancel()
         assert cancelled.status.kind == "cancelled"
 
-        invalid = ExecutionResult("task-invalid", [0], 10, 1, None)
+        invalid = ExecutionResult("task-invalid", [Qubit(0)], 10, 1, None)
         with pytest.raises(ValueError):
             invalid.finish({"2": 1})

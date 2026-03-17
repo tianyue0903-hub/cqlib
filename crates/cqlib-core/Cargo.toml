@@ -28,6 +28,7 @@ categories = [
 [dependencies]
 approx.workspace = true
 bitvec.workspace = true
+faer.workspace = true
 lalrpop-util = { workspace = true, features = ["lexer"] }
 indexmap.workspace = true
 ndarray.workspace = true

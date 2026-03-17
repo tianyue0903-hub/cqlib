@@ -145,19 +145,42 @@ impl PyUnitaryGate {
     /// Implements the numpy array protocol for numpy 2.0+ compatibility.
     ///
     /// Allows direct conversion to numpy array: `np.array(gate)` or `gate.matrix`.
-    #[pyo3(signature = (_dtype=None, _copy=None))]
+    /// Supports dtype and copy keyword arguments as required by NumPy 2.0.
+    #[pyo3(signature = (dtype=None, copy=None))]
     pub fn __array__<'py>(
         &self,
         py: Python<'py>,
-        _dtype: Option<Bound<'py, PyAny>>,
-        _copy: Option<bool>,
+        dtype: Option<Bound<'py, PyAny>>,
+        copy: Option<bool>,
     ) -> PyResult<Bound<'py, PyArray2<Complex64>>> {
-        match self.inner.matrix() {
-            Some(mat) => Ok(PyArray2::from_array(py, mat)),
-            None => Err(pyo3::exceptions::PyValueError::new_err(
-                "No matrix defined for this unitary gate",
-            )),
+        let mat = match self.inner.matrix() {
+            Some(m) => m,
+            None => {
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "No matrix defined for this unitary gate",
+                ));
+            }
+        };
+
+        // Create the array
+        let array = PyArray2::from_array(py, mat);
+
+        // Handle dtype conversion if specified
+        if let Some(dtype) = dtype {
+            // Convert to the requested dtype using numpy's astype
+            let astype_result = array.call_method("astype", (dtype,), None)?;
+            return Ok(astype_result.extract()?);
         }
+
+        // Handle copy parameter - if copy=True, return a copy
+        // The array from from_array is already a copy of the matrix data
+        // so we only need to handle explicit copy requests
+        if copy == Some(true) {
+            let copy_result = array.call_method("copy", (), None)?;
+            return Ok(copy_result.extract()?);
+        }
+
+        Ok(array)
     }
 }
 
