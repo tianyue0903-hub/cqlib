@@ -22,7 +22,7 @@ pub mod qis;
 pub(crate) mod util;
 
 pub use error_mitigation::VirtualDistillation;
-pub use error_mitigation::VirtualDistillationError;
+pub use error_mitigation::ErrorMitigationError;
 pub use error_mitigation::ZNEMitigation;
 
 pub mod visualization;

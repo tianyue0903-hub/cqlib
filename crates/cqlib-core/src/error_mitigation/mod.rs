@@ -10,8 +10,16 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
+use crate::circuit::Circuit;
+use crate::qis::Hamiltonian;
+
+pub mod error;
 pub mod zne_mitigation;
 pub mod virtual_distillation;
 
-pub use virtual_distillation::{VirtualDistillation, VirtualDistillationError};
+pub type Estimator<'a> =
+    dyn Fn(&Circuit, Option<&Hamiltonian>, Option<usize>) -> (f64, f64) + 'a;
+
+pub use error::ErrorMitigationError;
+pub use virtual_distillation::VirtualDistillation;
 pub use zne_mitigation::{ExtrapolateMethod, ZNEMitigation};
