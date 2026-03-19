@@ -855,4 +855,72 @@ impl PyDensityMatrix {
             inner: self.inner.clone(),
         }
     }
+
+    /// Checks if the density matrix is Hermitian (self-adjoint) within a tolerance.
+    ///
+    /// A valid density matrix must satisfy ρ = ρ†, i.e., ρ_ij = ρ_ji*.
+    ///
+    /// Args:
+    ///     tol: Tolerance for floating-point comparison (default: 1e-10)
+    ///
+    /// Returns:
+    ///     True if the matrix is Hermitian within the specified tolerance.
+    ///
+    /// Examples:
+    ///     >>> from cqlib.qis import DensityMatrix
+    ///     >>> dm = DensityMatrix(1)
+    ///     >>> dm.apply_h(0)
+    ///     >>> dm.is_hermitian()
+    ///     True
+    fn is_hermitian(&self, tol: Option<f64>) -> bool {
+        self.inner.is_hermitian(tol.unwrap_or(1e-10))
+    }
+
+    /// Checks if the density matrix is positive semidefinite.
+    ///
+    /// Uses the Gershgorin circle theorem for an approximate check:
+    /// If for each row i, |ρ_ii| >= sum_{j≠i} |ρ_ij|, then all eigenvalues are non-negative.
+    ///
+    /// Note: This is a sufficient but not necessary condition. A matrix that fails this
+    /// check might still be positive semidefinite, but one that passes definitely is.
+    ///
+    /// Args:
+    ///     tol: Tolerance for floating-point comparison (default: 1e-10)
+    ///
+    /// Returns:
+    ///     True if the matrix satisfies the positive semidefinite condition.
+    ///
+    /// Examples:
+    ///     >>> from cqlib.qis import DensityMatrix
+    ///     >>> dm = DensityMatrix(1)
+    ///     >>> dm.is_positive_semidefinite()
+    ///     True
+    fn is_positive_semidefinite(&self, tol: Option<f64>) -> bool {
+        self.inner
+            .is_positive_semidefinite_approx(tol.unwrap_or(1e-10))
+    }
+
+    /// Validates all physical constraints of the density matrix.
+    ///
+    /// Checks:
+    /// 1. Hermiticity: ρ = ρ†
+    /// 2. Positive semidefiniteness: All eigenvalues >= 0
+    /// 3. Unit trace: Tr(ρ) = 1
+    ///
+    /// Args:
+    ///     tol: Tolerance for floating-point comparisons (default: 1e-10)
+    ///
+    /// Raises:
+    ///     ValueError: If any physical constraint is violated.
+    ///
+    /// Examples:
+    ///     >>> from cqlib.qis import DensityMatrix
+    ///     >>> dm = DensityMatrix(1)
+    ///     >>> dm.apply_h(0)
+    ///     >>> dm.validate_physical()  # Should pass for valid states
+    fn validate_physical(&self, tol: Option<f64>) -> PyResult<()> {
+        self.inner
+            .validate_physical(tol.unwrap_or(1e-10))
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
 }

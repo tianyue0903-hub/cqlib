@@ -65,6 +65,10 @@ pub enum QisError {
     #[error("Operator is not Hermitian")]
     NotHermitian,
 
+    /// Thrown when a density matrix is expected to be positive semidefinite but is not.
+    #[error("Density matrix is not positive semidefinite")]
+    NotPositiveSemidefinite,
+
     /// Thrown when a parameter value is invalid.
     #[error("Invalid parameter value: {0}")]
     InvalidParameterValue(String),
