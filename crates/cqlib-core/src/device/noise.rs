@@ -337,9 +337,16 @@ impl NoiseModel {
     }
 
     /// Adds a readout error for a specific qubit.
-    pub fn add_readout_error(&mut self, qubit: Qubit, error: ReadoutError) -> Result<(), String> {
+    pub fn add_readout_error(
+        &mut self,
+        qubit: Qubit,
+        error: ReadoutError,
+    ) -> Result<(), NoiseError> {
         if !error.is_valid() {
-            return Err("Invalid probabilities".into());
+            return Err(NoiseError::InvalidProbability {
+                value: -1.0,
+                context: format!("ReadoutError for qubit {:?}", qubit),
+            });
         }
         self.readout_errors.insert(qubit, error);
         Ok(())
