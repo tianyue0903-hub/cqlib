@@ -148,9 +148,9 @@
 //! assert_eq!(dag.num_blocks(), 1); // Linear circuit has one basic block
 //! ```
 
+use crate::circuit::circuit_param::CircuitParam;
 use crate::circuit::gate::control_flow::ControlFlow;
 use crate::circuit::gate::instruction::Instruction;
-use crate::circuit::param::CircuitParam;
 use crate::circuit::{Circuit, CircuitError, IfElseGate, WhileLoopGate};
 use crate::circuit::{ConditionView, Operation, Parameter, Qubit};
 use indexmap::IndexSet;

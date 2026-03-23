@@ -243,7 +243,7 @@ impl DensityMatrixNoise {
         Ok(sim)
     }
 
-    fn apply_standard_gate_noise(
+    pub fn apply_standard_gate_noise(
         &mut self,
         gate: StandardGate,
         qs: &[usize],

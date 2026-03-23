@@ -10,10 +10,11 @@
 # copyright notice, and modified files need to carry a notice indicating
 # that they have been altered from the originals.
 
-from typing import List, Union, final
+from typing import List, Union, final, Optional
 import numpy as np
 
 from cqlib.circuit import Circuit
+from cqlib.circuit.gates.standard import StandardGate
 from cqlib.qis import Hamiltonian, PauliString
 
 @final
@@ -168,6 +169,21 @@ class DensityMatrix:
 
         Returns:
             The trace (sum of diagonal elements) as a real number.
+        """
+        ...
+
+    def apply_standard_gate(
+        self,
+        gate: StandardGate,
+        qubits: List[int],
+        params: Optional[List[float]] = None,
+    ) -> None:
+        """Applies a standard gate to the density matrix.
+
+        Args:
+            gate: The standard gate to apply.
+            qubits: List of target qubit indices.
+            params: List of parameters for parameterized gates.
         """
         ...
 
@@ -545,5 +561,71 @@ class DensityMatrix:
 
         Returns:
             A new DensityMatrix instance with the same data.
+        """
+        ...
+
+    def is_hermitian(self, tol: float = 1e-10) -> bool:
+        """Checks if the density matrix is Hermitian (self-adjoint) within a tolerance.
+
+        A valid density matrix must satisfy ρ = ρ†, i.e., ρ_ij = ρ_ji*.
+
+        Args:
+            tol: Tolerance for floating-point comparison (default: 1e-10)
+
+        Returns:
+            True if the matrix is Hermitian within the specified tolerance.
+
+        Examples:
+            >>> from cqlib.qis import DensityMatrix
+            >>> dm = DensityMatrix(1)
+            >>> dm.apply_h(0)
+            >>> dm.is_hermitian()
+            True
+        """
+        ...
+
+    def is_positive_semidefinite(self, tol: float = 1e-10) -> bool:
+        """Checks if the density matrix is positive semidefinite.
+
+        Uses the Gershgorin circle theorem for an approximate check:
+        If for each row i, |ρ_ii| >= sum_{j≠i} |ρ_ij|, then all eigenvalues are non-negative.
+
+        Note: This is a sufficient but not necessary condition. A matrix that fails this
+        check might still be positive semidefinite, but one that passes definitely is.
+
+        Args:
+            tol: Tolerance for floating-point comparison (default: 1e-10)
+
+        Returns:
+            True if the matrix satisfies the positive semidefinite condition.
+
+        Examples:
+            >>> from cqlib.qis import DensityMatrix
+            >>> dm = DensityMatrix(1)
+            >>> dm.is_positive_semidefinite()
+            True
+        """
+        ...
+
+    def validate_physical(self, tol: float = 1e-10) -> None:
+        """Validates all physical constraints of the density matrix.
+
+        Checks:
+        1. Hermiticity: ρ = ρ†
+        2. Positive semidefiniteness: All eigenvalues >= 0
+        3. Unit trace: Tr(ρ) = 1
+
+        Args:
+            tol: Tolerance for floating-point comparisons (default: 1e-10)
+
+        Raises:
+            ValueError: If any physical constraint is violated (not Hermitian,
+                       not positive semidefinite, or trace not equal to 1).
+
+        Examples:
+            >>> from cqlib.qis import DensityMatrix
+            >>> dm = DensityMatrix(1)
+            >>> dm.apply_h(0)
+            >>> dm.validate_physical()  # Should pass for valid states
         """
         ...

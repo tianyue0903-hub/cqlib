@@ -12,14 +12,14 @@
 
 //! Python bindings for cqlib-core DensityMatrix module.
 
+use crate::circuit::{PyCircuit, PyStandardGate};
+use crate::qis::qis_error_to_py_err;
 use cqlib_core::qis::state::density_matrix::DensityMatrix;
 use num_complex::Complex64;
 use numpy::{PyArray1, PyArray2, PyArrayMethods, PyUntypedArrayMethods};
-use pyo3::exceptions::{PyIndexError, PyValueError};
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyComplex, PyList};
-
-use crate::circuit::circuit_impl::PyCircuit;
 
 /// Quantum density matrix representing mixed or pure quantum states.
 ///
@@ -261,60 +261,63 @@ impl PyDensityMatrix {
         self.inner.trace().re
     }
 
+    /// Applies a standard gate to the density matrix.
+    ///
+    /// Args:
+    ///     gate: The standard gate to apply.
+    ///     qubits: List of target qubit indices.
+    ///     params: List of parameters for parameterized gates.
+    #[pyo3(signature = (gate, qubits, params=None))]
+    fn apply_standard_gate(
+        &mut self,
+        gate: &PyStandardGate,
+        qubits: Vec<usize>,
+        params: Option<Vec<f64>>,
+    ) -> PyResult<()> {
+        let p = params.unwrap_or_default();
+        self.inner
+            .apply_standard_gate(gate.inner, &qubits, &p)
+            .map_err(qis_error_to_py_err)
+    }
+
     /// Applies the Pauli-X (NOT) gate to the specified qubit.
     fn apply_x(&mut self, qubit: usize) -> PyResult<()> {
-        self.inner
-            .apply_x(qubit)
-            .map_err(|e| PyIndexError::new_err(e.to_string()))
+        self.inner.apply_x(qubit).map_err(qis_error_to_py_err)
     }
 
     /// Applies the Pauli-Y gate to the specified qubit.
     fn apply_y(&mut self, qubit: usize) -> PyResult<()> {
-        self.inner
-            .apply_y(qubit)
-            .map_err(|e| PyIndexError::new_err(e.to_string()))
+        self.inner.apply_y(qubit).map_err(qis_error_to_py_err)
     }
 
     /// Applies the Pauli-Z gate to the specified qubit.
     fn apply_z(&mut self, qubit: usize) -> PyResult<()> {
-        self.inner
-            .apply_z(qubit)
-            .map_err(|e| PyIndexError::new_err(e.to_string()))
+        self.inner.apply_z(qubit).map_err(qis_error_to_py_err)
     }
 
     /// Applies the Hadamard gate to the specified qubit.
     fn apply_h(&mut self, qubit: usize) -> PyResult<()> {
-        self.inner
-            .apply_h(qubit)
-            .map_err(|e| PyIndexError::new_err(e.to_string()))
+        self.inner.apply_h(qubit).map_err(qis_error_to_py_err)
     }
 
     /// Applies the S (phase) gate to the specified qubit.
     fn apply_s(&mut self, qubit: usize) -> PyResult<()> {
-        self.inner
-            .apply_s(qubit)
-            .map_err(|e| PyIndexError::new_err(e.to_string()))
+        self.inner.apply_s(qubit).map_err(qis_error_to_py_err)
     }
 
     /// Applies the S† (S-dagger) gate to the specified qubit.
     fn apply_sdg(&mut self, qubit: usize) -> PyResult<()> {
-        self.inner
-            .apply_sdg(qubit)
-            .map_err(|e| PyIndexError::new_err(e.to_string()))
+        self.inner.apply_sdg(qubit).map_err(qis_error_to_py_err)
     }
 
     /// Applies the T gate to the specified qubit.
     fn apply_t(&mut self, qubit: usize) -> PyResult<()> {
-        self.inner
-            .apply_t(qubit)
-            .map_err(|e| PyIndexError::new_err(e.to_string()))
+        self.inner.apply_t(qubit).map_err(qis_error_to_py_err)
     }
 
     /// Applies the T† (T-dagger) gate to the specified qubit.
     fn apply_tdg(&mut self, qubit: usize) -> PyResult<()> {
-        self.inner
-            .apply_tdg(qubit)
-            .map_err(|e| PyIndexError::new_err(e.to_string()))
+        self.inner.apply_tdg(qubit).map_err(qis_error_to_py_err)
     }
 
     /// Applies a parameterized RX (X-rotation) gate.
@@ -325,7 +328,7 @@ impl PyDensityMatrix {
     fn apply_rx(&mut self, qubit: usize, theta: f64) -> PyResult<()> {
         self.inner
             .apply_rx(qubit, theta)
-            .map_err(|e| PyIndexError::new_err(e.to_string()))
+            .map_err(qis_error_to_py_err)
     }
 
     /// Applies a parameterized RY (Y-rotation) gate.
@@ -336,7 +339,7 @@ impl PyDensityMatrix {
     fn apply_ry(&mut self, qubit: usize, theta: f64) -> PyResult<()> {
         self.inner
             .apply_ry(qubit, theta)
-            .map_err(|e| PyIndexError::new_err(e.to_string()))
+            .map_err(qis_error_to_py_err)
     }
 
     /// Applies a parameterized RZ (Z-rotation) gate.
@@ -347,7 +350,7 @@ impl PyDensityMatrix {
     fn apply_rz(&mut self, qubit: usize, theta: f64) -> PyResult<()> {
         self.inner
             .apply_rz(qubit, theta)
-            .map_err(|e| PyIndexError::new_err(e.to_string()))
+            .map_err(qis_error_to_py_err)
     }
 
     /// Applies a parameterized phase (P) gate.
@@ -358,35 +361,27 @@ impl PyDensityMatrix {
     fn apply_p(&mut self, qubit: usize, theta: f64) -> PyResult<()> {
         self.inner
             .apply_p(qubit, theta)
-            .map_err(|e| PyIndexError::new_err(e.to_string()))
+            .map_err(qis_error_to_py_err)
     }
 
     /// Applies the √X (X/2 plus) gate to the specified qubit.
     fn apply_x2p(&mut self, qubit: usize) -> PyResult<()> {
-        self.inner
-            .apply_x2p(qubit)
-            .map_err(|e| PyIndexError::new_err(e.to_string()))
+        self.inner.apply_x2p(qubit).map_err(qis_error_to_py_err)
     }
 
     /// Applies the √X† (X/2 minus) gate to the specified qubit.
     fn apply_x2m(&mut self, qubit: usize) -> PyResult<()> {
-        self.inner
-            .apply_x2m(qubit)
-            .map_err(|e| PyIndexError::new_err(e.to_string()))
+        self.inner.apply_x2m(qubit).map_err(qis_error_to_py_err)
     }
 
     /// Applies the √Y (Y/2 plus) gate to the specified qubit.
     fn apply_y2p(&mut self, qubit: usize) -> PyResult<()> {
-        self.inner
-            .apply_y2p(qubit)
-            .map_err(|e| PyIndexError::new_err(e.to_string()))
+        self.inner.apply_y2p(qubit).map_err(qis_error_to_py_err)
     }
 
     /// Applies the √Y† (Y/2 minus) gate to the specified qubit.
     fn apply_y2m(&mut self, qubit: usize) -> PyResult<()> {
-        self.inner
-            .apply_y2m(qubit)
-            .map_err(|e| PyIndexError::new_err(e.to_string()))
+        self.inner.apply_y2m(qubit).map_err(qis_error_to_py_err)
     }
 
     /// Applies a general single-qubit U gate.
@@ -402,7 +397,7 @@ impl PyDensityMatrix {
     fn apply_u(&mut self, qubit: usize, theta: f64, phi: f64, lambda_: f64) -> PyResult<()> {
         self.inner
             .apply_u(qubit, theta, phi, lambda_)
-            .map_err(|e| PyIndexError::new_err(e.to_string()))
+            .map_err(qis_error_to_py_err)
     }
 
     /// Applies a global phase (has no observable effect on a density matrix).
@@ -419,7 +414,7 @@ impl PyDensityMatrix {
     fn apply_xy(&mut self, qubit: usize, theta: f64) -> PyResult<()> {
         self.inner
             .apply_xy(qubit, theta)
-            .map_err(|e| PyIndexError::new_err(e.to_string()))
+            .map_err(qis_error_to_py_err)
     }
 
     /// Applies the XY2P gate.
@@ -430,7 +425,7 @@ impl PyDensityMatrix {
     fn apply_xy2p(&mut self, qubit: usize, theta: f64) -> PyResult<()> {
         self.inner
             .apply_xy2p(qubit, theta)
-            .map_err(|e| PyIndexError::new_err(e.to_string()))
+            .map_err(qis_error_to_py_err)
     }
 
     /// Applies the XY2M gate.
@@ -441,7 +436,7 @@ impl PyDensityMatrix {
     fn apply_xy2m(&mut self, qubit: usize, theta: f64) -> PyResult<()> {
         self.inner
             .apply_xy2m(qubit, theta)
-            .map_err(|e| PyIndexError::new_err(e.to_string()))
+            .map_err(qis_error_to_py_err)
     }
 
     /// Applies a parameterized RXY rotation gate.
@@ -453,7 +448,7 @@ impl PyDensityMatrix {
     fn apply_rxy(&mut self, qubit: usize, theta: f64, phi: f64) -> PyResult<()> {
         self.inner
             .apply_rxy(qubit, theta, phi)
-            .map_err(|e| PyIndexError::new_err(e.to_string()))
+            .map_err(qis_error_to_py_err)
     }
 
     /// Applies the SWAP gate between two qubits.
@@ -462,9 +457,7 @@ impl PyDensityMatrix {
     ///     q0: First qubit index
     ///     q1: Second qubit index
     fn apply_swap(&mut self, q0: usize, q1: usize) -> PyResult<()> {
-        self.inner
-            .apply_swap(q0, q1)
-            .map_err(|e| PyIndexError::new_err(e.to_string()))
+        self.inner.apply_swap(q0, q1).map_err(qis_error_to_py_err)
     }
 
     /// Applies the controlled-X (CNOT) gate.
@@ -475,7 +468,7 @@ impl PyDensityMatrix {
     fn apply_cx(&mut self, control: usize, target: usize) -> PyResult<()> {
         self.inner
             .apply_cx(control, target)
-            .map_err(|e| PyIndexError::new_err(e.to_string()))
+            .map_err(qis_error_to_py_err)
     }
 
     /// Applies the controlled-Y gate.
@@ -486,7 +479,7 @@ impl PyDensityMatrix {
     fn apply_cy(&mut self, control: usize, target: usize) -> PyResult<()> {
         self.inner
             .apply_cy(control, target)
-            .map_err(|e| PyIndexError::new_err(e.to_string()))
+            .map_err(qis_error_to_py_err)
     }
 
     /// Applies the controlled-Z gate.
@@ -495,9 +488,7 @@ impl PyDensityMatrix {
     ///     q0: First qubit index
     ///     q1: Second qubit index
     fn apply_cz(&mut self, q0: usize, q1: usize) -> PyResult<()> {
-        self.inner
-            .apply_cz(q0, q1)
-            .map_err(|e| PyIndexError::new_err(e.to_string()))
+        self.inner.apply_cz(q0, q1).map_err(qis_error_to_py_err)
     }
 
     /// Applies the controlled-RX gate.
@@ -509,7 +500,7 @@ impl PyDensityMatrix {
     fn apply_crx(&mut self, control: usize, target: usize, theta: f64) -> PyResult<()> {
         self.inner
             .apply_crx(control, target, theta)
-            .map_err(|e| PyIndexError::new_err(e.to_string()))
+            .map_err(qis_error_to_py_err)
     }
 
     /// Applies the controlled-RY gate.
@@ -521,7 +512,7 @@ impl PyDensityMatrix {
     fn apply_cry(&mut self, control: usize, target: usize, theta: f64) -> PyResult<()> {
         self.inner
             .apply_cry(control, target, theta)
-            .map_err(|e| PyIndexError::new_err(e.to_string()))
+            .map_err(qis_error_to_py_err)
     }
 
     /// Applies the controlled-RZ gate.
@@ -533,7 +524,7 @@ impl PyDensityMatrix {
     fn apply_crz(&mut self, control: usize, target: usize, theta: f64) -> PyResult<()> {
         self.inner
             .apply_crz(control, target, theta)
-            .map_err(|e| PyIndexError::new_err(e.to_string()))
+            .map_err(qis_error_to_py_err)
     }
 
     /// Applies the RXX (Ising XX) gate.
@@ -545,7 +536,7 @@ impl PyDensityMatrix {
     fn apply_rxx(&mut self, q0: usize, q1: usize, theta: f64) -> PyResult<()> {
         self.inner
             .apply_rxx(q0, q1, theta)
-            .map_err(|e| PyIndexError::new_err(e.to_string()))
+            .map_err(qis_error_to_py_err)
     }
 
     /// Applies the RYY (Ising YY) gate.
@@ -557,7 +548,7 @@ impl PyDensityMatrix {
     fn apply_ryy(&mut self, q0: usize, q1: usize, theta: f64) -> PyResult<()> {
         self.inner
             .apply_ryy(q0, q1, theta)
-            .map_err(|e| PyIndexError::new_err(e.to_string()))
+            .map_err(qis_error_to_py_err)
     }
 
     /// Applies the RZZ (Ising ZZ) gate.
@@ -569,7 +560,7 @@ impl PyDensityMatrix {
     fn apply_rzz(&mut self, q0: usize, q1: usize, theta: f64) -> PyResult<()> {
         self.inner
             .apply_rzz(q0, q1, theta)
-            .map_err(|e| PyIndexError::new_err(e.to_string()))
+            .map_err(qis_error_to_py_err)
     }
 
     /// Applies the RZX gate.
@@ -581,7 +572,7 @@ impl PyDensityMatrix {
     fn apply_rzx(&mut self, q0: usize, q1: usize, theta: f64) -> PyResult<()> {
         self.inner
             .apply_rzx(q0, q1, theta)
-            .map_err(|e| PyIndexError::new_err(e.to_string()))
+            .map_err(qis_error_to_py_err)
     }
 
     /// Applies the CCX (Toffoli) gate.
@@ -593,7 +584,7 @@ impl PyDensityMatrix {
     fn apply_ccx(&mut self, c0: usize, c1: usize, target: usize) -> PyResult<()> {
         self.inner
             .apply_ccx(c0, c1, target)
-            .map_err(|e| PyIndexError::new_err(e.to_string()))
+            .map_err(qis_error_to_py_err)
     }
 
     /// Applies the Fermionic Simulation (FSIM) gate.
@@ -606,7 +597,7 @@ impl PyDensityMatrix {
     fn apply_fsim(&mut self, q0: usize, q1: usize, theta: f64, phi: f64) -> PyResult<()> {
         self.inner
             .apply_fsim(q0, q1, theta, phi)
-            .map_err(|e| PyIndexError::new_err(e.to_string()))
+            .map_err(qis_error_to_py_err)
     }
 
     /// Applies a custom single-qubit gate.
@@ -643,7 +634,7 @@ impl PyDensityMatrix {
 
         self.inner
             .apply_single_qubit_gate(qubit, mat)
-            .map_err(|e| PyIndexError::new_err(e.to_string()))
+            .map_err(qis_error_to_py_err)
     }
 
     /// Applies a custom two-qubit gate.
@@ -682,7 +673,7 @@ impl PyDensityMatrix {
 
         self.inner
             .apply_double_qubits_gate(q0, q1, mat)
-            .map_err(|e| PyIndexError::new_err(e.to_string()))
+            .map_err(qis_error_to_py_err)
     }
 
     /// Applies an arbitrary n-qubit unitary gate.
@@ -723,7 +714,7 @@ impl PyDensityMatrix {
         let flat: numpy::ndarray::Array2<Complex64> = readonly.as_array().to_owned();
         self.inner
             .apply_unitary_gate(&qubits, &flat)
-            .map_err(|e| PyIndexError::new_err(e.to_string()))
+            .map_err(qis_error_to_py_err)
     }
 
     /// Applies a general quantum channel specified by Kraus operators.
@@ -781,7 +772,7 @@ impl PyDensityMatrix {
 
         self.inner
             .apply_kraus(&kraus_ops, &qubits)
-            .map_err(|e| PyIndexError::new_err(e.to_string()))
+            .map_err(qis_error_to_py_err)
     }
 
     /// Computes the partial trace over a set of qubits.
@@ -854,5 +845,73 @@ impl PyDensityMatrix {
         Self {
             inner: self.inner.clone(),
         }
+    }
+
+    /// Checks if the density matrix is Hermitian (self-adjoint) within a tolerance.
+    ///
+    /// A valid density matrix must satisfy ρ = ρ†, i.e., ρ_ij = ρ_ji*.
+    ///
+    /// Args:
+    ///     tol: Tolerance for floating-point comparison (default: 1e-10)
+    ///
+    /// Returns:
+    ///     True if the matrix is Hermitian within the specified tolerance.
+    ///
+    /// Examples:
+    ///     >>> from cqlib.qis import DensityMatrix
+    ///     >>> dm = DensityMatrix(1)
+    ///     >>> dm.apply_h(0)
+    ///     >>> dm.is_hermitian()
+    ///     True
+    fn is_hermitian(&self, tol: Option<f64>) -> bool {
+        self.inner.is_hermitian(tol.unwrap_or(1e-10))
+    }
+
+    /// Checks if the density matrix is positive semidefinite.
+    ///
+    /// Uses the Gershgorin circle theorem for an approximate check:
+    /// If for each row i, |ρ_ii| >= sum_{j≠i} |ρ_ij|, then all eigenvalues are non-negative.
+    ///
+    /// Note: This is a sufficient but not necessary condition. A matrix that fails this
+    /// check might still be positive semidefinite, but one that passes definitely is.
+    ///
+    /// Args:
+    ///     tol: Tolerance for floating-point comparison (default: 1e-10)
+    ///
+    /// Returns:
+    ///     True if the matrix satisfies the positive semidefinite condition.
+    ///
+    /// Examples:
+    ///     >>> from cqlib.qis import DensityMatrix
+    ///     >>> dm = DensityMatrix(1)
+    ///     >>> dm.is_positive_semidefinite()
+    ///     True
+    fn is_positive_semidefinite(&self, tol: Option<f64>) -> bool {
+        self.inner
+            .is_positive_semidefinite_approx(tol.unwrap_or(1e-10))
+    }
+
+    /// Validates all physical constraints of the density matrix.
+    ///
+    /// Checks:
+    /// 1. Hermiticity: ρ = ρ†
+    /// 2. Positive semidefiniteness: All eigenvalues >= 0
+    /// 3. Unit trace: Tr(ρ) = 1
+    ///
+    /// Args:
+    ///     tol: Tolerance for floating-point comparisons (default: 1e-10)
+    ///
+    /// Raises:
+    ///     ValueError: If any physical constraint is violated.
+    ///
+    /// Examples:
+    ///     >>> from cqlib.qis import DensityMatrix
+    ///     >>> dm = DensityMatrix(1)
+    ///     >>> dm.apply_h(0)
+    ///     >>> dm.validate_physical()  # Should pass for valid states
+    fn validate_physical(&self, tol: Option<f64>) -> PyResult<()> {
+        self.inner
+            .validate_physical(tol.unwrap_or(1e-10))
+            .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 }

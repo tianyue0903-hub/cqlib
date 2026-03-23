@@ -54,8 +54,9 @@
 
 use crate::circuit::bit::Qubit;
 use crate::circuit::circuit_impl::Circuit;
+use crate::circuit::circuit_param::ParameterValue;
 use crate::circuit::error::CircuitError;
-use crate::circuit::param::ParameterValue;
+use crate::circuit::parameter::Parameter;
 use crate::qis::error::QisError;
 use crate::qis::hamiltonian::Hamiltonian;
 use crate::qis::pauli::{Pauli, PauliString};
@@ -318,18 +319,14 @@ impl PauliEvolution for Circuit {
 fn multiply_angle_by_factor(angle: ParameterValue, factor: f64) -> ParameterValue {
     match angle {
         ParameterValue::Fixed(val) => ParameterValue::Fixed(val * factor),
-        ParameterValue::Param(param) => {
-            ParameterValue::Param(crate::circuit::Parameter::from(factor) * param)
-        }
+        ParameterValue::Param(param) => ParameterValue::Param(Parameter::from(factor) * param),
     }
 }
 
 /// Helper function to convert ParameterValue to Parameter
-fn parameter_value_to_parameter(
-    pv: ParameterValue,
-) -> Result<crate::circuit::Parameter, CircuitError> {
+fn parameter_value_to_parameter(pv: ParameterValue) -> Result<Parameter, CircuitError> {
     match pv {
-        ParameterValue::Fixed(val) => Ok(crate::circuit::Parameter::from(val)),
+        ParameterValue::Fixed(val) => Ok(Parameter::from(val)),
         ParameterValue::Param(param) => Ok(param),
     }
 }

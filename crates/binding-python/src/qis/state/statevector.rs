@@ -12,23 +12,14 @@
 
 //! Python bindings for cqlib-core Statevector module.
 
-use cqlib_core::qis::error::QisError;
+use crate::circuit::{PyStandardGate, circuit_impl::PyCircuit};
+use crate::qis::qis_error_to_py_err;
 use cqlib_core::qis::state::statevector::Statevector;
 use num_complex::Complex64;
 use numpy::{PyArray1, PyArray2, PyArrayMethods, PyUntypedArrayMethods};
-use pyo3::exceptions::{PyIndexError, PyValueError};
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyComplex, PyList};
-
-use crate::circuit::circuit_impl::PyCircuit;
-
-/// Converts a QisError to the appropriate Python exception.
-fn qis_error_to_py_err(err: QisError) -> PyErr {
-    match err {
-        QisError::IndexOutOfBounds { .. } => PyIndexError::new_err(err.to_string()),
-        _ => PyValueError::new_err(err.to_string()),
-    }
-}
 
 /// Quantum statevector representing a pure quantum state.
 ///
@@ -226,6 +217,25 @@ impl PyStatevector {
     ///     A list of probabilities (floats) with length 2^num_qubits.
     fn probabilities(&self) -> Vec<f64> {
         self.inner.probabilities()
+    }
+
+    /// Applies a standard gate to the statevector.
+    ///
+    /// Args:
+    ///     gate: The standard gate to apply.
+    ///     qubits: List of target qubit indices.
+    ///     params: List of parameters for parameterized gates.
+    #[pyo3(signature = (gate, qubits, params=None))]
+    fn apply_standard_gate(
+        &mut self,
+        gate: &PyStandardGate,
+        qubits: Vec<usize>,
+        params: Option<Vec<f64>>,
+    ) -> PyResult<()> {
+        let p = params.unwrap_or_default();
+        self.inner
+            .apply_standard_gate(gate.inner, &qubits, &p)
+            .map_err(qis_error_to_py_err)
     }
 
     /// Applies the Pauli-X (NOT) gate to the specified qubit.

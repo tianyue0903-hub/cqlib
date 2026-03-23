@@ -50,9 +50,9 @@ use super::operation::PyOperation;
 use super::parameter::PyParameter;
 use crate::circuit::operation::PyOperationIter;
 use crate::qis::pauli::PyPauliString;
+use cqlib_core::circuit::circuit_param::CircuitParam;
+use cqlib_core::circuit::circuit_param::ParameterValue;
 use cqlib_core::circuit::gate::Instruction;
-use cqlib_core::circuit::param::CircuitParam;
-use cqlib_core::circuit::param::ParameterValue;
 use cqlib_core::circuit::{Circuit, Operation, Qubit};
 use cqlib_core::qis::evolution::PauliEvolution;
 use num_complex::Complex64;
@@ -921,8 +921,13 @@ impl PyCircuit {
     ) -> PyResult<Self> {
         // Clone circuit data for thread-safe access without holding GIL
         let circuit = self.inner.clone();
+        let bindings_ref = bindings.as_ref().map(|map| {
+            map.iter()
+                .map(|(k, v)| (k.as_str(), *v))
+                .collect::<HashMap<&str, f64>>()
+        });
         let new_inner = py
-            .detach(move || circuit.assign_parameters(&bindings))
+            .detach(move || circuit.assign_parameters(&bindings_ref))
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
         Ok(PyCircuit { inner: new_inner })
     }

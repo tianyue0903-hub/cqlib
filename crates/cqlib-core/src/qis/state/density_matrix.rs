@@ -26,10 +26,10 @@
 //! achieving exceptional parallel performance and cache locality.
 
 use crate::circuit::circuit_impl::Circuit;
+use crate::circuit::circuit_param::CircuitParam;
 use crate::circuit::error::CircuitError;
 use crate::circuit::gate::StandardGate;
 use crate::circuit::gate::instruction::Instruction;
-use crate::circuit::param::CircuitParam;
 use crate::qis::Observable;
 use crate::qis::error::QisError;
 use num_complex::Complex64;
@@ -220,12 +220,17 @@ impl DensityMatrix {
 
     /// Creates a density matrix directly from a flattened $2^N \times 2^N$ matrix.
     ///
+    /// Validates all physical constraints: Hermiticity, positive semidefiniteness, and unit trace.
+    ///
     /// # Arguments
     /// * `num_qubits` - Number of qubits in the system.
     /// * `dm_state` - Vector of $4^N$ complex values representing the density matrix.
     ///
-    /// # Panics
-    /// Panics if the matrix length is incorrect or if the trace is not equal to 1.
+    /// # Errors
+    /// Returns `QisError::InvalidStateDimension` if the matrix length is incorrect.
+    /// Returns `QisError::NotHermitian` if the matrix is not Hermitian.
+    /// Returns `QisError::NotPositiveSemidefinite` if the matrix has negative eigenvalues.
+    /// Returns `QisError::NotNormalized` if the trace is not equal to 1.
     pub fn from_density_matrix_state(
         num_qubits: usize,
         dm_state: Vec<Complex64>,
@@ -239,10 +244,7 @@ impl DensityMatrix {
             data: dm_state,
             num_qubits,
         };
-        let tr = dm.trace();
-        if (tr.re - 1.0).abs() >= 1e-10 || tr.im.abs() >= 1e-10 {
-            return Err(QisError::NotNormalized);
-        }
+        dm.validate_physical(1e-10)?;
         Ok(dm)
     }
 
@@ -374,7 +376,7 @@ impl DensityMatrix {
         Ok(dm)
     }
 
-    fn apply_standard_gate(
+    pub fn apply_standard_gate(
         &mut self,
         gate: StandardGate,
         qubits: &[usize],
@@ -457,6 +459,102 @@ impl DensityMatrix {
                 .map(|i| self.data[i * dim + i])
                 .sum()
         }
+    }
+
+    /// Checks if the density matrix is Hermitian (self-adjoint) within a tolerance.
+    ///
+    /// A valid density matrix must satisfy ρ = ρ†, i.e., ρ_ij = ρ_ji*.
+    ///
+    /// # Arguments
+    /// * `tol` - Tolerance for floating-point comparison (e.g., 1e-10).
+    ///
+    /// # Returns
+    /// `true` if the matrix is Hermitian within the specified tolerance.
+    pub fn is_hermitian(&self, tol: f64) -> bool {
+        let dim = 1 << self.num_qubits;
+        for i in 0..dim {
+            for j in 0..i {
+                let ij_idx = i * dim + j;
+                let ji_idx = j * dim + i;
+                let ij = self.data[ij_idx];
+                let ji_conj = self.data[ji_idx].conj();
+                if (ij.re - ji_conj.re).abs() > tol || (ij.im - ji_conj.im).abs() > tol {
+                    return false;
+                }
+            }
+        }
+        // Check diagonal is real
+        for i in 0..dim {
+            if self.data[i * dim + i].im.abs() > tol {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Checks if the density matrix is positive semidefinite using Gershgorin circles.
+    ///
+    /// This is a sufficient but not necessary condition. Uses Gershgorin circle theorem:
+    /// If for each row i, |ρ_ii| >= sum_{j≠i} |ρ_ij|, then all eigenvalues are non-negative.
+    ///
+    /// # Arguments
+    /// * `tol` - Tolerance for floating-point comparison.
+    ///
+    /// # Returns
+    /// `true` if positive semidefinite (approximately), `false` if definitely not.
+    pub fn is_positive_semidefinite_approx(&self, tol: f64) -> bool {
+        let dim = 1 << self.num_qubits;
+        for i in 0..dim {
+            let diagonal = self.data[i * dim + i].re;
+            if diagonal < -tol {
+                return false;
+            }
+            let mut off_diag_sum: f64 = 0.0;
+            for j in 0..dim {
+                if i != j {
+                    off_diag_sum += self.data[i * dim + j].norm();
+                }
+            }
+            if diagonal + tol < off_diag_sum {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Validates all physical constraints of the density matrix.
+    ///
+    /// Checks:
+    /// 1. Hermiticity: ρ = ρ†
+    /// 2. Positive semidefiniteness: All eigenvalues >= 0
+    /// 3. Unit trace: Tr(ρ) = 1
+    ///
+    /// # Arguments
+    /// * `tol` - Tolerance for floating-point comparisons (e.g., 1e-10).
+    ///
+    /// # Returns
+    /// * `Ok(())` if all constraints are satisfied.
+    /// * `Err(QisError::NotHermitian)` if not Hermitian.
+    /// * `Err(QisError::NotPositiveSemidefinite)` if not positive semidefinite.
+    /// * `Err(QisError::NotNormalized)` if trace is not 1.
+    pub fn validate_physical(&self, tol: f64) -> Result<(), QisError> {
+        // Check Hermiticity
+        if !self.is_hermitian(tol) {
+            return Err(QisError::NotHermitian);
+        }
+
+        // Check positive semidefiniteness
+        if !self.is_positive_semidefinite_approx(tol) {
+            return Err(QisError::NotPositiveSemidefinite);
+        }
+
+        // Check unit trace
+        let tr = self.trace();
+        if (tr.re - 1.0).abs() >= tol || tr.im.abs() >= tol {
+            return Err(QisError::NotNormalized);
+        }
+
+        Ok(())
     }
 
     fn apply_x_kernel(&mut self, q: usize, off: usize) {
@@ -909,7 +1007,47 @@ impl DensityMatrix {
         qubits: &[usize],
         matrix: &ndarray::Array2<Complex64>,
     ) -> Result<(), QisError> {
-        self.validate_qubits(qubits)?;
+        let num_target_qubits = qubits.len();
+        let gate_dim = 1 << num_target_qubits;
+
+        // Validate number of target qubits
+        if num_target_qubits == 0 || num_target_qubits > self.num_qubits {
+            return Err(QisError::InvalidParameterValue(format!(
+                "Invalid number of target qubits: {} (must be 1 to {})",
+                num_target_qubits, self.num_qubits
+            )));
+        }
+
+        // Validate qubits and check for duplicates
+        for (i, &q) in qubits.iter().enumerate() {
+            if q >= self.num_qubits {
+                return Err(QisError::IndexOutOfBounds {
+                    index: q,
+                    max: self.num_qubits.saturating_sub(1),
+                });
+            }
+            for &other in &qubits[..i] {
+                if q == other {
+                    return Err(QisError::InvalidParameterValue(format!(
+                        "Duplicate qubit index {} in apply_unitary_gate",
+                        q
+                    )));
+                }
+            }
+        }
+
+        // Validate matrix dimensions
+        if matrix.shape() != [gate_dim, gate_dim] {
+            return Err(QisError::InvalidParameterValue(format!(
+                "Matrix dimensions {}x{} don't match expected {}x{} for {} qubits",
+                matrix.nrows(),
+                matrix.ncols(),
+                gate_dim,
+                gate_dim,
+                num_target_qubits
+            )));
+        }
+
         let flat: Vec<Complex64> = matrix.iter().cloned().collect();
         self.apply_matrix_kernel(qubits, self.num_qubits, &flat, false);
         self.apply_matrix_kernel(qubits, 0, &flat, true);

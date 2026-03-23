@@ -14,6 +14,7 @@ from typing import List, Optional, Union, final
 import numpy as np
 
 from cqlib.circuit import Circuit
+from cqlib.circuit.gates.standard import StandardGate
 from cqlib.device import NoiseModel
 from cqlib.qis import Hamiltonian, PauliString
 
@@ -116,6 +117,21 @@ class DensityMatrixNoise:
 
         Returns:
             A vector of probabilities for all 2^n computational basis states.
+        """
+        ...
+
+    def apply_standard_gate_noise(
+        self,
+        gate: StandardGate,
+        qubits: List[int],
+        params: Optional[List[float]] = None,
+    ) -> None:
+        """Applies a standard gate to the density matrix, automatically applying any associated noise.
+
+        Args:
+            gate: The standard gate to apply.
+            qubits: List of target qubit indices.
+            params: List of parameters for parameterized gates.
         """
         ...
 

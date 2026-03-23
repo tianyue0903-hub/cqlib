@@ -141,7 +141,7 @@ fn test_dump_parametric_gates() {
         &[
             "rx(1.5707963267948966) q[0];",
             "ry(theta) q[0];",
-            "rz(theta + 0.5) q[0];",
+            "rz(0.5 + theta) q[0];",
         ],
     );
 
@@ -172,17 +172,17 @@ fn test_dump_complex_parameters() {
     // Verify expressions are properly formatted
     // Note: Actual output format uses π symbol and reorders some expressions
     assert!(
-        qasm.contains("rx(π * theta)"),
-        "Should contain 'rx(π * theta)', got: {}",
+        qasm.contains("rx(theta*pi)"),
+        "Should contain 'rx(theta*pi)', got: {}",
         qasm
     );
     assert!(
-        qasm.contains("ry(phi / 2)"),
-        "Should contain 'ry(phi / 2)', got: {}",
+        qasm.contains("ry(phi/2)"),
+        "Should contain 'ry(phi/2)', got: {}",
         qasm
     );
     assert!(
-        qasm.contains("rz(0.5 * (theta + phi))"),
+        qasm.contains("rz(0.5*(phi + theta))"),
         "Should contain complex expression, got: {}",
         qasm
     );
@@ -379,7 +379,7 @@ fn test_dump_nested_custom_gates() {
             "rz(p) q0;",
             "}",
             "gate gate_mid(m) q0 {",
-            "gate_leaf(2 * m) q0;", // Simplified check, might need regex if float formatting varies
+            "gate_leaf(2*m) q0;", // Simplified check, might need regex if float formatting varies
             "}",
             "gate_mid(theta) q[0];",
         ],
@@ -1218,7 +1218,7 @@ fn test_dump_delay_gate() {
     let q0 = Qubit::new(0);
 
     // Use circuit.delay() method with ParameterValue
-    use crate::circuit::param::ParameterValue;
+    use crate::circuit::circuit_param::ParameterValue;
     circuit.delay(q0, ParameterValue::Fixed(100.0)).unwrap();
 
     let qasm = dumps(&circuit).expect("Dump failed");

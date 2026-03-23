@@ -19,7 +19,7 @@ pub mod qis;
 use pyo3::prelude::*;
 
 use crate::circuit::gate::{
-    PyCircuitGate, PyConditionView, PyControlFlow, PyDelay, PyDirective, PyIfElseGate, PyMcGate,
+    PyCircuitGate, PyConditionView, PyControlFlow, PyDirective, PyIfElseGate, PyMcGate,
     PyStandardGate, PyUnitaryGate, PyWhileLoopGate,
 };
 use circuit::circuit_to_matrix;
@@ -45,7 +45,6 @@ fn binding_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyWhileLoopGate>()?;
     m.add_class::<PyConditionView>()?;
     m.add_class::<PyDirective>()?;
-    m.add_class::<PyDelay>()?;
 
     // Register IR module with qasm2 and qcis submodules
     ir::register_ir_module(m)?;

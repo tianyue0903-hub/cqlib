@@ -47,6 +47,7 @@
 //! ```
 
 use crate::circuit::bit::Qubit;
+use crate::circuit::circuit_param::{CircuitParam, ParameterValue};
 use crate::circuit::circuit_to_matrix;
 use crate::circuit::error::CircuitError;
 use crate::circuit::gate::circuit_gate::{CircuitGate, FrozenCircuit};
@@ -55,7 +56,6 @@ use crate::circuit::gate::{
     ControlFlow, Directive, IfElseGate, Instruction, StandardGate, UnitaryGate,
 };
 use crate::circuit::operation::Operation;
-use crate::circuit::param::{CircuitParam, ParameterValue};
 use crate::circuit::parameter::Parameter;
 use indexmap::IndexSet;
 use ndarray::Array2;
@@ -1665,13 +1665,13 @@ impl Circuit {
             // Use a specific internal prefix to avoid collisions during the two-step replacement.
             // This acts as a simultaneous substitution.
             let temp_key = format!("__INTERNAL_SUB_{}", key);
-            param = param.replace(key, &Parameter::try_from(temp_key.as_str()).unwrap());
+            param = param.replace(key, Parameter::try_from(temp_key.as_str()).unwrap());
             temp_map.insert(temp_key, val);
         }
 
         // 2. Replace temp symbols with actual values
         for (temp_key, val) in temp_map {
-            param = param.replace(&temp_key, val);
+            param = param.replace(&temp_key, val.clone());
         }
 
         param
@@ -1683,44 +1683,36 @@ impl Circuit {
 
     pub fn assign_parameters(
         &self,
-        bindings: &Option<HashMap<String, f64>>,
+        bindings: &Option<HashMap<&str, f64>>,
     ) -> Result<Circuit, CircuitError> {
-        use crate::circuit::parameter::expr_node::ExprNode;
-
         let mut new_circuit = Circuit::from_qubits(self.qubits())?;
 
         // Map from old parameter index to new CircuitParam (either Fixed or Index)
         let mut index_map: Vec<CircuitParam> = Vec::with_capacity(self.parameters.len());
 
-        let empty_bindings = HashMap::new();
-        let bind_map = bindings.as_ref().unwrap_or(&empty_bindings);
-
         for param in self.parameters.iter() {
             if let Ok(val) = param.evaluate(bindings) {
                 index_map.push(CircuitParam::Fixed(val));
             } else {
-                // Otherwise perform partial evaluation/simplification
-                let expr = param.node.evaluate_partial(bind_map)?;
-                match expr {
-                    ExprNode::Integer(i) => index_map.push(CircuitParam::Fixed(i as f64)),
-                    ExprNode::Float(f) => index_map.push(CircuitParam::Fixed(f)),
-                    ExprNode::Pi => index_map.push(CircuitParam::Fixed(std::f64::consts::PI)),
-                    ExprNode::E => index_map.push(CircuitParam::Fixed(std::f64::consts::E)),
-                    _ => {
-                        // Still symbolic
-                        let new_param = Parameter::new(expr);
-                        // Intern the new parameter (deduplicates automatically)
-                        let (idx, is_new) = new_circuit.parameters.insert_full(new_param.clone());
+                let mut tp = param.clone();
+                if let Some(bindings) = bindings {
+                    for (k, v) in bindings.iter() {
+                        tp = tp.replace(k, Parameter::from(*v));
+                    }
+                    let s = tp.simplify();
+                    tp = s.map_err(|e| CircuitError::UnresolvedParameter(format!("{:?}", e)))?;
+                }
 
-                        // If it's a new symbolic parameter, track its symbols
-                        if is_new {
-                            for sym in new_param.get_symbols() {
-                                new_circuit.symbols.insert(sym);
-                            }
-                        }
-                        index_map.push(CircuitParam::Index(idx as u32));
+                // Intern the new parameter (deduplicates automatically)
+                let (idx, is_new) = new_circuit.parameters.insert_full(tp.clone());
+
+                // If it's a new symbolic parameter, track its symbols
+                if is_new {
+                    for sym in tp.get_symbols() {
+                        new_circuit.symbols.insert(sym);
                     }
                 }
+                index_map.push(CircuitParam::Index(idx as u32));
             }
         }
 

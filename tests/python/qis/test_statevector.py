@@ -15,7 +15,7 @@
 import pytest
 import math
 import numpy as np
-from cqlib import Circuit
+from cqlib.circuit import Circuit, StandardGate
 from cqlib.qis import Statevector, Hamiltonian, PauliString
 
 
@@ -108,6 +108,27 @@ class TestStatevectorProperties:
 
 class TestStatevectorSingleQubitGates:
     """Test single-qubit gate operations."""
+
+    def test_apply_standard_gate(self):
+        """Test applying gates via the general standard gate interface."""
+        # Single qubit no params
+        sv = Statevector(1)
+        sv.apply_standard_gate(StandardGate.X, [0])
+        probs = sv.probabilities()
+        assert math.isclose(probs[1], 1.0, abs_tol=1e-10)
+
+        # Single qubit with params
+        sv = Statevector(1)
+        sv.apply_standard_gate(StandardGate.RX, [0], [np.pi])
+        probs = sv.probabilities()
+        assert math.isclose(probs[1], 1.0, abs_tol=1e-10)
+
+        # Two qubit
+        sv = Statevector(2)
+        sv.apply_standard_gate(StandardGate.X, [0])
+        sv.apply_standard_gate(StandardGate.CX, [0, 1])
+        probs = sv.probabilities()
+        assert math.isclose(probs[3], 1.0, abs_tol=1e-10)
 
     def test_apply_x(self):
         """Test Pauli-X gate."""

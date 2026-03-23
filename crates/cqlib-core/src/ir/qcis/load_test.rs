@@ -61,7 +61,9 @@ fn test_parse_symbolic() {
     let p = parse_param("theta").unwrap();
     match p {
         ParameterValue::Param(param) => {
-            assert_eq!(param.get_symbols(), vec!["theta"]);
+            let mut expected = std::collections::HashSet::new();
+            expected.insert("theta".to_string());
+            assert_eq!(param.get_symbols(), expected);
         }
         _ => panic!("Expected param"),
     }
@@ -314,14 +316,14 @@ fn test_mixed_qcis_circuit() {
         // Initialize
         X2P Q0
         X2M Q1
-        
+
         // Entangle
         CZ Q0 Q1
-        
+
         // Rotate
         RZ Q0 pi/4
         RZ Q1 pi/4
-        
+
         // Measure all
         M Q0 Q1
     "#;

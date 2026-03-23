@@ -296,7 +296,7 @@ impl PyTwoQubitNoise {
     /// Creates a two-qubit depolarizing noise channel.
     ///
     /// With probability p, applies a random Pauli error from the 15 non-identity
-    /// Pauli operators (IX, IY, IZ, XI, XX, XY, ..., ZZ).
+    /// Pauli operators (IX, IT, IZ, XI, XX, XY, ..., ZZ).
     ///
     /// # Arguments
     ///
@@ -698,7 +698,7 @@ impl PyNoiseModel {
     fn add_readout_error(&mut self, qubit: PyIntOrQubit, error: PyReadoutError) -> PyResult<()> {
         self.inner
             .add_readout_error(qubit.into(), error.inner)
-            .map_err(PyValueError::new_err)
+            .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
     /// Adds single-qubit noise to a gate on a specific qubit.

@@ -737,7 +737,7 @@ impl PauliString {
 ///
 /// # Examples
 ///
-/// ```
+/// ```rust
 /// use cqlib_core::qis::pauli::{Pauli, PauliString};
 ///
 /// let mut p1 = PauliString::new(2);
@@ -747,7 +747,7 @@ impl PauliString {
 /// p2.set_pauli(0, Pauli::Z);
 ///
 /// let product = &p1 * &p2;
-/// assert_eq!(product.to_string(), "-iIT");
+/// assert_eq!(product.to_string(), "-iIY");
 /// ```
 impl Mul for &PauliString {
     type Output = PauliString;

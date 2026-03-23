@@ -12,6 +12,8 @@
 
 //! Python bindings for cqlib-core quantum information (qis) module.
 
+use cqlib_core::qis::error::QisError;
+use pyo3::exceptions::{PyIndexError, PyValueError};
 use pyo3::prelude::*;
 
 pub mod entropy;
@@ -20,6 +22,14 @@ pub mod hamiltonian;
 pub mod metrics;
 pub mod pauli;
 pub mod state;
+
+/// Converts a QisError to the appropriate Python exception.
+pub(crate) fn qis_error_to_py_err(err: QisError) -> PyErr {
+    match err {
+        QisError::IndexOutOfBounds { .. } => PyIndexError::new_err(err.to_string()),
+        _ => PyValueError::new_err(err.to_string()),
+    }
+}
 
 /// Register the qis submodule.
 pub fn register_qis_module(parent: &Bound<'_, PyModule>) -> PyResult<()> {

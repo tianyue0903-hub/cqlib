@@ -41,10 +41,10 @@
 //! ```
 
 use crate::circuit::circuit_impl::Circuit;
+use crate::circuit::circuit_param::CircuitParam;
 use crate::circuit::error::CircuitError;
 use crate::circuit::gate::StandardGate;
 use crate::circuit::gate::instruction::Instruction;
-use crate::circuit::param::CircuitParam;
 use crate::qis::error::QisError;
 use crate::qis::observable::Observable;
 use num_complex::Complex64;
@@ -357,7 +357,7 @@ impl Statevector {
     /// * `gate` - The standard gate to apply
     /// * `qubits` - Target qubit indices
     /// * `params` - Gate parameters (for parameterized gates)
-    fn apply_standard_gate(
+    pub fn apply_standard_gate(
         &mut self,
         gate: StandardGate,
         qubits: &[usize],

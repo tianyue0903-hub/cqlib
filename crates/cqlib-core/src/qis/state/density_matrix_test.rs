@@ -387,3 +387,218 @@ fn test_expectation_sv_dm_consistency() {
 
     assert_relative_eq!(exp_sv, exp_dm, epsilon = 1e-10);
 }
+
+#[test]
+fn test_is_hermitian_valid() {
+    // Valid pure state |+><+|
+    let mut dm = DensityMatrix::new(1);
+    dm.apply_h(0).unwrap();
+    assert!(dm.is_hermitian(1e-10));
+}
+
+#[test]
+fn test_is_hermitian_invalid() {
+    // Non-Hermitian matrix: |0><1| (no |1><0|)
+    let size = 4;
+    let mut state = vec![Complex64::new(0.0, 0.0); size];
+    state[1] = Complex64::new(1.0, 0.0); // |0><1| element
+    // Missing |1><0| element - not Hermitian
+    state[3] = Complex64::new(1.0, 0.0); // |1><1| to make trace 2
+
+    let dm = DensityMatrix {
+        data: state,
+        num_qubits: 1,
+    };
+    assert!(!dm.is_hermitian(1e-10));
+}
+
+#[test]
+fn test_is_hermitian_complex_off_diagonal() {
+    // Valid Hermitian with complex off-diagonal: (|0><1| + |1><0|)/2
+    let size = 4;
+    let mut state = vec![Complex64::new(0.0, 0.0); size];
+    state[0] = Complex64::new(0.5, 0.0);
+    state[1] = Complex64::new(0.5, 0.0); // |0><1|
+    state[2] = Complex64::new(0.5, 0.0); // |1><0| = conjugate of |0><1|
+    state[3] = Complex64::new(0.5, 0.0);
+
+    let dm = DensityMatrix {
+        data: state,
+        num_qubits: 1,
+    };
+    assert!(dm.is_hermitian(1e-10));
+}
+
+#[test]
+fn test_is_hermitian_requires_real_diagonal() {
+    // Diagonal must be real for Hermitian matrix
+    let size = 4;
+    let mut state = vec![Complex64::new(0.0, 0.0); size];
+    state[0] = Complex64::new(0.5, 0.1); // Complex diagonal - invalid
+    state[3] = Complex64::new(0.5, -0.1); // Conjugate won't help
+
+    let dm = DensityMatrix {
+        data: state,
+        num_qubits: 1,
+    };
+    assert!(!dm.is_hermitian(1e-10));
+}
+
+#[test]
+fn test_is_positive_semidefinite_valid() {
+    // Valid mixed state: I/2
+    let size = 4;
+    let mut state = vec![Complex64::new(0.0, 0.0); size];
+    state[0] = Complex64::new(0.5, 0.0);
+    state[3] = Complex64::new(0.5, 0.0);
+
+    let dm = DensityMatrix {
+        data: state,
+        num_qubits: 1,
+    };
+    assert!(dm.is_positive_semidefinite_approx(1e-10));
+}
+
+#[test]
+fn test_is_positive_semidefinite_negative_diagonal() {
+    // Negative diagonal element
+    let size = 4;
+    let mut state = vec![Complex64::new(0.0, 0.0); size];
+    state[0] = Complex64::new(-0.5, 0.0);
+    state[3] = Complex64::new(1.5, 0.0);
+
+    let dm = DensityMatrix {
+        data: state,
+        num_qubits: 1,
+    };
+    assert!(!dm.is_positive_semidefinite_approx(1e-10));
+}
+
+#[test]
+fn test_validate_physical_valid_mixed_state() {
+    // Valid mixed state: (|0><0| + |1><1|)/2
+    let size = 4;
+    let mut state = vec![Complex64::new(0.0, 0.0); size];
+    state[0] = Complex64::new(0.5, 0.0);
+    state[3] = Complex64::new(0.5, 0.0);
+
+    let dm = DensityMatrix {
+        data: state,
+        num_qubits: 1,
+    };
+    assert!(dm.validate_physical(1e-10).is_ok());
+}
+
+#[test]
+fn test_validate_physical_non_hermitian() {
+    // Non-Hermitian matrix should fail validation
+    let size = 4;
+    let mut state = vec![Complex64::new(0.0, 0.0); size];
+    state[0] = Complex64::new(0.5, 0.0);
+    state[1] = Complex64::new(0.5, 0.0); // Only |0><1|
+    state[3] = Complex64::new(0.5, 0.0);
+
+    let dm = DensityMatrix {
+        data: state,
+        num_qubits: 1,
+    };
+    let result = dm.validate_physical(1e-10);
+    assert!(result.is_err());
+    // Check it's the right error type
+    match result {
+        Err(crate::qis::error::QisError::NotHermitian) => (), // Expected
+        _ => panic!("Expected NotHermitian error"),
+    }
+}
+
+#[test]
+fn test_validate_physical_not_normalized() {
+    // Hermitian and PSD but wrong trace
+    let size = 4;
+    let mut state = vec![Complex64::new(0.0, 0.0); size];
+    state[0] = Complex64::new(1.0, 0.0);
+    state[3] = Complex64::new(1.0, 0.0); // Trace = 2
+
+    let dm = DensityMatrix {
+        data: state,
+        num_qubits: 1,
+    };
+    let result = dm.validate_physical(1e-10);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_from_density_matrix_state_valid() {
+    // Valid maximally mixed state
+    let size = 4;
+    let mut state = vec![Complex64::new(0.0, 0.0); size];
+    state[0] = Complex64::new(0.5, 0.0);
+    state[3] = Complex64::new(0.5, 0.0);
+
+    let result = DensityMatrix::from_density_matrix_state(1, state);
+    assert!(result.is_ok());
+    let dm = result.unwrap();
+    assert_relative_eq!(dm.trace().re, 1.0);
+}
+
+#[test]
+fn test_from_density_matrix_state_non_hermitian() {
+    // Non-Hermitian should be rejected
+    let size = 4;
+    let mut state = vec![Complex64::new(0.0, 0.0); size];
+    state[0] = Complex64::new(0.5, 0.0);
+    state[1] = Complex64::new(0.3, 0.2); // Asymmetric
+    state[3] = Complex64::new(0.5, 0.0);
+
+    let result = DensityMatrix::from_density_matrix_state(1, state);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_from_density_matrix_state_bell_state() {
+    // Valid Bell state density matrix: |Φ+><Φ+|
+    // |Φ+> = (|00> + |11>)/√2
+    // ρ = (|00><00| + |00><11| + |11><00| + |11><11|)/2
+    let size = 16; // 4^2
+    let mut state = vec![Complex64::new(0.0, 0.0); size];
+    state[0] = Complex64::new(0.5, 0.0); // |00><00|
+    state[3] = Complex64::new(0.5, 0.0); // |00><11|
+    state[12] = Complex64::new(0.5, 0.0); // |11><00|
+    state[15] = Complex64::new(0.5, 0.0); // |11><11|
+
+    let result = DensityMatrix::from_density_matrix_state(2, state);
+    assert!(result.is_ok());
+}
+
+#[test]
+fn test_pure_state_density_matrix_is_valid() {
+    // |+> state created via gates should be valid
+    let mut dm = DensityMatrix::new(1);
+    dm.apply_h(0).unwrap();
+
+    // Verify it's valid
+    assert!(dm.is_hermitian(1e-10));
+    assert!(dm.is_positive_semidefinite_approx(1e-10));
+    assert!(dm.validate_physical(1e-10).is_ok());
+}
+
+#[test]
+fn test_tolerance_handling() {
+    // Matrix that is "almost" Hermitian but slightly asymmetric
+    let size = 4;
+    let mut state = vec![Complex64::new(0.0, 0.0); size];
+    state[0] = Complex64::new(0.5, 0.0);
+    state[1] = Complex64::new(0.5 + 1e-8, 0.0); // Slightly different from conjugate of [2]
+    state[2] = Complex64::new(0.5, 0.0);
+    state[3] = Complex64::new(0.5, 0.0);
+
+    let dm = DensityMatrix {
+        data: state,
+        num_qubits: 1,
+    };
+
+    // Should pass with loose tolerance (difference 1e-8 < 1e-7)
+    assert!(dm.is_hermitian(1e-7));
+    // Should fail with strict tolerance (difference 1e-8 > 1e-10)
+    assert!(!dm.is_hermitian(1e-10));
+}

@@ -17,8 +17,8 @@
 // Allow clippy warnings for FFI functions that dereference raw pointers
 #![allow(clippy::not_unsafe_ptr_arg_deref, clippy::manual_unwrap_or)]
 
-use cqlib_core::circuit::param::ParameterValue;
-use cqlib_core::circuit::parameter::{Parameter, parse_parameter};
+use cqlib_core::circuit::circuit_param::ParameterValue;
+use cqlib_core::circuit::parameter::Parameter;
 use cqlib_core::circuit::{Circuit, Qubit};
 use std::collections::HashMap;
 use std::ffi::CStr;
@@ -419,7 +419,7 @@ pub extern "C" fn param_parse(expr: *const c_char) -> *mut ParameterWrapper {
         Err(_) => return std::ptr::null_mut(),
     };
 
-    match parse_parameter(expr_str) {
+    match Parameter::try_from(expr_str) {
         Ok(param) => Box::into_raw(Box::new(ParameterWrapper { inner: param })),
         Err(_) => std::ptr::null_mut(),
     }
@@ -445,7 +445,7 @@ pub extern "C" fn param_evaluate(ptr: *const ParameterWrapper, bindings: *const 
     }
 
     let param = unsafe { &(*ptr).inner };
-    let mut map = HashMap::new();
+    let mut map: HashMap<&str, f64> = HashMap::new();
 
     if !bindings.is_null() {
         if let Ok(c_str) = unsafe { std::ffi::CStr::from_ptr(bindings).to_str() } {
@@ -453,14 +453,15 @@ pub extern "C" fn param_evaluate(ptr: *const ParameterWrapper, bindings: *const 
                 let parts: Vec<&str> = pair.splitn(2, ':').collect();
                 if parts.len() == 2 {
                     if let Ok(val) = parts[1].parse::<f64>() {
-                        map.insert(parts[0].to_string(), val);
+                        map.insert(parts[0], val);
                     }
                 }
             }
         }
     }
 
-    match param.evaluate(&Some(map)) {
+    let bindings_opt = if map.is_empty() { None } else { Some(map) };
+    match param.evaluate(&bindings_opt) {
         Ok(val) => val,
         Err(_) => 0.0,
     }
@@ -556,14 +557,14 @@ pub extern "C" fn circuit_assign_params(
     let wrapper = unsafe { &(*circuit).inner };
 
     // Parse bindings
-    let mut map = HashMap::new();
+    let mut map: HashMap<&str, f64> = HashMap::new();
     if !bindings.is_null() {
         if let Ok(c_str) = unsafe { CStr::from_ptr(bindings).to_str() } {
             for pair in c_str.split(',') {
                 let parts: Vec<&str> = pair.splitn(2, ':').collect();
                 if parts.len() == 2 {
                     if let Ok(val) = parts[1].parse::<f64>() {
-                        map.insert(parts[0].to_string(), val);
+                        map.insert(parts[0], val);
                     }
                 }
             }
@@ -571,7 +572,8 @@ pub extern "C" fn circuit_assign_params(
     }
 
     // Assign parameters and create new circuit
-    match wrapper.assign_parameters(&Some(map)) {
+    let bindings_opt = if map.is_empty() { None } else { Some(map) };
+    match wrapper.assign_parameters(&bindings_opt) {
         Ok(new_circuit) => Box::into_raw(Box::new(CircuitWrapper { inner: new_circuit })),
         Err(_) => std::ptr::null_mut(),
     }

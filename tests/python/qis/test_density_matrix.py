@@ -15,7 +15,7 @@
 import pytest
 import math
 import numpy as np
-from cqlib import Circuit
+from cqlib.circuit import Circuit, StandardGate
 from cqlib.qis import DensityMatrix, PauliString, Hamiltonian
 
 
@@ -120,6 +120,24 @@ class TestDensityMatrixProperties:
 
 class TestDensityMatrixSingleQubitGates:
     """Test single-qubit gate operations."""
+
+    def test_apply_standard_gate(self):
+        """Test applying gates via the general standard gate interface."""
+        dm = DensityMatrix(1)
+        dm.apply_standard_gate(StandardGate.X, [0])
+        probs = dm.probabilities()
+        assert math.isclose(probs[1], 1.0, abs_tol=1e-10)
+
+        dm = DensityMatrix(1)
+        dm.apply_standard_gate(StandardGate.RX, [0], [np.pi])
+        probs = dm.probabilities()
+        assert math.isclose(probs[1], 1.0, abs_tol=1e-10)
+
+        dm = DensityMatrix(2)
+        dm.apply_standard_gate(StandardGate.X, [0])
+        dm.apply_standard_gate(StandardGate.CX, [0, 1])
+        probs = dm.probabilities()
+        assert math.isclose(probs[3], 1.0, abs_tol=1e-10)
 
     def test_apply_x(self):
         """Test Pauli-X gate."""
@@ -578,35 +596,18 @@ class TestDensityMatrixBoundaryConditions:
         assert np.isclose(dm.trace(), 1.0)
 
     def test_from_density_matrix_with_non_hermitian_matrix(self):
-        """Test behavior with non-Hermitian input.
-
-        Note: Current implementation does not validate Hermiticity.
-        This test documents that such validation should be added.
-        """
+        """Test that creating a density matrix with non-Hermitian input raises ValueError."""
         # Create a non-Hermitian matrix with trace 1
         non_hermitian = np.array([[1, 0.5], [-0.5, 0]], dtype=complex)
-        # Currently this does not raise an error, but should in the future
-        try:
-            dm = DensityMatrix.from_density_matrix(1, non_hermitian.flatten())
-            # If no error raised, verify the data is stored (even though unphysical)
-            assert dm.trace() == 1.0
-        except ValueError:
-            pytest.skip("Hermiticity validation not yet implemented")
+        with pytest.raises(ValueError):
+            DensityMatrix.from_density_matrix(1, non_hermitian.flatten())
 
     def test_from_density_matrix_with_negative_eigenvalues(self):
-        """Test behavior with non-positive-semidefinite input.
-
-        Note: Current implementation does not validate positive semidefiniteness.
-        This test documents that such validation should be added.
-        """
+        """Test that creating a density matrix with negative eigenvalues raises ValueError."""
         # Create a Hermitian matrix with trace 1 but negative eigenvalue
         neg_eig_matrix = np.array([[1.5, 0], [0, -0.5]], dtype=complex)
-        try:
-            dm = DensityMatrix.from_density_matrix(1, neg_eig_matrix.flatten())
-            # If no error raised, verify trace is correct
-            assert dm.trace() == 1.0
-        except ValueError:
-            pytest.skip("Positive semidefiniteness validation not yet implemented")
+        with pytest.raises(ValueError):
+            DensityMatrix.from_density_matrix(1, neg_eig_matrix.flatten())
 
     @pytest.mark.parametrize(
         "invalid_input",
