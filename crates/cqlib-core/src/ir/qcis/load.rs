@@ -50,7 +50,10 @@ use crate::circuit::circuit_param::ParameterValue;
 use crate::circuit::{Circuit, Parameter, Qubit};
 use regex::Regex;
 use std::collections::HashSet;
+use std::sync::LazyLock;
 use thiserror::Error;
+
+static QUBIT_PATTERN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^Q\d+$").unwrap());
 
 /// Errors that can occur during QCIS parsing.
 #[derive(Debug, Error, PartialEq)]
@@ -295,21 +298,21 @@ fn process_line(line: &str, c: &mut Circuit, existing_qubits: &mut HashSet<u32>)
         return Ok(());
     }
 
-    let qubit_pattern = Regex::new(r"^Q\d+$").unwrap();
+    // let qubit_pattern = Regex::new(r"^Q\d+$").unwrap();
 
     let gate_name = parts[0];
     let args = &parts[1..];
 
     // Validate qubit arguments first
     for &token in args.iter() {
-        if (token.starts_with('Q') || token.starts_with('q')) && !qubit_pattern.is_match(token) {
+        if (token.starts_with('Q') || token.starts_with('q')) && !QUBIT_PATTERN.is_match(token) {
             return Err(QcisParseError::InvalidQubitFormat(token.to_string()));
         }
     }
 
     let split_index = args
         .iter()
-        .position(|&token| !qubit_pattern.is_match(token))
+        .position(|&token| !QUBIT_PATTERN.is_match(token))
         .unwrap_or(args.len());
 
     let (qubit_slice, param_slice) = args.split_at(split_index);

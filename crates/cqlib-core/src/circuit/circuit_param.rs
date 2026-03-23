@@ -85,9 +85,7 @@ impl From<Parameter> for ParameterValue {
     /// (like `Pi`, `E`, or a simple number) to optimize storage.
     fn from(para: Parameter) -> Self {
         if let Ok(p) = para.evaluate(&None) {
-            ParameterValue::Fixed(p)
-        } else if let Ok(v) = para.evaluate(&None) {
-            Self::Fixed(v)
+            Self::Fixed(p)
         } else {
             Self::Param(para)
         }

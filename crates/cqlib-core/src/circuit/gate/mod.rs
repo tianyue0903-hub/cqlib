@@ -73,7 +73,6 @@
 
 pub mod circuit_gate;
 pub mod control_flow;
-pub mod delay;
 pub mod directive;
 pub mod gate_matrix;
 pub mod instruction;
@@ -84,7 +83,6 @@ pub mod unitary_gate;
 // Re-export key types for easier access
 pub use circuit_gate::{CircuitGate, FrozenCircuit};
 pub use control_flow::{ConditionView, ControlFlow, IfElseGate, WhileLoopGate};
-pub use delay::DelayOp;
 pub use directive::Directive;
 pub use instruction::Instruction;
 pub use mc_gate::MCGate;

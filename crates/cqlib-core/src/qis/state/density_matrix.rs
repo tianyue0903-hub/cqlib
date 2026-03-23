@@ -376,7 +376,7 @@ impl DensityMatrix {
         Ok(dm)
     }
 
-    fn apply_standard_gate(
+    pub fn apply_standard_gate(
         &mut self,
         gate: StandardGate,
         qubits: &[usize],
@@ -1007,7 +1007,47 @@ impl DensityMatrix {
         qubits: &[usize],
         matrix: &ndarray::Array2<Complex64>,
     ) -> Result<(), QisError> {
-        self.validate_qubits(qubits)?;
+        let num_target_qubits = qubits.len();
+        let gate_dim = 1 << num_target_qubits;
+
+        // Validate number of target qubits
+        if num_target_qubits == 0 || num_target_qubits > self.num_qubits {
+            return Err(QisError::InvalidParameterValue(format!(
+                "Invalid number of target qubits: {} (must be 1 to {})",
+                num_target_qubits, self.num_qubits
+            )));
+        }
+
+        // Validate qubits and check for duplicates
+        for (i, &q) in qubits.iter().enumerate() {
+            if q >= self.num_qubits {
+                return Err(QisError::IndexOutOfBounds {
+                    index: q,
+                    max: self.num_qubits.saturating_sub(1),
+                });
+            }
+            for &other in &qubits[..i] {
+                if q == other {
+                    return Err(QisError::InvalidParameterValue(format!(
+                        "Duplicate qubit index {} in apply_unitary_gate",
+                        q
+                    )));
+                }
+            }
+        }
+
+        // Validate matrix dimensions
+        if matrix.shape() != [gate_dim, gate_dim] {
+            return Err(QisError::InvalidParameterValue(format!(
+                "Matrix dimensions {}x{} don't match expected {}x{} for {} qubits",
+                matrix.nrows(),
+                matrix.ncols(),
+                gate_dim,
+                gate_dim,
+                num_target_qubits
+            )));
+        }
+
         let flat: Vec<Complex64> = matrix.iter().cloned().collect();
         self.apply_matrix_kernel(qubits, self.num_qubits, &flat, false);
         self.apply_matrix_kernel(qubits, 0, &flat, true);

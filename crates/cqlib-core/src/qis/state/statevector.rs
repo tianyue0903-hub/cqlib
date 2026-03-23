@@ -357,7 +357,7 @@ impl Statevector {
     /// * `gate` - The standard gate to apply
     /// * `qubits` - Target qubit indices
     /// * `params` - Gate parameters (for parameterized gates)
-    fn apply_standard_gate(
+    pub fn apply_standard_gate(
         &mut self,
         gate: StandardGate,
         qubits: &[usize],

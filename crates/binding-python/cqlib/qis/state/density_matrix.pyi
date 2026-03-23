@@ -10,10 +10,11 @@
 # copyright notice, and modified files need to carry a notice indicating
 # that they have been altered from the originals.
 
-from typing import List, Union, final
+from typing import List, Union, final, Optional
 import numpy as np
 
 from cqlib.circuit import Circuit
+from cqlib.circuit.gates.standard import StandardGate
 from cqlib.qis import Hamiltonian, PauliString
 
 @final
@@ -168,6 +169,21 @@ class DensityMatrix:
 
         Returns:
             The trace (sum of diagonal elements) as a real number.
+        """
+        ...
+
+    def apply_standard_gate(
+        self,
+        gate: StandardGate,
+        qubits: List[int],
+        params: Optional[List[float]] = None,
+    ) -> None:
+        """Applies a standard gate to the density matrix.
+
+        Args:
+            gate: The standard gate to apply.
+            qubits: List of target qubit indices.
+            params: List of parameters for parameterized gates.
         """
         ...
 

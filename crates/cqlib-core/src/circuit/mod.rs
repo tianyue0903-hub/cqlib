@@ -28,7 +28,6 @@ pub use dag::CircuitDag;
 pub use error::CircuitError;
 pub use gate::circuit_gate::CircuitGate;
 pub use gate::control_flow::{ConditionView, ControlFlow, IfElseGate, WhileLoopGate};
-pub use gate::delay::DelayOp;
 pub use gate::directive::Directive;
 pub use gate::instruction::Instruction;
 pub use gate::mc_gate::MCGate;

@@ -15,12 +15,11 @@
 import pytest
 import math
 import numpy as np
-from cqlib import Circuit
+from cqlib.circuit import Circuit, StandardGate
 from cqlib.qis.state import DensityMatrixNoise
 from cqlib.qis import PauliString, Hamiltonian
 from cqlib.device import NoiseModel, SingleQubitNoise, TwoQubitNoise, ReadoutError
 from cqlib.qis import Pauli
-from cqlib.circuit import StandardGate
 
 
 class TestDensityMatrixNoiseConstruction:
@@ -105,6 +104,38 @@ class TestDensityMatrixNoiseProperties:
 
 class TestDensityMatrixNoiseSingleQubitGates:
     """Test single-qubit gate operations with noise."""
+
+    def test_apply_standard_gate_noise(self):
+        """Test applying gates via the general standard gate noise interface."""
+        # Single qubit ideal
+        sim = DensityMatrixNoise(1)
+        sim.apply_standard_gate_noise(StandardGate.X, [0])
+        probs = sim.probabilities()
+        assert math.isclose(probs[1], 1.0, abs_tol=1e-10)
+
+        # Single qubit parametric
+        sim = DensityMatrixNoise(1)
+        sim.apply_standard_gate_noise(StandardGate.RX, [0], [np.pi])
+        probs = sim.probabilities()
+        assert math.isclose(probs[1], 1.0, abs_tol=1e-10)
+
+        # Two qubit
+        sim = DensityMatrixNoise(2)
+        sim.apply_standard_gate_noise(StandardGate.X, [0])
+        sim.apply_standard_gate_noise(StandardGate.CX, [0, 1])
+        probs = sim.probabilities()
+        assert math.isclose(probs[3], 1.0, abs_tol=1e-10)
+
+        # With noise
+        noise_model = NoiseModel()
+        noise = SingleQubitNoise.bit_flip(0.1)
+        noise_model.add_single_qubit_error(StandardGate.X, 0, noise)
+        sim = DensityMatrixNoise(1, noise_model)
+
+        sim.apply_standard_gate_noise(StandardGate.X, [0])
+        probs = sim.probabilities()
+        assert math.isclose(probs[1], 0.9, abs_tol=1e-10)
+        assert math.isclose(probs[0], 0.1, abs_tol=1e-10)
 
     def test_apply_x(self):
         """Test Pauli-X gate."""
