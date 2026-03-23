@@ -12,16 +12,17 @@
 pub mod ansatz;
 pub mod bit;
 pub mod circuit_impl;
+pub mod circuit_param;
 mod circuit_to_matrix;
 pub mod dag;
 pub mod error;
 pub mod gate;
 pub mod operation;
-pub mod param;
 pub mod parameter;
 
 pub use bit::Qubit;
 pub use circuit_impl::Circuit;
+pub use circuit_param::{CircuitParam, ParameterValue};
 pub use circuit_to_matrix::circuit_to_matrix;
 pub use dag::CircuitDag;
 pub use error::CircuitError;
@@ -34,5 +35,4 @@ pub use gate::mc_gate::MCGate;
 pub use gate::standard_gate::StandardGate;
 pub use gate::unitary_gate::UnitaryGate;
 pub use operation::Operation;
-pub use param::{CircuitParam, ParameterValue};
-pub use parameter::impls::Parameter;
+pub use parameter::Parameter;

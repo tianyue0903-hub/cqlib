@@ -198,8 +198,8 @@ class TestQasm2Dumps:
         c.ry(0, theta * 2)
 
         qasm = dumps(c)
-        assert "rx(theta + 0.5) q[0];" in qasm
-        assert "ry(2 * theta) q[0];" in qasm
+        assert "rx(0.5 + theta) q[0];" in qasm
+        assert "ry(2*theta) q[0];" in qasm
 
 
 class TestQasm2DumpExtendedGates:

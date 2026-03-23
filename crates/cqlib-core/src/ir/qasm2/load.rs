@@ -70,11 +70,11 @@
 
 use crate::circuit::Circuit;
 use crate::circuit::bit::Qubit;
+use crate::circuit::circuit_param::{CircuitParam, ParameterValue};
 use crate::circuit::gate::circuit_gate::{CircuitGate, FrozenCircuit};
 use crate::circuit::gate::control_flow::{ConditionView, ControlFlow, IfElseGate};
 use crate::circuit::gate::{Directive, Instruction, StandardGate};
 use crate::circuit::operation::Operation;
-use crate::circuit::param::{CircuitParam, ParameterValue};
 
 use crate::circuit::parameter::Parameter;
 use crate::ir::qasm2::ast::{
@@ -717,7 +717,7 @@ impl AstToCircuit {
                         }
                         l / r
                     }
-                    OpCode::Pow => l.pow(&r),
+                    OpCode::Pow => l.pow(r),
                 })
             }
             Expression::UnaryOp(op, expr) => {

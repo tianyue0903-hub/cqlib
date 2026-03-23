@@ -11,8 +11,8 @@
 // that they have been altered from the originals.
 
 use super::*;
+use crate::circuit::circuit_param::CircuitParam;
 use crate::circuit::gate::{Directive, Instruction, StandardGate};
-use crate::circuit::param::CircuitParam;
 use crate::circuit::{Circuit, Qubit};
 use crate::ir::qasm2::dump::dumps;
 
@@ -628,8 +628,8 @@ fn test_if_statement_with_cx_gate() {
 fn test_if_statement_with_symbolic_params() {
     // Test if statement with symbolic parameters in the body
     // This verifies that parameters like 'theta' in rx(theta) are correctly handled
+    use crate::circuit::circuit_param::CircuitParam;
     use crate::circuit::gate::control_flow::ControlFlow;
-    use crate::circuit::param::CircuitParam;
 
     let qasm_with_symbolic = r#"
         OPENQASM 2.0;

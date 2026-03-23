@@ -17,8 +17,8 @@
 
 use super::*;
 use crate::circuit::Qubit;
+use crate::circuit::circuit_param::ParameterValue;
 use crate::circuit::gate::{StandardGate, UnitaryGate};
-use crate::circuit::param::ParameterValue;
 use crate::circuit::parameter::Parameter;
 use ndarray::array;
 use num_complex::Complex64;

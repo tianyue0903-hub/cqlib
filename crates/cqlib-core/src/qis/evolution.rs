@@ -54,8 +54,8 @@
 
 use crate::circuit::bit::Qubit;
 use crate::circuit::circuit_impl::Circuit;
+use crate::circuit::circuit_param::ParameterValue;
 use crate::circuit::error::CircuitError;
-use crate::circuit::param::ParameterValue;
 use crate::qis::error::QisError;
 use crate::qis::hamiltonian::Hamiltonian;
 use crate::qis::pauli::{Pauli, PauliString};

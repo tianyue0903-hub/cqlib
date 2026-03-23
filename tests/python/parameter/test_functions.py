@@ -105,13 +105,13 @@ class TestExponentialAndLogarithm:
         x = Parameter("x")
         base = Parameter(10.0)
         result = x.log(base)
-        assert str(result) == "log(x, 10)"
+        assert str(result) == "log(10, x)"
 
     def test_log_without_base(self):
         """Apply log without base (defaults to ln)."""
         x = Parameter("x")
         result = x.log(None)
-        assert str(result) == "ln(x)"
+        assert str(result) == "log(e, x)"
 
     def test_exp_of_zero(self):
         """exp(0) evaluates to 1."""
@@ -187,7 +187,7 @@ class TestChainedFunctions:
         """Apply sqrt to sum expression."""
         theta = Parameter("theta")
         result = (theta + 1).sqrt()
-        assert str(result) == "sqrt(theta + 1)"
+        assert str(result) == "sqrt(1 + theta)"
 
     def test_complex_chain(self):
         """Complex chain of function calls."""
@@ -203,17 +203,17 @@ class TestFunctionWithExpressions:
         """Apply sin to expression."""
         theta = Parameter("theta")
         result = (theta + 1).sin()
-        assert str(result) == "sin(theta + 1)"
+        assert str(result) == "sin(1 + theta)"
 
     def test_exp_of_scaled(self):
         """Apply exp to scaled parameter."""
         theta = Parameter("theta")
         result = (2 * theta).exp()
-        assert str(result) == "exp(theta * 2)"
+        assert str(result) == "exp(2*theta)"
 
     def test_sqrt_of_product(self):
         """Apply sqrt to product of parameters."""
         theta = Parameter("theta")
         phi = Parameter("phi")
         result = (theta * phi).sqrt()
-        assert str(result) == "sqrt(theta * phi)"
+        assert str(result) == "sqrt(phi*theta)"

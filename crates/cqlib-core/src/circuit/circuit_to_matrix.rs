@@ -28,9 +28,9 @@
 //! - **Parallelization**: Large matrix multiplications (large state spaces) are automatically parallelized using `rayon`.
 
 use crate::circuit::Circuit;
+use crate::circuit::circuit_param::CircuitParam;
 use crate::circuit::error::CompileError;
 use crate::circuit::gate::Instruction;
-use crate::circuit::param::CircuitParam;
 use ndarray::Array2;
 use ndarray::parallel::prelude::*;
 use num_complex::Complex64;
@@ -173,7 +173,7 @@ pub fn circuit_to_matrix(
                 let symbols = circuit_gate.symbols();
                 let mut bindings = HashMap::new();
                 for (sym, val) in symbols.iter().zip(params.iter()) {
-                    bindings.insert(sym.clone(), *val);
+                    bindings.insert(sym.as_str(), *val);
                 }
                 let sub_circuit = circuit_gate
                     .circuit

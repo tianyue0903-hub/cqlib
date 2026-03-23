@@ -41,10 +41,10 @@
 //! ```
 
 use crate::circuit::circuit_impl::Circuit;
+use crate::circuit::circuit_param::CircuitParam;
 use crate::circuit::error::CircuitError;
 use crate::circuit::gate::StandardGate;
 use crate::circuit::gate::instruction::Instruction;
-use crate::circuit::param::CircuitParam;
 use crate::qis::error::QisError;
 use crate::qis::observable::Observable;
 use num_complex::Complex64;

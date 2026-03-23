@@ -12,13 +12,14 @@
 
 use crate::circuit::Qubit;
 use crate::circuit::circuit_impl::Circuit;
+use crate::circuit::circuit_param::{CircuitParam, ParameterValue};
 use crate::circuit::error::CircuitError;
 use crate::circuit::gate::control_flow::ConditionView;
 use crate::circuit::gate::{Instruction, StandardGate};
 use crate::circuit::operation::Operation;
-use crate::circuit::param::{CircuitParam, ParameterValue};
-use crate::circuit::parameter::impls::Parameter;
+use crate::circuit::parameter::Parameter;
 use smallvec::smallvec;
+use std::collections::HashSet;
 use std::f64::consts::PI;
 
 #[test]
@@ -273,7 +274,7 @@ fn test_assign_parameters() {
     // rx(1.0) q0 -> Fixed(1.0)
     // rz(1.0 + b) q0 -> Index(new_param)
     let mut bindings = HashMap::new();
-    bindings.insert("a".to_string(), 1.0);
+    bindings.insert("a", 1.0);
 
     let assigned_circuit = circuit.assign_parameters(&Some(bindings)).unwrap();
 
@@ -304,8 +305,8 @@ fn test_assign_parameters() {
 
     // Case 2: Full assignment a = 1.0, b = 2.0
     let mut bindings = HashMap::new();
-    bindings.insert("a".to_string(), 1.0);
-    bindings.insert("b".to_string(), 2.0);
+    bindings.insert("a", 1.0);
+    bindings.insert("b", 2.0);
 
     let assigned_circuit = circuit.assign_parameters(&Some(bindings)).unwrap();
 
@@ -385,8 +386,8 @@ fn test_decompose() {
         let p = &decomposed.parameters[idx as usize];
         // Should evaluate to same as gamma with bindings
         let mut bind = HashMap::new();
-        bind.insert("gamma".to_string(), 2.0);
-        bind.insert("delta".to_string(), 3.0);
+        bind.insert("gamma", 2.0);
+        bind.insert("delta", 3.0);
         assert_eq!(p.evaluate(&Some(bind)).unwrap(), 2.0);
     } else {
         panic!("Expected Index param for RX");
@@ -402,8 +403,8 @@ fn test_decompose() {
         let p = &decomposed.parameters[idx as usize];
         // gamma=2, delta=3 -> 2+3+1 = 6.0
         let mut bind = HashMap::new();
-        bind.insert("gamma".to_string(), 2.0);
-        bind.insert("delta".to_string(), 3.0);
+        bind.insert("gamma", 2.0);
+        bind.insert("delta", 3.0);
         assert_eq!(p.evaluate(&Some(bind)).unwrap(), 6.0);
     } else {
         panic!("Expected Index param for RZ");
@@ -436,7 +437,8 @@ fn test_decompose_nested() {
     ));
     if let CircuitParam::Index(idx) = flat.data[0].params[0] {
         let p = &flat.parameters[idx as usize];
-        assert_eq!(p.get_symbols(), vec!["phi"]);
+        let set1: HashSet<String> = ["phi".to_string()].into_iter().collect();
+        assert_eq!(p.get_symbols(), set1);
     }
 
     assert!(matches!(

@@ -39,6 +39,7 @@ rand.workspace = true
 regex.workspace = true
 rustworkx-core.workspace = true
 smallvec.workspace = true
+symb_anafis.workspace = true
 thiserror.workspace = true
 time.workspace = true
 uuid.workspace = true

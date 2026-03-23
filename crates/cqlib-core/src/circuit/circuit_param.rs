@@ -15,9 +15,7 @@
 //! This module defines the types used to represent parameters within a circuit and its operations.
 //! It bridges the gap between high-level symbolic expressions ([`Parameter`]) and low-level storage ([`CircuitParam`]).
 
-use crate::circuit::Parameter;
-use crate::circuit::parameter::expr_node::ExprNode;
-use std::f64::consts::{E, PI};
+use super::parameter::Parameter;
 
 /// Represents a resolved parameter stored efficiently within a [`Circuit`](crate::circuit::Circuit).
 ///
@@ -47,7 +45,7 @@ impl From<f64> for CircuitParam {
 /// # Examples
 ///
 /// ```rust
-/// use cqlib_core::circuit::param::ParameterValue;
+/// use cqlib_core::circuit::circuit_param::ParameterValue;
 /// use cqlib_core::circuit::Parameter;
 ///
 /// // Create from float
@@ -86,18 +84,12 @@ impl From<Parameter> for ParameterValue {
     /// It attempts to eagerly evaluate the parameter if it represents a known constant
     /// (like `Pi`, `E`, or a simple number) to optimize storage.
     fn from(para: Parameter) -> Self {
-        match para.node.as_ref() {
-            ExprNode::Integer(i64) => ParameterValue::Fixed(*i64 as f64),
-            ExprNode::Float(f64) => ParameterValue::Fixed(*f64),
-            ExprNode::Pi => ParameterValue::Fixed(PI),
-            ExprNode::E => ParameterValue::Fixed(E),
-            _ => {
-                if let Ok(v) = para.evaluate(&None) {
-                    Self::Fixed(v)
-                } else {
-                    Self::Param(para)
-                }
-            }
+        if let Ok(p) = para.evaluate(&None) {
+            ParameterValue::Fixed(p)
+        } else if let Ok(v) = para.evaluate(&None) {
+            Self::Fixed(v)
+        } else {
+            Self::Param(para)
         }
     }
 }

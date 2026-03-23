@@ -31,9 +31,9 @@
 //!   and references to the circuit's global parameter table (interning).
 
 use crate::circuit::bit::Qubit;
+use crate::circuit::circuit_param::CircuitParam;
 use crate::circuit::error::CircuitError;
 use crate::circuit::gate::instruction::Instruction;
-use crate::circuit::param::CircuitParam;
 use alloc::borrow::Cow;
 use ndarray::Array2;
 use num_complex::Complex64;
