@@ -10,6 +10,20 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
+//! # Quantum Device Module
+//!
+//! This module provides types for modeling quantum hardware devices.
+//! It includes device topology, qubit layout mapping, noise models,
+//! and execution result handling.
+//!
+//! ## Key Components
+//!
+//! - [`Device`]: Quantum device specification with qubit and edge properties
+//! - [`Topology`]: Device connectivity graph
+//! - [`Layout`]: Logical to physical qubit mapping
+//! - [`NoiseModel`]: Noise simulation parameters
+//! - [`ExecutionResult`]: Measurement outcome collection
+
 pub mod device_impl;
 pub mod error;
 pub mod layout;

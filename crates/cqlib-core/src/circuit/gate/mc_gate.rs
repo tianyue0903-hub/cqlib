@@ -14,8 +14,9 @@
 //!
 //! This module provides [`MCGate`], a type representing gates with multiple
 //! control qubits applied to a base [`StandardGate`]. For example, a
+//! multi-controlled X gate with 2 controls is the CCX (Toffoli) gate.
+
 use crate::circuit::gate::{StandardGate, gate_matrix};
-/// multi-controlled X gate with 2 controls is the CCX (Toffoli) gate.
 use crate::circuit::{CircuitError, Parameter};
 use alloc::borrow::Cow;
 use ndarray::Array2;

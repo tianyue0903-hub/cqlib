@@ -10,6 +10,17 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
+//! # Feature Map Module
+//!
+//! This module provides feature encoding circuits for quantum machine learning.
+//! Feature maps encode classical data into quantum states, enabling quantum
+//! computers to process classical information.
+//!
+//! ## Available Encodings
+//!
+//! - [`AngleEncoding`]: Simple tensor product encoding using rotation gates
+//! - [`ZZFeatureMap`]: Entangling feature map with ZZ interactions
+
 use super::traits::Ansatz;
 use super::two_local::EntanglementTopology;
 use crate::circuit::Instruction;

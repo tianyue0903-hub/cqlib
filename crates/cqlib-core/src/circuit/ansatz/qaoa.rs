@@ -10,6 +10,21 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
+//! # QAOA Ansatz Module
+//!
+//! This module implements the Quantum Approximate Optimization Algorithm (QAOA)
+//! ansatz. QAOA is a variational quantum algorithm designed for solving
+//! combinatorial optimization problems.
+//!
+//! ## Algorithm Overview
+//!
+//! The QAOA circuit alternates between:
+//! - **Cost Layer**: Applies $e^{-i\gamma H_C}$ where $H_C$ is the problem Hamiltonian
+//! - **Mixer Layer**: Applies $e^{-i\beta H_B}$ where $H_B$ is typically $\sum X_i$
+//!
+//! By optimizing the parameters $(\gamma, \beta)$, QAOA approximates the ground
+//! state of the cost Hamiltonian.
+
 use super::traits::Ansatz;
 use crate::circuit::Parameter;
 use crate::circuit::circuit_impl::Circuit;
