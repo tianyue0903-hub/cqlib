@@ -47,7 +47,7 @@ use cqlib_core::circuit::Qubit;
 use cqlib_core::device::Layout;
 use pyo3::exceptions::PyValueError;
 use pyo3::{PyResult, pyclass, pymethods};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 /// Maps logical (virtual) qubits to physical qubits on a quantum device.
 ///
@@ -288,24 +288,11 @@ impl PyLayout {
     /// assert phys_before != phys_after
     /// ```
     fn swap_physical(&mut self, phys_a: PyIntOrQubit, phys_b: PyIntOrQubit) -> PyResult<()> {
-        let physical_set: HashSet<Qubit> = self.inner.physical_qubits().collect();
         let phys_a = phys_a.into();
         let phys_b = phys_b.into();
-        if !physical_set.contains(&phys_a) {
-            return Err(PyValueError::new_err(format!(
-                "physical qubit {} not in layout",
-                phys_a.id()
-            )));
-        }
-        if !physical_set.contains(&phys_b) {
-            return Err(PyValueError::new_err(format!(
-                "physical qubit {} not in layout",
-                phys_b.id()
-            )));
-        }
-
-        self.inner.swap_physical(phys_a, phys_b);
-        Ok(())
+        self.inner
+            .swap_physical(phys_a, phys_b)
+            .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
     fn __repr__(&self) -> String {

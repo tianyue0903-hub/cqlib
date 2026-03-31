@@ -12,13 +12,14 @@
 
 use crate::circuit::Qubit;
 use crate::circuit::circuit_impl::Circuit;
+use crate::circuit::circuit_param::{CircuitParam, ParameterValue};
 use crate::circuit::error::CircuitError;
 use crate::circuit::gate::control_flow::ConditionView;
 use crate::circuit::gate::{Instruction, StandardGate};
 use crate::circuit::operation::Operation;
-use crate::circuit::param::{CircuitParam, ParameterValue};
-use crate::circuit::parameter::impls::Parameter;
+use crate::circuit::parameter::Parameter;
 use smallvec::smallvec;
+use std::collections::HashSet;
 use std::f64::consts::PI;
 
 #[test]
@@ -273,7 +274,7 @@ fn test_assign_parameters() {
     // rx(1.0) q0 -> Fixed(1.0)
     // rz(1.0 + b) q0 -> Index(new_param)
     let mut bindings = HashMap::new();
-    bindings.insert("a".to_string(), 1.0);
+    bindings.insert("a", 1.0);
 
     let assigned_circuit = circuit.assign_parameters(&Some(bindings)).unwrap();
 
@@ -304,8 +305,8 @@ fn test_assign_parameters() {
 
     // Case 2: Full assignment a = 1.0, b = 2.0
     let mut bindings = HashMap::new();
-    bindings.insert("a".to_string(), 1.0);
-    bindings.insert("b".to_string(), 2.0);
+    bindings.insert("a", 1.0);
+    bindings.insert("b", 2.0);
 
     let assigned_circuit = circuit.assign_parameters(&Some(bindings)).unwrap();
 
@@ -385,8 +386,8 @@ fn test_decompose() {
         let p = &decomposed.parameters[idx as usize];
         // Should evaluate to same as gamma with bindings
         let mut bind = HashMap::new();
-        bind.insert("gamma".to_string(), 2.0);
-        bind.insert("delta".to_string(), 3.0);
+        bind.insert("gamma", 2.0);
+        bind.insert("delta", 3.0);
         assert_eq!(p.evaluate(&Some(bind)).unwrap(), 2.0);
     } else {
         panic!("Expected Index param for RX");
@@ -402,8 +403,8 @@ fn test_decompose() {
         let p = &decomposed.parameters[idx as usize];
         // gamma=2, delta=3 -> 2+3+1 = 6.0
         let mut bind = HashMap::new();
-        bind.insert("gamma".to_string(), 2.0);
-        bind.insert("delta".to_string(), 3.0);
+        bind.insert("gamma", 2.0);
+        bind.insert("delta", 3.0);
         assert_eq!(p.evaluate(&Some(bind)).unwrap(), 6.0);
     } else {
         panic!("Expected Index param for RZ");
@@ -436,7 +437,8 @@ fn test_decompose_nested() {
     ));
     if let CircuitParam::Index(idx) = flat.data[0].params[0] {
         let p = &flat.parameters[idx as usize];
-        assert_eq!(p.get_symbols(), vec!["phi"]);
+        let set1: HashSet<String> = ["phi".to_string()].into_iter().collect();
+        assert_eq!(p.get_symbols(), set1);
     }
 
     assert!(matches!(
@@ -672,4 +674,179 @@ fn test_decompose_control_flow_multiple_qubits() {
         has_control_flow,
         "ControlFlowGate should be preserved after decompose"
     );
+}
+
+// ============================================================================
+// Tests for compose() method
+// ============================================================================
+
+#[test]
+fn test_compose_basic_with_mapping() {
+    // Create qc1 with qubits 1, 3, 5
+    let mut qc1 = Circuit::new(0);
+    let q1 = Qubit::new(1);
+    let q3 = Qubit::new(3);
+    let q5 = Qubit::new(5);
+    qc1.add_qubits(vec![q1, q3, q5]).unwrap();
+    qc1.h(q1).unwrap();
+
+    // Create qc2 with qubits 1, 2
+    let mut qc2 = Circuit::new(0);
+    let q2 = Qubit::new(2);
+    qc2.add_qubits(vec![q1, q2]).unwrap();
+    qc2.x(q1).unwrap();
+
+    // Compose: map qc2's q1 -> qc1's q3, qc2's q2 -> qc1's q1
+    let result = qc1.compose(&qc2, Some(&[q3, q1]));
+    assert!(result.is_ok(), "compose should succeed");
+
+    // Verify: qc1 qubit count unchanged, qubits are {1, 3, 5}
+    assert_eq!(qc1.num_qubits(), 3);
+    let expected: Vec<Qubit> = vec![q1, q3, q5];
+    assert_eq!(qc1.qubits(), expected);
+
+    // Verify: 2 operations (1 from qc1, 1 from qc2)
+    assert_eq!(qc1.data.len(), 2);
+}
+
+#[test]
+fn test_compose_without_mapping() {
+    // Create qc1 with qubits 1, 3, 5
+    let mut qc1 = Circuit::new(0);
+    let q1 = Qubit::new(1);
+    let q3 = Qubit::new(3);
+    let q5 = Qubit::new(5);
+    qc1.add_qubits(vec![q1, q3, q5]).unwrap();
+    qc1.h(q1).unwrap();
+
+    // Create qc2 with qubits 6, 7
+    let mut qc2 = Circuit::new(0);
+    let q6 = Qubit::new(6);
+    let q7 = Qubit::new(7);
+    qc2.add_qubits(vec![q6, q7]).unwrap();
+    qc2.cx(q6, q7).unwrap();
+
+    // Compose without mapping: qc2's qubits are appended
+    let result = qc1.compose(&qc2, None);
+    assert!(result.is_ok(), "compose should succeed");
+
+    // Verify: 3 + 2 = 5 qubits
+    assert_eq!(qc1.num_qubits(), 5);
+
+    // Verify: all qubits present
+    let expected: Vec<Qubit> = vec![q1, q3, q5, q6, q7];
+    assert_eq!(qc1.qubits(), expected);
+
+    // Verify: 2 operations (1 from qc1, 1 from qc2)
+    assert_eq!(qc1.data.len(), 2);
+}
+
+#[test]
+fn test_compose_empty_circuit() {
+    let mut qc1 = Circuit::new(2);
+    qc1.h(Qubit::new(0)).unwrap();
+
+    let qc2 = Circuit::new(0);
+
+    let result = qc1.compose(&qc2, None);
+    assert!(result.is_ok());
+
+    assert_eq!(qc1.num_qubits(), 2);
+    assert_eq!(qc1.data.len(), 1);
+}
+
+#[test]
+fn test_compose_qubit_count_mismatch() {
+    let mut qc1 = Circuit::new(0);
+    let q1 = Qubit::new(1);
+    let q3 = Qubit::new(3);
+    qc1.add_qubits(vec![q1, q3]).unwrap();
+
+    let mut qc2 = Circuit::new(0);
+    let q2 = Qubit::new(2);
+    qc2.add_qubits(vec![q1, q2, q3]).unwrap();
+
+    // Mapping only 2 qubits, but qc2 has 3
+    let result = qc1.compose(&qc2, Some(&[q1, q3]));
+    assert!(matches!(
+        result,
+        Err(CircuitError::QubitCountMismatch {
+            expected: 3,
+            actual: 2
+        })
+    ));
+}
+
+#[test]
+fn test_compose_nonexistent_target_qubit() {
+    let mut qc1 = Circuit::new(0);
+    let q1 = Qubit::new(1);
+    qc1.add_qubits(vec![q1]).unwrap();
+
+    let mut qc2 = Circuit::new(0);
+    let q2 = Qubit::new(2);
+    qc2.add_qubits(vec![q2]).unwrap();
+
+    // Try to map qc2's q2 to q3, which does not exist in qc1
+    let q3 = Qubit::new(3);
+    let result = qc1.compose(&qc2, Some(&[q3]));
+    assert!(matches!(result, Err(CircuitError::QubitNotFound(3))));
+}
+
+#[test]
+fn test_compose_with_parameters() {
+    // qc1 with parameterized gate
+    let mut qc1 = Circuit::new(1);
+    let theta = Parameter::symbol("theta");
+    qc1.rx(Qubit::new(0), theta.clone()).unwrap();
+
+    // qc2 with different parameterized gate
+    let mut qc2 = Circuit::new(1);
+    let phi = Parameter::symbol("phi");
+    qc2.ry(Qubit::new(0), phi.clone()).unwrap();
+
+    let result = qc1.compose(&qc2, None);
+    assert!(result.is_ok());
+
+    // Both parameters should be present
+    assert_eq!(qc1.parameters().len(), 2);
+    assert!(qc1.symbols().contains("theta"));
+    assert!(qc1.symbols().contains("phi"));
+}
+
+#[test]
+fn test_compose_preserves_operation_order() {
+    // qc1: Bell state preparation
+    let mut qc1 = Circuit::new(2);
+    qc1.h(Qubit::new(0)).unwrap();
+    qc1.cx(Qubit::new(0), Qubit::new(1)).unwrap();
+
+    // qc2: Bell measurement
+    let mut qc2 = Circuit::new(2);
+    qc2.cx(Qubit::new(0), Qubit::new(1)).unwrap();
+    qc2.h(Qubit::new(0)).unwrap();
+
+    let result = qc1.compose(&qc2, None);
+    assert!(result.is_ok());
+
+    // Total: 2 + 2 = 4 operations
+    assert_eq!(qc1.data.len(), 4);
+
+    // Verify order: h, cx (from qc1), cx, h (from qc2)
+    assert!(matches!(
+        qc1.data[0].instruction,
+        Instruction::Standard(StandardGate::H)
+    ));
+    assert!(matches!(
+        qc1.data[1].instruction,
+        Instruction::Standard(StandardGate::CX)
+    ));
+    assert!(matches!(
+        qc1.data[2].instruction,
+        Instruction::Standard(StandardGate::CX)
+    ));
+    assert!(matches!(
+        qc1.data[3].instruction,
+        Instruction::Standard(StandardGate::H)
+    ));
 }

@@ -78,27 +78,31 @@ impl Hamiltonian {
     /// # Arguments
     /// * `ops` - A vector of tuples, each containing a [`PauliString`] and a [`Complex64`] coefficient.
     ///
-    /// # Panics
-    /// Panics if not all Pauli strings in the list act on the same number of qubits.
-    pub fn from_list(ops: Vec<(PauliString, Complex64)>) -> Self {
+    /// # Errors
+    /// Returns `QisError::QubitMismatch` if not all Pauli strings in the list act on the same number of qubits.
+    pub fn from_list(
+        ops: Vec<(PauliString, Complex64)>,
+    ) -> Result<Self, crate::qis::error::QisError> {
         if ops.is_empty() {
             // Handle the empty case by returning a 0-qubit empty Hamiltonian.
             // Depending on design, this could also panic, but allowing an empty
             // list representing the zero operator is a valid fallback.
-            return Self::new(0);
+            return Ok(Self::new(0));
         }
         let n = ops[0].0.num_qubits;
         // Verify that all operators have the same dimension
         for (op, _) in &ops {
-            assert_eq!(
-                op.num_qubits, n,
-                "All Pauli strings must have the same number of qubits"
-            );
+            if op.num_qubits != n {
+                return Err(crate::qis::error::QisError::QubitMismatch {
+                    expected: n,
+                    actual: op.num_qubits,
+                });
+            }
         }
-        Self {
+        Ok(Self {
             num_qubits: n,
             terms: ops,
-        }
+        })
     }
 
     /// Adds a new Pauli string term with a given coefficient to the Hamiltonian.
@@ -107,11 +111,21 @@ impl Hamiltonian {
     /// * `op` - The Pauli string operator to add.
     /// * `coeff` - The complex coefficient for this term.
     ///
-    /// # Panics
-    /// Panics if the number of qubits in the `op` does not match the Hamiltonian's `num_qubits`.
-    pub fn add_term(&mut self, op: PauliString, coeff: Complex64) {
-        assert_eq!(op.num_qubits, self.num_qubits, "Qubit count mismatch");
+    /// # Errors
+    /// Returns `QisError::QubitMismatch` if the number of qubits in the `op` does not match the Hamiltonian's `num_qubits`.
+    pub fn add_term(
+        &mut self,
+        op: PauliString,
+        coeff: Complex64,
+    ) -> Result<(), crate::qis::error::QisError> {
+        if op.num_qubits != self.num_qubits {
+            return Err(crate::qis::error::QisError::QubitMismatch {
+                expected: self.num_qubits,
+                actual: op.num_qubits,
+            });
+        }
         self.terms.push((op, coeff));
+        Ok(())
     }
 
     /// Simplifies the Hamiltonian by combining terms with the same Pauli string.

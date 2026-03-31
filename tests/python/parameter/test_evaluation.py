@@ -4,7 +4,7 @@
 #
 # This code is licensed under the Apache License, Version 2.0. You may
 # obtain a copy of this license in the LICENSE.txt file in the root directory
-# of this source tree or at http:#www.apache.org/licenses/LICENSE-2.0.
+# of this source tree or at http://www.apache.org/licenses/LICENSE-2.0.
 #
 # Any modifications or derivative works of this code must retain this
 # copyright notice, and modified files need to carry a notice indicating
@@ -35,19 +35,19 @@ class TestConstantEvaluation:
 
     def test_evaluate_float(self):
         """Evaluate float constant."""
-        p = Parameter.from_float(3.14)
+        p = Parameter(3.14)
         result = p.evaluate()
         assert np.isclose(result, 3.14)
 
     def test_evaluate_zero(self):
         """Evaluate zero constant."""
-        p = Parameter.from_float(0.0)
+        p = Parameter(0.0)
         result = p.evaluate({})
         assert np.isclose(result, 0.0)
 
     def test_evaluate_negative(self):
         """Evaluate negative constant."""
-        p = Parameter.from_float(-5.5)
+        p = Parameter(-5.5)
         result = p.evaluate({})
         assert np.isclose(result, -5.5)
 

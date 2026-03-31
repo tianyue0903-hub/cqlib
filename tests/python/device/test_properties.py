@@ -4,7 +4,7 @@
 #
 # This code is licensed under the Apache License, Version 2.0. You may
 # obtain a copy of this license in the LICENSE.txt file in the root directory
-# of this source tree or at http:#www.apache.org/licenses/LICENSE-2.0.
+# of this source tree or at http://www.apache.org/licenses/LICENSE-2.0.
 #
 # Any modifications or derivative works of this code must retain this
 # copyright notice, and modified files need to carry a notice indicating
@@ -14,6 +14,7 @@
 
 import pytest
 
+from cqlib import Qubit
 from cqlib.circuit import Instruction, StandardGate
 from cqlib.device import Device, EdgeProp, InstructionProp, QubitProp, Topology
 
@@ -24,20 +25,19 @@ class TestPropertyBuilders:
     def test_instruction_qubit_edge_prop_builders(self):
         """InstructionProp/QubitProp/EdgeProp should preserve configured fields."""
         x_inst = Instruction.from_standard_gate(StandardGate.X)
-        ip = InstructionProp(x_inst, 0.01).with_length(80.0)
+        ip = InstructionProp(x_inst, 0.01)
+        ip.length = 80.0
         assert ip.error_rate == pytest.approx(0.01)
         assert ip.length == pytest.approx(80.0)
         assert ip.instruction.name == "X"
 
-        qp = (
-            QubitProp(0.02)
-            .with_prob_meas0_prep1(0.03)
-            .with_prob_meas1_prep0(0.04)
-            .with_t1(120.0)
-            .with_t2(95.0)
-            .with_frequency(5.1)
-            .with_native_instruction(ip)
-        )
+        qp = QubitProp(0.02)
+        qp.prob_meas0_prep1 = 0.03
+        qp.prob_meas1_prep0 = 0.04
+        qp.t1 = 120.0
+        qp.t2 = 95.0
+        qp.frequency = 5.1
+        qp.native_instruction = ip
         assert qp.readout_error == pytest.approx(0.02)
         assert qp.t1 == pytest.approx(120.0)
         assert qp.t2 == pytest.approx(95.0)
@@ -46,8 +46,10 @@ class TestPropertyBuilders:
         assert qp.native_instructions[0].instruction.name == "X"
 
         cx_inst = Instruction.from_standard_gate(StandardGate.CX)
-        eip = InstructionProp(cx_inst, 0.08).with_length(300.0)
-        ep = EdgeProp().with_native_instruction(eip)
+        eip = InstructionProp(cx_inst, 0.08)
+        eip.length = 300.0
+        ep = EdgeProp()
+        ep.native_instruction = eip
         assert len(ep.native_instructions) == 1
         assert ep.native_instructions[0].instruction.name == "CX"
 
@@ -57,32 +59,30 @@ class TestDeviceProperties:
 
     def test_device_add_and_query(self):
         """Device should store defaults and per-qubit/edge overrides."""
-        topo = Topology([0, 1, 2], [(0, 1, "CX"), (1, 2, "CX")])
-        device = (
-            Device("mock_backend", topo)
-            .with_default_t1(50.0)
-            .with_default_t2(35.0)
-            .with_default_readout_error(0.05)
-            .with_default_single_qubit_error(0.001)
-            .with_default_two_qubit_error(0.01)
-            .with_native_gates(
-                [
-                    Instruction.from_standard_gate(StandardGate.X),
-                    Instruction.from_standard_gate(StandardGate.CX),
-                ]
-            )
-        )
+        topo = Topology([0, 1, 2], [(0, 1, "G1"), (1, 2, "G2")])
+        device = Device("mock_backend", [Qubit(0), Qubit(1), Qubit(2)], topo)
+        device.default_t1 = 50.0
+        device.default_t2 = 35.0
+        device.default_readout_error = 0.05
+        device.default_single_qubit_error = 0.001
+        device.default_two_qubit_error = 0.01
+        device.native_gates = [
+            Instruction.from_standard_gate(StandardGate.X),
+            Instruction.from_standard_gate(StandardGate.CX),
+        ]
 
-        qp0 = QubitProp(0.02).with_t1(80.0).with_t2(70.0)
+        qp0 = QubitProp(0.02)
+        qp0.t1 = 80.0
+        qp0.t2 = 70.0
         device.add_qubit_properties(0, qp0)
 
-        ep01 = EdgeProp().with_native_instruction(
-            InstructionProp(Instruction.from_standard_gate(StandardGate.CX), 0.06)
-        )
+        ep01 = EdgeProp()
+        cx_inst = Instruction.from_standard_gate(StandardGate.CX)
+        ep01.native_instruction = InstructionProp(cx_inst, 0.06)
         device.add_edge_properties(0, 1, ep01)
 
         assert device.name == "mock_backend"
-        assert sorted(device.qubits) == [0, 1, 2]
+        assert sorted(device.qubits) == [Qubit(0), Qubit(1), Qubit(2)]
         assert device.invalid_qubits == []
         assert device.default_single_qubit_error == pytest.approx(0.001)
         assert device.default_two_qubit_error == pytest.approx(0.01)
@@ -105,8 +105,8 @@ class TestDeviceProperties:
 
     def test_device_rejects_invalid_qubit_or_edge(self):
         """Adding properties outside topology should raise ValueError."""
-        topo = Topology([0, 1], [(0, 1)])
-        device = Device("mock", topo)
+        topo = Topology([0, 1], [(0, 1, "G1")])
+        device = Device("mock", [Qubit(0), Qubit(1)], topo)
 
         with pytest.raises(ValueError):
             device.add_qubit_properties(9, QubitProp(0.01))

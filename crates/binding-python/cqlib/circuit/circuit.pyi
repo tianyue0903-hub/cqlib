@@ -21,6 +21,7 @@ from .gates.circuit_gate import CircuitGate
 from .gates.mc_gate import McGate
 from .gates.control_flow import ConditionView, ControlFlow
 from .gates.directive import Directive
+from ..qis import PauliString
 
 # Type alias for qubit list in control flow operations
 # Supports list[int] or list[Qubit]
@@ -450,6 +451,44 @@ class Circuit:
         """
         ...
 
+    def pauli_evolution(
+        self,
+        pauli: PauliString,
+        angle: float,
+        qubits: list[int] | list[Qubit],
+    ) -> None:
+        """Applies a Pauli evolution gate exp(-i * angle/2 * PauliString) to the circuit.
+
+        This method synthesizes a unitary evolution of a Pauli operator and
+        appends the corresponding operations to the circuit.
+
+        Algorithm:
+            The rotation e^(-iθ/2 · P) is implemented as follows:
+            1. Phase Validation: The PauliString's internal phase must be ±1.
+            2. Basis Transformation: Convert non-Z Paulis to Z basis.
+            3. CNOT Chain: Accumulate parity along the chain to the last qubit.
+            4. Core Rotation: Apply RZ(θ) on the last qubit.
+            5. Reverse CNOT Ladder: Uncompute parity.
+            6. Inverse Transformation: Restore the original basis.
+
+        Args:
+            pauli: The Pauli string representing the generator of evolution.
+            angle: The evolution angle.
+            qubits: The target qubits on which the Pauli operator acts.
+
+        Raises:
+            ValueError: If the number of qubits doesn't match the Pauli string length,
+                or if the Pauli string phase is invalid (not ±1).
+
+        Examples:
+            >>> from cqlib import Circuit
+            >>> from cqlib.qis import PauliString
+            >>> circuit = Circuit(3)
+            >>> pauli = PauliString.from_str("XZI")
+            >>> circuit.pauli_evolution(pauli, 3.14159/2, [0, 1, 2])
+        """
+        ...
+
     def __len__(self) -> int:
         """Returns the number of operations in the circuit."""
         ...
@@ -477,6 +516,62 @@ class Circuit:
         Example:
             >>> circuit = Circuit(2)  # Qubits 0, 1
             >>> circuit.add_qubits([2, 3])  # Now has qubits 0, 1, 2, 3
+        """
+        ...
+
+    def add_parameter(self, param: Parameter) -> tuple[int, bool]:
+        """Adds a parameter to the circuit.
+
+        Args:
+            param: A Parameter object to add to the circuit.
+
+        Returns:
+            A tuple of (index, is_new) where:
+                - index: The parameter's index in the circuit's parameter table
+                - is_new: True if the parameter was newly added, False if it already existed
+
+        Example:
+            >>> from cqlib import Circuit, Parameter
+            >>> circuit = Circuit(1)
+            >>> theta = Parameter.symbol("theta")
+            >>> index, is_new = circuit.add_parameter(theta)
+        """
+        ...
+
+    def compose(
+        self,
+        other: "Circuit",
+        qubits_map: Optional[list[int]] = None,
+    ) -> None:
+        """Composes another circuit into this circuit.
+
+        This method merges the operations from `other` circuit into `self`.
+        Qubits from `other` can either be mapped to existing qubits in `self`
+        (via `qubits_map`) or appended as new qubits.
+
+        Args:
+            other: The circuit to compose into this circuit.
+            qubits_map: An optional list mapping qubits from `other` to qubits in `self`.
+                - If `qubits_map` is provided, each qubit in `other` (in their natural
+                  iteration order) is mapped to the corresponding qubit in `qubits_map`.
+                - If `qubits_map` is None, all qubits from `other` are appended as new
+                  qubits to `self`.
+
+        Raises:
+            ValueError: If the mapping is invalid (wrong length or non-existent qubits).
+
+        Example:
+            >>> from cqlib import Circuit
+            >>> # Create first circuit
+            >>> qc1 = Circuit(2)
+            >>> qc1.h(0)
+            >>> # Create second circuit
+            >>> qc2 = Circuit(2)
+            >>> qc2.x(0)
+            >>> # Compose qc2 into qc1 (append as new qubits)
+            >>> qc1.compose(qc2)
+            >>> # Or compose with mapping: map qc2's qubits 0,1 to qc1's qubits 1,0
+            >>> qc1.compose(qc2, [1, 0])
         """
         ...
 

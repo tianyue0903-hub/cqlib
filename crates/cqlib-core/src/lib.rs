@@ -21,3 +21,5 @@ pub mod ir;
 pub mod qis;
 
 pub use error_mitigation::ZNEMitigation;
+
+pub mod visualization;

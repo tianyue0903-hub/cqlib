@@ -239,7 +239,11 @@ impl Instruction {
                 );
                 if let Some(m) = uni.matrix() {
                     let controlled = gate_matrix::control_matrix(m, num_new_ctrls);
-                    g = g.with_matrix(controlled).unwrap();
+                    // Handle possible matrix dimension error, return None on failure
+                    g = match g.with_matrix(controlled) {
+                        Ok(gate) => gate,
+                        Err(_) => return None,
+                    };
                 }
                 // Copy circuit field if present
                 if let Some(c) = uni.circuit() {
@@ -248,9 +252,7 @@ impl Instruction {
 
                 Some(Instruction::UnitaryGate(Box::from(g)))
             }
-            Instruction::CircuitGate(_) => {
-                panic!("CircuitGate instructions are not supported yet");
-            }
+            Instruction::CircuitGate(_) => None, // CircuitGate does not support control yet
             Instruction::Directive(_) => None,
             Instruction::Delay => None,
             Instruction::ControlFlowGate(_) => None,

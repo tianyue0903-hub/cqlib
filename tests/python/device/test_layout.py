@@ -4,7 +4,7 @@
 #
 # This code is licensed under the Apache License, Version 2.0. You may
 # obtain a copy of this license in the LICENSE.txt file in the root directory
-# of this source tree or at http:#www.apache.org/licenses/LICENSE-2.0.
+# of this source tree or at http://www.apache.org/licenses/LICENSE-2.0.
 #
 # Any modifications or derivative works of this code must retain this
 # copyright notice, and modified files need to carry a notice indicating
@@ -14,6 +14,7 @@
 
 import pytest
 
+from cqlib import Qubit
 from cqlib.device import Layout
 
 
@@ -22,17 +23,19 @@ class TestLayout:
 
     def test_layout_mapping_and_swap(self):
         """Layout should expose maps and update mapping after swap."""
-        layout = Layout(logical=[0, 1], physical=[10, 11, 12], init_map={0: 11})
+        layout = Layout(
+            logical=[0, 1], physical=[10, 11, 12], init_map={Qubit(0): Qubit(11)}
+        )
         assert layout.num_logical == 2
         assert layout.num_physical == 3
         assert layout.num_ancilla == 1
 
-        assert set(layout.logical_qubits) == {0, 1}
-        assert set(layout.physical_qubits) == {10, 11, 12}
-        assert set(layout.v2p_map.keys()).issuperset({0, 1})
-        assert set(layout.p2v_map.keys()).issubset({10, 11, 12})
+        assert set(layout.logical_qubits) == {Qubit(0), Qubit(1)}
+        assert set(layout.physical_qubits) == {Qubit(10), Qubit(11), Qubit(12)}
+        assert set(layout.v2p_map.keys()).issuperset({Qubit(0), Qubit(1)})
+        assert set(layout.p2v_map.keys()).issubset({Qubit(10), Qubit(11), Qubit(12)})
 
-        assert layout.get_physical(0) == 11
+        assert layout.get_physical(0) == Qubit(11)
         v_on_11 = layout.get_virtual(11)
         v_on_12 = layout.get_virtual(12)
 

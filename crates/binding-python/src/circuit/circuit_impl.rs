@@ -52,10 +52,13 @@ use super::gate::{
 use super::operation::PyOperation;
 use super::parameter::PyParameter;
 use crate::circuit::operation::PyOperationIter;
+use crate::qis::pauli::PyPauliString;
+use crate::visualization::py_draw_text;
+use cqlib_core::circuit::circuit_param::CircuitParam;
+use cqlib_core::circuit::circuit_param::ParameterValue;
 use cqlib_core::circuit::gate::Instruction;
-use cqlib_core::circuit::param::CircuitParam;
-use cqlib_core::circuit::param::ParameterValue;
 use cqlib_core::circuit::{Circuit, Operation, Qubit};
+use cqlib_core::qis::evolution::PauliEvolution;
 use num_complex::Complex64;
 use numpy::{PyArray2, ToPyArray};
 use pyo3::IntoPyObjectExt;
@@ -922,8 +925,13 @@ impl PyCircuit {
     ) -> PyResult<Self> {
         // Clone circuit data for thread-safe access without holding GIL
         let circuit = self.inner.clone();
+        let bindings_ref = bindings.as_ref().map(|map| {
+            map.iter()
+                .map(|(k, v)| (k.as_str(), *v))
+                .collect::<HashMap<&str, f64>>()
+        });
         let new_inner = py
-            .detach(move || circuit.assign_parameters(&bindings))
+            .detach(move || circuit.assign_parameters(&bindings_ref))
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
         Ok(PyCircuit { inner: new_inner })
     }
@@ -1115,6 +1123,79 @@ impl PyCircuit {
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
+    /// Adds a parameter to the circuit.
+    ///
+    /// Args:
+    ///     param: A Parameter object to add to the circuit.
+    ///
+    /// Returns:
+    ///     A tuple of (index, is_new) where:
+    ///         - index: The parameter's index in the circuit's parameter table
+    ///         - is_new: True if the parameter was newly added, False if it already existed
+    ///
+    /// # Example
+    ///
+    /// ```python
+    /// from cqlib import Circuit, Parameter
+    ///
+    /// circuit = Circuit(1)
+    /// theta = Parameter.symbol("theta")
+    /// index, is_new = circuit.add_parameter(theta)
+    /// ```
+    fn add_parameter(&mut self, param: PyParameter) -> PyResult<(usize, bool)> {
+        let param_core = param.into_inner();
+        let (idx, is_new) = self.inner.add_parameter(param_core);
+        Ok((idx, is_new))
+    }
+
+    /// Composes another circuit into this circuit.
+    ///
+    /// This method merges the operations from `other` circuit into `self`. Qubits from `other`
+    /// can either be mapped to existing qubits in `self` (via `qubits_map`) or appended as new qubits.
+    ///
+    /// Args:
+    ///     other: The circuit to compose into this circuit.
+    ///     qubits_map: An optional list mapping qubits from `other` to qubits in `self`.
+    ///         - If `qubits_map` is provided, each qubit in `other` (in their natural iteration order)
+    ///           is mapped to the corresponding qubit in `qubits_map`.
+    ///         - If `qubits_map` is None, all qubits from `other` are appended as new qubits to `self`.
+    ///
+    /// Raises:
+    ///     ValueError: If the mapping is invalid (wrong length or non-existent qubits).
+    ///
+    /// # Example
+    ///
+    /// ```python
+    /// from cqlib import Circuit
+    ///
+    /// # Create first circuit
+    /// qc1 = Circuit(2)
+    /// qc1.h(0)
+    ///
+    /// # Create second circuit
+    /// qc2 = Circuit(2)
+    /// qc2.x(0)
+    ///
+    /// # Compose qc2 into qc1 (append as new qubits)
+    /// qc1.compose(qc2)
+    ///
+    /// # Or compose with mapping: map qc2's qubits 0,1 to qc1's qubits 1,0
+    /// qc1.compose(qc2, [1, 0])
+    /// ```
+    #[pyo3(signature = (other, qubits_map=None))]
+    fn compose(&mut self, other: &PyCircuit, qubits_map: Option<Vec<usize>>) -> PyResult<()> {
+        let qubits_map_core: Option<Vec<Qubit>> = qubits_map.map(|indices| {
+            indices
+                .into_iter()
+                .map(|idx| Qubit::new(idx as u32))
+                .collect()
+        });
+
+        self.inner
+            .compose(&other.inner, qubits_map_core.as_deref())
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
     /// Appends a conditional (if-else) operation to the circuit.
     ///
     /// Executes different quantum operations based on a classical condition
@@ -1202,6 +1283,63 @@ impl PyCircuit {
         self.inner
             .while_loop(condition.inner, body_core)
             .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    /// Appends a Pauli evolution gate e^(-iθ/2 · P) to the circuit.
+    ///
+    /// This method implements the Pauli rotation using basis transformation
+    /// and CNOT ladder algorithm.
+    ///
+    /// Args:
+    ///     pauli: The Pauli string operator P to exponentiate. Must be Hermitian
+    ///         (i.e., its phase must be ±1) for the evolution to be unitary.
+    ///     angle: The rotation angle θ (in radians).
+    ///     qubits: The qubits to apply the operation on. Must match pauli.num_qubits.
+    ///
+    /// Returns:
+    ///     self (for method chaining)
+    ///
+    /// Raises:
+    ///     ValueError: If qubit count mismatch, PauliString has non-Hermitian
+    ///         phase (±i), or other error occurs.
+    ///
+    /// Algorithm:
+    ///     The rotation e^(-iθ/2 · P) is implemented as follows:
+    ///     1. Phase Validation: The PauliString's internal phase must be ±1.
+    ///     2. Basis Transformation: Convert non-Z Paulis to Z basis.
+    ///     3. CNOT Chain: Accumulate parity along the chain to the last qubit.
+    ///     4. Core Rotation: Apply RZ(θ) on the last qubit.
+    ///     5. Reverse CNOT Ladder: Uncompute parity.
+    ///     6. Inverse Transformation: Restore the original basis.
+    ///
+    /// Examples:
+    ///     >>> from cqlib import Circuit
+    ///     >>> from cqlib.qis import PauliString
+    ///     >>> circuit = Circuit(3)
+    ///     >>> pauli = PauliString.from_str("XZI")
+    ///     >>> circuit.pauli_evolution(pauli, 3.14159/2, [0, 1, 2])
+    fn pauli_evolution(
+        &mut self,
+        pauli: &PyPauliString,
+        angle: f64,
+        qubits: Vec<PyIntOrQubit>,
+    ) -> PyResult<()> {
+        // Convert Python qubit indices to Qubit objects
+        let qubits_core: Vec<Qubit> = qubits.into_iter().map(|q| q.into()).collect();
+
+        self.inner
+            .pauli_evolution(&pauli.inner, angle, &qubits_core)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+
+        Ok(())
+    }
+
+    fn __str__(&self) -> PyResult<String> {
+        py_draw_text(self, None, false, false, true, false)
+    }
+
+    fn __repr__(&self) -> PyResult<String> {
+        self.__str__()
     }
 }
 

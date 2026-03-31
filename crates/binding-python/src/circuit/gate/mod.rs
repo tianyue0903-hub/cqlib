@@ -10,9 +10,10 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
+use pyo3::prelude::*;
+
 pub mod circuit_gate;
 pub mod control_flow;
-pub mod delay;
 pub mod directive;
 pub mod mc_gate;
 pub mod standard;
@@ -20,8 +21,31 @@ pub mod unitary;
 
 pub use circuit_gate::PyCircuitGate;
 pub use control_flow::{PyConditionView, PyControlFlow, PyIfElseGate, PyWhileLoopGate};
-pub use delay::PyDelay;
 pub use directive::PyDirective;
 pub use mc_gate::PyMcGate;
 pub use standard::PyStandardGate;
 pub use unitary::PyUnitaryGate;
+
+/// Registers all gate classes and static gate instances on `m`.
+pub(crate) fn register_gate_classes(parent: &Bound<'_, PyModule>) -> PyResult<()> {
+    let m = PyModule::new(parent.py(), "gate")?;
+
+    m.add_class::<PyStandardGate>()?;
+    m.add_class::<PyUnitaryGate>()?;
+    m.add_class::<PyMcGate>()?;
+    m.add_class::<PyCircuitGate>()?;
+    m.add_class::<PyControlFlow>()?;
+    m.add_class::<PyIfElseGate>()?;
+    m.add_class::<PyWhileLoopGate>()?;
+    m.add_class::<PyConditionView>()?;
+    m.add_class::<PyDirective>()?;
+    // Register static gate instances (H, X, CX, etc.) onto StandardGate
+    standard::register_gates(&m)?;
+    parent.add_submodule(&m)?;
+    parent
+        .py()
+        .import("sys")?
+        .getattr("modules")?
+        .set_item("cqlib._native.circuit.gate", &m)?;
+    Ok(())
+}

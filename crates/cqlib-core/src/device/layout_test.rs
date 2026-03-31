@@ -138,7 +138,9 @@ fn test_layout_swap_physical() {
     let phys_101_virt = layout.get_virtual(Qubit::new(101));
 
     // Swap physical qubits 100 and 101
-    layout.swap_physical(Qubit::new(100), Qubit::new(101));
+    layout
+        .swap_physical(Qubit::new(100), Qubit::new(101))
+        .unwrap();
 
     // After swap, virtual qubits should be exchanged
     assert_eq!(layout.get_virtual(Qubit::new(100)), phys_101_virt);
@@ -156,7 +158,9 @@ fn test_layout_swap_same_qubit() {
     let original_virt = layout.get_virtual(Qubit::new(100));
 
     // Swapping with itself should be a no-op
-    layout.swap_physical(Qubit::new(100), Qubit::new(100));
+    layout
+        .swap_physical(Qubit::new(100), Qubit::new(100))
+        .unwrap();
 
     // Mapping should be unchanged
     assert_eq!(layout.get_virtual(Qubit::new(100)), original_virt);
@@ -181,7 +185,7 @@ fn test_layout_swap_two_mapped() {
     assert!(virt_b.is_some());
 
     // Swap
-    layout.swap_physical(phys_a, phys_b);
+    layout.swap_physical(phys_a, phys_b).unwrap();
 
     // Virtual qubits should be exchanged
     assert_eq!(layout.get_virtual(phys_a), virt_b);
@@ -211,4 +215,31 @@ fn test_layout_get_physical() {
 
     // Non-existent qubit should return None
     assert_eq!(layout.get_physical(Qubit::new(999)), None);
+}
+
+#[test]
+fn test_ancilla_id_generation_no_conflict_with_physical() {
+    // Test scenario where physical qubit IDs might overlap with ancilla IDs
+    // Logical: [0, 1] (max id = 1), so ancilla starts from 2
+    // Physical: [2, 3, 4]
+    // This means ancilla(2) will have same ID as physical(2)
+
+    let logical = vec![Qubit::new(0), Qubit::new(1)];
+    let physical = vec![Qubit::new(2), Qubit::new(3), Qubit::new(4)];
+
+    let layout = Layout::new(logical, physical, None).unwrap();
+
+    // Verify ancilla was created with ID 2
+    assert!(layout.get_physical(Qubit::new(2)).is_some());
+
+    // The ancilla Qubit(2) maps to physical Qubit(4) (sequential assignment)
+    // Q0 -> P2, Q1 -> P3, Ancilla(2) -> P4
+    assert_eq!(layout.get_physical(Qubit::new(0)), Some(Qubit::new(2)));
+    assert_eq!(layout.get_physical(Qubit::new(1)), Some(Qubit::new(3)));
+    assert_eq!(layout.get_physical(Qubit::new(2)), Some(Qubit::new(4))); // ancilla
+
+    // Verify reverse mapping: physical qubits map to virtual qubits
+    assert_eq!(layout.get_virtual(Qubit::new(2)), Some(Qubit::new(0))); // logical
+    assert_eq!(layout.get_virtual(Qubit::new(3)), Some(Qubit::new(1))); // logical
+    assert_eq!(layout.get_virtual(Qubit::new(4)), Some(Qubit::new(2))); // ancilla
 }

@@ -10,7 +10,42 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
+//! # Circuit Error Types
+//!
+//! This module defines error types for quantum circuit operations.
+//! It provides comprehensive error handling for parameter evaluation,
+//! circuit validation, and symbolic computation errors.
+
+use symb_anafis::DiffError;
 use thiserror::Error;
+
+/// A unified error type for operations involving symbolic parameters.
+#[derive(Debug, Error)]
+pub enum ParameterError {
+    /// Wraps symbolic errors from the underlying math engine (parsing, syntax, diff, simplify).
+    #[error(transparent)]
+    SymbolicError(#[from] DiffError),
+
+    /// Indicates that a symbolic variable required for evaluation was missing.
+    #[error("Symbol not found: {0}")]
+    UndefinedSymbol(String),
+
+    /// Indicates an arithmetic error where a division or modulo operation by zero occurred.
+    #[error("Division by zero")]
+    DivisionByZero,
+
+    /// Indicates that a mathematical function was called with an argument outside its defined domain.
+    #[error("Domain error: {0}")]
+    DomainError(String),
+
+    /// Indicates that a calculation resulted in NaN (Not a Number).
+    #[error("Calculation resulted in NaN: {0}")]
+    NaN(String),
+
+    /// Indicates an error occurred during parsing.
+    #[error("Parse error: {0}")]
+    ParseError(String),
+}
 
 /// Errors that can occur during the numerical evaluation of symbolic parameters.
 ///
@@ -53,6 +88,14 @@ pub enum EvalError {
     /// Consider simplifying the expression or increasing the depth limit.
     #[error("Maximum recursion depth exceeded during evaluation (depth limit: {0})")]
     MaxRecursionDepthExceeded(usize),
+}
+
+/// Errors that can occur during symbolic differentiation.
+#[derive(Debug, Error)]
+pub enum DerivativeError {
+    /// Indicates that an expression is not differentiable with respect to a given variable.
+    #[error("Cannot differentiate expression: {0}")]
+    NonDifferentiable(String),
 }
 
 /// A comprehensive error type for operations involving Quantum Circuits.

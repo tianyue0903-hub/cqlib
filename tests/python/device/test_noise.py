@@ -4,7 +4,7 @@
 #
 # This code is licensed under the Apache License, Version 2.0. You may
 # obtain a copy of this license in the LICENSE.txt file in the root directory
-# of this source tree or at http:#www.apache.org/licenses/LICENSE-2.0.
+# of this source tree or at http://www.apache.org/licenses/LICENSE-2.0.
 #
 # Any modifications or derivative works of this code must retain this
 # copyright notice, and modified files need to carry a notice indicating
@@ -22,6 +22,7 @@ from cqlib.device import (
     SingleQubitNoise,
     TwoQubitNoise,
 )
+from cqlib.qis import Pauli
 
 
 class TestNoiseChannels:
@@ -30,7 +31,8 @@ class TestNoiseChannels:
     def test_single_and_two_qubit_noise(self):
         """Noise factories should produce valid channels and kraus matrices."""
         sq = SingleQubitNoise.depolarizing(0.1)
-        assert sq.kind == "depolarizing"
+        # SingleQubitNoise doesn't have 'kind' property, check via repr
+        assert "depolarizing" in repr(sq)
         assert sq.is_valid() is True
         sq_kraus = sq.to_kraus()
         assert len(sq_kraus) == 4
@@ -46,10 +48,12 @@ class TestNoiseChannels:
         assert len(tq_kraus) == 4
         assert tq_kraus[0].shape == (4, 4)
 
-        cp = TwoQubitNoise.correlated_pauli("X", "Z", 0.05)
+        cp = TwoQubitNoise.correlated_pauli(Pauli.x(), Pauli.z(), 0.05)
         assert cp.kind == "correlated_pauli"
-        with pytest.raises(ValueError):
-            TwoQubitNoise.correlated_pauli("A", "Z", 0.1)
+        # Note: correlated_pauli with invalid probability doesn't raise ValueError immediately
+        # The is_valid() method should be used to check validity
+        invalid_cp = TwoQubitNoise.correlated_pauli(Pauli.x(), Pauli.z(), 1.5)
+        assert invalid_cp.is_valid() is False
 
 
 class TestOperationKeyAndNoiseModel:
@@ -86,12 +90,14 @@ class TestOperationKeyAndNoiseModel:
         skey = OperationKey.new_single(StandardGate.X, 0)
         s_errs = nm.get_single_qubit_errors(skey)
         assert s_errs is not None
-        assert s_errs[0].kind == "bit_flip"
+        # SingleQubitNoise doesn't have 'kind' property, verify via repr
+        assert "bit_flip" in repr(s_errs[0])
 
         nm.add_two_qubit_error(StandardGate.CX, 0, 1, TwoQubitNoise.depolarizing(0.02))
         tkey = OperationKey.new_double(StandardGate.CX, 0, 1)
         t_errs = nm.get_two_qubit_errors(tkey)
         assert t_errs is not None
+        # TwoQubitNoise has 'kind' property
         assert t_errs[0].kind == "depolarizing"
 
         with pytest.raises(ValueError):

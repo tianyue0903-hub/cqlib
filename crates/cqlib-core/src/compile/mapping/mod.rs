@@ -42,9 +42,9 @@ pub use vf2::{
     Vf2CandidateOptions, Vf2CandidateScore, Vf2LayoutCandidate, Vf2Mapping, Vf2ScoreWeights,
 };
 
+use crate::circuit::circuit_param::CircuitParam;
 use crate::circuit::gate::control_flow::ControlFlow;
 use crate::circuit::gate::{Instruction, StandardGate};
-use crate::circuit::param::CircuitParam;
 use crate::circuit::{Circuit, Operation, Parameter, Qubit};
 use crate::compile::error::CompileError;
 pub(crate) use crate::compile::prepared::{PreparedCircuit, preprocess_circuit};

@@ -82,7 +82,7 @@ impl Topology {
         let mut graph = StableDiGraph::<Qubit, String>::new();
         let mut node_indices = HashMap::new();
         for qubit in &qubits {
-            node_indices.insert(*qubit, graph.add_node(qubit.clone()));
+            node_indices.insert(*qubit, graph.add_node(*qubit));
         }
         for qs in qubits.windows(2) {
             graph.add_edge(node_indices[&qs[0]], node_indices[&qs[1]], "".to_string());

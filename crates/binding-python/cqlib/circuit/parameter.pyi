@@ -101,6 +101,58 @@ class Parameter:
     def log(self, base: Optional["Parameter"] = None) -> "Parameter": ...
     def sqrt(self) -> "Parameter": ...
     def abs(self) -> "Parameter": ...
+    def sinh(self) -> "Parameter":
+        """Returns the hyperbolic sine sinh(x)."""
+        ...
+    def cosh(self) -> "Parameter":
+        """Returns the hyperbolic cosine cosh(x)."""
+        ...
+    def tanh(self) -> "Parameter":
+        """Returns the hyperbolic tangent tanh(x)."""
+        ...
+    def floor(self) -> "Parameter":
+        """Returns the floor of the expression."""
+        ...
+    def ceil(self) -> "Parameter":
+        """Returns the ceiling of the expression."""
+        ...
+    def round(self) -> "Parameter":
+        """Returns the rounded value of the expression."""
+        ...
+    def is_constant(self) -> bool:
+        """Returns True if this parameter is a constant (has no free variables).
+
+        Example:
+            >>> Parameter(3.14).is_constant()
+            True
+            >>> Parameter("x").is_constant()
+            False
+        """
+        ...
+    def is_zero(self) -> bool:
+        """Returns True if this parameter evaluates to zero.
+
+        Returns False if the parameter cannot be evaluated (contains unbound symbols).
+
+        Example:
+            >>> Parameter(0.0).is_zero()
+            True
+            >>> Parameter(1.0).is_zero()
+            False
+        """
+        ...
+    def is_one(self) -> bool:
+        """Returns True if this parameter evaluates to one.
+
+        Returns False if the parameter cannot be evaluated (contains unbound symbols).
+
+        Example:
+            >>> Parameter(1.0).is_one()
+            True
+            >>> Parameter(2.0).is_one()
+            False
+        """
+        ...
     def pow(self, val: "Parameter" | float) -> "Parameter":
         """Returns the power of this parameter raised to the given exponent.
 
