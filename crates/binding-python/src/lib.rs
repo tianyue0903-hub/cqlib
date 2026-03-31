@@ -15,6 +15,7 @@ pub mod compile;
 pub mod device;
 pub mod ir;
 pub mod qis;
+pub mod visualization;
 
 use pyo3::prelude::*;
 
@@ -65,6 +66,10 @@ fn binding_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // Register static gate instances (H, X, etc.) to StandardGate class
     circuit::gate::standard::register_gates(m)?;
+
+    // Register visualization functions
+    m.add_function(wrap_pyfunction!(visualization::py_draw_text, m)?)?;
+    m.add_function(wrap_pyfunction!(visualization::py_draw_figure, m)?)?;
 
     Ok(())
 }

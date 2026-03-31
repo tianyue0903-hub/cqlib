@@ -1,6 +1,6 @@
 // This code is part of Cqlib.
 //
-// (C) Copyright China Telecom Quantum Group 2025-2026
+// (C) Copyright China Telecom Quantum Group 2026
 //
 // This code is licensed under the Apache License, Version 2.0. You may
 // obtain a copy of this license in the LICENSE.txt file in the root directory
@@ -10,16 +10,13 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
-extern crate alloc;
-extern crate core;
+//! Visualization namespace.
+//!
+//! - [`crate::visualization::circuit`] contains circuit-drawing backends and IR.
+//! - [`crate::visualization::result`] is reserved for result/statistics visualization.
 
 pub mod circuit;
-pub mod compile;
-pub mod device;
-pub mod error_mitigation;
-pub mod ir;
-pub mod qis;
+pub mod result;
 
-pub use error_mitigation::ZNEMitigation;
-
-pub mod visualization;
+// Re-export circuit visualization APIs at `visualization::*` for ergonomic use.
+pub use circuit::*;
