@@ -30,6 +30,7 @@ pub mod ir_utils;
 pub mod model;
 pub mod parameter_formatter;
 pub mod style;
+pub mod text;
 pub use builder::{VisualBuildOptions, build_visual_circuit};
 pub use error::VisualizationError;
 pub use model::{
@@ -38,6 +39,7 @@ pub use model::{
 };
 pub use parameter_formatter::{ParameterDisplayMode, ParameterFormatOptions, ParameterFormatter};
 pub use style::GateStyle;
+pub use text::{TextDrawerOptions, circuit_to_text};
 
 #[cfg(test)]
 #[path = "builder_tests.rs"]
@@ -58,3 +60,7 @@ mod parameter_formatter_tests;
 #[cfg(test)]
 #[path = "style_tests.rs"]
 mod style_tests;
+
+#[cfg(test)]
+#[path = "text_tests.rs"]
+mod text_tests;
