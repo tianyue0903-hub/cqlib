@@ -26,6 +26,7 @@
 
 pub mod builder;
 pub mod error;
+pub mod figure;
 pub mod ir_utils;
 pub mod model;
 pub mod parameter_formatter;
@@ -33,6 +34,7 @@ pub mod style;
 pub mod text;
 pub use builder::{VisualBuildOptions, build_visual_circuit};
 pub use error::VisualizationError;
+pub use figure::{FigureDrawerOptions, FigureDrawStyle, circuit_to_figure, render_figure_to_file};
 pub use model::{
     VisualChildren, VisualCircuit, VisualCondition, VisualControlFlowKind, VisualOpStyle,
     VisualOperation,
@@ -48,6 +50,10 @@ mod builder_tests;
 #[cfg(test)]
 #[path = "error_tests.rs"]
 mod error_tests;
+
+#[cfg(test)]
+#[path = "figure_tests.rs"]
+mod figure_tests;
 
 #[cfg(test)]
 #[path = "model_tests.rs"]
