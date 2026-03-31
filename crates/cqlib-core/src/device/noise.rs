@@ -10,6 +10,18 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
+//! # Noise Model Module
+//!
+//! This module provides types for simulating quantum noise in device simulations.
+//! It includes single-qubit and two-qubit noise channels, readout errors,
+//! and a comprehensive noise model for realistic quantum circuit simulation.
+//!
+//! ## Noise Channels
+//!
+//! - **Single-qubit**: Bit-flip, phase-flip, depolarizing, amplitude damping, phase damping
+//! - **Two-qubit**: Two-qubit depolarizing
+//! - **Readout**: Measurement error modeling
+
 use crate::circuit::{Qubit, StandardGate};
 use crate::qis::pauli::Pauli;
 use ndarray::linalg::kron;

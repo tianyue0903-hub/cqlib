@@ -66,6 +66,32 @@ use crate::circuit::error::CircuitError;
 use crate::circuit::gate::StandardGate;
 use crate::circuit::{Instruction, Qubit};
 
+/// Returns all k-combinations of `{0, 1, ..., n-1}` in lexicographic order.
+fn k_combinations(n: usize, k: usize) -> Vec<Vec<usize>> {
+    let mut result = Vec::new();
+    let mut combo = Vec::with_capacity(k);
+    k_combinations_helper(0, n, k, &mut combo, &mut result);
+    result
+}
+
+fn k_combinations_helper(
+    start: usize,
+    n: usize,
+    remaining: usize,
+    combo: &mut Vec<usize>,
+    result: &mut Vec<Vec<usize>>,
+) {
+    if remaining == 0 {
+        result.push(combo.clone());
+        return;
+    }
+    for i in start..=(n - remaining) {
+        combo.push(i);
+        k_combinations_helper(i + 1, n, remaining - 1, combo, result);
+        combo.pop();
+    }
+}
+
 /// Defines the topology of the entanglement layer in a TwoLocal ansatz.
 ///
 /// The entanglement topology determines which pairs of qubits are connected
@@ -97,6 +123,74 @@ pub enum EntanglementTopology {
 }
 
 impl EntanglementTopology {
+    /// Generates all k-tuples of qubit indices based on the entanglement topology.
+    ///
+    /// This generalizes [`generate_pairs`](Self::generate_pairs) (k=2) to arbitrary
+    /// locality k. It is used by [`PauliFeatureMap`][super::feature_map::PauliFeatureMap]
+    /// to apply k-local Pauli evolution gates.
+    ///
+    /// # Behavior per topology
+    ///
+    /// | Topology | k=1 | k=2 | k≥3 |
+    /// |----------|-----|-----|-----|
+    /// | Linear | each qubit | (0,1),(1,2),… | consecutive windows of width k |
+    /// | Circular | each qubit | linear + wrap | all rotational windows mod n |
+    /// | Full | each qubit | all C(n,2) | all C(n,k) |
+    /// | Custom | each qubit | custom pairs | falls back to Full (C(n,k)) |
+    ///
+    /// Returns an empty vec if `k == 0`, `num_qubits == 0`, or `k > num_qubits`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use cqlib_core::circuit::ansatz::EntanglementTopology;
+    ///
+    /// let full = EntanglementTopology::Full;
+    /// let triples = full.generate_k_tuples(3, 4);
+    /// assert_eq!(triples, vec![
+    ///     vec![0, 1, 2],
+    ///     vec![0, 1, 3],
+    ///     vec![0, 2, 3],
+    ///     vec![1, 2, 3],
+    /// ]);
+    ///
+    /// let linear = EntanglementTopology::Linear;
+    /// let triples = linear.generate_k_tuples(3, 4);
+    /// assert_eq!(triples, vec![vec![0, 1, 2], vec![1, 2, 3]]);
+    /// ```
+    pub fn generate_k_tuples(&self, k: usize, num_qubits: usize) -> Vec<Vec<usize>> {
+        if k == 0 || num_qubits == 0 || k > num_qubits {
+            return vec![];
+        }
+        if k == 1 {
+            return (0..num_qubits).map(|i| vec![i]).collect();
+        }
+        if k == 2 {
+            return self
+                .generate_pairs(num_qubits)
+                .into_iter()
+                .map(|(a, b)| vec![a, b])
+                .collect();
+        }
+        // k >= 3
+        match self {
+            EntanglementTopology::Linear => {
+                (0..=num_qubits - k).map(|i| (i..i + k).collect()).collect()
+            }
+            // For Circular k≥3, generates n rotational windows: [i, i+1, ..., i+k-1] (mod n).
+            // Note: when k == n, all n windows contain the same set of qubits (just rotated),
+            // so they produce the same Pauli string and each applies an identical evolution gate.
+            // This rotational symmetry is intentional for periodic-boundary feature maps.
+            EntanglementTopology::Circular => (0..num_qubits)
+                .map(|i| (0..k).map(|j| (i + j) % num_qubits).collect())
+                .collect(),
+            // Custom topology only defines pairs; fall back to Full for k > 2.
+            EntanglementTopology::Full | EntanglementTopology::Custom(_) => {
+                k_combinations(num_qubits, k)
+            }
+        }
+    }
+
     /// Generates a list of qubit pairs based on the specified topology.
     ///
     /// # Arguments
@@ -250,13 +344,19 @@ impl TwoLocal {
     /// Sets the rotation gates used in the rotation layers.
     ///
     /// Each qubit receives all specified rotation gates in sequence.
-    /// Common choices include:
-    /// - `[RY]` for RealAmplitudes ansatz
+    /// Valid choices are single-parameter single-qubit rotation gates:
+    /// - `[RX]`, `[RY]`, `[RZ]` individually
     /// - `[RY, RZ]` for EfficientSU2 ansatz
+    /// - `[RX, RY, RZ]` for full SU(2) coverage
     ///
     /// # Arguments
     ///
-    /// * `gates` - A vector of single-qubit parameterized gates.
+    /// * `gates` - A vector of single-qubit parameterized gates (RX, RY, or RZ).
+    ///
+    /// # Errors
+    ///
+    /// Validation is performed in [`build_circuit`](Ansatz::build_circuit).
+    /// Returns `CircuitError::InvalidOperation` if any gate is not RX, RY, or RZ.
     pub fn rotation_gates(mut self, gates: Vec<StandardGate>) -> Self {
         self.rotation_gates = gates;
         self
@@ -264,13 +364,19 @@ impl TwoLocal {
 
     /// Sets the entanglement gate used in the entanglement layers.
     ///
-    /// Common choices:
-    /// - `CX` (CNOT): Standard choice, universal for entanglement
+    /// Valid choices are two-qubit controlled gates that create entanglement:
+    /// - `CX` (CNOT): Standard choice, universal for entanglement (default)
+    /// - `CY`: Controlled-Y gate
     /// - `CZ`: Symmetric, native on some hardware
     ///
     /// # Arguments
     ///
-    /// * `gate` - A two-qubit entanglement gate.
+    /// * `gate` - A two-qubit controlled entanglement gate (CX, CY, or CZ).
+    ///
+    /// # Errors
+    ///
+    /// Validation is performed in [`build_circuit`](Ansatz::build_circuit).
+    /// Returns `CircuitError::InvalidOperation` if the gate is not CX, CY, or CZ.
     pub fn entanglement_gate(mut self, gate: StandardGate) -> Self {
         self.entanglement_gate = gate;
         self
@@ -306,7 +412,71 @@ impl TwoLocal {
 }
 
 impl Ansatz for TwoLocal {
+    fn validate(&self) -> Result<(), CircuitError> {
+        if self.num_qubits == 0 {
+            return Err(CircuitError::InvalidOperation(
+                "TwoLocal requires at least 1 qubit".to_string(),
+            ));
+        }
+
+        // Validate rotation gates: must be RX, RY, or RZ
+        for gate in &self.rotation_gates {
+            if !matches!(gate, StandardGate::RX | StandardGate::RY | StandardGate::RZ) {
+                return Err(CircuitError::InvalidOperation(format!(
+                    "Rotation gates must be RX, RY, or RZ, got {:?}",
+                    gate
+                )));
+            }
+        }
+
+        // Validate entanglement gate: must be CX, CY, or CZ
+        if !matches!(
+            self.entanglement_gate,
+            StandardGate::CX | StandardGate::CY | StandardGate::CZ
+        ) {
+            return Err(CircuitError::InvalidOperation(format!(
+                "Entanglement gate must be CX, CY, or CZ, got {:?}",
+                self.entanglement_gate
+            )));
+        }
+
+        // Validate Custom topology pairs
+        if let EntanglementTopology::Custom(pairs) = &self.entanglement {
+            use std::collections::HashSet;
+            let mut seen = HashSet::new();
+            for (c, t) in pairs {
+                // Check for self-loop
+                if c == t {
+                    return Err(CircuitError::InvalidOperation(format!(
+                        "EntanglementTopology::Custom contains self-loop ({}, {})",
+                        c, t
+                    )));
+                }
+                // Check index bounds
+                if *c >= self.num_qubits || *t >= self.num_qubits {
+                    return Err(CircuitError::InvalidOperation(format!(
+                        "EntanglementTopology::Custom contains out-of-bounds index: ({}, {}) for {} qubits",
+                        c, t, self.num_qubits
+                    )));
+                }
+                // Check for duplicate edges (undirected: (c,t) == (t,c))
+                let edge = if c < t { (*c, *t) } else { (*t, *c) };
+                if !seen.insert(edge) {
+                    return Err(CircuitError::InvalidOperation(format!(
+                        "EntanglementTopology::Custom contains duplicate edge ({}, {})",
+                        c, t
+                    )));
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     fn build_circuit(&self, prefix: &str) -> Result<Circuit, CircuitError> {
+        // Validate configuration first
+        self.validate()?;
+
         let mut circuit = Circuit::new(self.num_qubits);
         let mut param_idx = 0;
 
@@ -339,15 +509,12 @@ impl Ansatz for TwoLocal {
                 let pairs = self.entanglement.generate_pairs(self.num_qubits);
 
                 for (c, t) in pairs {
-                    // Safety check to ensure we don't apply an entanglement gate with out-of-bounds qubits
-                    if c < self.num_qubits && t < self.num_qubits {
-                        circuit.append(
-                            Instruction::Standard(self.entanglement_gate),
-                            vec![Qubit::new(c as u32), Qubit::new(t as u32)],
-                            vec![], // CX takes no parameters
-                            None,
-                        )?;
-                    }
+                    circuit.append(
+                        Instruction::Standard(self.entanglement_gate),
+                        vec![Qubit::new(c as u32), Qubit::new(t as u32)],
+                        vec![],
+                        None,
+                    )?;
                 }
             }
         }

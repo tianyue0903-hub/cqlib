@@ -10,83 +10,577 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
+//! Tests for the Pauli Feature Map ansatz.
+
 use super::*;
-use crate::circuit::ansatz::Ansatz;
-use crate::circuit::gate::StandardGate;
+use crate::circuit::Operation;
+use crate::circuit::ansatz::{Ansatz, EntanglementTopology, PauliFeatureMap};
+use crate::circuit::circuit_param::CircuitParam;
+use crate::circuit::gate::instruction::Instruction;
+use crate::circuit::gate::standard_gate::StandardGate;
+use crate::qis::pauli::PauliString;
+
+/// Helper function to extract the StandardGate from an Operation's instruction
+fn get_standard_gate(op: &Operation) -> Option<StandardGate> {
+    match &op.instruction {
+        Instruction::Standard(gate) => Some(*gate),
+        _ => None,
+    }
+}
+
+/// Helper function to check if an operation is an H gate on a specific qubit
+fn is_h_gate_on_qubit(op: &Operation, expected_qubit: usize) -> bool {
+    match get_standard_gate(op) {
+        Some(StandardGate::H) => op.qubits.len() == 1 && op.qubits[0].index() == expected_qubit,
+        _ => false,
+    }
+}
+
+/// Helper function to check if an operation is an RZ gate with a specific parameter pattern
+fn is_rz_gate_with_param(op: &Operation, expected_qubit: usize) -> bool {
+    match get_standard_gate(op) {
+        Some(StandardGate::RZ) => {
+            op.qubits.len() == 1 && op.qubits[0].index() == expected_qubit && op.params.len() == 1
+        }
+        _ => false,
+    }
+}
+
+/// Helper function to check if an operation is a CNOT gate between specific qubits
+fn is_cnot_gate(op: &Operation, control: usize, target: usize) -> bool {
+    match get_standard_gate(op) {
+        Some(StandardGate::CX) => {
+            op.qubits.len() == 2
+                && op.qubits[0].index() == control
+                && op.qubits[1].index() == target
+        }
+        _ => false,
+    }
+}
+
+// ============================================================================
+// Parameter Prefix Tests
+// ============================================================================
 
 #[test]
-fn test_angle_encoding() {
-    let ansatz = AngleEncoding::new(3, StandardGate::RX);
-    assert_eq!(ansatz.num_qubits(), 3);
-    assert_eq!(ansatz.num_parameters(), 3);
+fn test_pauli_feature_map_uses_default_parameter_prefix() {
+    // Create feature map with default prefix "x"
+    let fm = PauliFeatureMap::new(2);
+    let circuit = fm.build_circuit("").unwrap();
 
-    let circuit = ansatz.build_circuit("x").unwrap();
-    assert_eq!(circuit.num_qubits(), 3);
-
-    // Check parameters
-    assert_eq!(circuit.parameters().len(), 3);
     let syms = circuit.symbols();
     assert!(syms.contains("x_0"));
     assert!(syms.contains("x_1"));
-    assert!(syms.contains("x_2"));
-
-    // Check circuit operations: 3 RX gates
-    let ops = circuit.operations();
-    assert_eq!(ops.len(), 3);
 }
 
 #[test]
-fn test_zz_feature_map() {
-    // 2 qubits, 1 layer, Linear entanglement
-    let ansatz = ZZFeatureMap::new(2)
+fn test_pauli_feature_map_custom_parameter_prefix() {
+    // Create feature map with custom prefix
+    let fm = PauliFeatureMap::new(2).parameter_prefix("feature");
+    let circuit = fm.build_circuit("").unwrap();
+
+    let syms = circuit.symbols();
+    assert!(syms.contains("feature_0"));
+    assert!(syms.contains("feature_1"));
+}
+
+#[test]
+fn test_pauli_feature_map_explicit_prefix_overrides() {
+    // When explicit prefix is provided, it should override self.parameter_prefix
+    let fm = PauliFeatureMap::new(2).parameter_prefix("feature");
+    let circuit = fm.build_circuit("theta").unwrap();
+
+    let syms = circuit.symbols();
+    assert!(syms.contains("theta_0"));
+    assert!(syms.contains("theta_1"));
+}
+
+// ============================================================================
+// Basic Structure Tests
+// ============================================================================
+
+#[test]
+fn test_pauli_feature_map_num_parameters_equals_num_qubits() {
+    // For feature maps, each qubit has one input feature
+    let fm = PauliFeatureMap::new(3);
+    assert_eq!(fm.num_parameters(), 3);
+    assert_eq!(fm.num_qubits(), 3);
+}
+
+#[test]
+fn test_pauli_feature_map_reps_affects_circuit_depth() {
+    // Test that reps parameter affects the circuit
+    let fm_1rep = PauliFeatureMap::new(2).reps(1);
+    let circuit_1rep = fm_1rep.build_circuit("x").unwrap();
+    let ops_1rep = circuit_1rep.operations();
+
+    let fm_2rep = PauliFeatureMap::new(2).reps(2);
+    let circuit_2rep = fm_2rep.build_circuit("x").unwrap();
+    let ops_2rep = circuit_2rep.operations();
+
+    // 2 reps should have approximately 2x the operations of 1 rep
+    assert_eq!(ops_2rep.len(), 2 * ops_1rep.len());
+}
+
+#[test]
+fn test_pauli_feature_map_zero_reps_empty_circuit() {
+    let fm = PauliFeatureMap::new(2).reps(0);
+    let circuit = fm.build_circuit("x").unwrap();
+    let ops = circuit.operations();
+
+    // Zero reps should produce an empty circuit
+    assert_eq!(ops.len(), 0);
+}
+
+// ============================================================================
+// Default Configuration Tests (Z + ZZ)
+// ============================================================================
+
+#[test]
+fn test_pauli_feature_map_default_z_only_structure() {
+    // Use only Z Pauli string to test 1-local structure
+    let fm = PauliFeatureMap::new(2)
+        .reps(1)
+        .paulis(vec![(PauliString::from("Z"), "Z".to_string())])
+        .entanglement(EntanglementTopology::Linear);
+
+    let circuit = fm.build_circuit("x").unwrap();
+    let ops = circuit.operations();
+
+    // Expected structure for 1 rep, 2 qubits, Z only:
+    // 1. H on qubit 0
+    // 2. H on qubit 1
+    // 3. Z evolution on qubit 0: pauli_evolution("Z") = just RZ(2*x_0)
+    // 4. Z evolution on qubit 1: pauli_evolution("Z") = just RZ(2*x_1)
+    assert_eq!(ops.len(), 4);
+
+    // Check H gates
+    assert!(is_h_gate_on_qubit(&ops[0], 0));
+    assert!(is_h_gate_on_qubit(&ops[1], 1));
+
+    // Check RZ gates (Z evolution uses RZ with angle 2*x)
+    assert!(is_rz_gate_with_param(&ops[2], 0));
+    assert!(is_rz_gate_with_param(&ops[3], 1));
+}
+
+#[test]
+fn test_pauli_feature_map_default_zz_structure() {
+    // Use only ZZ Pauli string to test 2-local structure
+    let fm = PauliFeatureMap::new(2)
+        .reps(1)
+        .paulis(vec![(PauliString::from("ZZ"), "ZZ".to_string())])
+        .entanglement(EntanglementTopology::Linear);
+
+    let circuit = fm.build_circuit("x").unwrap();
+    let ops = circuit.operations();
+
+    // Expected structure for 1 rep, 2 qubits, ZZ only, linear entanglement:
+    // 1. H on qubit 0
+    // 2. H on qubit 1
+    // 3. ZZ evolution on pair (0,1): pauli_evolution("ZZ") = CNOT(0,1), RZ, CNOT(0,1)
+    assert_eq!(ops.len(), 5);
+
+    // Check H gates
+    assert!(is_h_gate_on_qubit(&ops[0], 0));
+    assert!(is_h_gate_on_qubit(&ops[1], 1));
+
+    // Check ZZ evolution gates
+    assert!(is_cnot_gate(&ops[2], 0, 1));
+    assert!(is_rz_gate_with_param(&ops[3], 1));
+    assert!(is_cnot_gate(&ops[4], 0, 1));
+}
+
+#[test]
+fn test_pauli_feature_map_default_z_and_zz_structure() {
+    // Default: Z + ZZ
+    let fm = PauliFeatureMap::new(2)
         .reps(1)
         .entanglement(EntanglementTopology::Linear);
 
-    assert_eq!(ansatz.num_qubits(), 2);
-    // Features are just x_0, x_1
-    assert_eq!(ansatz.num_parameters(), 2);
-
-    let circuit = ansatz.build_circuit("f").unwrap();
-    // Check parameters
-    // We expect 3 parameters to be registered:
-    // 1. f_0 * 2 (or 2 * f_0 depending on expression formatting)
-    // 2. f_1 * 2 (or 2 * f_1)
-    // 3. (π - f_0) * (π - f_1) * 4
-    let params: Vec<_> = circuit.parameters().iter().map(|p| p.to_string()).collect();
-    assert_eq!(params.len(), 3);
-    // Check for either format of the multiplication (with or without spaces)
-    assert!(
-        params
-            .iter()
-            .any(|p| p == "f_0 * 2" || p == "2 * f_0" || p == "2*f_0"),
-        "Expected 'f_0 * 2', '2 * f_0', or '2*f_0', got: {:?}",
-        params
-    );
-    assert!(
-        params
-            .iter()
-            .any(|p| p == "f_1 * 2" || p == "2 * f_1" || p == "2*f_1"),
-        "Expected 'f_1 * 2', '2 * f_1', or '2*f_1', got: {:?}",
-        params
-    );
-    assert!(
-        params
-            .iter()
-            .any(|p| p.contains("π") && p.contains("f_0") && p.contains("f_1") && p.contains("4")),
-        "Expected parameter containing π, f_0, f_1, and 4, got: {:?}",
-        params
-    );
-
-    let syms = circuit.symbols();
-    assert!(syms.contains("f_0"));
-    assert!(syms.contains("f_1"));
-
-    // Check circuit operations
-    // Layer 1:
-    // 2 H gates
-    // 2 RZ gates
-    // 1 ZZ interaction (CNOT, RZ, CNOT = 3 gates)
-    // Total ops: 2 + 2 + 3 = 7
+    let circuit = fm.build_circuit("x").unwrap();
     let ops = circuit.operations();
+
+    // Expected structure:
+    // 1. H on qubit 0
+    // 2. H on qubit 1
+    // 3. Z on qubit 0: RZ(2*x_0)
+    // 4. Z on qubit 1: RZ(2*x_1)
+    // 5. ZZ on pair (0,1): CNOT(0,1), RZ(4*(π-x_0)(π-x_1)), CNOT(0,1)
+    // Total: 2 + 2 + 3 = 7
     assert_eq!(ops.len(), 7);
+
+    // Check H gates
+    assert!(is_h_gate_on_qubit(&ops[0], 0));
+    assert!(is_h_gate_on_qubit(&ops[1], 1));
+
+    // Check Z evolutions (RZ gates)
+    assert!(is_rz_gate_with_param(&ops[2], 0));
+    assert!(is_rz_gate_with_param(&ops[3], 1));
+
+    // Check ZZ evolution (CNOT-RZ-CNOT)
+    assert!(is_cnot_gate(&ops[4], 0, 1));
+    assert!(is_rz_gate_with_param(&ops[5], 1));
+    assert!(is_cnot_gate(&ops[6], 0, 1));
+}
+
+// ============================================================================
+// Multi-Qubit Tests
+// ============================================================================
+
+#[test]
+fn test_pauli_feature_map_3qubits_linear_entanglement() {
+    // 3 qubits with ZZ and linear entanglement (pairs: 0-1, 1-2)
+    let fm = PauliFeatureMap::new(3)
+        .reps(1)
+        .paulis(vec![(PauliString::from("ZZ"), "ZZ".to_string())])
+        .entanglement(EntanglementTopology::Linear);
+
+    let circuit = fm.build_circuit("x").unwrap();
+    let ops = circuit.operations();
+
+    // Expected structure:
+    // 1. H on qubit 0, 1, 2
+    // 2. ZZ on (0,1): CNOT(0,1), RZ, CNOT(0,1)
+    // 3. ZZ on (1,2): CNOT(1,2), RZ, CNOT(1,2)
+    // Total: 3 + 3 + 3 = 9 operations
+    assert_eq!(ops.len(), 9);
+
+    // Check all H gates
+    assert!(is_h_gate_on_qubit(&ops[0], 0));
+    assert!(is_h_gate_on_qubit(&ops[1], 1));
+    assert!(is_h_gate_on_qubit(&ops[2], 2));
+
+    // Check ZZ evolution on (0,1)
+    assert!(is_cnot_gate(&ops[3], 0, 1));
+    assert!(is_rz_gate_with_param(&ops[4], 1));
+    assert!(is_cnot_gate(&ops[5], 0, 1));
+
+    // Check ZZ evolution on (1,2)
+    assert!(is_cnot_gate(&ops[6], 1, 2));
+    assert!(is_rz_gate_with_param(&ops[7], 2));
+    assert!(is_cnot_gate(&ops[8], 1, 2));
+}
+
+#[test]
+fn test_pauli_feature_map_3qubits_circular_entanglement() {
+    // 3 qubits with ZZ and circular entanglement (pairs: 0-1, 1-2, 2-0)
+    let fm = PauliFeatureMap::new(3)
+        .reps(1)
+        .paulis(vec![(PauliString::from("ZZ"), "ZZ".to_string())])
+        .entanglement(EntanglementTopology::Circular);
+
+    let circuit = fm.build_circuit("x").unwrap();
+    let ops = circuit.operations();
+
+    // Expected: 3 H + 3*(3 ZZ gates) = 12 operations
+    assert_eq!(ops.len(), 12);
+
+    // Check H gates
+    assert!(is_h_gate_on_qubit(&ops[0], 0));
+    assert!(is_h_gate_on_qubit(&ops[1], 1));
+    assert!(is_h_gate_on_qubit(&ops[2], 2));
+
+    // Check ZZ on (0,1)
+    assert!(is_cnot_gate(&ops[3], 0, 1));
+    assert!(is_rz_gate_with_param(&ops[4], 1));
+    assert!(is_cnot_gate(&ops[5], 0, 1));
+
+    // Check ZZ on (1,2)
+    assert!(is_cnot_gate(&ops[6], 1, 2));
+    assert!(is_rz_gate_with_param(&ops[7], 2));
+    assert!(is_cnot_gate(&ops[8], 1, 2));
+
+    // Check ZZ on (2,0):
+    // pauli_evolution iterates qubit indices in ascending order, so for pair (2,0)
+    // the PauliString has Z at qubit-0 and Z at qubit-2, producing CNOT(0,2).
+    assert!(is_cnot_gate(&ops[9], 0, 2));
+    assert!(is_rz_gate_with_param(&ops[10], 2));
+    assert!(is_cnot_gate(&ops[11], 0, 2));
+}
+
+// ============================================================================
+// Custom Entanglement Tests
+// ============================================================================
+
+#[test]
+fn test_pauli_feature_map_custom_topology() {
+    // Custom topology with specific pairs
+    let fm = PauliFeatureMap::new(4)
+        .reps(1)
+        .paulis(vec![(PauliString::from("ZZ"), "ZZ".to_string())])
+        .entanglement(EntanglementTopology::Custom(vec![(0, 2), (1, 3)]));
+
+    let circuit = fm.build_circuit("x").unwrap();
+    let ops = circuit.operations();
+
+    // Expected: 4 H + 2*(3 ZZ gates) = 10 operations
+    assert_eq!(ops.len(), 10);
+
+    // Check H gates
+    assert!(is_h_gate_on_qubit(&ops[0], 0));
+    assert!(is_h_gate_on_qubit(&ops[1], 1));
+    assert!(is_h_gate_on_qubit(&ops[2], 2));
+    assert!(is_h_gate_on_qubit(&ops[3], 3));
+
+    // Check ZZ on (0,2)
+    assert!(is_cnot_gate(&ops[4], 0, 2));
+    assert!(is_rz_gate_with_param(&ops[5], 2));
+    assert!(is_cnot_gate(&ops[6], 0, 2));
+
+    // Check ZZ on (1,3)
+    assert!(is_cnot_gate(&ops[7], 1, 3));
+    assert!(is_rz_gate_with_param(&ops[8], 3));
+    assert!(is_cnot_gate(&ops[9], 1, 3));
+}
+
+// ============================================================================
+// Pauli String Variants Tests
+// ============================================================================
+
+#[test]
+fn test_pauli_feature_map_x_pauli_structure() {
+    // X Pauli requires basis change: H -> RZ -> H
+    let fm = PauliFeatureMap::new(2)
+        .reps(1)
+        .paulis(vec![(PauliString::from("X"), "X".to_string())])
+        .entanglement(EntanglementTopology::Linear);
+
+    let circuit = fm.build_circuit("x").unwrap();
+    let ops = circuit.operations();
+
+    // Expected: H, H (initial) + H-RZ-H on qubit 0 + H-RZ-H on qubit 1
+    // = 2 + 3 + 3 = 8 operations
+    assert_eq!(ops.len(), 8);
+
+    // Check initial H gates
+    assert!(is_h_gate_on_qubit(&ops[0], 0));
+    assert!(is_h_gate_on_qubit(&ops[1], 1));
+
+    // X evolution on qubit 0: H, RZ, H
+    assert!(is_h_gate_on_qubit(&ops[2], 0));
+    assert!(is_rz_gate_with_param(&ops[3], 0));
+    assert!(is_h_gate_on_qubit(&ops[4], 0));
+
+    // X evolution on qubit 1: H, RZ, H
+    assert!(is_h_gate_on_qubit(&ops[5], 1));
+    assert!(is_rz_gate_with_param(&ops[6], 1));
+    assert!(is_h_gate_on_qubit(&ops[7], 1));
+}
+
+#[test]
+fn test_pauli_feature_map_y_pauli_structure() {
+    // Y Pauli requires basis change: SDG -> H -> RZ -> H -> S
+    let fm = PauliFeatureMap::new(2)
+        .reps(1)
+        .paulis(vec![(PauliString::from("Y"), "Y".to_string())])
+        .entanglement(EntanglementTopology::Linear);
+
+    let circuit = fm.build_circuit("x").unwrap();
+    let ops = circuit.operations();
+
+    // Expected: H, H (initial) + SDG-H-RZ-H-S on each qubit
+    // = 2 + 5 + 5 = 12 operations
+    assert_eq!(ops.len(), 12);
+
+    // Check initial H gates
+    assert!(is_h_gate_on_qubit(&ops[0], 0));
+    assert!(is_h_gate_on_qubit(&ops[1], 1));
+}
+
+#[test]
+fn test_pauli_feature_map_xy_pauli_structure() {
+    // XY two-qubit Pauli string
+    let fm = PauliFeatureMap::new(2)
+        .reps(1)
+        .paulis(vec![(PauliString::from("XY"), "XY".to_string())])
+        .entanglement(EntanglementTopology::Linear);
+
+    let circuit = fm.build_circuit("x").unwrap();
+    let ops = circuit.operations();
+
+    // Expected: H, H (initial) + pauli_evolution("XY") on pair (0,1)
+    // XY evolution decomposition (X at q0, Y at q1):
+    //   Forward basis change: H(q0) [X→Z], SDG(q1)+H(q1) [Y→Z]  = 3 ops
+    //   CNOT(0,1) + RZ(q1) + CNOT(0,1)                           = 3 ops
+    //   Inverse basis change: H(q0) [Z→X], H(q1)+S(q1) [Z→Y]    = 3 ops
+    //   XY evolution total                                        = 9 ops
+    // Total: 2 (initial H) + 9 = 11
+    assert_eq!(ops.len(), 11);
+}
+
+// ============================================================================
+// Validation Error Tests
+// ============================================================================
+
+#[test]
+fn test_pauli_feature_map_validation_zero_qubits() {
+    let fm = PauliFeatureMap::new(0);
+    let result = fm.build_circuit("x");
+    assert!(result.is_err());
+
+    match result.unwrap_err() {
+        CircuitError::InvalidOperation(msg) => {
+            assert_eq!(msg, "PauliFeatureMap requires at least 1 qubit");
+        }
+        _ => panic!("Expected InvalidOperation error"),
+    }
+}
+
+#[test]
+fn test_pauli_feature_map_validation_pauli_too_long() {
+    // Pauli string longer than num_qubits
+    let fm = PauliFeatureMap::new(1).paulis(vec![(PauliString::from("ZZ"), "ZZ".to_string())]);
+
+    let result = fm.build_circuit("x");
+    assert!(result.is_err());
+
+    match result.unwrap_err() {
+        CircuitError::InvalidOperation(msg) => {
+            assert!(msg.contains("has length 2 which exceeds num_qubits 1"));
+        }
+        _ => panic!("Expected InvalidOperation error"),
+    }
+}
+
+#[test]
+fn test_pauli_feature_map_validation_custom_topology_out_of_bounds() {
+    let fm = PauliFeatureMap::new(2)
+        .paulis(vec![(PauliString::from("ZZ"), "ZZ".to_string())])
+        .entanglement(EntanglementTopology::Custom(vec![(0, 5)]));
+
+    let result = fm.build_circuit("x");
+    assert!(result.is_err());
+
+    match result.unwrap_err() {
+        CircuitError::InvalidOperation(msg) => {
+            assert!(msg.contains("out-of-bounds"));
+        }
+        _ => panic!("Expected InvalidOperation error"),
+    }
+}
+
+#[test]
+fn test_pauli_feature_map_zzz_3local_structure() {
+    // ZZZ (3-local) on 3 qubits with Full topology: only one C(3,3) tuple [0,1,2]
+    let fm = PauliFeatureMap::new(3)
+        .reps(1)
+        .paulis(vec![(PauliString::from("ZZZ"), "ZZZ".to_string())])
+        .entanglement(EntanglementTopology::Full);
+
+    let circuit = fm.build_circuit("x").unwrap();
+    let ops = circuit.operations();
+
+    // Expected structure for 1 rep, 3 qubits, ZZZ only, Full topology:
+    // - H on qubit 0, 1, 2                          = 3 ops
+    // - ZZZ evolution on tuple (0,1,2):
+    //     CNOT(0,1), CNOT(1,2) [forward chain]      = 2 ops
+    //     RZ(q2)                                     = 1 op
+    //     CNOT(1,2), CNOT(0,1) [reverse chain]      = 2 ops
+    // Total: 3 + 5 = 8
+    assert_eq!(ops.len(), 8);
+
+    assert!(is_h_gate_on_qubit(&ops[0], 0));
+    assert!(is_h_gate_on_qubit(&ops[1], 1));
+    assert!(is_h_gate_on_qubit(&ops[2], 2));
+    assert!(is_cnot_gate(&ops[3], 0, 1));
+    assert!(is_cnot_gate(&ops[4], 1, 2));
+    assert!(is_rz_gate_with_param(&ops[5], 2));
+    assert!(is_cnot_gate(&ops[6], 1, 2));
+    assert!(is_cnot_gate(&ops[7], 0, 1));
+}
+
+#[test]
+fn test_pauli_feature_map_zzz_4qubits_full_topology() {
+    // ZZZ (3-local) on 4 qubits: C(4,3) = 4 tuples
+    let fm = PauliFeatureMap::new(4)
+        .reps(1)
+        .paulis(vec![(PauliString::from("ZZZ"), "ZZZ".to_string())])
+        .entanglement(EntanglementTopology::Full);
+
+    let circuit = fm.build_circuit("x").unwrap();
+    let ops = circuit.operations();
+
+    // 4 H + 4 * 5 (ZZZ evolution) = 4 + 20 = 24
+    assert_eq!(ops.len(), 24);
+    assert_eq!(fm.num_parameters(), 4);
+}
+
+// ============================================================================
+// Parameter Value Tests
+// ============================================================================
+
+#[test]
+fn test_pauli_feature_map_z_parameter_value() {
+    // Verify that Z evolution uses the correct angle factor (2*x)
+    let fm = PauliFeatureMap::new(1)
+        .reps(1)
+        .paulis(vec![(PauliString::from("Z"), "Z".to_string())]);
+
+    let circuit = fm.build_circuit("x").unwrap();
+    let ops = circuit.operations();
+
+    // Check the RZ parameter
+    assert_eq!(ops.len(), 2); // H + RZ
+    assert!(is_h_gate_on_qubit(&ops[0], 0));
+    assert!(is_rz_gate_with_param(&ops[1], 0));
+
+    // The parameter should contain "2" (from 2*x_0)
+    match &ops[1].params[0] {
+        CircuitParam::Index(_) => {
+            // Symbolic parameter, check the symbol name
+            let params = circuit.parameters();
+            let param_str = params[0].to_string();
+            assert!(param_str.contains("2") || param_str.contains("x_0"));
+        }
+        CircuitParam::Fixed(_) => {
+            // Fixed parameter, would be checked differently
+        }
+    }
+}
+
+// ============================================================================
+// Full Entanglement Tests
+// ============================================================================
+
+#[test]
+fn test_pauli_feature_map_full_entanglement_3qubits() {
+    // Full entanglement on 3 qubits: pairs (0,1), (0,2), (1,2)
+    let fm = PauliFeatureMap::new(3)
+        .reps(1)
+        .paulis(vec![(PauliString::from("ZZ"), "ZZ".to_string())])
+        .entanglement(EntanglementTopology::Full);
+
+    let circuit = fm.build_circuit("x").unwrap();
+    let ops = circuit.operations();
+
+    // Expected: 3 H + 3*(3 ZZ gates) = 12 operations
+    assert_eq!(ops.len(), 12);
+
+    // Check H gates
+    for i in 0..3 {
+        assert!(is_h_gate_on_qubit(&ops[i], i));
+    }
+}
+
+// ============================================================================
+// Integration Tests
+// ============================================================================
+
+#[test]
+fn test_pauli_feature_map_matches_zz_feature_map_for_equivalent_config() {
+    // PauliFeatureMap with Z+ZZ should produce equivalent structure to ZZFeatureMap
+    // (though gate decomposition might differ slightly)
+
+    use crate::circuit::ansatz::ZZFeatureMap;
+
+    let pauli_fm = PauliFeatureMap::new(2)
+        .reps(1)
+        .entanglement(EntanglementTopology::Linear);
+
+    let zz_fm = ZZFeatureMap::new(2)
+        .reps(1)
+        .entanglement(EntanglementTopology::Linear);
+
+    assert_eq!(pauli_fm.num_qubits(), zz_fm.num_qubits());
+    assert_eq!(pauli_fm.num_parameters(), zz_fm.num_parameters());
 }

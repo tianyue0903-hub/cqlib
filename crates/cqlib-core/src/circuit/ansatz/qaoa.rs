@@ -10,12 +10,28 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
+//! # QAOA Ansatz Module
+//!
+//! This module implements the Quantum Approximate Optimization Algorithm (QAOA)
+//! ansatz. QAOA is a variational quantum algorithm designed for solving
+//! combinatorial optimization problems.
+//!
+//! ## Algorithm Overview
+//!
+//! The QAOA circuit alternates between:
+//! - **Cost Layer**: Applies $e^{-i\gamma H_C}$ where $H_C$ is the problem Hamiltonian
+//! - **Mixer Layer**: Applies $e^{-i\beta H_B}$ where $H_B$ is typically $\sum X_i$
+//!
+//! By optimizing the parameters $(\gamma, \beta)$, QAOA approximates the ground
+//! state of the cost Hamiltonian.
+
 use super::traits::Ansatz;
 use crate::circuit::Parameter;
 use crate::circuit::circuit_impl::Circuit;
 use crate::circuit::error::CircuitError;
 use crate::qis::evolution::PauliEvolution;
 use crate::qis::hamiltonian::Hamiltonian;
+use crate::qis::pauli::{Pauli, PauliString};
 
 /// The QAOA (Quantum Approximate Optimization Algorithm) Ansatz.
 ///
@@ -41,27 +57,35 @@ impl QAOAAnsatz {
     ///
     /// By default, it uses the standard X-mixer ($\sum X_i$) and `reps = 1`.
     /// The number of qubits is inferred from the cost operator.
-    pub fn new(cost_operator: Hamiltonian) -> Self {
+    ///
+    /// # Errors
+    ///
+    /// Returns `CircuitError::InvalidOperation` if there's an internal error building
+    /// the default mixer Hamiltonian.
+    pub fn new(cost_operator: Hamiltonian) -> Result<Self, CircuitError> {
         let num_qubits = cost_operator.num_qubits;
 
         // Build the default X-mixer: H_B = \sum_{i=0}^{n-1} X_i
+        // Directly set Pauli X at each qubit index to avoid relying on
+        // the string parsing convention (highest-index-first).
         let mut mixer_operator = Hamiltonian::new(num_qubits);
         for i in 0..num_qubits {
-            let mut pauli_str = vec!['I'; num_qubits];
-            pauli_str[i] = 'X';
-            let pauli_str: String = pauli_str.into_iter().collect();
-            // Add term X_i with coefficient 1.0
-            mixer_operator
-                .add_term(pauli_str.parse().unwrap(), 1.0.into())
-                .unwrap();
+            let mut pauli = PauliString::new(num_qubits);
+            pauli.set_pauli(i, Pauli::X);
+            mixer_operator.add_term(pauli, 1.0.into()).map_err(|e| {
+                CircuitError::InvalidOperation(format!(
+                    "Failed to add term to mixer Hamiltonian: {:?}",
+                    e
+                ))
+            })?;
         }
 
-        Self {
+        Ok(Self {
             cost_operator,
             mixer_operator,
             reps: 1,
             initial_state: None,
-        }
+        })
     }
 
     /// Sets the number of alternating layers (depth $p$).
@@ -73,12 +97,12 @@ impl QAOAAnsatz {
     /// Overrides the default mixer Hamiltonian.
     ///
     /// The custom mixer must act on the same number of qubits as the cost operator.
-    pub fn mixer(mut self, mixer_operator: Hamiltonian) -> Result<Self, String> {
+    pub fn mixer(mut self, mixer_operator: Hamiltonian) -> Result<Self, CircuitError> {
         if mixer_operator.num_qubits != self.cost_operator.num_qubits {
-            return Err(format!(
-                "Mixer operator qubits ({}) must match cost operator qubits ({}).",
-                mixer_operator.num_qubits, self.cost_operator.num_qubits
-            ));
+            return Err(CircuitError::QubitCountMismatch {
+                expected: self.cost_operator.num_qubits,
+                actual: mixer_operator.num_qubits,
+            });
         }
         self.mixer_operator = mixer_operator;
         Ok(self)
@@ -88,13 +112,12 @@ impl QAOAAnsatz {
     ///
     /// By default, QAOA starts in the uniform superposition state $|+\rangle^{\otimes n}$.
     /// If an initial state is provided, it replaces the default Hadamard layer.
-    pub fn initial_state(mut self, circuit: Circuit) -> Result<Self, String> {
+    pub fn initial_state(mut self, circuit: Circuit) -> Result<Self, CircuitError> {
         if circuit.num_qubits() != self.cost_operator.num_qubits {
-            return Err(format!(
-                "Initial state qubits ({}) must match cost operator qubits ({}).",
-                circuit.num_qubits(),
-                self.cost_operator.num_qubits
-            ));
+            return Err(CircuitError::QubitCountMismatch {
+                expected: self.cost_operator.num_qubits,
+                actual: circuit.num_qubits(),
+            });
         }
         self.initial_state = Some(circuit);
         Ok(self)
@@ -102,11 +125,54 @@ impl QAOAAnsatz {
 }
 
 impl Ansatz for QAOAAnsatz {
+    fn validate(&self) -> Result<(), CircuitError> {
+        // Validate mixer operator has same number of qubits as cost operator
+        if self.mixer_operator.num_qubits != self.cost_operator.num_qubits {
+            return Err(CircuitError::QubitCountMismatch {
+                expected: self.cost_operator.num_qubits,
+                actual: self.mixer_operator.num_qubits,
+            });
+        }
+
+        // Validate initial state has same number of qubits if provided
+        if let Some(initial_circuit) = &self.initial_state {
+            if initial_circuit.num_qubits() != self.cost_operator.num_qubits {
+                return Err(CircuitError::QubitCountMismatch {
+                    expected: self.cost_operator.num_qubits,
+                    actual: initial_circuit.num_qubits(),
+                });
+            }
+        }
+
+        // Validate cost operator has real coefficients (Hermitian requirement)
+        for (pauli_str, coeff) in &self.cost_operator.terms {
+            if coeff.im.abs() > 1e-10 {
+                return Err(CircuitError::InvalidOperation(format!(
+                    "Cost Hamiltonian coefficient for {} has non-zero imaginary part ({}). QAOA requires Hermitian Hamiltonian with real coefficients.",
+                    pauli_str, coeff.im
+                )));
+            }
+        }
+
+        // Validate mixer operator has real coefficients
+        for (pauli_str, coeff) in &self.mixer_operator.terms {
+            if coeff.im.abs() > 1e-10 {
+                return Err(CircuitError::InvalidOperation(format!(
+                    "Mixer Hamiltonian coefficient for {} has non-zero imaginary part ({}). QAOA requires Hermitian Hamiltonian with real coefficients.",
+                    pauli_str, coeff.im
+                )));
+            }
+        }
+
+        Ok(())
+    }
+
     /// Builds the parameterized QAOA circuit.
     ///
     /// Parameters are generated using the provided prefix. For example, if `prefix` is "p",
     /// the parameters will be named "p_gamma_0", "p_beta_0", "p_gamma_1", "p_beta_1", etc.
     fn build_circuit(&self, prefix: &str) -> Result<Circuit, CircuitError> {
+        self.validate()?;
         // 1. Prepare initial state
         let mut circuit = if let Some(initial_circuit) = &self.initial_state {
             initial_circuit.clone()

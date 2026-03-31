@@ -233,6 +233,18 @@ pub enum Pauli {
     I,
 }
 
+impl From<char> for Pauli {
+    fn from(s: char) -> Self {
+        match &s {
+            'X' => Pauli::X,
+            'Y' => Pauli::Y,
+            'Z' => Pauli::Z,
+            'I' => Pauli::I,
+            _ => panic!("Invalid Pauli character: {}", s),
+        }
+    }
+}
+
 impl fmt::Display for Pauli {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let s = match self {
@@ -480,6 +492,45 @@ impl PauliString {
         self.z.set(idx, z_val == 1);
     }
 
+    /// Gets the Pauli operator at the specified qubit index.
+    ///
+    /// # Arguments
+    ///
+    /// * `idx` - The qubit index.
+    ///
+    /// # Returns
+    ///
+    /// The Pauli operator at the specified index.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use cqlib_core::qis::pauli::{Pauli, PauliString};
+    ///
+    /// // PauliString uses highest-index-first string convention (same as Display):
+    /// // "XZI" → qubit 2 = X, qubit 1 = Z, qubit 0 = I
+    /// let ps: PauliString = "XZI".parse().unwrap();
+    /// assert_eq!(ps.get_pauli(0), Pauli::I);
+    /// assert_eq!(ps.get_pauli(1), Pauli::Z);
+    /// assert_eq!(ps.get_pauli(2), Pauli::X);
+    /// ```
+    pub fn get_pauli(&self, idx: usize) -> Pauli {
+        assert!(
+            idx < self.num_qubits,
+            "Index {} out of bounds for {} qubits",
+            idx,
+            self.num_qubits
+        );
+        let x_bit = self.x[idx];
+        let z_bit = self.z[idx];
+        match (x_bit, z_bit) {
+            (false, false) => Pauli::I,
+            (true, false) => Pauli::X,
+            (false, true) => Pauli::Z,
+            (true, true) => Pauli::Y,
+        }
+    }
+
     /// Checks if this Pauli string commutes with another.
     ///
     /// Two Pauli strings commute if their symplectic inner product is 0 (mod 2).
@@ -547,6 +598,45 @@ impl PauliString {
                 if *bit { acc | (1 << i) } else { acc }
             },
         )
+    }
+
+    /// Returns the support of the Pauli string (indices of non-identity operators).
+    ///
+    /// The support is the set of qubit indices where the Pauli operator is not I.
+    /// This is useful for identifying which qubits participate in a Pauli operation.
+    ///
+    /// # Returns
+    ///
+    /// A vector of qubit indices where the Pauli operator is X, Y, or Z (not I).
+    /// Indices are returned in ascending order.
+    ///
+    /// # Examples
+    /// ```
+    /// use cqlib_core::qis::pauli::{Pauli, PauliString};
+    ///
+    /// // "XZI" uses highest-index-first convention: qubit 2=X, qubit 1=Z, qubit 0=I
+    /// let ps: PauliString = "XZI".parse().unwrap();
+    /// assert_eq!(ps.support(), vec![1, 2]);
+    ///
+    /// // Y ⊗ I ⊗ Y has support on qubits 0 and 2
+    /// let mut ps = PauliString::new(3);
+    /// ps.set_pauli(0, Pauli::Y);
+    /// ps.set_pauli(2, Pauli::Y);
+    /// assert_eq!(ps.support(), vec![0, 2]);
+    ///
+    /// // Identity has empty support
+    /// let ps = PauliString::new(3);
+    /// assert!(ps.support().is_empty());
+    /// ```
+    pub fn support(&self) -> Vec<usize> {
+        let mut support = Vec::new();
+        for i in 0..self.num_qubits {
+            // Non-identity if either x or z bit is set
+            if self.x[i] || self.z[i] {
+                support.push(i);
+            }
+        }
+        support
     }
 
     /// Computes the phase factor contributed by Y operators.
@@ -747,7 +837,7 @@ impl PauliString {
 /// p2.set_pauli(0, Pauli::Z);
 ///
 /// let product = &p1 * &p2;
-/// assert_eq!(product.to_string(), "-iIY");
+/// assert_eq!(product.to_string(), "-iIT");
 /// ```
 impl Mul for &PauliString {
     type Output = PauliString;

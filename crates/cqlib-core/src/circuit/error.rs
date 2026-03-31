@@ -10,6 +10,12 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
+//! # Circuit Error Types
+//!
+//! This module defines error types for quantum circuit operations.
+//! It provides comprehensive error handling for parameter evaluation,
+//! circuit validation, and symbolic computation errors.
+
 use symb_anafis::DiffError;
 use thiserror::Error;
 
