@@ -10,11 +10,12 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
+#include <assert.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <assert.h>
 #include <string.h>
-#include <math.h>
+
 #include "cqlib_c.h"
 
 // Define math constants for GCC compatibility
@@ -151,9 +152,9 @@ void test_advanced_gates() {
     assert(circuit_reset(c, 3) == 0);
 
     // Test error cases
-    assert(circuit_ccx(c, 0, 1, 10) == -2); // out of bounds
-    assert(circuit_measure(c, 10) == -2);   // out of bounds
-    assert(circuit_reset(c, 10) == -2);     // out of bounds
+    assert(circuit_ccx(c, 0, 1, 10) == -2);  // out of bounds
+    assert(circuit_measure(c, 10) == -2);    // out of bounds
+    assert(circuit_reset(c, 10) == -2);      // out of bounds
 
     circuit_free(c);
     printf("test_advanced_gates PASSED\n");

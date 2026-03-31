@@ -20,8 +20,6 @@ Test coverage:
 - Parametric CircuitGate creation and usage
 """
 
-import numpy as np
-import pytest
 from cqlib.circuit import Circuit, Parameter
 from cqlib.circuit.gates import CircuitGate
 

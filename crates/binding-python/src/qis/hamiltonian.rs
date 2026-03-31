@@ -382,6 +382,7 @@ impl PyHamiltonian {
     ///     >>> h.add_term(PauliString.from_str("ZZ"), 0.5)
     ///     >>> h.add_term(PauliString.from_str("XX"), 0.3)
     ///     >>> circuit = h.to_trotter_circuit(1.0, 10, TrotterMode.first_order())
+    #[allow(clippy::wrong_self_convention)]
     fn to_trotter_circuit(
         &self,
         time: f64,
@@ -390,7 +391,7 @@ impl PyHamiltonian {
     ) -> PyResult<PyCircuit> {
         let circuit = self
             .inner
-            .to_trotter_circuit(time, steps, mode.inner.clone())
+            .to_trotter_circuit(time, steps, mode.inner)
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
 
         Ok(PyCircuit { inner: circuit })

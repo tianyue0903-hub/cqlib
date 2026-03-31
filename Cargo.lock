@@ -147,6 +147,7 @@ dependencies = [
  "cbindgen",
  "cqlib-core",
  "libc",
+ "num-complex",
 ]
 
 [[package]]

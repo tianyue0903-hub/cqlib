@@ -21,7 +21,6 @@
 """
 
 import pytest
-import numpy as np
 from cqlib.circuit import Circuit
 
 

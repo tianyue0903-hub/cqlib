@@ -223,6 +223,7 @@ impl PySingleQubitNoise {
     /// # Returns
     ///
     /// List of 2x2 complex NumPy arrays representing the Kraus operators.
+    #[allow(clippy::wrong_self_convention)]
     fn to_kraus<'py>(&self, py: Python<'py>) -> Vec<Bound<'py, PyArray2<Complex64>>> {
         self.inner
             .to_kraus()
@@ -357,6 +358,7 @@ impl PyTwoQubitNoise {
     /// # Returns
     ///
     /// List of 4x4 complex NumPy arrays representing the Kraus operators.
+    #[allow(clippy::wrong_self_convention)]
     fn to_kraus<'py>(&self, py: Python<'py>) -> Vec<Bound<'py, PyArray2<Complex64>>> {
         self.inner
             .to_kraus()

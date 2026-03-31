@@ -31,14 +31,13 @@ use binding_c::ir::{qasm2_load, qcis_load};
 use binding_c::qis::{
     density_matrix_cx, density_matrix_free, density_matrix_h, density_matrix_new,
     density_matrix_noise_cx, density_matrix_noise_free, density_matrix_noise_h,
-    density_matrix_noise_new, density_matrix_noise_num_qubits, density_matrix_noise_x,
-    density_matrix_num_qubits, density_matrix_probabilities, density_matrix_x,
-    hamiltonian_add_term, hamiltonian_free, hamiltonian_new, hamiltonian_num_qubits,
-    hamiltonian_num_terms, observable_expectation_dm, observable_expectation_sv, pauli_string_free,
-    pauli_string_free_string, pauli_string_get_pauli, pauli_string_new, pauli_string_num_qubits,
-    pauli_string_set_pauli, pauli_string_to_string, statevector_cx, statevector_free,
-    statevector_h, statevector_new, statevector_num_qubits, statevector_probabilities,
-    statevector_x, statevector_y, statevector_z,
+    density_matrix_noise_new, density_matrix_noise_num_qubits, density_matrix_num_qubits,
+    density_matrix_probabilities, density_matrix_x, hamiltonian_add_term, hamiltonian_free,
+    hamiltonian_new, hamiltonian_num_qubits, hamiltonian_num_terms, observable_expectation_dm,
+    observable_expectation_sv, pauli_string_free, pauli_string_free_string, pauli_string_get_pauli,
+    pauli_string_new, pauli_string_num_qubits, pauli_string_set_pauli, pauli_string_to_string,
+    statevector_cx, statevector_free, statevector_h, statevector_new, statevector_num_qubits,
+    statevector_probabilities, statevector_x,
 };
 
 #[test]

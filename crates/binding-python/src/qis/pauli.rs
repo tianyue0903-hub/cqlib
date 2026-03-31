@@ -95,6 +95,7 @@ impl PyPhase {
     }
 
     /// Converts the phase to a Python complex number.
+    #[allow(clippy::wrong_self_convention)]
     fn to_complex<'py>(&self, py: Python<'py>) -> Bound<'py, PyComplex> {
         let c = self.inner.to_complex();
         PyComplex::from_doubles(py, c.re, c.im)
@@ -198,11 +199,13 @@ impl PyPauli {
     /// - X = (1, 0)
     /// - Y = (1, 1)
     /// - Z = (0, 1)
+    #[allow(clippy::wrong_self_convention)]
     fn to_symplectic(&self) -> (u8, u8) {
         self.inner.to_symplectic()
     }
 
     /// Returns the 2x2 complex matrix representation as a NumPy array.
+    #[allow(clippy::wrong_self_convention)]
     fn to_matrix<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray2<num_complex::Complex64>> {
         let mat = self.inner.to_matrix();
         let data: Vec<Vec<num_complex::Complex64>> = vec![

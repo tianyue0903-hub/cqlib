@@ -13,7 +13,6 @@
 from typing import Dict, List, Optional, Tuple, TypedDict
 from cqlib.circuit import Circuit
 
-
 class Vf2CandidateScoreDict(TypedDict):
     """Scoring breakdown for one VF2 initial-layout candidate.
 
@@ -29,7 +28,6 @@ class Vf2CandidateScoreDict(TypedDict):
     topology_fit: float
     gate_distribution: float
 
-
 class Vf2LayoutCandidateDict(TypedDict):
     """A candidate logical-to-physical layout produced by VF2 search.
 
@@ -43,7 +41,6 @@ class Vf2LayoutCandidateDict(TypedDict):
     layout: List[int]
     score: Vf2CandidateScoreDict
 
-
 class Topology:
     """Hardware topology used by VF2 and SABRE mapping.
 
@@ -51,7 +48,9 @@ class Topology:
     checks and route planning.
     """
 
-    def __init__(self, qubits: List[int], couplings: List[Tuple[int, int] | Tuple[int, int, str]]) -> None:
+    def __init__(
+        self, qubits: List[int], couplings: List[Tuple[int, int] | Tuple[int, int, str]]
+    ) -> None:
         """Creates a topology from physical qubits and couplings.
 
         Args:
@@ -97,7 +96,9 @@ class Topology:
         """Adds physical qubits to topology."""
         ...
 
-    def add_couplings(self, couplings: List[Tuple[int, int] | Tuple[int, int, str]]) -> None:
+    def add_couplings(
+        self, couplings: List[Tuple[int, int] | Tuple[int, int, str]]
+    ) -> None:
         """Adds coupling edges to topology."""
         ...
 
@@ -140,7 +141,6 @@ class Topology:
         """Returns the degree (number of couplings) of `qubit`."""
         ...
 
-
 class SabreConfig:
     """Configuration object for `map_with_vf2_sabre`."""
 
@@ -178,7 +178,6 @@ class SabreConfig:
         """
         ...
 
-
 def vf2_is_subgraph_isomorphic(
     circuit: Circuit,
     topology: Topology,
@@ -201,7 +200,6 @@ def vf2_is_subgraph_isomorphic(
         >>> ok = vf2_is_subgraph_isomorphic(circuit, topology)
     """
     ...
-
 
 def vf2_find_initial_layout(
     circuit: Circuit,
@@ -228,7 +226,6 @@ def vf2_find_initial_layout(
         >>> layout = vf2_find_initial_layout(circuit, topology)
     """
     ...
-
 
 def vf2_find_initial_layout_candidates(
     circuit: Circuit,
@@ -273,7 +270,6 @@ def vf2_find_initial_layout_candidates(
     """
     ...
 
-
 def vf2_map(
     circuit: Circuit,
     topology: Topology,
@@ -296,7 +292,6 @@ def vf2_map(
         >>> mapped = vf2_map(circuit, topology)
     """
     ...
-
 
 def map_with_vf2_sabre(
     circuit: Circuit,

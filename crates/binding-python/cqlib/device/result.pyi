@@ -91,7 +91,6 @@ class Outcome:
     def __hash__(self) -> int: ...
     def __eq__(self, value: object) -> bool: ...
 
-
 class Status:
     """
     Execution status of a quantum job.
@@ -167,7 +166,6 @@ class Status:
     def is_success(self) -> bool:
         """Returns True if the job completed successfully."""
         ...
-
 
 class ExecutionResult:
     """

@@ -17,7 +17,6 @@ from ...circuit.gates import StandardGate
 from ...qis import PauliString
 from .two_local import EntanglementTopology
 
-
 @final
 class AngleEncoding:
     """Data encoding circuit using a single rotation gate per qubit.
@@ -77,7 +76,6 @@ class AngleEncoding:
 
     def __repr__(self) -> str: ...
     def __str__(self) -> str: ...
-
 
 @final
 class ZZFeatureMap:
@@ -163,7 +161,6 @@ class ZZFeatureMap:
 
     def __repr__(self) -> str: ...
     def __str__(self) -> str: ...
-
 
 @final
 class PauliFeatureMap:

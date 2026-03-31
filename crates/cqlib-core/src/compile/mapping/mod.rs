@@ -159,6 +159,7 @@ impl TopologyAdapter {
         }
 
         let mut fidelity = vec![vec![1.0; n]; n];
+        #[allow(clippy::needless_range_loop)]
         for i in 0..n {
             fidelity[i][i] = 1.0;
         }
@@ -413,6 +414,7 @@ fn compute_all_pairs_shortest_path(adj_matrix: &[Vec<bool>]) -> Vec<Vec<u32>> {
         }
     }
 
+    #[allow(clippy::needless_range_loop)]
     for k in 0..n {
         for i in 0..n {
             let dik = dist[i][k];

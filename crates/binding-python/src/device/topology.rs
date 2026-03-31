@@ -180,7 +180,7 @@ impl PyTopology {
     /// Returns all physical qubits in the topology.
     #[getter]
     fn qubits(&self) -> Vec<PyQubit> {
-        self.inner.qubits().into_iter().map(|q| q.into()).collect()
+        self.inner.qubits().map(|q| q.into()).collect()
     }
 
     /// Adds physical qubits to the topology.

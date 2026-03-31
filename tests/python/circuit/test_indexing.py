@@ -22,7 +22,6 @@
 """
 
 import pytest
-from cqlib.circuit import Circuit
 
 
 class TestCircuitIndexing:
@@ -208,14 +207,14 @@ class TestOperationProperties:
         """测试操作名称"""
         c = bell_state_circuit
         op = c[0]
-        assert hasattr(op, 'name')
+        assert hasattr(op, "name")
         assert isinstance(op.name, str)
 
     def test_operation_qubits(self, bell_state_circuit):
         """测试操作qubits"""
         c = bell_state_circuit
         op = c[1]  # CNOT
-        assert hasattr(op, 'qubits')
+        assert hasattr(op, "qubits")
         assert len(op.qubits) == 2
 
     def test_operation_params(self, single_qubit_circuit, theta_param):
@@ -223,5 +222,5 @@ class TestOperationProperties:
         c = single_qubit_circuit
         c.rx(0, theta_param)
         op = c[0]
-        assert hasattr(op, 'params')
+        assert hasattr(op, "params")
         assert op.num_params == 1
