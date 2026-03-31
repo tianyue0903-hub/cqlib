@@ -16,7 +16,6 @@ from .mc_gate import McGate
 from .circuit_gate import CircuitGate
 from .control_flow import ConditionView, ControlFlow, IfElseGate, WhileLoopGate
 from .directive import Directive
-from .delay import Delay
 
 # --- Single Qubit Gates ---
 I: StandardGate
@@ -76,7 +75,6 @@ __all__ = [
     "IfElseGate",
     "WhileLoopGate",
     "Directive",
-    "Delay",
     # Single Qubit
     "I",
     "H",

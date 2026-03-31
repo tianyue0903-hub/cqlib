@@ -46,12 +46,14 @@
 //! - Empty lines are ignored
 //! - Extra whitespace is normalized
 
-use crate::circuit::param::ParameterValue;
-use crate::circuit::parameter::parse::parse_parameter;
-use crate::circuit::{Circuit, Qubit};
+use crate::circuit::circuit_param::ParameterValue;
+use crate::circuit::{Circuit, Parameter, Qubit};
 use regex::Regex;
 use std::collections::HashSet;
+use std::sync::LazyLock;
 use thiserror::Error;
+
+static QUBIT_PATTERN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^Q\d+$").unwrap());
 
 /// Errors that can occur during QCIS parsing.
 #[derive(Debug, Error, PartialEq)]
@@ -199,15 +201,20 @@ fn format_error_with_line(error: QcisParseError, line_num: usize, line: &str) ->
 
 /// Parse a parameter string into a ParameterValue.
 /// Supports numbers, pi, e, and basic arithmetic operations (+, -, *, /).
-fn parse_param(param_str: &str) -> Option<ParameterValue> {
+fn parse_param(param_str: &str) -> Result<ParameterValue> {
     let param_str = param_str.trim();
     if param_str.is_empty() {
-        return None;
+        return Err(QcisParseError::MissingParameter("".to_string()));
     }
-
-    match parse_parameter(param_str) {
-        Ok(param) => Some(param.into()),
-        Err(_) => param_str.parse::<f64>().ok().map(ParameterValue::Fixed),
+    let p = Parameter::try_from(param_str);
+    if let Ok(p) = p {
+        if let Ok(v) = p.evaluate(&None) {
+            Ok(ParameterValue::Fixed(v))
+        } else {
+            Ok(p.into())
+        }
+    } else {
+        Err(QcisParseError::MissingParameter("".to_string()))
     }
 }
 
@@ -291,21 +298,21 @@ fn process_line(line: &str, c: &mut Circuit, existing_qubits: &mut HashSet<u32>)
         return Ok(());
     }
 
-    let qubit_pattern = Regex::new(r"^Q\d+$").unwrap();
+    // let qubit_pattern = Regex::new(r"^Q\d+$").unwrap();
 
     let gate_name = parts[0];
     let args = &parts[1..];
 
     // Validate qubit arguments first
     for &token in args.iter() {
-        if (token.starts_with('Q') || token.starts_with('q')) && !qubit_pattern.is_match(token) {
+        if (token.starts_with('Q') || token.starts_with('q')) && !QUBIT_PATTERN.is_match(token) {
             return Err(QcisParseError::InvalidQubitFormat(token.to_string()));
         }
     }
 
     let split_index = args
         .iter()
-        .position(|&token| !qubit_pattern.is_match(token))
+        .position(|&token| !QUBIT_PATTERN.is_match(token))
         .unwrap_or(args.len());
 
     let (qubit_slice, param_slice) = args.split_at(split_index);
@@ -317,7 +324,10 @@ fn process_line(line: &str, c: &mut Circuit, existing_qubits: &mut HashSet<u32>)
         .collect::<Result<Vec<_>>>()?;
 
     // Parse parameters
-    let params: Vec<ParameterValue> = param_slice.iter().filter_map(|&s| parse_param(s)).collect();
+    let params: Vec<ParameterValue> = param_slice
+        .iter()
+        .map(|&s| parse_param(s))
+        .collect::<Result<Vec<_>>>()?;
 
     // Validate qubit and parameter counts
     validate_gate_args(gate_name, &qubits, &params)?;

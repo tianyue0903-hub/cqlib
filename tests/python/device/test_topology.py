@@ -12,36 +12,32 @@
 
 """Tests for topology APIs exposed under cqlib.device."""
 
-from cqlib.compiler import Topology as CompilerTopology
+from cqlib import Qubit
 from cqlib.device import Topology
 
 
 class TestDeviceTopology:
     """Tests topology aliasing and graph helper behavior."""
 
-    def test_device_topology_aliases_compiler_topology(self):
-        """cqlib.device.Topology should alias cqlib.compiler.Topology."""
-        assert Topology is CompilerTopology
-
     def test_topology_basic_queries(self):
         """Topology should expose counts, neighbors, degrees, and coupling names."""
-        topo = Topology([0, 1, 2], [(0, 1), (1, 2, "CZ")])
+        topo = Topology([0, 1, 2], [(0, 1, "G1"), (1, 2, "G2")])
         assert topo.num_qubits == 3
         assert topo.num_couplings == 2
-        assert sorted(topo.qubits) == [0, 1, 2]
+        assert sorted(topo.qubits) == [Qubit(0), Qubit(1), Qubit(2)]
 
         assert topo.contains_qubit(1) is True
         assert topo.contains_qubit(99) is False
         # Topology uses directed couplings; neighbors/degree are based on outgoing edges.
-        assert set(topo.neighbors(1)) == {2}
+        assert set(topo.neighbors(1)) == {Qubit(2)}
         assert topo.degree(1) == 1
-        assert topo.get_coupling_name(1, 2) == "CZ"
+        assert topo.get_coupling_name(1, 2) == "G2"
 
     def test_topology_add_remove_qubits_and_couplings(self):
         """Topology should support qubit/coupling add-remove operations."""
-        topo = Topology([0, 1, 2], [(0, 1)])
+        topo = Topology([0, 1, 2], [(0, 1, "G1")])
         topo.add_qubits([3])
-        topo.add_couplings([(2, 3, "CX")])
+        topo.add_couplings([(2, 3, "G2")])
         assert topo.contains_qubit(3) is True
         assert topo.is_connected(2, 3) or topo.is_connected(3, 2)
 

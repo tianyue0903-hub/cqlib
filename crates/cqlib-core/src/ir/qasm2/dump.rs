@@ -52,11 +52,11 @@
 //! - Nested control flow is not supported
 //! - Measurements inside gate definitions are silently ignored (OpenQASM restriction)
 
+use crate::circuit::circuit_param::CircuitParam;
 use crate::circuit::gate::circuit_gate::{CircuitGate, FrozenCircuit};
 use crate::circuit::gate::control_flow::ControlFlow;
 use crate::circuit::gate::{Directive, Instruction, StandardGate};
 use crate::circuit::operation::Operation;
-use crate::circuit::param::CircuitParam;
 use crate::circuit::parameter::Parameter;
 use crate::circuit::{Circuit, Qubit};
 use indexmap::IndexMap;
@@ -528,11 +528,11 @@ fn resolve_param(
 
     if !param_map.is_empty() {
         for (sym, repl) in param_map {
-            param = param.replace(sym, repl);
+            param = param.replace(sym, repl.clone());
         }
     }
 
-    param = param.simplify(None);
+    // param = param.simplify();
     param
 }
 
@@ -547,7 +547,11 @@ fn format_params(
     let params_str: Vec<String> = op
         .params
         .iter()
-        .map(|p| resolve_param(p, circuit, param_map).to_string())
+        .map(|p| {
+            let s = resolve_param(p, circuit, param_map).to_string();
+            // Convert symb_anafis specific representations to OpenQASM 2.0 compliant ones
+            s.replace("π", "pi")
+        })
         .collect();
     format!("({})", params_str.join(","))
 }

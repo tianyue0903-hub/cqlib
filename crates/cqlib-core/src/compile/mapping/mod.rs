@@ -34,10 +34,10 @@ pub use vf2::{
     Vf2CandidateOptions, Vf2CandidateScore, Vf2LayoutCandidate, Vf2Mapping, Vf2ScoreWeights,
 };
 
+use crate::circuit::circuit_param::CircuitParam;
+use crate::circuit::circuit_param::ParameterValue;
 use crate::circuit::dag::Terminator;
 use crate::circuit::gate::{Instruction, StandardGate};
-use crate::circuit::param::CircuitParam;
-use crate::circuit::param::ParameterValue;
 use crate::circuit::{Circuit, CircuitDag, Operation, Parameter, Qubit};
 use crate::compile::error::CompileError;
 use crate::device::Topology;

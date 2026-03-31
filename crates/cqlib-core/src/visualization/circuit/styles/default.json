@@ -1,0 +1,280 @@
+{
+  "default": {
+    "border_color": "None",
+    "background_color": "red",
+    "font_size": 40,
+    "text_color": "black",
+    "line_color": "black"
+  },
+  "H": {
+    "border_color": "#0E29A6",
+    "background_color": "#0E29A6",
+    "text_color": "white"
+  },
+  "I": {
+    "border_color": "#487EF0",
+    "background_color": "#487EF0",
+    "text_color": "white"
+  },
+  "RX": {
+    "border_color": "#53B4AA",
+    "background_color": "#53B4AA",
+    "text_color": "white"
+  },
+  "RXX": {
+    "border_color": "#53B4AA",
+    "background_color": "#53B4AA",
+    "text_color": "white"
+  },
+  "CRX": {
+    "border_color": "#5B3EAC",
+    "background_color": "#5B3EAC",
+    "text_color": "white",
+    "line_color": "#0E29A6"
+  },
+  "RXY": {
+    "border_color": "#53B4AA",
+    "background_color": "#53B4AA",
+    "text_color": "white"
+  },
+  "RY": {
+    "border_color": "#53B4AA",
+    "background_color": "#53B4AA",
+    "text_color": "white"
+  },
+  "RYY": {
+    "border_color": "#53B4AA",
+    "background_color": "#53B4AA",
+    "text_color": "white"
+  },
+  "CRY": {
+    "border_color": "#5B3EAC",
+    "background_color": "#5B3EAC",
+    "text_color": "white",
+    "line_color": "#5B3EAC"
+  },
+  "RZ": {
+    "border_color": "#53B4AA",
+    "background_color": "#53B4AA",
+    "text_color": "white"
+  },
+  "RZZ": {
+    "border_color": "#53B4AA",
+    "background_color": "#53B4AA",
+    "text_color": "white"
+  },
+  "RZX": {
+    "border_color": "#53B4AA",
+    "background_color": "#53B4AA",
+    "text_color": "white"
+  },
+  "CRZ": {
+    "border_color": "#5B3EAC",
+    "background_color": "#5B3EAC",
+    "text_color": "white",
+    "line_color": "#5B3EAC"
+  },
+  "S": {
+    "border_color": "#ADA379",
+    "background_color": "#ADA379",
+    "text_color": "white"
+  },
+  "SD": {
+    "border_color": "#ADA379",
+    "background_color": "#ADA379",
+    "text_color": "white"
+  },
+  "SWAP": {
+    "border_color": "#0E29A6",
+    "background_color": "#0E29A6",
+    "line_width": 2,
+    "text_color": "#0E29A6",
+    "line_color": "#0E29A6"
+  },
+  "T": {
+    "border_color": "#ADA379",
+    "background_color": "#ADA379",
+    "text_color": "white"
+  },
+  "TD": {
+    "border_color": "#ADA379",
+    "background_color": "#ADA379",
+    "text_color": "white"
+  },
+  "U3": {
+    "border_color": "#53B4AA",
+    "background_color": "#53B4AA",
+    "text_color": "white"
+  },
+  "X": {
+    "border_color": "#487EF0",
+    "background_color": "#487EF0",
+    "text_color": "white"
+  },
+  "CX": {
+    "border_color": "#DE9367",
+    "background_color": "#DE9367",
+    "text_color": "white",
+    "line_color": "#DE9367"
+  },
+  "CCX": {
+    "border_color": "#5B3EAC",
+    "background_color": "#5B3EAC",
+    "text_color": "white",
+    "line_color": "#5B3EAC"
+  },
+  "X2P": {
+    "border_color": "#9BCE48",
+    "background_color": "#9BCE48",
+    "text_color": "white"
+  },
+  "X2M": {
+    "border_color": "#9BCE48",
+    "background_color": "#9BCE48",
+    "text_color": "white"
+  },
+  "XY": {
+    "border_color": "#DE9367",
+    "background_color": "#DE9367",
+    "text_color": "white"
+  },
+  "XY2P": {
+    "border_color": "#DE9367",
+    "background_color": "#DE9367",
+    "text_color": "white"
+  },
+  "XY2M": {
+    "border_color": "#DE9367",
+    "background_color": "#DE9367",
+    "text_color": "white"
+  },
+  "Y": {
+    "border_color": "#487EF0",
+    "background_color": "#487EF0",
+    "text_color": "white"
+  },
+  "Y2M": {
+    "border_color": "#9BCE48",
+    "background_color": "#9BCE48",
+    "text_color": "white"
+  },
+  "Y2P": {
+    "border_color": "#9BCE48",
+    "background_color": "#9BCE48",
+    "text_color": "white"
+  },
+  "CY": {
+    "border_color": "#DE9367",
+    "background_color": "#DE9367",
+    "text_color": "white",
+    "line_color": "#DE9367"
+  },
+  "Z": {
+    "border_color": "#487EF0",
+    "background_color": "#487EF0",
+    "text_color": "white"
+  },
+  "CZ": {
+    "border_color": "#DE9367",
+    "background_color": "#DE9367",
+    "text_color": "white",
+    "line_color": "#DE9367",
+    "line_width": 2
+  },
+  "UNITARY": {
+    "border_color": "#DE9367",
+    "background_color": "#DE9367",
+    "text_color": "white",
+    "line_color": "#DE9367",
+    "line_width": 2
+  },
+  "M": {
+    "border_color": "#E9685D",
+    "background_color": "#E9685D",
+    "text_color": "white",
+    "line_color": "white"
+  },
+  "D": {
+    "border_color": "#E9685D",
+    "background_color": "#E9685D",
+    "text_color": "white",
+    "line_color": "black"
+  },
+  "R": {
+    "border_color": "#E9685D",
+    "background_color": "#E9685D",
+    "text_color": "white",
+    "line_color": "black"
+  },
+  "P": {
+    "border_color": "#53B4AA",
+    "background_color": "#53B4AA",
+    "text_color": "white"
+  },
+  "U": {
+    "border_color": "#53B4AA",
+    "background_color": "#53B4AA",
+    "text_color": "white",
+    "line_width": 1.1
+  },
+  "MODULE": {
+    "border_color": "#5B3EAC",
+    "background_color": "#5B3EAC",
+    "text_color": "white",
+    "line_color": "#5B3EAC",
+    "line_width": 1
+  },
+  "GPHASE": {
+    "border_color": "#ADA379",
+    "background_color": "#ADA379",
+    "text_color": "white",
+    "line_color": "#ADA379"
+  },
+  "CONTROL_FLOW": {
+    "border_color": "black",
+    "background_color": "#F16359",
+    "text_color": "white",
+    "line_color": "black",
+    "line_width": 1.2
+  },
+  "IF": {
+    "border_color": "black",
+    "background_color": "#F16359",
+    "text_color": "white",
+    "line_color": "black",
+    "line_width": 1.2
+  },
+  "ELSE": {
+    "border_color": "black",
+    "background_color": "#F16359",
+    "text_color": "white",
+    "line_color": "black",
+    "line_width": 1.2
+  },
+  "END": {
+    "border_color": "black",
+    "background_color": "#F16359",
+    "text_color": "white",
+    "line_color": "black",
+    "line_width": 1.2
+  },
+  "WHILE": {
+    "border_color": "black",
+    "background_color": "#F16359",
+    "text_color": "white",
+    "line_color": "black",
+    "line_width": 1.2
+  },
+  "FSIM": {
+  "border_color": "#53B4AA",
+  "background_color": "#53B4AA",
+  "text_color": "white",
+  "line_color": "#53B4AA",
+  "line_width": 1.2
+ },
+  "B": {
+    "border_color": "none",
+    "line_color": "black",
+    "line_width": 1
+  }
+}

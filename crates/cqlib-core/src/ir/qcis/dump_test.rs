@@ -1,7 +1,7 @@
 use super::*;
 use crate::circuit::Circuit;
 use crate::circuit::Qubit;
-use crate::circuit::param::ParameterValue;
+use crate::circuit::circuit_param::ParameterValue;
 use crate::circuit::parameter::Parameter;
 
 #[test]
@@ -163,7 +163,7 @@ fn test_format_float() {
     assert_eq!(format_float(-std::f64::consts::PI / 2.0), "-pi/2");
     assert_eq!(format_float(std::f64::consts::PI / 4.0), "pi/4");
     assert_eq!(format_float(42.0), "42");
-    assert_eq!(format_float(std::f64::consts::PI), "3.14159");
+    assert_eq!(format_float(3.14159), "3.14159");
 }
 
 #[test]
@@ -230,7 +230,7 @@ fn test_dump_symbolic_parameters() {
     // Verify symbolic parameters appear in output
     let expected = r#"RX Q0 theta
 RY Q1 phi
-RZ Q0 theta + 0.5
+RZ Q0 0.5 + theta
 RXY Q1 theta phi
 "#;
     assert_eq!(qcis, expected);

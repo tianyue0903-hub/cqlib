@@ -21,7 +21,7 @@ pub mod parameter;
 pub use bit::PyQubit;
 pub use circuit_impl::PyCircuit;
 pub use gate::{
-    PyCircuitGate, PyConditionView, PyControlFlow, PyDelay, PyDirective, PyIfElseGate, PyMcGate,
+    PyCircuitGate, PyConditionView, PyControlFlow, PyDirective, PyIfElseGate, PyMcGate,
     PyStandardGate, PyUnitaryGate, PyWhileLoopGate,
 };
 pub use instruction::PyInstruction;

@@ -10,6 +10,12 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
+//! # Device Error Types
+//!
+//! This module defines error types for quantum device operations.
+//! It provides error handling for device topology validation,
+//! layout mapping, and qubit connectivity issues.
+
 use crate::circuit::Qubit;
 use std::fmt;
 use thiserror::Error;

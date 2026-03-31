@@ -15,11 +15,12 @@ pub mod compile;
 pub mod device;
 pub mod ir;
 pub mod qis;
+pub mod visualization;
 
 use pyo3::prelude::*;
 
 use crate::circuit::gate::{
-    PyCircuitGate, PyConditionView, PyControlFlow, PyDelay, PyDirective, PyIfElseGate, PyMcGate,
+    PyCircuitGate, PyConditionView, PyControlFlow, PyDirective, PyIfElseGate, PyMcGate,
     PyStandardGate, PyUnitaryGate, PyWhileLoopGate,
 };
 use circuit::circuit_to_matrix;
@@ -45,7 +46,6 @@ fn binding_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyWhileLoopGate>()?;
     m.add_class::<PyConditionView>()?;
     m.add_class::<PyDirective>()?;
-    m.add_class::<PyDelay>()?;
 
     // Register IR module with qasm2 and qcis submodules
     ir::register_ir_module(m)?;
@@ -66,6 +66,10 @@ fn binding_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // Register static gate instances (H, X, etc.) to StandardGate class
     circuit::gate::standard::register_gates(m)?;
+
+    // Register visualization functions
+    m.add_function(wrap_pyfunction!(visualization::py_draw_text, m)?)?;
+    m.add_function(wrap_pyfunction!(visualization::py_draw_figure, m)?)?;
 
     Ok(())
 }

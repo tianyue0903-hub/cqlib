@@ -414,8 +414,8 @@ impl ZNEMitigation {
         op: &Operation,
     ) -> Result<(), CircuitError> {
         let params = op.params.iter().map(|param| match param {
-            crate::circuit::param::CircuitParam::Fixed(value) => (*value).into(),
-            crate::circuit::param::CircuitParam::Index(index) => {
+            crate::circuit::circuit_param::CircuitParam::Fixed(value) => (*value).into(),
+            crate::circuit::circuit_param::CircuitParam::Index(index) => {
                 source.parameters()[*index as usize].clone().into()
             }
         });
@@ -433,8 +433,10 @@ impl ZNEMitigation {
             .params
             .iter()
             .map(|param| match param {
-                crate::circuit::param::CircuitParam::Fixed(value) => Parameter::from(*value),
-                crate::circuit::param::CircuitParam::Index(index) => {
+                crate::circuit::circuit_param::CircuitParam::Fixed(value) => {
+                    Parameter::from(*value)
+                }
+                crate::circuit::circuit_param::CircuitParam::Index(index) => {
                     self.circuit.parameters()[*index as usize].clone()
                 }
             })

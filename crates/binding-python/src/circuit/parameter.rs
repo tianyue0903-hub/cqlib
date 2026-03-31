@@ -23,7 +23,6 @@
 //! - Symbolic differentiation and simplification
 
 use cqlib_core::circuit::Parameter;
-use cqlib_core::circuit::parameter::parse_parameter;
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use std::collections::HashMap;
@@ -87,12 +86,12 @@ impl PyParameter {
                 });
             }
             // Try to parse as expression (might contain numbers like "3.14+2")
-            if let Ok(param) = parse_parameter(&name) {
+            if let Ok(param) = Parameter::try_from(name.as_str()) {
                 return Ok(PyParameter { inner: param });
             }
             // Otherwise, treat as a symbol name
             return Ok(PyParameter {
-                inner: Parameter::symbol(name),
+                inner: Parameter::symbol(&name),
             });
         }
 
@@ -121,8 +120,7 @@ impl PyParameter {
     /// - Parentheses: `(`, `)`
     #[staticmethod]
     fn from_expression(expr: String) -> PyResult<Self> {
-        use cqlib_core::circuit::parameter::parse_parameter;
-        parse_parameter(expr.as_str())
+        Parameter::try_from(expr.as_str())
             .map(|param| PyParameter { inner: param })
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
@@ -154,8 +152,13 @@ impl PyParameter {
     /// The computed floating-point result.
     #[pyo3(signature = (bindings=None))]
     fn evaluate(&self, bindings: Option<HashMap<String, f64>>) -> PyResult<f64> {
+        let bindings_ref = bindings.as_ref().map(|map| {
+            map.iter()
+                .map(|(k, v)| (k.as_str(), *v))
+                .collect::<HashMap<&str, f64>>()
+        });
         self.inner
-            .evaluate(&bindings)
+            .evaluate(&bindings_ref)
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
@@ -168,11 +171,14 @@ impl PyParameter {
     /// # Returns
     ///
     /// A new simplified parameter.
-    #[pyo3(signature = (max_iterations=None))]
-    fn simplify(&self, max_iterations: Option<i32>) -> Self {
-        PyParameter {
-            inner: self.inner.simplify(max_iterations),
-        }
+    #[pyo3(signature = ())]
+    fn simplify(&self) -> PyResult<Self> {
+        // Note: max_iterations is ignored in the current implementation
+        let inner = self
+            .inner
+            .simplify()
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        Ok(PyParameter { inner })
     }
 
     /// Computes the symbolic derivative with respect to a variable.
@@ -184,10 +190,12 @@ impl PyParameter {
     /// # Returns
     ///
     /// A new parameter representing the derivative.
-    fn derivative(&self, var: String) -> Self {
-        PyParameter {
-            inner: self.inner.derivative(&var),
-        }
+    fn derivative(&self, var: String) -> PyResult<Self> {
+        let inner = self
+            .inner
+            .derivative(&var)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        Ok(PyParameter { inner })
     }
 
     /// Returns the power of this parameter raised to the given exponent.
@@ -211,12 +219,12 @@ impl PyParameter {
     fn pow(&self, val: &Bound<'_, PyAny>) -> PyResult<Self> {
         if let Ok(param) = val.extract::<PyParameter>() {
             Ok(PyParameter {
-                inner: self.inner.pow(&param.inner),
+                inner: self.inner.pow(param.inner),
             })
         } else if let Ok(val_f64) = val.extract::<f64>() {
             let exp_param = Parameter::from(val_f64);
             Ok(PyParameter {
-                inner: self.inner.pow(&exp_param),
+                inner: self.inner.pow(exp_param),
             })
         } else {
             Err(PyTypeError::new_err(
@@ -228,7 +236,7 @@ impl PyParameter {
     /// Returns all unique symbols in this parameter.
     #[getter]
     fn symbols(&self) -> Vec<String> {
-        self.inner.get_symbols()
+        self.inner.get_symbols().into_iter().collect()
     }
 
     /// Returns the absolute value |x|.
@@ -306,11 +314,100 @@ impl PyParameter {
     /// # Arguments
     ///
     /// * `base` - Optional base for the logarithm.
+    #[pyo3(signature = (base=None))]
     fn log(&self, base: Option<PyParameter>) -> Self {
-        let base_inner = base.map(|p| p.inner);
+        let base_inner = base.map(|p| p.inner).unwrap_or(Parameter::e());
         PyParameter {
             inner: self.inner.log(base_inner),
         }
+    }
+
+    /// Returns the hyperbolic sine sinh(x).
+    fn sinh(&self) -> Self {
+        PyParameter {
+            inner: self.inner.sinh(),
+        }
+    }
+
+    /// Returns the hyperbolic cosine cosh(x).
+    fn cosh(&self) -> Self {
+        PyParameter {
+            inner: self.inner.cosh(),
+        }
+    }
+
+    /// Returns the hyperbolic tangent tanh(x).
+    fn tanh(&self) -> Self {
+        PyParameter {
+            inner: self.inner.tanh(),
+        }
+    }
+
+    /// Returns the floor of the expression.
+    fn floor(&self) -> Self {
+        PyParameter {
+            inner: self.inner.floor(),
+        }
+    }
+
+    /// Returns the ceiling of the expression.
+    fn ceil(&self) -> Self {
+        PyParameter {
+            inner: self.inner.ceil(),
+        }
+    }
+
+    /// Returns the rounded value of the expression.
+    fn round(&self) -> Self {
+        PyParameter {
+            inner: self.inner.round(),
+        }
+    }
+
+    /// Returns True if this parameter is a constant (has no free variables).
+    ///
+    /// # Examples
+    ///
+    /// ```python
+    /// >>> Parameter(3.14).is_constant()
+    /// True
+    /// >>> Parameter("x").is_constant()
+    /// False
+    /// ```
+    fn is_constant(&self) -> bool {
+        self.inner.is_constant()
+    }
+
+    /// Returns True if this parameter evaluates to zero.
+    ///
+    /// Returns False if the parameter cannot be evaluated (contains unbound symbols).
+    ///
+    /// # Examples
+    ///
+    /// ```python
+    /// >>> Parameter(0.0).is_zero()
+    /// True
+    /// >>> Parameter(1.0).is_zero()
+    /// False
+    /// ```
+    fn is_zero(&self) -> bool {
+        self.inner.is_zero()
+    }
+
+    /// Returns True if this parameter evaluates to one.
+    ///
+    /// Returns False if the parameter cannot be evaluated (contains unbound symbols).
+    ///
+    /// # Examples
+    ///
+    /// ```python
+    /// >>> Parameter(1.0).is_one()
+    /// True
+    /// >>> Parameter(2.0).is_one()
+    /// False
+    /// ```
+    fn is_one(&self) -> bool {
+        self.inner.is_one()
     }
 
     fn __str__(&self) -> String {
@@ -405,26 +502,6 @@ impl PyParameter {
         }
     }
 
-    fn __mod__(&self, other: &Bound<'_, PyAny>) -> PyResult<Self> {
-        if let Ok(param) = other.extract::<PyParameter>() {
-            Ok(PyParameter {
-                inner: self.inner.clone() % param.inner,
-            })
-        } else {
-            Err(PyTypeError::new_err("Unsupported operand type for %"))
-        }
-    }
-
-    fn __rmod__(&self, other: &Bound<'_, PyAny>) -> PyResult<Self> {
-        if let Ok(param) = other.extract::<PyParameter>() {
-            Ok(PyParameter {
-                inner: param.inner % self.inner.clone(),
-            })
-        } else {
-            Err(PyTypeError::new_err("Unsupported operand type for %"))
-        }
-    }
-
     fn __pow__(
         &self,
         other: &Bound<'_, PyAny>,
@@ -432,12 +509,12 @@ impl PyParameter {
     ) -> PyResult<Self> {
         if let Ok(param) = other.extract::<PyParameter>() {
             Ok(PyParameter {
-                inner: self.inner.pow(&param.inner),
+                inner: self.inner.pow(param.inner),
             })
         } else if let Ok(val) = other.extract::<f64>() {
             let exp_param = Parameter::from(val);
             Ok(PyParameter {
-                inner: self.inner.pow(&exp_param),
+                inner: self.inner.pow(exp_param),
             })
         } else {
             Err(PyTypeError::new_err("Unsupported operand type for **"))
@@ -494,10 +571,8 @@ impl PyParameter {
     /// # Result: (y * 3) + 2
     /// ```
     fn replace(&self, symbol: String, param: PyParameter) -> Self {
-        // Need to clone self to get mutable reference, but we use replace which returns new
-        let mut inner_clone = self.inner.clone();
         PyParameter {
-            inner: inner_clone.replace(&symbol, &param.inner),
+            inner: self.inner.replace(&symbol, param.inner),
         }
     }
 }

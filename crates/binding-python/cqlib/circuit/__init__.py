@@ -25,7 +25,6 @@ from .._native import (
     IfElseGate,
     WhileLoopGate,
     Directive,
-    Delay,
     circuit_to_matrix,
 )
 

@@ -12,7 +12,6 @@
 
 pub mod circuit_gate;
 pub mod control_flow;
-pub mod delay;
 pub mod directive;
 pub mod mc_gate;
 pub mod standard;
@@ -20,7 +19,6 @@ pub mod unitary;
 
 pub use circuit_gate::PyCircuitGate;
 pub use control_flow::{PyConditionView, PyControlFlow, PyIfElseGate, PyWhileLoopGate};
-pub use delay::PyDelay;
 pub use directive::PyDirective;
 pub use mc_gate::PyMcGate;
 pub use standard::PyStandardGate;
