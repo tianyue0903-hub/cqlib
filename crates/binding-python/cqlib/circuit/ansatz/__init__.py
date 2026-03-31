@@ -29,7 +29,7 @@ Convenience constructors:
 - :func:`pauli_feature_map`: PauliFeatureMap shortcut.
 """
 
-from ..._native import ansatz as _ansatz
+from ..._native.circuit import ansatz as _ansatz
 
 EntanglementTopology = _ansatz.EntanglementTopology
 TwoLocal = _ansatz.TwoLocal

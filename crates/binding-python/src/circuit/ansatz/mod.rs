@@ -48,12 +48,12 @@ pub(crate) fn register_ansatz_module(parent: &Bound<'_, PyModule>) -> PyResult<(
 
     parent.add_submodule(&m)?;
 
-    // Make `from cqlib._native.ansatz import X` work by injecting into sys.modules
+    // Make `from cqlib._native.circuit.ansatz import X` work
     parent
         .py()
         .import("sys")?
         .getattr("modules")?
-        .set_item("cqlib._native.ansatz", &m)?;
+        .set_item("cqlib._native.circuit.ansatz", &m)?;
 
     Ok(())
 }
