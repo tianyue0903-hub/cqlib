@@ -52,11 +52,37 @@ use crate::circuit::error::CircuitError;
 /// }
 /// ```
 pub trait Ansatz {
+    /// Validates the ansatz configuration without building the circuit.
+    ///
+    /// This method checks whether the ansatz configuration is valid, allowing
+    /// early detection of errors before expensive circuit construction. The
+    /// default implementation performs no validation.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` if the configuration is valid.
+    /// * `Err(CircuitError)` if the configuration is invalid.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use cqlib_core::circuit::ansatz::{Ansatz, TwoLocal};
+    ///
+    /// let ansatz = TwoLocal::new(2);
+    /// assert!(ansatz.validate().is_ok());
+    /// ```
+    fn validate(&self) -> Result<(), CircuitError> {
+        Ok(())
+    }
+
     /// Builds the ansatz circuit and returns it.
     ///
     /// This method constructs the actual quantum circuit based on the ansatz
     /// configuration. All rotation angles in the circuit are represented as
     /// symbolic parameters that can be bound to concrete values later.
+    ///
+    /// Implementations should call [`validate`](Self::validate) at the start
+    /// of this method to ensure configuration validity.
     ///
     /// # Arguments
     ///

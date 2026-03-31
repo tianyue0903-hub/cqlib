@@ -19,7 +19,7 @@ fn test_qaoa_ansatz_default_mixer() {
     let mut h_c = Hamiltonian::new(2);
     h_c.add_term("ZZ".parse().unwrap(), 0.5.into()).unwrap();
 
-    let ansatz = QAOAAnsatz::new(h_c).reps(2);
+    let ansatz = QAOAAnsatz::new(h_c).unwrap().reps(2);
 
     // 2 qubits, 2 layers => 4 parameters (gamma_0, beta_0, gamma_1, beta_1)
     assert_eq!(ansatz.num_qubits(), 2);
@@ -57,7 +57,7 @@ fn test_qaoa_custom_mixer() {
     let mut h_b = Hamiltonian::new(2);
     h_b.add_term("XX".parse().unwrap(), 1.0.into()).unwrap();
 
-    let ansatz = QAOAAnsatz::new(h_c).mixer(h_b).unwrap().reps(1);
+    let ansatz = QAOAAnsatz::new(h_c).unwrap().mixer(h_b).unwrap().reps(1);
     let circuit = ansatz.build_circuit("p").unwrap();
 
     // Ops:
@@ -76,13 +76,15 @@ fn test_qaoa_mixer_mismatch_error() {
     let mut h_b = Hamiltonian::new(3); // 3 qubits
     h_b.add_term("XXX".parse().unwrap(), 1.0.into()).unwrap();
 
-    let result = QAOAAnsatz::new(h_c).mixer(h_b);
+    let result = QAOAAnsatz::new(h_c).unwrap().mixer(h_b);
     assert!(result.is_err());
-    assert!(
-        result
-            .unwrap_err()
-            .contains("must match cost operator qubits")
-    );
+    assert!(matches!(
+        result.unwrap_err(),
+        CircuitError::QubitCountMismatch {
+            expected: 2,
+            actual: 3
+        }
+    ));
 }
 
 #[test]
@@ -97,6 +99,7 @@ fn test_qaoa_custom_initial_state() {
     initial_circuit.x(1.into()).unwrap();
 
     let ansatz = QAOAAnsatz::new(h_c)
+        .unwrap()
         .initial_state(initial_circuit.clone())
         .unwrap()
         .reps(1);
@@ -128,13 +131,15 @@ fn test_qaoa_initial_state_mismatch_error() {
     let mut initial_circuit = Circuit::new(3);
     initial_circuit.h(0.into()).unwrap();
 
-    let result = QAOAAnsatz::new(h_c).initial_state(initial_circuit);
+    let result = QAOAAnsatz::new(h_c).unwrap().initial_state(initial_circuit);
     assert!(result.is_err());
-    assert!(
-        result
-            .unwrap_err()
-            .contains("must match cost operator qubits")
-    );
+    assert!(matches!(
+        result.unwrap_err(),
+        CircuitError::QubitCountMismatch {
+            expected: 2,
+            actual: 3
+        }
+    ));
 }
 
 #[test]
@@ -143,7 +148,7 @@ fn test_qaoa_zero_reps() {
     let mut h_c = Hamiltonian::new(2);
     h_c.add_term("ZZ".parse().unwrap(), 0.5.into()).unwrap();
 
-    let ansatz = QAOAAnsatz::new(h_c).reps(0);
+    let ansatz = QAOAAnsatz::new(h_c).unwrap().reps(0);
 
     // 0 layers => 0 parameters
     assert_eq!(ansatz.num_parameters(), 0);
@@ -166,7 +171,7 @@ fn test_qaoa_multi_qubit_parameter_naming() {
     h_c.add_term("IZZI".parse().unwrap(), 1.0.into()).unwrap();
     h_c.add_term("IIZZ".parse().unwrap(), 1.0.into()).unwrap();
 
-    let ansatz = QAOAAnsatz::new(h_c).reps(3);
+    let ansatz = QAOAAnsatz::new(h_c).unwrap().reps(3);
 
     // 4 qubits, 3 layers => 6 parameters (gamma_0, beta_0, gamma_1, beta_1, gamma_2, beta_2)
     assert_eq!(ansatz.num_parameters(), 6);
@@ -185,4 +190,48 @@ fn test_qaoa_multi_qubit_parameter_naming() {
     // Verify no extra parameters with wrong indices
     assert!(!syms.contains("theta_gamma_3"));
     assert!(!syms.contains("theta_beta_3"));
+}
+
+#[test]
+fn test_qaoa_complex_coefficient_error() {
+    use num_complex::Complex64;
+
+    // Cost Hamiltonian with complex coefficient (non-Hermitian)
+    let mut h_c = Hamiltonian::new(2);
+    h_c.add_term("ZZ".parse().unwrap(), Complex64::new(0.5, 0.3))
+        .unwrap();
+
+    let ansatz = QAOAAnsatz::new(h_c).unwrap().reps(1);
+
+    // Should fail validation due to complex coefficient
+    let result = ansatz.build_circuit("p");
+    assert!(result.is_err());
+    assert!(matches!(
+        &result.unwrap_err(),
+        CircuitError::InvalidOperation(msg) if msg.contains("non-zero imaginary part")
+    ));
+}
+
+#[test]
+fn test_qaoa_complex_mixer_coefficient_error() {
+    use num_complex::Complex64;
+
+    // Cost Hamiltonian with real coefficient (valid)
+    let mut h_c = Hamiltonian::new(2);
+    h_c.add_term("ZZ".parse().unwrap(), 0.5.into()).unwrap();
+
+    // Custom Mixer with complex coefficient (invalid)
+    let mut h_b = Hamiltonian::new(2);
+    h_b.add_term("XX".parse().unwrap(), Complex64::new(1.0, 0.5))
+        .unwrap();
+
+    let ansatz = QAOAAnsatz::new(h_c).unwrap().mixer(h_b).unwrap().reps(1);
+
+    // Should fail validation due to complex mixer coefficient
+    let result = ansatz.build_circuit("p");
+    assert!(result.is_err());
+    assert!(matches!(
+        &result.unwrap_err(),
+        CircuitError::InvalidOperation(msg) if msg.contains("non-zero imaginary part")
+    ));
 }

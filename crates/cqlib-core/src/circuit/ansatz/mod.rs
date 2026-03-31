@@ -53,8 +53,8 @@ pub mod qaoa;
 pub mod traits;
 pub mod two_local;
 
-pub use facades::{efficient_su2, real_amplitudes};
-pub use feature_map::{AngleEncoding, ZZFeatureMap};
+pub use facades::{efficient_su2, pauli_feature_map, real_amplitudes, zz_feature_map};
+pub use feature_map::{AngleEncoding, PauliFeatureMap, ZZFeatureMap};
 pub use qaoa::QAOAAnsatz;
 pub use traits::Ansatz;
 pub use two_local::{EntanglementTopology, TwoLocal};

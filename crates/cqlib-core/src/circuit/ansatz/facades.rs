@@ -13,7 +13,7 @@
 //! Convenient constructor functions for common ansatz patterns.
 //!
 //! This module provides high-level factory functions that create pre-configured
-//! [`TwoLocal`] ansatze for common use cases in variational quantum algorithms.
+//! ansatze for common use cases in variational quantum algorithms.
 //!
 //! # Available Ansatze
 //!
@@ -23,17 +23,23 @@
 //! - [`efficient_su2`]: Hardware-efficient ansatz spanning SU(2), widely used in
 //!   VQE and Quantum Machine Learning.
 //!
+//! - [`zz_feature_map`]: Second-order Pauli-Z feature map for quantum kernel methods.
+//!
+//! - [`pauli_feature_map`]: General-purpose Pauli feature map with arbitrary Pauli strings.
+//!
 //! # Comparison
 //!
 //! | Ansatz | Rotation Gates | Entanglement | Use Case |
 //! |--------|---------------|--------------|----------|
 //! | RealAmplitudes | RY | CX | Chemistry, QAOA with real amplitudes |
 //! | EfficientSU2 | RY, RZ | CX | General VQE, QML |
+//! | ZZFeatureMap | Z + ZZ | (topology) | Quantum kernel methods |
+//! | PauliFeatureMap | arbitrary Paulis | (topology) | QML feature encoding |
 //!
 //! # Example
 //!
 //! ```
-//! use cqlib_core::circuit::ansatz::{real_amplitudes, efficient_su2, EntanglementTopology, Ansatz};
+//! use cqlib_core::circuit::ansatz::{real_amplitudes, efficient_su2, zz_feature_map, EntanglementTopology, Ansatz};
 //!
 //! // Create a RealAmplitudes ansatz for 4 qubits
 //! let ra = real_amplitudes(4, 3, EntanglementTopology::Linear);
@@ -42,10 +48,16 @@
 //! // Create an EfficientSU2 ansatz
 //! let su2 = efficient_su2(3, 2, EntanglementTopology::Full);
 //! assert_eq!(su2.num_parameters(), 18); // 3 qubits * 2 gates * 3 layers
+//!
+//! // Create a ZZFeatureMap for 3 qubits
+//! let fm = zz_feature_map(3, 2, EntanglementTopology::Full);
+//! assert_eq!(fm.num_parameters(), 3);
 //! ```
 
+use super::feature_map::{PauliFeatureMap, ZZFeatureMap};
 use super::two_local::{EntanglementTopology, TwoLocal};
 use crate::circuit::gate::StandardGate;
+use crate::qis::pauli::PauliString;
 
 /// Creates a RealAmplitudes ansatz.
 ///
@@ -159,6 +171,103 @@ pub fn efficient_su2(
         .reps(reps)
         .rotation_gates(vec![StandardGate::RY, StandardGate::RZ])
         .entanglement_gate(StandardGate::CX)
+        .entanglement(entanglement)
+}
+
+/// Creates a ZZFeatureMap.
+///
+/// A second-order Pauli-Z feature map widely used in quantum kernel methods.
+/// Encodes classical data using single-qubit Z-rotations and two-qubit ZZ-entanglement,
+/// making the feature kernel hard to evaluate classically for large circuits.
+///
+/// The circuit structure for each repetition layer:
+/// 1. Hadamard layer on all qubits.
+/// 2. `RZ(2 · x_i)` on each qubit i.
+/// 3. `e^{-i · 2 · (π − x_i)(π − x_j) · Z_i Z_j}` for each entangled pair `(i, j)`.
+///
+/// # Arguments
+///
+/// * `num_qubits` - The number of qubits (= number of input features). Must be ≥ 1.
+/// * `reps` - The number of repetition layers. More reps → richer feature space.
+/// * `entanglement` - Connectivity pattern for ZZ interactions.
+///
+/// # Returns
+///
+/// A [`ZZFeatureMap`] instance. Always has `num_qubits` parameters (one per feature).
+///
+/// # Example
+///
+/// ```
+/// use cqlib_core::circuit::ansatz::{zz_feature_map, EntanglementTopology, Ansatz};
+///
+/// let fm = zz_feature_map(3, 2, EntanglementTopology::Full);
+/// assert_eq!(fm.num_qubits(), 3);
+/// assert_eq!(fm.num_parameters(), 3); // one parameter x_i per qubit
+///
+/// let circuit = fm.build_circuit("x").unwrap();
+/// ```
+pub fn zz_feature_map(
+    num_qubits: usize,
+    reps: usize,
+    entanglement: EntanglementTopology,
+) -> ZZFeatureMap {
+    ZZFeatureMap::new(num_qubits)
+        .reps(reps)
+        .entanglement(entanglement)
+}
+
+/// Creates a PauliFeatureMap.
+///
+/// A general-purpose data encoding circuit using Pauli evolution gates.
+/// Supports arbitrary Pauli strings (e.g., "Z", "ZZ", "XY", "ZZZ") and flexible
+/// entanglement topologies.
+///
+/// For each repetition layer:
+/// 1. Hadamard layer on all qubits.
+/// 2. For each Pauli template P and each k-tuple of qubit indices from the topology:
+///    - If k=1: apply `e^{-i x_i P}` with angle `2 · x_i`.
+///    - If k≥2: apply `e^{-i 2 · ∏(π − x_j) P}` with angle `4 · ∏(π − x_j)`.
+///
+/// # Arguments
+///
+/// * `num_qubits` - The number of qubits (= number of input features). Must be ≥ 1.
+/// * `reps` - The number of repetition layers.
+/// * `paulis` - Pauli string templates with labels. Use [`PauliString::from`] for construction.
+/// * `entanglement` - Connectivity pattern for multi-qubit interactions.
+///
+/// # Returns
+///
+/// A [`PauliFeatureMap`] instance. Always has `num_qubits` parameters (one per feature).
+///
+/// # Example
+///
+/// ```
+/// use cqlib_core::circuit::ansatz::{pauli_feature_map, EntanglementTopology, Ansatz};
+/// use cqlib_core::qis::pauli::PauliString;
+///
+/// // ZZFeatureMap-equivalent: Z + ZZ paulis
+/// let fm = pauli_feature_map(
+///     3, 2,
+///     vec![
+///         (PauliString::from("Z"),  "Z".to_string()),
+///         (PauliString::from("ZZ"), "ZZ".to_string()),
+///     ],
+///     EntanglementTopology::Full,
+/// );
+/// assert_eq!(fm.num_qubits(), 3);
+/// assert_eq!(fm.num_parameters(), 3);
+///
+/// let circuit = fm.build_circuit("x").unwrap();
+/// ```
+pub fn pauli_feature_map(
+    num_qubits: usize,
+    reps: usize,
+    paulis: Vec<(PauliString, String)>,
+    entanglement: EntanglementTopology,
+) -> PauliFeatureMap {
+    PauliFeatureMap::new(num_qubits)
+        .reps(reps)
+        .paulis(paulis)
         .entanglement(entanglement)
 }
 
