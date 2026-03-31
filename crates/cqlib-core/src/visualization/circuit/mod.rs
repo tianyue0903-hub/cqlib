@@ -29,6 +29,7 @@ pub mod error;
 pub mod ir_utils;
 pub mod model;
 pub mod parameter_formatter;
+pub mod style;
 pub use builder::{VisualBuildOptions, build_visual_circuit};
 pub use error::VisualizationError;
 pub use model::{
@@ -36,6 +37,7 @@ pub use model::{
     VisualOperation,
 };
 pub use parameter_formatter::{ParameterDisplayMode, ParameterFormatOptions, ParameterFormatter};
+pub use style::GateStyle;
 
 #[cfg(test)]
 #[path = "builder_tests.rs"]
@@ -53,3 +55,6 @@ mod model_tests;
 #[path = "parameter_formatter_tests.rs"]
 mod parameter_formatter_tests;
 
+#[cfg(test)]
+#[path = "style_tests.rs"]
+mod style_tests;
