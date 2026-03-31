@@ -11,24 +11,35 @@
 // that they have been altered from the originals.
 
 use binding_c::circuit::{
-    circuit_ccx, circuit_crx, circuit_crx_param, circuit_crz, circuit_crz_param,
-    circuit_cry, circuit_cry_param, circuit_cx, circuit_cy, circuit_cz,
-    circuit_fsim, circuit_fsim_param, circuit_free, circuit_h, circuit_measure,
-    circuit_new, circuit_num_qubits, circuit_rxy, circuit_rxy_param, circuit_rxx,
-    circuit_rxx_param, circuit_rzx, circuit_rzx_param, circuit_rzz, circuit_rzz_param,
-    circuit_ryy, circuit_ryy_param, circuit_rx, circuit_ry,
-    circuit_rz, circuit_s, circuit_swap, circuit_sx,
-    circuit_t, circuit_x, circuit_x2m, circuit_x2p, circuit_y, circuit_y2m, circuit_y2p,
-    circuit_z, circuit_reset, param_evaluate, param_free, param_parse,
+    circuit_ccx, circuit_crx, circuit_crx_param, circuit_cry, circuit_cry_param, circuit_crz,
+    circuit_crz_param, circuit_cx, circuit_cy, circuit_cz, circuit_free, circuit_fsim,
+    circuit_fsim_param, circuit_h, circuit_measure, circuit_new, circuit_num_qubits, circuit_reset,
+    circuit_rx, circuit_rxx, circuit_rxx_param, circuit_rxy, circuit_rxy_param, circuit_ry,
+    circuit_ryy, circuit_ryy_param, circuit_rz, circuit_rzx, circuit_rzx_param, circuit_rzz,
+    circuit_rzz_param, circuit_s, circuit_swap, circuit_sx, circuit_t, circuit_x, circuit_x2m,
+    circuit_x2p, circuit_y, circuit_y2m, circuit_y2p, circuit_z, param_evaluate, param_free,
+    param_parse,
 };
 use binding_c::device::{
-    device_new, device_free, device_num_qubits, device_add_qubit_properties,
-    device_set_default_single_qubit_error, device_get_default_single_qubit_error,
-    device_set_default_two_qubit_error, device_get_default_two_qubit_error,
-    device_get_t1, topology_new_line, topology_free, topology_num_qubits,
-    qubit_prop_new, qubit_prop_free, qubit_prop_set_t1, qubit_prop_get_t1,
+    device_add_qubit_properties, device_free, device_get_default_single_qubit_error,
+    device_get_default_two_qubit_error, device_get_t1, device_new, device_num_qubits,
+    device_set_default_single_qubit_error, device_set_default_two_qubit_error, qubit_prop_free,
+    qubit_prop_get_t1, qubit_prop_new, qubit_prop_set_t1, topology_free, topology_new_line,
+    topology_num_qubits,
 };
 use binding_c::ir::{qasm2_load, qcis_load};
+use binding_c::qis::{
+    density_matrix_cx, density_matrix_free, density_matrix_h, density_matrix_new,
+    density_matrix_noise_cx, density_matrix_noise_free, density_matrix_noise_h,
+    density_matrix_noise_new, density_matrix_noise_num_qubits, density_matrix_noise_x,
+    density_matrix_num_qubits, density_matrix_probabilities, density_matrix_x,
+    hamiltonian_add_term, hamiltonian_free, hamiltonian_new, hamiltonian_num_qubits,
+    hamiltonian_num_terms, observable_expectation_dm, observable_expectation_sv, pauli_string_free,
+    pauli_string_free_string, pauli_string_get_pauli, pauli_string_new, pauli_string_num_qubits,
+    pauli_string_set_pauli, pauli_string_to_string, statevector_cx, statevector_free,
+    statevector_h, statevector_new, statevector_num_qubits, statevector_probabilities,
+    statevector_x, statevector_y, statevector_z,
+};
 
 #[test]
 fn test_circuit_lifecycle() {
@@ -200,29 +211,58 @@ fn test_device_and_topology() {
     let qubits = [0u32, 1, 2];
     let topo = topology_new_line(qubits.as_ptr(), 3);
     assert!(!topo.is_null(), "Topology should not be null");
-    assert_eq!(topology_num_qubits(topo), 3, "Topology should have 3 qubits");
-    
+    assert_eq!(
+        topology_num_qubits(topo),
+        3,
+        "Topology should have 3 qubits"
+    );
+
     // Test device creation
-    let device = device_new(std::ffi::CStr::from_bytes_with_nul(b"TestDevice\0").unwrap().as_ptr(), topo);
+    let device = device_new(
+        std::ffi::CStr::from_bytes_with_nul(b"TestDevice\0")
+            .unwrap()
+            .as_ptr(),
+        topo,
+    );
     assert!(!device.is_null(), "Device should not be null");
     assert_eq!(device_num_qubits(device), 3, "Device should have 3 qubits");
-    
+
     // Test gate error setters/getters
-    assert_eq!(device_set_default_single_qubit_error(device, 0.01), 0, "Should set single-qubit error");
-    assert_eq!(device_get_default_single_qubit_error(device), 0.01, "Should get single-qubit error");
-    
-    assert_eq!(device_set_default_two_qubit_error(device, 0.02), 0, "Should set two-qubit error");
-    assert_eq!(device_get_default_two_qubit_error(device), 0.02, "Should get two-qubit error");
-    
+    assert_eq!(
+        device_set_default_single_qubit_error(device, 0.01),
+        0,
+        "Should set single-qubit error"
+    );
+    assert_eq!(
+        device_get_default_single_qubit_error(device),
+        0.01,
+        "Should get single-qubit error"
+    );
+
+    assert_eq!(
+        device_set_default_two_qubit_error(device, 0.02),
+        0,
+        "Should set two-qubit error"
+    );
+    assert_eq!(
+        device_get_default_two_qubit_error(device),
+        0.02,
+        "Should get two-qubit error"
+    );
+
     // Test qubit properties
     let qubit_prop = qubit_prop_new(0.001);
     assert!(!qubit_prop.is_null(), "QubitProp should not be null");
     assert_eq!(qubit_prop_set_t1(qubit_prop, 50.0), 0, "Should set T1");
     assert_eq!(qubit_prop_get_t1(qubit_prop), 50.0, "Should get T1");
-    
-    assert_eq!(device_add_qubit_properties(device, 0, qubit_prop), 0, "Should add qubit properties");
+
+    assert_eq!(
+        device_add_qubit_properties(device, 0, qubit_prop),
+        0,
+        "Should add qubit properties"
+    );
     assert_eq!(device_get_t1(device, 0), 50.0, "Should retrieve qubit T1");
-    
+
     // Cleanup
     qubit_prop_free(qubit_prop);
     device_free(device);
@@ -232,9 +272,168 @@ fn test_device_and_topology() {
 #[test]
 fn test_device_null_pointer_safety() {
     // Verify Device FFI handles null pointers gracefully
-    assert_eq!(device_num_qubits(std::ptr::null()), 0, "NULL device should return 0 qubits");
+    assert_eq!(
+        device_num_qubits(std::ptr::null()),
+        0,
+        "NULL device should return 0 qubits"
+    );
     device_free(std::ptr::null_mut()); // Should not crash
-    
+
     // Verify getters on NULL return default/error values
-    assert_eq!(device_get_default_single_qubit_error(std::ptr::null()), -1.0, "NULL device should return -1.0");
+    assert_eq!(
+        device_get_default_single_qubit_error(std::ptr::null()),
+        -1.0,
+        "NULL device should return -1.0"
+    );
+}
+
+#[test]
+fn test_statevector_lifecycle() {
+    let ptr = statevector_new(2);
+    assert!(!ptr.is_null());
+
+    assert_eq!(statevector_num_qubits(ptr), 2);
+
+    assert_eq!(statevector_h(ptr, 0), 0);
+    assert_eq!(statevector_cx(ptr, 0, 1), 0);
+
+    let mut probs = [0.0f64; 4];
+    assert_eq!(statevector_probabilities(ptr, probs.as_mut_ptr(), 4), 0);
+    assert!((probs[0] - 0.5).abs() < 1e-10);
+    assert!((probs[3] - 0.5).abs() < 1e-10);
+
+    statevector_free(ptr);
+}
+
+#[test]
+fn test_density_matrix_lifecycle() {
+    let ptr = density_matrix_new(2);
+    assert!(!ptr.is_null());
+
+    assert_eq!(density_matrix_num_qubits(ptr), 2);
+
+    assert_eq!(density_matrix_h(ptr, 0), 0);
+    assert_eq!(density_matrix_cx(ptr, 0, 1), 0);
+
+    let mut probs = [0.0f64; 4];
+    assert_eq!(density_matrix_probabilities(ptr, probs.as_mut_ptr(), 4), 0);
+    assert!((probs[0] - 0.5).abs() < 1e-10);
+    assert!((probs[3] - 0.5).abs() < 1e-10);
+
+    density_matrix_free(ptr);
+}
+
+#[test]
+fn test_density_matrix_noise_lifecycle() {
+    let ptr = density_matrix_noise_new(2);
+    assert!(!ptr.is_null());
+
+    assert_eq!(density_matrix_noise_num_qubits(ptr), 2);
+
+    assert_eq!(density_matrix_noise_h(ptr, 0), 0);
+    assert_eq!(density_matrix_noise_cx(ptr, 0, 1), 0);
+
+    density_matrix_noise_free(ptr);
+}
+
+#[test]
+fn test_pauli_string_operations() {
+    let ptr = pauli_string_new(3);
+    assert!(!ptr.is_null());
+
+    assert_eq!(pauli_string_num_qubits(ptr), 3);
+
+    assert_eq!(pauli_string_set_pauli(ptr, 0, 1), 0); // X
+    assert_eq!(pauli_string_set_pauli(ptr, 1, 3), 0); // Z
+    assert_eq!(pauli_string_set_pauli(ptr, 2, 0), 0); // I
+
+    assert_eq!(pauli_string_get_pauli(ptr, 0), 1);
+    assert_eq!(pauli_string_get_pauli(ptr, 1), 3);
+    assert_eq!(pauli_string_get_pauli(ptr, 2), 0);
+
+    let str_ptr = pauli_string_to_string(ptr);
+    assert!(!str_ptr.is_null());
+    let cstr = unsafe { std::ffi::CStr::from_ptr(str_ptr) };
+    assert_eq!(cstr.to_str().unwrap(), "XZI");
+    pauli_string_free_string(str_ptr);
+
+    pauli_string_free(ptr);
+}
+
+#[test]
+fn test_hamiltonian_operations() {
+    let ptr = hamiltonian_new(2);
+    assert!(!ptr.is_null());
+
+    assert_eq!(hamiltonian_num_qubits(ptr), 2);
+
+    let term1 = std::ffi::CString::new("XX").unwrap();
+    assert_eq!(hamiltonian_add_term(ptr, term1.as_ptr(), 1.0, 0.0), 0);
+
+    let term2 = std::ffi::CString::new("ZZ").unwrap();
+    assert_eq!(hamiltonian_add_term(ptr, term2.as_ptr(), 0.5, 0.0), 0);
+
+    assert_eq!(hamiltonian_num_terms(ptr), 2);
+
+    hamiltonian_free(ptr);
+}
+
+#[test]
+fn test_observable_expectation() {
+    // Create Hamiltonian H = Z
+    let h_ptr = hamiltonian_new(1);
+    let term = std::ffi::CString::new("Z").unwrap();
+    assert_eq!(hamiltonian_add_term(h_ptr, term.as_ptr(), 1.0, 0.0), 0);
+
+    // Create statevector |1>
+    let sv_ptr = statevector_new(1);
+    assert_eq!(statevector_x(sv_ptr, 0), 0);
+
+    // Compute <1|Z|1>
+    let mut real = 0.0;
+    let mut imag = 0.0;
+    assert_eq!(
+        observable_expectation_sv(h_ptr, sv_ptr, &mut real, &mut imag),
+        0
+    );
+    assert!((real - (-1.0)).abs() < 1e-10);
+    assert!(imag.abs() < 1e-10);
+
+    // Test with density matrix
+    let dm_ptr = density_matrix_new(1);
+    assert_eq!(density_matrix_x(dm_ptr, 0), 0);
+    assert_eq!(
+        observable_expectation_dm(h_ptr, dm_ptr, &mut real, &mut imag),
+        0
+    );
+    assert!((real - (-1.0)).abs() < 1e-10);
+    assert!(imag.abs() < 1e-10);
+
+    hamiltonian_free(h_ptr);
+    statevector_free(sv_ptr);
+    density_matrix_free(dm_ptr);
+}
+
+#[test]
+fn test_qis_null_pointer_safety() {
+    // Test null pointers for qis functions
+    statevector_free(std::ptr::null_mut());
+    density_matrix_free(std::ptr::null_mut());
+    density_matrix_noise_free(std::ptr::null_mut());
+    pauli_string_free(std::ptr::null_mut());
+    hamiltonian_free(std::ptr::null_mut());
+
+    assert_eq!(statevector_num_qubits(std::ptr::null()), 0);
+    assert_eq!(density_matrix_num_qubits(std::ptr::null()), 0);
+    assert_eq!(density_matrix_noise_num_qubits(std::ptr::null()), 0);
+    assert_eq!(pauli_string_num_qubits(std::ptr::null()), 0);
+    assert_eq!(hamiltonian_num_qubits(std::ptr::null()), 0);
+
+    assert_eq!(statevector_h(std::ptr::null_mut(), 0), -1);
+    assert_eq!(density_matrix_h(std::ptr::null_mut(), 0), -1);
+    assert_eq!(pauli_string_set_pauli(std::ptr::null_mut(), 0, 1), -1);
+    assert_eq!(
+        hamiltonian_add_term(std::ptr::null_mut(), std::ptr::null(), 1.0, 0.0),
+        -1
+    );
 }

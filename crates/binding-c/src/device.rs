@@ -77,11 +77,7 @@ pub extern "C" fn topology_new(
                 .map(|&coupling| {
                     let target = (coupling & 0xFFFFFFFF) as u32;
                     let control = (coupling >> 32) as u32;
-                    (
-                        Qubit::new(control),
-                        Qubit::new(target),
-                        "".to_string(),
-                    )
+                    (Qubit::new(control), Qubit::new(target), "".to_string())
                 })
                 .collect()
         }
@@ -387,10 +383,7 @@ pub extern "C" fn device_get_default_t2(ptr: *const DeviceWrapper) -> f64 {
 
 /// Set default readout error.
 #[unsafe(no_mangle)]
-pub extern "C" fn device_set_default_readout_error(
-    ptr: *mut DeviceWrapper,
-    error: f64,
-) -> i32 {
+pub extern "C" fn device_set_default_readout_error(ptr: *mut DeviceWrapper, error: f64) -> i32 {
     if ptr.is_null() {
         return -1;
     }
@@ -432,10 +425,7 @@ pub extern "C" fn device_get_default_single_qubit_error(ptr: *const DeviceWrappe
 
 /// Set default two-qubit gate error.
 #[unsafe(no_mangle)]
-pub extern "C" fn device_set_default_two_qubit_error(
-    ptr: *mut DeviceWrapper,
-    error: f64,
-) -> i32 {
+pub extern "C" fn device_set_default_two_qubit_error(ptr: *mut DeviceWrapper, error: f64) -> i32 {
     if ptr.is_null() {
         return -1;
     }
