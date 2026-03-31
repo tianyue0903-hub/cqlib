@@ -20,7 +20,13 @@ including device topology, qubit properties, noise models, and execution results
 from .device_impl import InstructionProp, QubitProp, EdgeProp, Device
 from .topology import Topology
 from .layout import Layout
-from .noise import SingleQubitNoise, TwoQubitNoise, ReadoutError, OperationKey, NoiseModel
+from .noise import (
+    SingleQubitNoise,
+    TwoQubitNoise,
+    ReadoutError,
+    OperationKey,
+    NoiseModel,
+)
 from .result import Outcome, Status, ExecutionResult
 
 __all__ = [

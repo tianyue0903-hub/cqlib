@@ -87,6 +87,7 @@ impl PySabreConfig {
         gate_cost_weight = 1.0,
         predicted_fidelity_weight = 0.1,
     ))]
+    #[allow(clippy::too_many_arguments)]
     fn new(
         vf2_policy: String,
         field_mode: bool,
@@ -243,6 +244,7 @@ pub fn py_vf2_find_initial_layout(
     region_beam_width = 32,
     region_oversample_factor = 3,
 ))]
+#[allow(clippy::too_many_arguments)]
 pub fn py_vf2_find_initial_layout_candidates(
     py: Python<'_>,
     circuit: &PyCircuit,

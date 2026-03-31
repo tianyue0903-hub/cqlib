@@ -14,7 +14,6 @@ from ...qis import PauliString
 from .feature_map import PauliFeatureMap, ZZFeatureMap
 from .two_local import EntanglementTopology, TwoLocal
 
-
 def real_amplitudes(
     num_qubits: int,
     reps: int,
@@ -42,7 +41,6 @@ def real_amplitudes(
         9
     """
     ...
-
 
 def efficient_su2(
     num_qubits: int,
@@ -73,7 +71,6 @@ def efficient_su2(
     """
     ...
 
-
 def zz_feature_map(
     num_qubits: int,
     reps: int,
@@ -99,7 +96,6 @@ def zz_feature_map(
         3
     """
     ...
-
 
 def pauli_feature_map(
     num_qubits: int,

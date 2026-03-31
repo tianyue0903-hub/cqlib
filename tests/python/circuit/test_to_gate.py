@@ -20,8 +20,6 @@ Test coverage:
 - Circuit gate decomposition
 """
 
-import pytest
-import numpy as np
 from cqlib.circuit import Circuit, Parameter
 from cqlib.circuit.gates import CircuitGate
 

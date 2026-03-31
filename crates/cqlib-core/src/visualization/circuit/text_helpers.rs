@@ -332,6 +332,8 @@ pub(super) fn draw_control_flow_marker(lines: &mut [Vec<String>], lanes: &[usize
     ));
 
     let label_y = select_label_row(top_line, bottom_line);
+
+    #[allow(clippy::needless_range_loop)]
     for y in (top_line + 1)..bottom_line {
         let is_wire = y % 2 == 1;
         let fill = ' ';
@@ -381,6 +383,8 @@ pub(super) fn draw_connect_vertical(lines: &mut [Vec<String>], lanes: &[usize]) 
         min_y = min_y.min(y);
         max_y = max_y.max(y);
     }
+
+    #[allow(clippy::needless_range_loop)]
     for y in (min_y + 1)..max_y {
         if y % 2 == 1 {
             lines[y].push(BoxChar::TOP_BOTTOM_LEFT_RIGHT.to_string());
@@ -420,6 +424,7 @@ pub(super) fn draw_fsim(lines: &mut [Vec<String>], op: &VisualOperation) {
         lines[y_wire(*lane)].push(end_token.clone());
     }
 
+    #[allow(clippy::needless_range_loop)]
     for y in (min_y + 1)..max_y {
         let base_char = if y % 2 == 1 {
             BoxChar::TOP_BOTTOM_LEFT_RIGHT.chars().next().unwrap_or('┼')

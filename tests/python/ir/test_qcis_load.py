@@ -377,7 +377,7 @@ CZ Q0 Q1
 M Q0
 M Q1
 """
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.qcis', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".qcis", delete=False) as f:
             f.write(qcis_content)
             temp_path = f.name
 

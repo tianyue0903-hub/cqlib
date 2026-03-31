@@ -676,10 +676,6 @@ fn test_decompose_control_flow_multiple_qubits() {
     );
 }
 
-// ============================================================================
-// Tests for compose() method
-// ============================================================================
-
 #[test]
 fn test_compose_basic_with_mapping() {
     // Create qc1 with qubits 1, 3, 5

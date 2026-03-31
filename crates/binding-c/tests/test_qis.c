@@ -10,11 +10,12 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
+#include <assert.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <assert.h>
 #include <string.h>
-#include <math.h>
+
 #include "cqlib_c.h"
 
 // Test statevector lifecycle
@@ -87,14 +88,14 @@ void test_pauli_string_operations() {
     assert(pauli_string_num_qubits(ps) == 3);
 
     // Set Pauli operators
-    assert(pauli_string_set_pauli(ps, 0, 1) == 0); // X
-    assert(pauli_string_set_pauli(ps, 1, 3) == 0); // Z
-    assert(pauli_string_set_pauli(ps, 2, 0) == 0); // I
+    assert(pauli_string_set_pauli(ps, 0, 1) == 0);  // X
+    assert(pauli_string_set_pauli(ps, 1, 3) == 0);  // Z
+    assert(pauli_string_set_pauli(ps, 2, 0) == 0);  // I
 
     // Get Pauli operators
-    assert(pauli_string_get_pauli(ps, 0) == 1); // X
-    assert(pauli_string_get_pauli(ps, 1) == 3); // Z
-    assert(pauli_string_get_pauli(ps, 2) == 0); // I
+    assert(pauli_string_get_pauli(ps, 0) == 1);  // X
+    assert(pauli_string_get_pauli(ps, 1) == 3);  // Z
+    assert(pauli_string_get_pauli(ps, 2) == 0);  // I
 
     // Test string representation
     char* str = pauli_string_to_string(ps);
@@ -133,7 +134,7 @@ void test_observable_expectation() {
 
     // Create statevector |1>
     StatevectorWrapper* sv = statevector_new(1);
-    assert(statevector_x(sv, 0) == 0); // |0> -> |1>
+    assert(statevector_x(sv, 0) == 0);  // |0> -> |1>
 
     // Compute <1|Z|1>
     double real, imag;
@@ -188,4 +189,4 @@ int main() {
 
     printf("All QIS tests PASSED!\n");
     return 0;
-}
+}

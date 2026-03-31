@@ -202,10 +202,7 @@ class Device:
     """
 
     def __init__(
-        self,
-        name: str,
-        qubits: list[int] | list[Qubit],
-        topology: Topology
+        self, name: str, qubits: list[int] | list[Qubit], topology: Topology
     ) -> None:
         """
         Initializes a Device.
@@ -333,7 +330,9 @@ class Device:
         """
         ...
 
-    def add_edge_properties(self, control: int | Qubit, target: int | Qubit, props: EdgeProp) -> None:
+    def add_edge_properties(
+        self, control: int | Qubit, target: int | Qubit, props: EdgeProp
+    ) -> None:
         """
         Adds or updates properties for a specific coupling edge.
 
@@ -356,7 +355,9 @@ class Device:
         """
         ...
 
-    def edge_properties(self, control: int | Qubit, target: int | Qubit) -> EdgeProp | None:
+    def edge_properties(
+        self, control: int | Qubit, target: int | Qubit
+    ) -> EdgeProp | None:
         """
         Returns the properties of a specific coupling edge, if defined.
 

@@ -23,9 +23,7 @@
 - 使用表达式参数
 """
 
-import pytest
 import numpy as np
-from cqlib.circuit import Circuit, Parameter
 
 
 class TestRotationGatesWithFloat:
@@ -119,7 +117,9 @@ class TestRotationGatesWithExpression:
         c.rx(0, 2.0 * theta_param)
         assert len(c) == 1
 
-    def test_rx_with_complex_expression(self, single_qubit_circuit, theta_param, phi_param):
+    def test_rx_with_complex_expression(
+        self, single_qubit_circuit, theta_param, phi_param
+    ):
         """RX门使用复杂表达式"""
         c = single_qubit_circuit
         c.rx(0, theta_param + phi_param)

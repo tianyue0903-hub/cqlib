@@ -123,7 +123,6 @@ class SingleQubitNoise:
         """
         ...
 
-
 class TwoQubitNoise:
     """
     Two-qubit quantum noise channel.
@@ -159,7 +158,9 @@ class TwoQubitNoise:
         ...
 
     @staticmethod
-    def independent(q0_noise: SingleQubitNoise, q1_noise: SingleQubitNoise) -> "TwoQubitNoise":
+    def independent(
+        q0_noise: SingleQubitNoise, q1_noise: SingleQubitNoise
+    ) -> "TwoQubitNoise":
         """
         Creates independent single-qubit noise on both qubits.
 
@@ -200,7 +201,6 @@ class TwoQubitNoise:
         """Returns the noise channel type."""
         ...
 
-
 class ReadoutError:
     """
     Asymmetric readout error model.
@@ -238,7 +238,6 @@ class ReadoutError:
         """Returns `True` if both probabilities are in [0.0, 1.0]."""
         ...
 
-
 class OperationKey:
     """
     Key for looking up noise parameters in a noise model.
@@ -258,7 +257,9 @@ class OperationKey:
         ...
 
     @staticmethod
-    def new_double(gate: StandardGate, q0: int | Qubit, q1: int | Qubit) -> "OperationKey":
+    def new_double(
+        gate: StandardGate, q0: int | Qubit, q1: int | Qubit
+    ) -> "OperationKey":
         """
         Creates a key for a two-qubit operation.
 
@@ -270,7 +271,9 @@ class OperationKey:
         ...
 
     @staticmethod
-    def new_triple(gate: StandardGate, q0: int | Qubit, q1: int | Qubit, q2: int | Qubit) -> "OperationKey":
+    def new_triple(
+        gate: StandardGate, q0: int | Qubit, q1: int | Qubit, q2: int | Qubit
+    ) -> "OperationKey":
         """
         Creates a key for a three-qubit operation.
 
@@ -294,7 +297,6 @@ class OperationKey:
 
     def __hash__(self) -> int: ...
     def __eq__(self, value: object) -> bool: ...
-
 
 class NoiseModel:
     """
@@ -339,7 +341,9 @@ class NoiseModel:
         """
         ...
 
-    def add_single_qubit_error(self, gate: StandardGate, qubit: int | Qubit, noise: SingleQubitNoise) -> None:
+    def add_single_qubit_error(
+        self, gate: StandardGate, qubit: int | Qubit, noise: SingleQubitNoise
+    ) -> None:
         """
         Adds single-qubit noise to a gate on a specific qubit.
 
@@ -350,7 +354,9 @@ class NoiseModel:
         """
         ...
 
-    def add_two_qubit_error(self, gate: StandardGate, q0: int | Qubit, q1: int | Qubit, noise: TwoQubitNoise) -> None:
+    def add_two_qubit_error(
+        self, gate: StandardGate, q0: int | Qubit, q1: int | Qubit, noise: TwoQubitNoise
+    ) -> None:
         """
         Adds two-qubit noise to a gate on specific qubits.
 
@@ -366,7 +372,9 @@ class NoiseModel:
         """Returns the readout error for a qubit, if any."""
         ...
 
-    def get_single_qubit_errors(self, key: OperationKey) -> list[SingleQubitNoise] | None:
+    def get_single_qubit_errors(
+        self, key: OperationKey
+    ) -> list[SingleQubitNoise] | None:
         """Returns all single-qubit noise channels for an operation."""
         ...
 

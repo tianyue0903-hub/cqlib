@@ -16,10 +16,8 @@ Pytest fixtures and utilities for cqlib tests.
 
 import pytest
 import numpy as np
-from cqlib.circuit import Circuit, Parameter, Qubit
+from cqlib.circuit import Circuit, Parameter
 
-
-# ==================== Circuit Fixtures ====================
 
 @pytest.fixture
 def empty_circuit():
@@ -77,8 +75,6 @@ def qft_3qubit_circuit():
     return c
 
 
-# ==================== Parameter Fixtures ====================
-
 @pytest.fixture
 def theta_param():
     """Returns a symbolic parameter named 'theta'."""
@@ -108,8 +104,6 @@ def constant_param():
     """Returns a constant parameter with value 3.14."""
     return Parameter.from_float(3.14)
 
-
-# ==================== Parameterized Circuit Fixtures ====================
 
 @pytest.fixture
 def single_param_circuit(theta_param):
@@ -141,12 +135,11 @@ def variational_circuit(theta_param, phi_param):
     return c
 
 
-# ==================== Gate Fixtures ====================
-
 @pytest.fixture
 def hadamard_gate():
     """Returns a Hadamard gate instance."""
     from cqlib.circuit.gates import H
+
     return H
 
 
@@ -154,29 +147,30 @@ def hadamard_gate():
 def cnot_gate():
     """Returns a CNOT gate instance."""
     from cqlib.circuit.gates import CX
+
     return CX
 
-
-# ==================== Utility Fixtures ====================
 
 @pytest.fixture
 def is_close():
     """Returns a function to check if two arrays are close."""
+
     def _is_close(a, b, rtol=1e-10, atol=1e-10):
         return np.allclose(a, b, rtol=rtol, atol=atol)
+
     return _is_close
 
 
 @pytest.fixture
 def is_unitary():
     """Returns a function to check if a matrix is unitary."""
+
     def _is_unitary(mat, rtol=1e-10, atol=1e-10):
         identity = mat @ mat.conj().T
         return np.allclose(identity, np.eye(len(mat)), rtol=rtol, atol=atol)
+
     return _is_unitary
 
-
-# ==================== QASM2 Fixtures ====================
 
 @pytest.fixture
 def qasm_bell_state():
@@ -216,8 +210,6 @@ h q[1];
 swap q[0],q[1];
 """
 
-
-# ==================== QCIS Fixtures ====================
 
 @pytest.fixture
 def qcis_bell_state():

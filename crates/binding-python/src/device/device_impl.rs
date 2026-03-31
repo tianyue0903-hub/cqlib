@@ -432,8 +432,7 @@ impl PyDevice {
     #[getter]
     fn calibration_time(&self) -> Option<chrono::DateTime<chrono::Utc>> {
         self.inner.calibration_time().map(|t| {
-            chrono::DateTime::from_timestamp(t.unix_timestamp(), 0)
-                .unwrap_or_else(|| chrono::Utc::now())
+            chrono::DateTime::from_timestamp(t.unix_timestamp(), 0).unwrap_or_else(chrono::Utc::now)
         })
     }
 

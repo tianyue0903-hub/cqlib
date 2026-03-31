@@ -43,8 +43,6 @@ fn binding_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(compile::py_vf2_map, m)?)?;
     m.add_function(wrap_pyfunction!(compile::py_map_with_vf2_sabre, m)?)?;
 
-
-
     // Register visualization functions
     m.add_function(wrap_pyfunction!(visualization::py_draw_text, m)?)?;
     m.add_function(wrap_pyfunction!(visualization::py_draw_figure, m)?)?;

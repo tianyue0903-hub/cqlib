@@ -43,7 +43,6 @@ def loads(qasm: str) -> Circuit:
     """
     ...
 
-
 def load(path: str) -> Circuit:
     """Load and parse an OpenQASM 2.0 file into a Circuit.
 
@@ -61,7 +60,6 @@ def load(path: str) -> Circuit:
         >>> circuit = load("/path/to/circuit.qasm")
     """
     ...
-
 
 def dumps(circuit: Circuit) -> str:
     """Serialize a Circuit to an OpenQASM 2.0 string.
@@ -85,7 +83,6 @@ def dumps(circuit: Circuit) -> str:
         >>> print(qasm_str)
     """
     ...
-
 
 def dump(circuit: Circuit, path: str) -> None:
     """Serialize a Circuit to an OpenQASM 2.0 file.

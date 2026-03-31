@@ -14,8 +14,6 @@ from typing import final
 
 from ...circuit import Circuit
 from ...circuit.gates import StandardGate
-from ...qis import PauliString
-
 
 @final
 class EntanglementTopology:
@@ -68,7 +66,6 @@ class EntanglementTopology:
     def __repr__(self) -> str: ...
     def __str__(self) -> str: ...
     def __eq__(self, other: object) -> bool: ...
-
 
 @final
 class TwoLocal:

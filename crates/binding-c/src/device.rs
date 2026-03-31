@@ -23,10 +23,6 @@ use std::collections::HashSet;
 use std::ffi::CStr;
 use std::os::raw::c_char;
 
-// =====================================================================
-// Wrapper Types for C FFI
-// =====================================================================
-
 /// Wrapper for Topology to be used from C
 pub struct TopologyWrapper {
     pub(crate) inner: Topology,
@@ -41,10 +37,6 @@ pub struct DeviceWrapper {
 pub struct QubitPropWrapper {
     pub(crate) inner: QubitProp,
 }
-
-// =====================================================================
-// Topology C Interface
-// =====================================================================
 
 /// Create a new topology from arrays of qubits and couplings.
 /// qubits: array of qubit indices
@@ -174,10 +166,6 @@ pub extern "C" fn topology_is_connected(
     0
 }
 
-// =====================================================================
-// QubitProp C Interface
-// =====================================================================
-
 /// Create a new QubitProp with readout error.
 #[unsafe(no_mangle)]
 pub extern "C" fn qubit_prop_new(readout_error: f64) -> *mut QubitPropWrapper {
@@ -281,10 +269,6 @@ pub extern "C" fn qubit_prop_get_frequency(ptr: *const QubitPropWrapper) -> f64 
     }
     unsafe { (*ptr).inner.frequency().unwrap_or(-1.0) }
 }
-
-// =====================================================================
-// Device C Interface
-// =====================================================================
 
 /// Create a new Device with a name and topology.
 /// Returns pointer to DeviceWrapper, or NULL on error.
