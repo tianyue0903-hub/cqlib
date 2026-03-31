@@ -10,11 +10,18 @@
 # copyright notice, and modified files need to carry a notice indicating
 # that they have been altered from the originals.
 
-from ..._native import StandardGate, UnitaryGate, McGate, CircuitGate
+from ..._native.circuit import gate as _gate_module
 
+StandardGate = _gate_module.StandardGate
+UnitaryGate = _gate_module.UnitaryGate
+McGate = _gate_module.McGate
+CircuitGate = _gate_module.CircuitGate
+ConditionView = _gate_module.ConditionView
+ControlFlow = _gate_module.ControlFlow
+IfElseGate = _gate_module.IfElseGate
+WhileLoopGate = _gate_module.WhileLoopGate
+Directive = _gate_module.Directive
 
-
-# --- Single Qubit Gates ---
 I = StandardGate.I
 H = StandardGate.H
 X = StandardGate.X
@@ -66,6 +73,12 @@ __all__ = [
     "StandardGate",
     "UnitaryGate",
     "McGate",
+    "CircuitGate",
+    "ConditionView",
+    "ControlFlow",
+    "IfElseGate",
+    "WhileLoopGate",
+    "Directive",
     # Single Qubit
     "I",
     "H",

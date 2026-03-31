@@ -419,12 +419,7 @@ pub extern "C" fn circuit_rxy(
 
 /// Apply RXX gate with concrete float value.
 #[unsafe(no_mangle)]
-pub extern "C" fn circuit_rxx(
-    ptr: *mut CircuitWrapper,
-    a: u32,
-    b: u32,
-    theta: f64,
-) -> i32 {
+pub extern "C" fn circuit_rxx(ptr: *mut CircuitWrapper, a: u32, b: u32, theta: f64) -> i32 {
     if ptr.is_null() {
         return -1;
     }
@@ -442,12 +437,7 @@ pub extern "C" fn circuit_rxx(
 
 /// Apply RYY gate with concrete float value.
 #[unsafe(no_mangle)]
-pub extern "C" fn circuit_ryy(
-    ptr: *mut CircuitWrapper,
-    a: u32,
-    b: u32,
-    theta: f64,
-) -> i32 {
+pub extern "C" fn circuit_ryy(ptr: *mut CircuitWrapper, a: u32, b: u32, theta: f64) -> i32 {
     if ptr.is_null() {
         return -1;
     }
@@ -465,12 +455,7 @@ pub extern "C" fn circuit_ryy(
 
 /// Apply RZZ gate with concrete float value.
 #[unsafe(no_mangle)]
-pub extern "C" fn circuit_rzz(
-    ptr: *mut CircuitWrapper,
-    a: u32,
-    b: u32,
-    theta: f64,
-) -> i32 {
+pub extern "C" fn circuit_rzz(ptr: *mut CircuitWrapper, a: u32, b: u32, theta: f64) -> i32 {
     if ptr.is_null() {
         return -1;
     }
@@ -488,12 +473,7 @@ pub extern "C" fn circuit_rzz(
 
 /// Apply RZX gate with concrete float value.
 #[unsafe(no_mangle)]
-pub extern "C" fn circuit_rzx(
-    ptr: *mut CircuitWrapper,
-    a: u32,
-    b: u32,
-    theta: f64,
-) -> i32 {
+pub extern "C" fn circuit_rzx(ptr: *mut CircuitWrapper, a: u32, b: u32, theta: f64) -> i32 {
     if ptr.is_null() {
         return -1;
     }

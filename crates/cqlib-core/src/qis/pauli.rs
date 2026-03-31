@@ -837,7 +837,7 @@ impl PauliString {
 /// p2.set_pauli(0, Pauli::Z);
 ///
 /// let product = &p1 * &p2;
-/// assert_eq!(product.to_string(), "-iIT");
+/// assert_eq!(product.to_string(), "-iIY");
 /// ```
 impl Mul for &PauliString {
     type Output = PauliString;

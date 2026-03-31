@@ -23,9 +23,9 @@
 use cqlib_core::qis::{
     DensityMatrix, DensityMatrixNoise, Hamiltonian, Observable, Pauli, PauliString, Statevector,
 };
+use num_complex;
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_double};
-use num_complex;
 
 // =============================================================================
 // Statevector Wrapper
@@ -144,7 +144,11 @@ pub extern "C" fn statevector_cx(ptr: *mut StatevectorWrapper, control: u32, tar
 
 /// Get probabilities.
 #[unsafe(no_mangle)]
-pub extern "C" fn statevector_probabilities(ptr: *const StatevectorWrapper, out_probs: *mut c_double, len: usize) -> i32 {
+pub extern "C" fn statevector_probabilities(
+    ptr: *const StatevectorWrapper,
+    out_probs: *mut c_double,
+    len: usize,
+) -> i32 {
     if ptr.is_null() || out_probs.is_null() {
         return -1;
     }
@@ -230,7 +234,11 @@ pub extern "C" fn density_matrix_x(ptr: *mut DensityMatrixWrapper, qubit_idx: u3
 
 /// Apply CNOT gate.
 #[unsafe(no_mangle)]
-pub extern "C" fn density_matrix_cx(ptr: *mut DensityMatrixWrapper, control: u32, target: u32) -> i32 {
+pub extern "C" fn density_matrix_cx(
+    ptr: *mut DensityMatrixWrapper,
+    control: u32,
+    target: u32,
+) -> i32 {
     if ptr.is_null() {
         return -1;
     }
@@ -246,7 +254,11 @@ pub extern "C" fn density_matrix_cx(ptr: *mut DensityMatrixWrapper, control: u32
 
 /// Get probabilities.
 #[unsafe(no_mangle)]
-pub extern "C" fn density_matrix_probabilities(ptr: *const DensityMatrixWrapper, out_probs: *mut c_double, len: usize) -> i32 {
+pub extern "C" fn density_matrix_probabilities(
+    ptr: *const DensityMatrixWrapper,
+    out_probs: *mut c_double,
+    len: usize,
+) -> i32 {
     if ptr.is_null() || out_probs.is_null() {
         return -1;
     }
@@ -300,7 +312,10 @@ pub extern "C" fn density_matrix_noise_num_qubits(ptr: *const DensityMatrixNoise
 
 /// Apply H gate with noise.
 #[unsafe(no_mangle)]
-pub extern "C" fn density_matrix_noise_h(ptr: *mut DensityMatrixNoiseWrapper, qubit_idx: u32) -> i32 {
+pub extern "C" fn density_matrix_noise_h(
+    ptr: *mut DensityMatrixNoiseWrapper,
+    qubit_idx: u32,
+) -> i32 {
     if ptr.is_null() {
         return -1;
     }
@@ -316,7 +331,10 @@ pub extern "C" fn density_matrix_noise_h(ptr: *mut DensityMatrixNoiseWrapper, qu
 
 /// Apply X gate with noise.
 #[unsafe(no_mangle)]
-pub extern "C" fn density_matrix_noise_x(ptr: *mut DensityMatrixNoiseWrapper, qubit_idx: u32) -> i32 {
+pub extern "C" fn density_matrix_noise_x(
+    ptr: *mut DensityMatrixNoiseWrapper,
+    qubit_idx: u32,
+) -> i32 {
     if ptr.is_null() {
         return -1;
     }
@@ -332,12 +350,18 @@ pub extern "C" fn density_matrix_noise_x(ptr: *mut DensityMatrixNoiseWrapper, qu
 
 /// Apply CNOT gate with noise.
 #[unsafe(no_mangle)]
-pub extern "C" fn density_matrix_noise_cx(ptr: *mut DensityMatrixNoiseWrapper, control: u32, target: u32) -> i32 {
+pub extern "C" fn density_matrix_noise_cx(
+    ptr: *mut DensityMatrixNoiseWrapper,
+    control: u32,
+    target: u32,
+) -> i32 {
     if ptr.is_null() {
         return -1;
     }
     let wrapper = unsafe { &mut *ptr };
-    if control as usize >= wrapper.inner.state.num_qubits || target as usize >= wrapper.inner.state.num_qubits {
+    if control as usize >= wrapper.inner.state.num_qubits
+        || target as usize >= wrapper.inner.state.num_qubits
+    {
         return -2;
     }
     match wrapper.inner.apply_cx(control as usize, target as usize) {
@@ -383,7 +407,11 @@ pub extern "C" fn pauli_string_num_qubits(ptr: *const PauliStringWrapper) -> usi
 
 /// Set Pauli operator at a qubit.
 #[unsafe(no_mangle)]
-pub extern "C" fn pauli_string_set_pauli(ptr: *mut PauliStringWrapper, qubit_idx: u32, pauli: u8) -> i32 {
+pub extern "C" fn pauli_string_set_pauli(
+    ptr: *mut PauliStringWrapper,
+    qubit_idx: u32,
+    pauli: u8,
+) -> i32 {
     if ptr.is_null() {
         return -1;
     }
@@ -496,7 +524,12 @@ pub extern "C" fn hamiltonian_num_qubits(ptr: *const HamiltonianWrapper) -> usiz
 
 /// Add a term to the Hamiltonian.
 #[unsafe(no_mangle)]
-pub extern "C" fn hamiltonian_add_term(ptr: *mut HamiltonianWrapper, pauli_str: *const c_char, real: c_double, imag: c_double) -> i32 {
+pub extern "C" fn hamiltonian_add_term(
+    ptr: *mut HamiltonianWrapper,
+    pauli_str: *const c_char,
+    real: c_double,
+    imag: c_double,
+) -> i32 {
     if ptr.is_null() || pauli_str.is_null() {
         return -1;
     }
@@ -532,7 +565,12 @@ pub extern "C" fn hamiltonian_num_terms(ptr: *const HamiltonianWrapper) -> usize
 
 /// Compute expectation value of Hamiltonian on statevector.
 #[unsafe(no_mangle)]
-pub extern "C" fn observable_expectation_sv(h_ptr: *const HamiltonianWrapper, sv_ptr: *const StatevectorWrapper, out_real: *mut c_double, out_imag: *mut c_double) -> i32 {
+pub extern "C" fn observable_expectation_sv(
+    h_ptr: *const HamiltonianWrapper,
+    sv_ptr: *const StatevectorWrapper,
+    out_real: *mut c_double,
+    out_imag: *mut c_double,
+) -> i32 {
     if h_ptr.is_null() || sv_ptr.is_null() || out_real.is_null() || out_imag.is_null() {
         return -1;
     }
@@ -552,13 +590,21 @@ pub extern "C" fn observable_expectation_sv(h_ptr: *const HamiltonianWrapper, sv
 
 /// Compute expectation value of Hamiltonian on density matrix.
 #[unsafe(no_mangle)]
-pub extern "C" fn observable_expectation_dm(h_ptr: *const HamiltonianWrapper, dm_ptr: *const DensityMatrixWrapper, out_real: *mut c_double, out_imag: *mut c_double) -> i32 {
+pub extern "C" fn observable_expectation_dm(
+    h_ptr: *const HamiltonianWrapper,
+    dm_ptr: *const DensityMatrixWrapper,
+    out_real: *mut c_double,
+    out_imag: *mut c_double,
+) -> i32 {
     if h_ptr.is_null() || dm_ptr.is_null() || out_real.is_null() || out_imag.is_null() {
         return -1;
     }
     let h_wrapper = unsafe { &*h_ptr };
     let dm_wrapper = unsafe { &*dm_ptr };
-    match h_wrapper.inner.expectation_density_matrix(&dm_wrapper.inner) {
+    match h_wrapper
+        .inner
+        .expectation_density_matrix(&dm_wrapper.inner)
+    {
         Ok(val) => {
             unsafe {
                 *out_real = val;

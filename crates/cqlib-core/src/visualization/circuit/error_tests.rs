@@ -24,10 +24,7 @@ fn test_unknown_qubit_error_display() {
 
 #[test]
 fn test_parameter_index_out_of_bounds_error_display() {
-    let err = VisualizationError::ParameterIndexOutOfBounds {
-        index: 10,
-        len: 5,
-    };
+    let err = VisualizationError::ParameterIndexOutOfBounds { index: 10, len: 5 };
     assert_eq!(format!("{err}"), "parameter index 10 out of bounds (len=5)");
 }
 
@@ -103,10 +100,7 @@ fn test_error_source_for_other_variants() {
     let err = VisualizationError::UnknownQubit(0);
     assert!(err.source().is_none());
 
-    let err = VisualizationError::ParameterIndexOutOfBounds {
-        index: 5,
-        len: 3,
-    };
+    let err = VisualizationError::ParameterIndexOutOfBounds { index: 5, len: 3 };
     assert!(err.source().is_none());
 
     let err = VisualizationError::SvgRenderFailed("error".to_string());
@@ -117,10 +111,7 @@ fn test_error_source_for_other_variants() {
 fn test_all_error_variants() {
     let errors = vec![
         VisualizationError::UnknownQubit(0),
-        VisualizationError::ParameterIndexOutOfBounds {
-            index: 1,
-            len: 1,
-        },
+        VisualizationError::ParameterIndexOutOfBounds { index: 1, len: 1 },
         VisualizationError::SvgRenderFailed("render error".to_string()),
         VisualizationError::Io(io::Error::new(io::ErrorKind::Other, "other")),
     ];

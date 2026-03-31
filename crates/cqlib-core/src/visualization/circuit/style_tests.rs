@@ -134,14 +134,8 @@ fn test_style_book_case_insensitive_style_name() {
     let upper_style = book_upper.get("default");
     let mixed_style = book_mixed.get("default");
 
-    assert_eq!(
-        default_style.background_color,
-        upper_style.background_color
-    );
-    assert_eq!(
-        default_style.background_color,
-        mixed_style.background_color
-    );
+    assert_eq!(default_style.background_color, upper_style.background_color);
+    assert_eq!(default_style.background_color, mixed_style.background_color);
 }
 
 #[test]

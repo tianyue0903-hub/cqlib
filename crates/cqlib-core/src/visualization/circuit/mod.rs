@@ -34,7 +34,7 @@ pub mod style;
 pub mod text;
 pub use builder::{VisualBuildOptions, build_visual_circuit};
 pub use error::VisualizationError;
-pub use figure::{FigureDrawerOptions, FigureDrawStyle, circuit_to_figure, render_figure_to_file};
+pub use figure::{FigureDrawStyle, FigureDrawerOptions, circuit_to_figure, render_figure_to_file};
 pub use model::{
     VisualChildren, VisualCircuit, VisualCondition, VisualControlFlowKind, VisualOpStyle,
     VisualOperation,
@@ -70,4 +70,3 @@ mod style_tests;
 #[cfg(test)]
 #[path = "text_tests.rs"]
 mod text_tests;
-

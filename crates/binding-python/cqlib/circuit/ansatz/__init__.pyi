@@ -10,23 +10,22 @@
 # copyright notice, and modified files need to carry a notice indicating
 # that they have been altered from the originals.
 
-from .circuit import Parameter, Circuit, Qubit
-from .compiler import SabreConfig
-from .device import Topology
-from .qis import DensityMatrix, Pauli, PauliString, Phase, Statevector
-from .visualization import draw_text, draw_figure
+"""Type stubs for ``cqlib.circuit.ansatz``."""
+
+from .facades import efficient_su2, pauli_feature_map, real_amplitudes, zz_feature_map
+from .feature_map import AngleEncoding, PauliFeatureMap, ZZFeatureMap
+from .qaoa import QAOAAnsatz
+from .two_local import EntanglementTopology, TwoLocal
 
 __all__ = [
-    "Parameter",
-    "Circuit",
-    "Qubit",
-    "Topology",
-    "SabreConfig",
-    "Pauli",
-    "PauliString",
-    "Phase",
-    "Statevector",
-    "DensityMatrix",
-    "draw_text",
-    "draw_figure",
+    "EntanglementTopology",
+    "TwoLocal",
+    "AngleEncoding",
+    "ZZFeatureMap",
+    "PauliFeatureMap",
+    "QAOAAnsatz",
+    "real_amplitudes",
+    "efficient_su2",
+    "zz_feature_map",
+    "pauli_feature_map",
 ]

@@ -357,8 +357,22 @@ pub(super) fn draw_measure_svg(
     let label_y = py(y - 0.30 * height);
     let label_x0 = cx - rx * 0.75;
     let label_x1 = cx + rx * 0.75;
-    out.push(svg_text(label_x0, label_y, "0", label_fs, &line_color, "middle"));
-    out.push(svg_text(label_x1, label_y, "1", label_fs, &line_color, "middle"));
+    out.push(svg_text(
+        label_x0,
+        label_y,
+        "0",
+        label_fs,
+        &line_color,
+        "middle",
+    ));
+    out.push(svg_text(
+        label_x1,
+        label_y,
+        "1",
+        label_fs,
+        &line_color,
+        "middle",
+    ));
 
     out
 }
