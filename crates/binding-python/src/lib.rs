@@ -66,5 +66,8 @@ fn binding_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Register static gate instances (H, X, etc.) to StandardGate class
     circuit::gate::standard::register_gates(m)?;
 
+    // Register ansatz submodule
+    circuit::ansatz::register_ansatz_module(m)?;
+
     Ok(())
 }

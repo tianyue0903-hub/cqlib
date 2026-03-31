@@ -10,6 +10,7 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
+pub mod ansatz;
 pub mod bit;
 pub mod circuit_impl;
 pub mod circuit_to_matrix;
