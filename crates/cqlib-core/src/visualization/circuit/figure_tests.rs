@@ -11,7 +11,7 @@
 // that they have been altered from the originals.
 
 use super::*;
-use crate::circuit::param::ParameterValue;
+use crate::circuit::circuit_param::ParameterValue;
 use crate::circuit::{
     Circuit, ConditionView, Instruction, Operation, Parameter, Qubit, StandardGate, UnitaryGate,
 };
@@ -729,4 +729,3 @@ fn test_fold_layout() {
         "fold_layout.png",
     );
 }
-

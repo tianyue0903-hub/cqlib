@@ -13,7 +13,7 @@
 //! Tests for the visualization IR builder module.
 
 use super::*;
-use crate::circuit::param::ParameterValue;
+use crate::circuit::circuit_param::ParameterValue;
 use crate::circuit::parameter::Parameter;
 use crate::circuit::{Circuit, ConditionView, Instruction, Operation, Qubit, StandardGate};
 use crate::visualization::circuit::model::{

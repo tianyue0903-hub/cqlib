@@ -11,7 +11,7 @@
 // that they have been altered from the originals.
 
 use super::*;
-use crate::circuit::param::ParameterValue;
+use crate::circuit::circuit_param::ParameterValue;
 use crate::circuit::{Circuit, Parameter, Qubit};
 use crate::circuit::{ConditionView, Directive, Instruction, Operation, StandardGate};
 use crate::visualization::circuit::builder::build_visual_circuit;
@@ -482,7 +482,7 @@ fn test_parameter_symbolic_with_value_for_symbolic_expr_in_text_from_visual() {
     let text = draw_text_from_visual(&visual, &TextDrawerOptions::default()).unwrap();
     let resp = r#"
                   
- Q0: ───RX(theta + 1)─
+ Q0: ───RX(1 + theta)─
                   
 
 "#;

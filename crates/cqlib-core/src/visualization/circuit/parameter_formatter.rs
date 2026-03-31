@@ -17,7 +17,7 @@
 //! [`ParameterFormatter`].
 
 use crate::circuit::Circuit;
-use crate::circuit::param::CircuitParam;
+use crate::circuit::circuit_param::CircuitParam;
 use crate::circuit::parameter::Parameter;
 use crate::visualization::circuit::error::VisualizationError;
 use std::f64::consts::PI;

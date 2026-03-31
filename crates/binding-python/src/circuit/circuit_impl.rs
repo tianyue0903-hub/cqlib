@@ -52,6 +52,7 @@ use crate::circuit::operation::PyOperationIter;
 use crate::qis::pauli::PyPauliString;
 use cqlib_core::circuit::circuit_param::CircuitParam;
 use cqlib_core::circuit::circuit_param::ParameterValue;
+use crate::visualization::py_draw_text;
 use cqlib_core::circuit::gate::Instruction;
 use cqlib_core::circuit::{Circuit, Operation, Qubit};
 use cqlib_core::qis::evolution::PauliEvolution;
@@ -1328,6 +1329,14 @@ impl PyCircuit {
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
 
         Ok(())
+    }
+
+    fn __str__(&self) -> PyResult<String> {
+        py_draw_text(self, None, false, false, true, false)
+    }
+
+    fn __repr__(&self) -> PyResult<String> {
+        self.__str__()
     }
 }
 

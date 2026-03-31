@@ -14,6 +14,7 @@ from .circuit import Parameter, Circuit, Qubit
 from .compiler import SabreConfig
 from .device import Topology
 from .qis import DensityMatrix, Pauli, PauliString, Phase, Statevector
+from .visualization import draw_text, draw_figure
 
 __all__ = [
     "Parameter",
@@ -26,4 +27,6 @@ __all__ = [
     "Phase",
     "Statevector",
     "DensityMatrix",
+    "draw_text",
+    "draw_figure",
 ]

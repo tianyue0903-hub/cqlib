@@ -13,7 +13,7 @@
 //! Tests for the parameter formatter module.
 
 use super::*;
-use crate::circuit::param::CircuitParam;
+use crate::circuit::circuit_param::CircuitParam;
 use crate::circuit::parameter::Parameter;
 use crate::circuit::{Circuit, Qubit};
 use crate::visualization::ParameterDisplayMode;
