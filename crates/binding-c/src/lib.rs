@@ -21,6 +21,7 @@
 //! - [`circuit`]: Quantum circuit operations and gates
 //! - [`ir`]: IR format parsing (QCIS, OpenQASM2)
 //! - [`device`]: Device topology and qubit properties
+//! - [`qis`]: Quantum information science operations
 
 // Allow clippy warnings for FFI functions that dereference raw pointers
 #![allow(clippy::not_unsafe_ptr_arg_deref)]
@@ -28,3 +29,4 @@
 pub mod circuit;
 pub mod device;
 pub mod ir;
+pub mod qis;

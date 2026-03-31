@@ -29,6 +29,18 @@ use binding_c::device::{
     qubit_prop_new, qubit_prop_free, qubit_prop_set_t1, qubit_prop_get_t1,
 };
 use binding_c::ir::{qasm2_load, qcis_load};
+use binding_c::qis::{
+    statevector_new, statevector_free, statevector_num_qubits, statevector_h, statevector_x,
+    statevector_y, statevector_z, statevector_cx, statevector_probabilities,
+    density_matrix_new, density_matrix_free, density_matrix_num_qubits, density_matrix_h,
+    density_matrix_x, density_matrix_cx, density_matrix_probabilities,
+    density_matrix_noise_new, density_matrix_noise_free, density_matrix_noise_num_qubits,
+    density_matrix_noise_h, density_matrix_noise_x, density_matrix_noise_cx,
+    pauli_string_new, pauli_string_free, pauli_string_num_qubits, pauli_string_set_pauli,
+    pauli_string_get_pauli, pauli_string_to_string, pauli_string_free_string,
+    hamiltonian_new, hamiltonian_free, hamiltonian_num_qubits, hamiltonian_add_term,
+    hamiltonian_num_terms, observable_expectation_sv, observable_expectation_dm,
+};
 
 #[test]
 fn test_circuit_lifecycle() {
@@ -237,4 +249,146 @@ fn test_device_null_pointer_safety() {
     
     // Verify getters on NULL return default/error values
     assert_eq!(device_get_default_single_qubit_error(std::ptr::null()), -1.0, "NULL device should return -1.0");
+}
+
+#[test]
+fn test_statevector_lifecycle() {
+    let ptr = statevector_new(2);
+    assert!(!ptr.is_null());
+
+    assert_eq!(statevector_num_qubits(ptr), 2);
+
+    assert_eq!(statevector_h(ptr, 0), 0);
+    assert_eq!(statevector_cx(ptr, 0, 1), 0);
+
+    let mut probs = [0.0f64; 4];
+    assert_eq!(statevector_probabilities(ptr, probs.as_mut_ptr(), 4), 0);
+    assert!((probs[0] - 0.5).abs() < 1e-10);
+    assert!((probs[3] - 0.5).abs() < 1e-10);
+
+    statevector_free(ptr);
+}
+
+#[test]
+fn test_density_matrix_lifecycle() {
+    let ptr = density_matrix_new(2);
+    assert!(!ptr.is_null());
+
+    assert_eq!(density_matrix_num_qubits(ptr), 2);
+
+    assert_eq!(density_matrix_h(ptr, 0), 0);
+    assert_eq!(density_matrix_cx(ptr, 0, 1), 0);
+
+    let mut probs = [0.0f64; 4];
+    assert_eq!(density_matrix_probabilities(ptr, probs.as_mut_ptr(), 4), 0);
+    assert!((probs[0] - 0.5).abs() < 1e-10);
+    assert!((probs[3] - 0.5).abs() < 1e-10);
+
+    density_matrix_free(ptr);
+}
+
+#[test]
+fn test_density_matrix_noise_lifecycle() {
+    let ptr = density_matrix_noise_new(2);
+    assert!(!ptr.is_null());
+
+    assert_eq!(density_matrix_noise_num_qubits(ptr), 2);
+
+    assert_eq!(density_matrix_noise_h(ptr, 0), 0);
+    assert_eq!(density_matrix_noise_cx(ptr, 0, 1), 0);
+
+    density_matrix_noise_free(ptr);
+}
+
+#[test]
+fn test_pauli_string_operations() {
+    let ptr = pauli_string_new(3);
+    assert!(!ptr.is_null());
+
+    assert_eq!(pauli_string_num_qubits(ptr), 3);
+
+    assert_eq!(pauli_string_set_pauli(ptr, 0, 1), 0); // X
+    assert_eq!(pauli_string_set_pauli(ptr, 1, 3), 0); // Z
+    assert_eq!(pauli_string_set_pauli(ptr, 2, 0), 0); // I
+
+    assert_eq!(pauli_string_get_pauli(ptr, 0), 1);
+    assert_eq!(pauli_string_get_pauli(ptr, 1), 3);
+    assert_eq!(pauli_string_get_pauli(ptr, 2), 0);
+
+    let str_ptr = pauli_string_to_string(ptr);
+    assert!(!str_ptr.is_null());
+    let cstr = unsafe { std::ffi::CStr::from_ptr(str_ptr) };
+    assert_eq!(cstr.to_str().unwrap(), "XZI");
+    pauli_string_free_string(str_ptr);
+
+    pauli_string_free(ptr);
+}
+
+#[test]
+fn test_hamiltonian_operations() {
+    let ptr = hamiltonian_new(2);
+    assert!(!ptr.is_null());
+
+    assert_eq!(hamiltonian_num_qubits(ptr), 2);
+
+    let term1 = std::ffi::CString::new("XX").unwrap();
+    assert_eq!(hamiltonian_add_term(ptr, term1.as_ptr(), 1.0, 0.0), 0);
+
+    let term2 = std::ffi::CString::new("ZZ").unwrap();
+    assert_eq!(hamiltonian_add_term(ptr, term2.as_ptr(), 0.5, 0.0), 0);
+
+    assert_eq!(hamiltonian_num_terms(ptr), 2);
+
+    hamiltonian_free(ptr);
+}
+
+#[test]
+fn test_observable_expectation() {
+    // Create Hamiltonian H = Z
+    let h_ptr = hamiltonian_new(1);
+    let term = std::ffi::CString::new("Z").unwrap();
+    assert_eq!(hamiltonian_add_term(h_ptr, term.as_ptr(), 1.0, 0.0), 0);
+
+    // Create statevector |1>
+    let sv_ptr = statevector_new(1);
+    assert_eq!(statevector_x(sv_ptr, 0), 0);
+
+    // Compute <1|Z|1>
+    let mut real = 0.0;
+    let mut imag = 0.0;
+    assert_eq!(observable_expectation_sv(h_ptr, sv_ptr, &mut real, &mut imag), 0);
+    assert!((real - (-1.0)).abs() < 1e-10);
+    assert!(imag.abs() < 1e-10);
+
+    // Test with density matrix
+    let dm_ptr = density_matrix_new(1);
+    assert_eq!(density_matrix_x(dm_ptr, 0), 0);
+    assert_eq!(observable_expectation_dm(h_ptr, dm_ptr, &mut real, &mut imag), 0);
+    assert!((real - (-1.0)).abs() < 1e-10);
+    assert!(imag.abs() < 1e-10);
+
+    hamiltonian_free(h_ptr);
+    statevector_free(sv_ptr);
+    density_matrix_free(dm_ptr);
+}
+
+#[test]
+fn test_qis_null_pointer_safety() {
+    // Test null pointers for qis functions
+    statevector_free(std::ptr::null_mut());
+    density_matrix_free(std::ptr::null_mut());
+    density_matrix_noise_free(std::ptr::null_mut());
+    pauli_string_free(std::ptr::null_mut());
+    hamiltonian_free(std::ptr::null_mut());
+
+    assert_eq!(statevector_num_qubits(std::ptr::null()), 0);
+    assert_eq!(density_matrix_num_qubits(std::ptr::null()), 0);
+    assert_eq!(density_matrix_noise_num_qubits(std::ptr::null()), 0);
+    assert_eq!(pauli_string_num_qubits(std::ptr::null()), 0);
+    assert_eq!(hamiltonian_num_qubits(std::ptr::null()), 0);
+
+    assert_eq!(statevector_h(std::ptr::null_mut(), 0), -1);
+    assert_eq!(density_matrix_h(std::ptr::null_mut(), 0), -1);
+    assert_eq!(pauli_string_set_pauli(std::ptr::null_mut(), 0, 1), -1);
+    assert_eq!(hamiltonian_add_term(std::ptr::null_mut(), std::ptr::null(), 1.0, 0.0), -1);
 }
