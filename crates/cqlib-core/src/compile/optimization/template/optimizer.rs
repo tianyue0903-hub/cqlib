@@ -29,8 +29,7 @@
 
 use super::library::{CompiledTemplate, TemplateLibrary, compile_template};
 use crate::circuit::gate::{Instruction, StandardGate};
-use crate::circuit::param::CircuitParam;
-use crate::circuit::{Circuit, Operation, Qubit};
+use crate::circuit::{Circuit, CircuitParam, Operation, ParameterValue, Qubit};
 use crate::compile::error::CompileError;
 use crate::compile::graph::{CommutationView, GateGraph, GateNode};
 use crate::compile::prepared::{PreparedCircuit, append_operation, preprocess_circuit};
@@ -925,7 +924,6 @@ fn estimate_standard_gate_cost(gate: StandardGate) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::circuit::param::ParameterValue;
     use crate::circuit::{Circuit, Qubit};
 
     /// Builds a simple H-CX-H circuit for matching tests.

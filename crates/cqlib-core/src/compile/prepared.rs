@@ -14,8 +14,7 @@
 
 use crate::circuit::dag::Terminator;
 use crate::circuit::gate::Instruction;
-use crate::circuit::param::{CircuitParam, ParameterValue};
-use crate::circuit::{Circuit, CircuitDag, Operation, Parameter, Qubit};
+use crate::circuit::{Circuit, CircuitDag, CircuitParam, Operation, Parameter, ParameterValue, Qubit};
 use crate::compile::error::CompileError;
 use smallvec::{SmallVec, smallvec};
 use std::collections::HashMap;

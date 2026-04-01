@@ -13,8 +13,7 @@
 //! Template rule loading and registration.
 
 use crate::circuit::gate::{Instruction, StandardGate};
-use crate::circuit::param::ParameterValue;
-use crate::circuit::{Circuit, Qubit};
+use crate::circuit::{Circuit, ParameterValue, Qubit};
 use crate::compile::error::CompileError;
 use crate::compile::graph::{CommutationView, GateGraph};
 use crate::compile::prepared::{PreparedCircuit, preprocess_circuit};

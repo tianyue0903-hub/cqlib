@@ -21,8 +21,7 @@
 //! downstream passes can choose strict parameter matching and conservative
 //! symbolic handling.
 
-use crate::circuit::param::CircuitParam;
-use crate::circuit::{Operation, Parameter};
+use crate::circuit::{CircuitParam, Operation, Parameter, ParameterValue};
 use crate::compile::error::CompileError;
 use crate::compile::prepared::{PreparedCircuit, PreparedOperation};
 use ndarray::Array2;
@@ -496,9 +495,7 @@ mod tests {
             .append(
                 Instruction::Standard(StandardGate::RZ),
                 [Qubit::new(0)],
-                [crate::circuit::param::ParameterValue::Param(
-                    Parameter::symbol("theta"),
-                )],
+                [ParameterValue::Param(Parameter::symbol("theta"))],
                 None,
             )
             .unwrap();
@@ -506,7 +503,7 @@ mod tests {
             .append(
                 Instruction::Standard(StandardGate::RZ),
                 [Qubit::new(0)],
-                [crate::circuit::param::ParameterValue::Fixed(0.1)],
+                [ParameterValue::Fixed(0.1)],
                 None,
             )
             .unwrap();

@@ -13,8 +13,7 @@
 use super::*;
 use crate::circuit::gate::control_flow::{ConditionView, ControlFlow};
 use crate::circuit::gate::{Directive, Instruction, StandardGate};
-use crate::circuit::param::ParameterValue;
-use crate::circuit::{Circuit, Operation, Parameter, Qubit};
+use crate::circuit::{Circuit, Operation, Parameter, ParameterValue, Qubit};
 use crate::compile::error::CompileError;
 use smallvec::smallvec;
 use std::collections::{HashMap, HashSet};

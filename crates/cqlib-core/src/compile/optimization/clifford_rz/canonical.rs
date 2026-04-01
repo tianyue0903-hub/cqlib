@@ -11,8 +11,7 @@
 // that they have been altered from the originals.
 
 use crate::circuit::gate::{Instruction, StandardGate};
-use crate::circuit::param::CircuitParam;
-use crate::circuit::{Operation, Parameter, Qubit};
+use crate::circuit::{CircuitParam, Operation, Parameter, ParameterValue, Qubit};
 use crate::compile::error::CompileError;
 use crate::compile::prepared::PreparedOperation;
 use smallvec::{SmallVec, smallvec};
@@ -328,7 +327,6 @@ fn resolve_numeric_params(
 mod tests {
     use super::*;
     use crate::circuit::circuit_to_matrix;
-    use crate::circuit::param::ParameterValue;
     use crate::circuit::{Circuit, Qubit};
     use crate::compile::prepared::preprocess_circuit;
     use num_complex::Complex64;
@@ -403,8 +401,6 @@ mod tests {
 
     impl AppendOperationExt for Circuit {
         fn append_operation(&mut self, op: Operation) -> Result<(), crate::circuit::CircuitError> {
-            use crate::circuit::param::ParameterValue;
-
             let params = op
                 .params
                 .iter()
