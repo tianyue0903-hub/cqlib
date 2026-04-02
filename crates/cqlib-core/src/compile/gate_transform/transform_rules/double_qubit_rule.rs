@@ -509,8 +509,8 @@ mod tests {
 
         // Gates are applied in temporal order (left-to-right in circuit),
         // so we use right-multiplication: U = G1 · G2 · G3 · ...
-        for ((gate, params), qubits) in decomposed.gates.iter().zip(decomposed.qubits.iter()) {
-            let gate_mat = gate_expand_rust(*gate, params, qubits.clone(), 2);
+        for op in &decomposed.ops {
+            let gate_mat = gate_expand_rust(op.gate, &op.params, op.qubits.iter().copied().collect(), 2);
             total_u = gate_mat.dot(&total_u);
         }
         total_u
@@ -537,7 +537,7 @@ mod tests {
         if test_verbose() {
             println!("Testing rule: {}", rule_name);
             println!("Original gate: {:?}", gate);
-            println!("Decomposed gates: {:?}", decomposed.gates.len());
+            println!("Decomposed gates: {:?}", decomposed.ops.len());
             println!("Original matrix:\n{:?}", original_matrix);
             println!("Decomposed matrix:\n{:?}", decomposed_matrix);
         }
@@ -972,15 +972,15 @@ mod tests {
         let theta = Parameter::symbol("theta");
         let decomposed = DoubleQubitRule::rzz2crz_rule(&StandardGate::RZZ, &smallvec![theta]);
 
-        assert_eq!(decomposed.gates.len(), 2);
-        assert_eq!(decomposed.gates[0].1[0].get_symbols(), vec!["theta".to_string()]);
-        assert_eq!(decomposed.gates[1].1[0].get_symbols(), vec!["theta".to_string()]);
+        assert_eq!(decomposed.ops.len(), 2);
+        assert_eq!(decomposed.ops[0].params[0].get_symbols(), vec!["theta".to_string()]);
+        assert_eq!(decomposed.ops[1].params[0].get_symbols(), vec!["theta".to_string()]);
 
         let mut bindings = HashMap::new();
         bindings.insert("theta".to_string(), 0.7);
 
-        assert!((decomposed.gates[0].1[0].evaluate(&Some(bindings.clone())).unwrap() - 0.7).abs() < 1e-10);
-        assert!((decomposed.gates[1].1[0].evaluate(&Some(bindings)).unwrap() + 1.4).abs() < 1e-10);
+        assert!((decomposed.ops[0].params[0].evaluate(&Some(bindings.clone())).unwrap() - 0.7).abs() < 1e-10);
+        assert!((decomposed.ops[1].params[0].evaluate(&Some(bindings)).unwrap() + 1.4).abs() < 1e-10);
     }
 
     #[test]
@@ -991,9 +991,9 @@ mod tests {
             DoubleQubitRule::fsim2cx_rule(&StandardGate::FSIM, &smallvec![theta, phi]);
 
         let symbolic_params: Vec<_> = decomposed
-            .gates
+            .ops
             .iter()
-            .flat_map(|(_, params)| params.iter())
+            .flat_map(|op| op.params.iter())
             .filter(|param| !param.get_symbols().is_empty())
             .map(|param| param.get_symbols())
             .collect();

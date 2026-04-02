@@ -2,7 +2,7 @@ use crate::circuit::gate::StandardGate;
 use crate::circuit::parameter::Parameter;
 use crate::compile::gate_transform::transform_rules::decomposed_gate::DecomposedGate;
 use crate::compile::gate_transform::transform_rules::double_qubit_rule::DoubleQubitRule;
-use crate::compile::gate_transform::transform_rules::param_transform_rules::ParamTransformRule;
+use crate::compile::gate_transform::transform_rules::param_transform_rule::ParamTransformRule;
 use smallvec::SmallVec;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

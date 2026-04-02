@@ -28,11 +28,15 @@ fn is_matrix_differ_by_phase(matrix1: &Array2<Complex<f64>>, matrix2: &Array2<Co
 fn matrix_from_decomposed_gate(decomposed: &DecomposedGate) -> Array2<Complex<f64>> {
     let mut total_u = StandardGate::I.matrix(&[]).into_owned();
 
-    for ((gate, params), qubits) in decomposed.gates.iter().zip(decomposed.qubits.iter()) {
-        assert_eq!(qubits.as_slice(), &[0], "Expected single-qubit decomposition on qubit 0");
+    for op in &decomposed.ops {
+        assert_eq!(
+            op.qubits.as_slice(),
+            &[0],
+            "Expected single-qubit decomposition on qubit 0"
+        );
         let gate_params: SmallVec<[f64; 3]> =
-            params.iter().map(|p| p.evaluate(&None).unwrap()).collect();
-        total_u = gate.matrix(&gate_params).dot(&total_u);
+            op.params.iter().map(|p| p.evaluate(&None).unwrap()).collect();
+        total_u = op.gate.matrix(&gate_params).dot(&total_u);
     }
 
     total_u
@@ -358,11 +362,11 @@ fn test_symbolic_params_preserved_for_rxy2u() {
     let phi = Parameter::symbol("phi");
     let decomposed = ParamTransformRule::rxy2u_rule(&StandardGate::RXY, &smallvec![theta, phi]);
 
-    assert_eq!(decomposed.gates.len(), 1);
-    assert_eq!(decomposed.gates[0].0, StandardGate::U);
+    assert_eq!(decomposed.ops.len(), 1);
+    assert_eq!(decomposed.ops[0].gate, StandardGate::U);
 
-    let param_symbols: Vec<_> = decomposed.gates[0]
-        .1
+    let param_symbols: Vec<_> = decomposed.ops[0]
+        .params
         .iter()
         .map(|p| p.get_symbols())
         .collect();
@@ -379,9 +383,9 @@ fn test_symbolic_params_preserved_for_u2rx() {
         ParamTransformRule::u2rx_rule(&StandardGate::U, &smallvec![theta, phi, lambda]);
 
     let symbolic_params: Vec<_> = decomposed
-        .gates
+        .ops
         .iter()
-        .flat_map(|(_, params)| params.iter())
+        .flat_map(|op| op.params.iter())
         .filter(|param| !param.get_symbols().is_empty())
         .map(|param| param.get_symbols())
         .collect();
@@ -396,9 +400,9 @@ fn test_symbolic_params_preserved_for_u2rx() {
     bindings.insert("lambda".to_string(), -1.1);
 
     let evaluated: Vec<f64> = decomposed
-        .gates
+        .ops
         .iter()
-        .flat_map(|(_, params)| params.iter())
+        .flat_map(|op| op.params.iter())
         .map(|param| param.evaluate(&Some(bindings.clone())).unwrap())
         .collect();
 

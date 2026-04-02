@@ -335,15 +335,13 @@ impl GateTransform {
                     let decomposed = TransformRuleExecutor::apply(step.rule, g, gate_params);
 
                     // Map decomposed qubits to actual circuit qubits
-                    for ((decomp_gate, decomp_params), decomp_qubits) in
-                        decomposed.gates.iter().zip(decomposed.qubits.iter())
-                    {
+                    for decomp_op in &decomposed.ops {
                         // Map decomp_qubits to actual circuit qubits
                         let mapped_qubits: Vec<i32> =
-                            decomp_qubits.iter().map(|&q| qs[q as usize]).collect();
+                            decomp_op.qubits.iter().map(|&q| qs[q as usize]).collect();
                         next_gates.push((
-                            decomp_gate.clone(),
-                            decomp_params.clone(),
+                            decomp_op.gate,
+                            decomp_op.params.clone(),
                             mapped_qubits,
                         ));
                     }
@@ -476,7 +474,14 @@ impl GateTransform {
             for (g, gate_params) in &current_gates {
                 if *g == step.source_gate {
                     let decomposed = TransformRuleExecutor::apply(step.rule, g, gate_params);
-                    next_gates.extend(decomposed.gates.iter().cloned());
+                    next_gates.extend(decomposed.ops.iter().map(|op| {
+                        debug_assert_eq!(
+                            op.qubits.as_slice(),
+                            &[0],
+                            "single-qubit param transform rules should only emit qubit 0 ops"
+                        );
+                        (op.gate, op.params.clone())
+                    }));
                 } else {
                     next_gates.push((g.clone(), gate_params.clone()));
                 }

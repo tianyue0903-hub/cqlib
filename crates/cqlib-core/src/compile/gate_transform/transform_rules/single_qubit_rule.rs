@@ -750,35 +750,4 @@ mod test_single_qubit_rule {
     fn clifford_sxypmrz_rule() {
         test_rule_clifford(SingleQubitRule::sxypmrz_rule, "sxypmrz_rule");
     }
-
-    // #[test]
-    // fn test_select_rule_on_case() {
-    //     let rule = SingleQubitRule::sxypmrz_rule;
-    //     let case = "HSHS";
-    //     let matrix = get_hs_matrix(case);
-    //     // let matrix = get_random_unitary();
-    //     let decomposed_gates = rule(&matrix);
-
-    //     print_matrix("Input matrix", &matrix);
-
-    //     for gate in decomposed_gates.clone() {
-    //         println!("--------------------------------");
-    //         println!("gate: {}", gate.gate_type.to_string("qasm".to_string()));
-    //         for i in 0..gate.parameter_num {
-    //             println!("  param[{}]: {}", i, gate.parameters[i as usize]);
-    //         }
-    //         let gate_matrix = get_gate_matrix(gate.gate_type.clone(), [
-    //             gate.parameters[0].evaluate_rust(&None).unwrap_or(0.0),
-    //             gate.parameters[1].evaluate_rust(&None).unwrap_or(0.0),
-    //             gate.parameters[2].evaluate_rust(&None).unwrap_or(0.0),
-    //         ]);
-    //         print_matrix("gate matrix", &gate_matrix);
-    //         println!("--------------------------------");
-    //     }
-
-    //     let final_matrix = matrix_from_gate_vec(&decomposed_gates);
-    //     print_matrix("Final matrix", &final_matrix);
-    //     let is_equal = is_matrix_differ_by_phase(&matrix, &final_matrix);
-    //     println!("Equal: {}", is_equal);
-    // }
 }

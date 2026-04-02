@@ -303,5 +303,5 @@ impl ParamTransformRule {
 }
 
 #[cfg(test)]
-#[path = "param_transform_rules_test.rs"]
-mod param_transform_rules_test;
+#[path = "param_transform_rule_test.rs"]
+mod param_transform_rule_test;
