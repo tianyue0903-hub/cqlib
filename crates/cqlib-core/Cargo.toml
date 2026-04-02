@@ -46,7 +46,6 @@ resvg = "0.45"
 thiserror.workspace = true
 time.workspace = true
 uuid.workspace = true
-rayon = "1.11.0"
 
 [build-dependencies]
 lalrpop.workspace = true
