@@ -506,7 +506,10 @@ mod test_single_qubit_rule {
         let theta = rng.random_range(0.0..PI);
         let phi = rng.random_range(0.0..(2.0 * PI));
         let lam = rng.random_range(0.0..(2.0 * PI));
-        StandardGate::U.matrix(&[theta, phi, lam]).into_owned()
+        StandardGate::U
+            .matrix(&[theta, phi, lam])
+            .expect("U matrix should be well-formed")
+            .into_owned()
     }
 
     fn format_complex(c: &Complex<f64>) -> String {
@@ -559,10 +562,16 @@ mod test_single_qubit_rule {
     fn matrix_from_gate_vec(
         gates: &Vec<(StandardGate, SmallVec<[f64; 3]>)>,
     ) -> Array2<Complex<f64>> {
-        let mut total_u = StandardGate::I.matrix(&[]).into_owned();
+        let mut total_u = StandardGate::I
+            .matrix(&[])
+            .expect("identity matrix should be well-formed")
+            .into_owned();
 
         for (gate, param) in gates {
-            total_u = gate.matrix(param).dot(&total_u);
+            total_u = gate
+                .matrix(param)
+                .expect("single-qubit gate matrix should be well-formed")
+                .dot(&total_u);
         }
         total_u
     }
@@ -575,7 +584,10 @@ mod test_single_qubit_rule {
             "Z" => StandardGate::Z,
             _ => panic!("Invalid Pauli string"),
         };
-        gate_type.matrix(&[]).into_owned()
+        gate_type
+            .matrix(&[])
+            .expect("Pauli matrix should be well-formed")
+            .into_owned()
     }
 
     fn get_hs_matrix(hs_string: &str) -> Array2<Complex<f64>> {
@@ -662,7 +674,10 @@ mod test_single_qubit_rule {
     #[test]
     fn test_matrix_equal_func() {
         let mut rng = rand::rng();
-        let ref_mat = StandardGate::Y.matrix(&[]).into_owned();
+        let ref_mat = StandardGate::Y
+            .matrix(&[])
+            .expect("Y matrix should be well-formed")
+            .into_owned();
 
         for _ in 0..10 {
             let random_phase = Complex::new(0.0, rng.random_range(-PI..PI)).exp();
@@ -674,7 +689,11 @@ mod test_single_qubit_rule {
 
         for _ in 0..10 {
             let random_phase = Complex::new(0.0, rng.random_range(-PI..PI)).exp();
-            let test_mat = StandardGate::X.matrix(&[]).into_owned() * random_phase;
+            let test_mat = StandardGate::X
+                .matrix(&[])
+                .expect("X matrix should be well-formed")
+                .into_owned()
+                * random_phase;
             let is_not_equal = !is_matrix_differ_by_phase(&ref_mat, &test_mat);
 
             assert!(is_not_equal, "ref_mat and test_mat are equal");

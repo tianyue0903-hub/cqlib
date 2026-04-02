@@ -422,7 +422,7 @@ impl DoubleQubitRule {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::circuit::parameter::impls::Parameter;
+    use crate::circuit::Parameter;
     use ndarray::prelude::*;
     use num::complex::Complex;
     use num::complex::ComplexFloat;
@@ -492,7 +492,10 @@ mod tests {
         // let gate_mat: &Array2<Complex<f64>> = &gate.matrix_rust(bindings);
         let gate_params: SmallVec<[f64; 3]> =
             params.iter().map(|p| p.evaluate(&None).unwrap()).collect();
-        let gate_mat = gate.matrix(&gate_params).to_owned();
+        let gate_mat = gate
+            .matrix(&gate_params)
+            .expect("two-qubit gate matrix should be well-formed")
+            .to_owned();
         for ii in 0..expand_mat_shape {
             for jj in 0..expand_mat_shape {
                 if ii & xor_value == jj & xor_value {
@@ -531,7 +534,10 @@ mod tests {
         let decomposed = rule(gate, params);
         let gate_params: SmallVec<[f64; 3]> =
             params.iter().map(|p| p.evaluate(&None).unwrap()).collect();
-        let original_matrix = gate.matrix(&gate_params).to_owned();
+        let original_matrix = gate
+            .matrix(&gate_params)
+            .expect("two-qubit gate matrix should be well-formed")
+            .to_owned();
         let decomposed_matrix = matrix_from_decomposed_gate(&decomposed);
 
         if test_verbose() {
@@ -973,11 +979,11 @@ mod tests {
         let decomposed = DoubleQubitRule::rzz2crz_rule(&StandardGate::RZZ, &smallvec![theta]);
 
         assert_eq!(decomposed.ops.len(), 2);
-        assert_eq!(decomposed.ops[0].params[0].get_symbols(), vec!["theta".to_string()]);
-        assert_eq!(decomposed.ops[1].params[0].get_symbols(), vec!["theta".to_string()]);
+        assert!(decomposed.ops[0].params[0].get_symbols().contains("theta"));
+        assert!(decomposed.ops[1].params[0].get_symbols().contains("theta"));
 
         let mut bindings = HashMap::new();
-        bindings.insert("theta".to_string(), 0.7);
+        bindings.insert("theta", 0.7);
 
         assert!((decomposed.ops[0].params[0].evaluate(&Some(bindings.clone())).unwrap() - 0.7).abs() < 1e-10);
         assert!((decomposed.ops[1].params[0].evaluate(&Some(bindings)).unwrap() + 1.4).abs() < 1e-10);
@@ -998,7 +1004,7 @@ mod tests {
             .map(|param| param.get_symbols())
             .collect();
 
-        assert!(symbolic_params.iter().any(|symbols| symbols == &vec!["theta".to_string()]));
-        assert!(symbolic_params.iter().any(|symbols| symbols == &vec!["phi".to_string()]));
+        assert!(symbolic_params.iter().any(|symbols| symbols.contains("theta")));
+        assert!(symbolic_params.iter().any(|symbols| symbols.contains("phi")));
     }
 }

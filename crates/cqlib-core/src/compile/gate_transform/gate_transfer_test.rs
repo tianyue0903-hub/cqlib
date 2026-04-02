@@ -1,10 +1,8 @@
 use super::*;
-use crate::circuit::Qubit;
+use crate::circuit::{Parameter, ParameterValue, Qubit};
 use crate::circuit::gate::MCGate;
 use crate::circuit::gate::control_flow::ConditionView;
 use crate::circuit::gate::{CircuitGate, FrozenCircuit, UnitaryGate};
-use crate::circuit::param::ParameterValue;
-use crate::circuit::parameter::impls::Parameter;
 use num::complex::Complex;
 use num::complex::ComplexFloat;
 use std::sync::Arc;
@@ -240,7 +238,7 @@ fn gate_transfer_circuit_test(iset: &InstructionSet, circuit: &Circuit) {
 fn gate_transfer_symbolic_circuit_test(
     iset: &InstructionSet,
     circuit: &Circuit,
-    bindings: HashMap<String, f64>,
+    bindings: HashMap<&str, f64>,
 ) {
     let mut gt = GateTransform::new(iset.clone());
     let result = gt.execute(circuit);
@@ -436,7 +434,12 @@ fn generate_circuit_with_special_operation() -> Circuit {
     let frozen_sub_circuit = FrozenCircuit::new(sub_circuit);
     let mut ugate = UnitaryGate::new("TestUnitary", 2);
     ugate = ugate
-        .with_matrix(StandardGate::CX.matrix(&[]).into_owned())
+        .with_matrix(
+            StandardGate::CX
+                .matrix(&[])
+                .expect("CX matrix should be well-formed")
+                .into_owned(),
+        )
         .unwrap();
     ugate = ugate.with_circuit(Arc::new(frozen_sub_circuit));
 
@@ -680,7 +683,7 @@ fn test_gate_transform_preserves_symbolic_rzz_parameters() {
         .any(|op| op.params.iter().any(|param| matches!(param, CircuitParam::Index(_)))));
 
     let mut bindings = HashMap::new();
-    bindings.insert("theta".to_string(), 0.37);
+    bindings.insert("theta", 0.37);
     gate_transfer_symbolic_circuit_test(&iset, &circuit, bindings);
 }
 
@@ -708,7 +711,7 @@ fn test_gate_transform_symbolic_single_qubit_rx_to_target_basis() {
         .any(|op| op.params.iter().any(|param| matches!(param, CircuitParam::Index(_)))));
 
     let mut bindings = HashMap::new();
-    bindings.insert("theta".to_string(), 0.37);
+    bindings.insert("theta", 0.37);
     gate_transfer_symbolic_circuit_test(&iset, &circuit, bindings);
 }
 
@@ -748,9 +751,9 @@ fn test_gate_transform_symbolic_u_recursively_rewrites_to_target_basis() {
     }));
 
     let mut bindings = HashMap::new();
-    bindings.insert("theta".to_string(), 0.11);
-    bindings.insert("phi".to_string(), -0.23);
-    bindings.insert("lambda".to_string(), 0.41);
+    bindings.insert("theta", 0.11);
+    bindings.insert("phi", -0.23);
+    bindings.insert("lambda", 0.41);
     gate_transfer_symbolic_circuit_test(&iset, &circuit, bindings);
 }
 
@@ -784,8 +787,8 @@ fn test_gate_transform_preserves_mixed_symbolic_single_and_double_qubit_paramete
         .any(|op| op.params.iter().any(|param| matches!(param, CircuitParam::Index(_)))));
 
     let mut bindings = HashMap::new();
-    bindings.insert("theta".to_string(), 0.29);
-    bindings.insert("phi".to_string(), -0.17);
-    bindings.insert("lambda".to_string(), 0.63);
+    bindings.insert("theta", 0.29);
+    bindings.insert("phi", -0.17);
+    bindings.insert("lambda", 0.63);
     gate_transfer_symbolic_circuit_test(&iset, &circuit, bindings);
 }

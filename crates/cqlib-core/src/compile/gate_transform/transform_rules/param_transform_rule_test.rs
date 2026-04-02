@@ -26,7 +26,10 @@ fn is_matrix_differ_by_phase(matrix1: &Array2<Complex<f64>>, matrix2: &Array2<Co
 }
 
 fn matrix_from_decomposed_gate(decomposed: &DecomposedGate) -> Array2<Complex<f64>> {
-    let mut total_u = StandardGate::I.matrix(&[]).into_owned();
+    let mut total_u = StandardGate::I
+        .matrix(&[])
+        .expect("identity matrix should be well-formed")
+        .into_owned();
 
     for op in &decomposed.ops {
         assert_eq!(
@@ -36,7 +39,11 @@ fn matrix_from_decomposed_gate(decomposed: &DecomposedGate) -> Array2<Complex<f6
         );
         let gate_params: SmallVec<[f64; 3]> =
             op.params.iter().map(|p| p.evaluate(&None).unwrap()).collect();
-        total_u = op.gate.matrix(&gate_params).dot(&total_u);
+        total_u = op
+            .gate
+            .matrix(&gate_params)
+            .expect("single-qubit gate matrix should be well-formed")
+            .dot(&total_u);
     }
 
     total_u
@@ -50,7 +57,10 @@ fn assert_rule_decomposition(
 ) {
     let decomposed = rule(&gate, params);
     let gate_params: SmallVec<[f64; 3]> = params.iter().map(|p| p.evaluate(&None).unwrap()).collect();
-    let original_matrix = gate.matrix(&gate_params).to_owned();
+    let original_matrix = gate
+        .matrix(&gate_params)
+        .expect("single-qubit gate matrix should be well-formed")
+        .to_owned();
     let decomposed_matrix = matrix_from_decomposed_gate(&decomposed);
 
     assert!(
@@ -370,8 +380,8 @@ fn test_symbolic_params_preserved_for_rxy2u() {
         .iter()
         .map(|p| p.get_symbols())
         .collect();
-    assert!(param_symbols.iter().any(|symbols| symbols == &vec!["theta".to_string()]));
-    assert!(param_symbols.iter().any(|symbols| symbols == &vec!["phi".to_string()]));
+    assert!(param_symbols.iter().any(|symbols| symbols.contains("theta")));
+    assert!(param_symbols.iter().any(|symbols| symbols.contains("phi")));
 }
 
 #[test]
@@ -390,14 +400,14 @@ fn test_symbolic_params_preserved_for_u2rx() {
         .map(|param| param.get_symbols())
         .collect();
 
-    assert!(symbolic_params.iter().any(|symbols| symbols == &vec!["theta".to_string()]));
-    assert!(symbolic_params.iter().any(|symbols| symbols == &vec!["phi".to_string()]));
-    assert!(symbolic_params.iter().any(|symbols| symbols == &vec!["lambda".to_string()]));
+    assert!(symbolic_params.iter().any(|symbols| symbols.contains("theta")));
+    assert!(symbolic_params.iter().any(|symbols| symbols.contains("phi")));
+    assert!(symbolic_params.iter().any(|symbols| symbols.contains("lambda")));
 
     let mut bindings = HashMap::new();
-    bindings.insert("theta".to_string(), 0.7);
-    bindings.insert("phi".to_string(), 0.4);
-    bindings.insert("lambda".to_string(), -1.1);
+    bindings.insert("theta", 0.7);
+    bindings.insert("phi", 0.4);
+    bindings.insert("lambda", -1.1);
 
     let evaluated: Vec<f64> = decomposed
         .ops

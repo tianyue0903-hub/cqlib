@@ -9,9 +9,7 @@ use crate::circuit::circuit_impl::Circuit;
 use crate::circuit::dag::CircuitDag;
 use crate::circuit::gate::StandardGate;
 use crate::circuit::gate::instruction::Instruction;
-use crate::circuit::param::{CircuitParam, ParameterValue};
-use crate::circuit::parameter::Parameter;
-use crate::circuit::{Operation, Qubit};
+use crate::circuit::{CircuitParam, Operation, Parameter, ParameterValue, Qubit};
 use crate::compile::gate_transform::transform_rules::rule_registry::TransformRuleExecutor;
 use crate::compile::gate_transform::transform_rules::single_qubit_rule::SingleQubitRule;
 use crate::device::InstructionSet;
@@ -551,7 +549,10 @@ impl GateTransform {
                         // Single-qubit gate: accumulate into front layer
                         let q = qubits[0];
                         let gate_matrix: Array2<Complex<f64>> =
-                            sgate.matrix(&param_values).into_owned();
+                            sgate
+                                .matrix(&param_values)
+                                .expect("single-qubit gate matrix should be well-formed")
+                                .into_owned();
 
                         if let Some(existing) = front_layer.get(&q.id()) {
                             front_layer.insert(q.id(), gate_matrix.dot(existing));
