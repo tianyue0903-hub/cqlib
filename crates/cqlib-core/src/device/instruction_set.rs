@@ -1,20 +1,19 @@
 use crate::circuit::gate::StandardGate;
+use crate::compile::gate_transform::transform_rules::rule_registry::{
+    SingleQubitParamTransformRule, TransformRuleKind, TwoQubitTransformRule,
+};
 use std::collections::HashMap;
 
-/// Represents a step in the two-qubit gate transformation chain.
-/// Each step transforms from `source_gate` using `rule_name`.
+/// Represents a step in a gate transformation chain.
 #[derive(Debug, Clone)]
 pub struct TransformStep {
     pub source_gate: StandardGate,
-    pub rule_name: String,
+    pub rule: TransformRuleKind,
 }
 
 impl TransformStep {
-    pub fn new(source_gate: StandardGate, rule_name: String) -> Self {
-        Self {
-            source_gate,
-            rule_name,
-        }
+    pub fn new(source_gate: StandardGate, rule: TransformRuleKind) -> Self {
+        Self { source_gate, rule }
     }
 }
 
@@ -48,12 +47,48 @@ fn get_two_qubit_categories() -> HashMap<StandardGate, Vec<StandardGate>> {
     categories
 }
 
+/// Single-qubit parameterized gate categories.
+///
+/// Categories:
+/// - RX category (key: RX): RX, RY, RZ
+/// - U category (key: U): U
+/// - RXY category (key: RXY): RXY, XY, XY2P, XY2M
+fn get_single_qubit_param_categories() -> HashMap<StandardGate, Vec<StandardGate>> {
+    let mut categories = HashMap::new();
+    categories.insert(
+        StandardGate::RX,
+        vec![StandardGate::RX, StandardGate::RY, StandardGate::RZ],
+    );
+    categories.insert(StandardGate::U, vec![StandardGate::U]);
+    categories.insert(
+        StandardGate::RXY,
+        vec![
+            StandardGate::RXY,
+            StandardGate::XY,
+            StandardGate::XY2P,
+            StandardGate::XY2M,
+        ],
+    );
+    categories
+}
+
 /// Get the key gate for a given gate type, if it belongs to a known category.
 fn get_category_key(gate: &StandardGate) -> Option<StandardGate> {
     let categories = get_two_qubit_categories();
     for (key, members) in categories.iter() {
         if members.contains(gate) {
             return Some(key.clone());
+        }
+    }
+    None
+}
+
+/// Get the key gate for a single-qubit parameterized gate.
+fn get_single_qubit_param_category_key(gate: &StandardGate) -> Option<StandardGate> {
+    let categories = get_single_qubit_param_categories();
+    for (key, members) in categories.iter() {
+        if members.contains(gate) {
+            return Some(*key);
         }
     }
     None
@@ -97,15 +132,34 @@ fn gate_to_string(gate: &StandardGate) -> String {
         StandardGate::XY2P => "xy2p",
         StandardGate::XY2M => "xy2m",
         StandardGate::GPhase => "gphase",
-        _ => "Unknown Gate",
     };
     name.to_string()
     // gate.to_string("qasm".to_string())
 }
 
-/// Generate the rule name for transforming from source to target gate.
-fn make_rule_name(source: &StandardGate, target: &StandardGate) -> String {
-    format!("{}2{}_rule", gate_to_string(source), gate_to_string(target))
+fn make_two_qubit_rule(source: &StandardGate, target: &StandardGate) -> TransformRuleKind {
+    TransformRuleKind::TwoQubit(
+        TwoQubitTransformRule::from_gates(source, target).unwrap_or_else(|| {
+            panic!(
+                "No typed two-qubit transform rule registered for {:?} -> {:?}",
+                source, target
+            )
+        }),
+    )
+}
+
+fn make_single_qubit_param_rule(
+    source: &StandardGate,
+    target: &StandardGate,
+) -> TransformRuleKind {
+    TransformRuleKind::SingleQubitParam(
+        SingleQubitParamTransformRule::from_gates(source, target).unwrap_or_else(|| {
+            panic!(
+                "No typed single-qubit param transform rule registered for {:?} -> {:?}",
+                source, target
+            )
+        }),
+    )
 }
 
 #[derive(Debug, Default, Clone)]
@@ -115,6 +169,8 @@ pub struct InstructionSet {
     single_qubit_decomposition_rule: String,
     /// Cache of two-qubit transform rules: source gate -> list of transform steps
     two_qubit_rule_map: HashMap<StandardGate, Vec<TransformStep>>,
+    /// Cache of symbolic single-qubit transform rules: source gate -> list of transform steps
+    single_qubit_rule_map: HashMap<StandardGate, Vec<TransformStep>>,
 }
 
 impl InstructionSet {
@@ -163,6 +219,7 @@ impl InstructionSet {
             double_qubit_gate,
             single_qubit_decomposition_rule: sqdr,
             two_qubit_rule_map: HashMap::new(),
+            single_qubit_rule_map: HashMap::new(),
         }
     }
 
@@ -195,7 +252,7 @@ impl InstructionSet {
     /// - If source and target are in different categories:
     ///   - source -> source_key -> target_key -> target
     ///
-    /// Returns a vector of TransformStep, each containing the source gate and rule name.
+    /// Returns a vector of TransformStep, each containing the source gate and typed rule.
     pub fn select_transform_rule(
         &mut self,
         source: StandardGate,
@@ -240,18 +297,18 @@ impl InstructionSet {
                     // Direct transform if either is the key gate
                     curr_rules.push(TransformStep::new(
                         source.clone(),
-                        make_rule_name(&source, dg),
+                        make_two_qubit_rule(&source, dg),
                     ));
                 } else {
                     // Need to go through the key gate
                     // source -> key -> target
                     curr_rules.push(TransformStep::new(
                         source.clone(),
-                        make_rule_name(&source, &source_cate),
+                        make_two_qubit_rule(&source, &source_cate),
                     ));
                     curr_rules.push(TransformStep::new(
                         target_cate.clone(),
-                        make_rule_name(&target_cate, dg),
+                        make_two_qubit_rule(&target_cate, dg),
                     ));
                 }
             } else {
@@ -262,21 +319,21 @@ impl InstructionSet {
                 if source != source_cate {
                     curr_rules.push(TransformStep::new(
                         source.clone(),
-                        make_rule_name(&source, &source_cate),
+                        make_two_qubit_rule(&source, &source_cate),
                     ));
                 }
 
                 // Step 2: source_key -> target_key
                 curr_rules.push(TransformStep::new(
                     source_cate.clone(),
-                    make_rule_name(&source_cate, &target_cate),
+                    make_two_qubit_rule(&source_cate, &target_cate),
                 ));
 
                 // Step 3: target_key -> target (if target is not the key)
                 if *dg != target_cate {
                     curr_rules.push(TransformStep::new(
                         target_cate.clone(),
-                        make_rule_name(&target_cate, dg),
+                        make_two_qubit_rule(&target_cate, dg),
                     ));
                 }
             }
@@ -297,288 +354,107 @@ impl InstructionSet {
     pub fn get_two_qubit_rule_map(&self) -> &HashMap<StandardGate, Vec<TransformStep>> {
         &self.two_qubit_rule_map
     }
-}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_select_transform_rule_same_category_key_to_member() {
-        // CX -> CY (both in CX category, CX is the key)
-        let mut iset = InstructionSet::new(
-            vec![StandardGate::RZ, StandardGate::RX],
-            vec![StandardGate::CY],
-            None,
-        );
-        let rules = iset.select_transform_rule(StandardGate::CX).unwrap();
-        assert_eq!(rules.len(), 1);
-        assert_eq!(rules[0].source_gate, StandardGate::CX);
-        assert_eq!(rules[0].rule_name, "cx2cy_rule");
-    }
-
-    #[test]
-    fn test_select_transform_rule_same_category_member_to_key() {
-        // CY -> CX (both in CX category, CX is the key)
-        let mut iset = InstructionSet::new(
-            vec![StandardGate::RZ, StandardGate::RX],
-            vec![StandardGate::CX],
-            None,
-        );
-        let rules = iset.select_transform_rule(StandardGate::CY).unwrap();
-        assert_eq!(rules.len(), 1);
-        assert_eq!(rules[0].source_gate, StandardGate::CY);
-        assert_eq!(rules[0].rule_name, "cy2cx_rule");
-    }
-
-    #[test]
-    fn test_select_transform_rule_same_category_member_to_member() {
-        // CY -> CZ (both in CX category, neither is the key)
-        let mut iset = InstructionSet::new(
-            vec![StandardGate::RZ, StandardGate::RX],
-            vec![StandardGate::CZ],
-            None,
-        );
-        let rules = iset.select_transform_rule(StandardGate::CY).unwrap();
-        assert_eq!(rules.len(), 2);
-        assert_eq!(rules[0].source_gate, StandardGate::CY);
-        assert_eq!(rules[0].rule_name, "cy2cx_rule");
-        assert_eq!(rules[1].source_gate, StandardGate::CX);
-        assert_eq!(rules[1].rule_name, "cx2cz_rule");
-    }
-
-    #[test]
-    fn test_select_transform_rule_different_category_key_to_key() {
-        // CX -> RZZ (different categories, both are keys)
-        let mut iset = InstructionSet::new(
-            vec![StandardGate::RZ, StandardGate::RX],
-            vec![StandardGate::RZZ],
-            None,
-        );
-        let rules = iset.select_transform_rule(StandardGate::CX).unwrap();
-        assert_eq!(rules.len(), 1);
-        assert_eq!(rules[0].source_gate, StandardGate::CX);
-        assert_eq!(rules[0].rule_name, "cx2rzz_rule");
-    }
-
-    #[test]
-    fn test_select_transform_rule_cx_to_fsim() {
-        // CX -> FSIM (different categories, both are keys)
-        let mut iset = InstructionSet::new(
-            vec![StandardGate::RZ, StandardGate::RX],
-            vec![StandardGate::FSIM],
-            None,
-        );
-        let rules = iset.select_transform_rule(StandardGate::CX).unwrap();
-        assert_eq!(rules.len(), 1);
-        assert_eq!(rules[0].source_gate, StandardGate::CX);
-        assert_eq!(rules[0].rule_name, "cx2fsim_rule");
-    }
-
-    #[test]
-    fn test_select_transform_rule_fsim_to_cx() {
-        // FSIM -> CX (different categories, both are keys)
-        let mut iset = InstructionSet::new(
-            vec![StandardGate::RZ, StandardGate::RX],
-            vec![StandardGate::CX],
-            None,
-        );
-        let rules = iset.select_transform_rule(StandardGate::FSIM).unwrap();
-        assert_eq!(rules.len(), 1);
-        assert_eq!(rules[0].source_gate, StandardGate::FSIM);
-        assert_eq!(rules[0].rule_name, "fsim2cx_rule");
-    }
-
-    #[test]
-    fn test_select_transform_rule_fsim_to_rxx() {
-        // FSIM -> RXX (different categories, FSIM key to RZZ member)
-        let mut iset = InstructionSet::new(
-            vec![StandardGate::RZ, StandardGate::RX],
-            vec![StandardGate::RXX],
-            None,
-        );
-        let rules = iset.select_transform_rule(StandardGate::FSIM).unwrap();
-        assert_eq!(rules.len(), 2);
-        assert_eq!(rules[0].source_gate, StandardGate::FSIM);
-        assert_eq!(rules[0].rule_name, "fsim2rzz_rule");
-        assert_eq!(rules[1].source_gate, StandardGate::RZZ);
-        assert_eq!(rules[1].rule_name, "rzz2rxx_rule");
-    }
-
-    #[test]
-    fn test_select_transform_rule_different_category_member_to_key() {
-        // CY -> RZZ (different categories, CY is member, RZZ is key)
-        let mut iset = InstructionSet::new(
-            vec![StandardGate::RZ, StandardGate::RX],
-            vec![StandardGate::RZZ],
-            None,
-        );
-        let rules = iset.select_transform_rule(StandardGate::CY).unwrap();
-        assert_eq!(rules.len(), 2);
-        assert_eq!(rules[0].source_gate, StandardGate::CY);
-        assert_eq!(rules[0].rule_name, "cy2cx_rule");
-        assert_eq!(rules[1].source_gate, StandardGate::CX);
-        assert_eq!(rules[1].rule_name, "cx2rzz_rule");
-    }
-
-    #[test]
-    fn test_select_transform_rule_different_category_key_to_member() {
-        // CX -> RXX (different categories, CX is key, RXX is member)
-        let mut iset = InstructionSet::new(
-            vec![StandardGate::RZ, StandardGate::RX],
-            vec![StandardGate::RXX],
-            None,
-        );
-        let rules = iset.select_transform_rule(StandardGate::CX).unwrap();
-        assert_eq!(rules.len(), 2);
-        assert_eq!(rules[0].source_gate, StandardGate::CX);
-        assert_eq!(rules[0].rule_name, "cx2rzz_rule");
-        assert_eq!(rules[1].source_gate, StandardGate::RZZ);
-        assert_eq!(rules[1].rule_name, "rzz2rxx_rule");
-    }
-
-    #[test]
-    fn test_select_transform_rule_different_category_member_to_member() {
-        // CY -> RXX (different categories, both are members)
-        let mut iset = InstructionSet::new(
-            vec![StandardGate::RZ, StandardGate::RX],
-            vec![StandardGate::RXX],
-            None,
-        );
-        let rules = iset.select_transform_rule(StandardGate::CY).unwrap();
-        assert_eq!(rules.len(), 3);
-        assert_eq!(rules[0].source_gate, StandardGate::CY);
-        assert_eq!(rules[0].rule_name, "cy2cx_rule");
-        assert_eq!(rules[1].source_gate, StandardGate::CX);
-        assert_eq!(rules[1].rule_name, "cx2rzz_rule");
-        assert_eq!(rules[2].source_gate, StandardGate::RZZ);
-        assert_eq!(rules[2].rule_name, "rzz2rxx_rule");
-    }
-
-    #[test]
-    fn test_select_transform_rule_same_gate() {
-        // CX -> CX (no transformation needed)
-        let mut iset = InstructionSet::new(
-            vec![StandardGate::RZ, StandardGate::RX],
-            vec![StandardGate::CX],
-            None,
-        );
-        let rules = iset.select_transform_rule(StandardGate::CX).unwrap();
-        assert_eq!(rules.len(), 0);
-    }
-
-    #[test]
-    fn test_select_transform_rule_caching() {
-        let mut iset = InstructionSet::new(
-            vec![StandardGate::RZ, StandardGate::RX],
-            vec![StandardGate::CY],
-            None,
-        );
-
-        // First call calculates and caches
-        let rules1 = iset.select_transform_rule(StandardGate::CX).unwrap();
-        assert!(
-            iset.get_two_qubit_rule_map()
-                .contains_key(&StandardGate::CX)
-        );
-
-        // Second call returns cached result
-        let rules2 = iset.select_transform_rule(StandardGate::CX).unwrap();
-        assert_eq!(rules1.len(), rules2.len());
-        assert_eq!(rules1[0].rule_name, rules2[0].rule_name);
-    }
-
-    #[test]
-    fn test_unknown_gate_returns_error() {
-        // SWAP is not in any category, should return error
-        let mut iset = InstructionSet::new(
-            vec![StandardGate::RZ, StandardGate::RX],
-            vec![StandardGate::CX],
-            None,
-        );
-        let result = iset.select_transform_rule(StandardGate::SWAP);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_multi_double_qubit_gate_support() {
-        // Test with multiple double qubit gates in instruction set
-        let mut iset = InstructionSet::new(
-            vec![StandardGate::RZ, StandardGate::RX],
-            vec![StandardGate::CZ, StandardGate::RZZ],
-            None,
-        );
-
-        // Test that transformation rules can be generated for various source gates
-        let source_gates = vec![
-            StandardGate::CX,
-            StandardGate::CY,
-            StandardGate::CZ,
-            StandardGate::RXX,
-            StandardGate::RYY,
-            StandardGate::RZZ,
-            StandardGate::RZX,
-        ];
-
-        for source in &source_gates {
-            let result = iset.select_transform_rule(*source);
-            assert!(result.is_ok(), "Failed for source gate: {:?}", source);
-            let rules = result.unwrap();
-            // Rules should be generated for all source gates
-            assert!(rules.len() <= 2);
+    /// Select the transform rule chain to convert a symbolic single-qubit parameterized
+    /// source gate into one of the instruction set's supported single-qubit parameterized gates.
+    pub fn select_single_qubit_param_transform_rule(
+        &mut self,
+        source: StandardGate,
+    ) -> Result<Vec<TransformStep>, String> {
+        if let Some(rules) = self.single_qubit_rule_map.get(&source) {
+            return Ok(rules.clone());
         }
 
-        // Test caching for multiple source gates
-        assert!(iset.get_two_qubit_rule_map().len() >= source_gates.len());
-    }
+        if self.single_qubit_gates.contains(&source) {
+            let empty_rules = Vec::new();
+            self.single_qubit_rule_map
+                .insert(source, empty_rules.clone());
+            return Ok(empty_rules);
+        }
 
-    #[test]
-    fn test_multi_double_qubit_gate_random_selection() {
-        // Test that different target gates can be selected randomly
-        let mut iset = InstructionSet::new(
-            vec![StandardGate::RZ, StandardGate::RX],
-            vec![StandardGate::CX, StandardGate::RZZ, StandardGate::CZ],
-            None,
-        );
+        let source_cate = get_single_qubit_param_category_key(&source).ok_or_else(|| {
+            format!(
+                "Transform rule not found: source gate {:?} is not in any known single-qubit parameterized category",
+                source
+            )
+        })?;
 
-        // Test multiple times to ensure random selection works
-        let mut selected_targets = std::collections::HashSet::new();
-        for _ in 0..10 {
-            let result = iset.select_transform_rule(StandardGate::CY);
-            assert!(result.is_ok());
-            let rules = result.unwrap();
-            if !rules.is_empty() {
-                // Get the last rule's target from the rule name
-                let last_rule = &rules[rules.len() - 1];
-                selected_targets.insert(last_rule.rule_name.clone());
+        let target_gates: Vec<StandardGate> = self
+            .single_qubit_gates
+            .iter()
+            .copied()
+            .filter(|gate| get_single_qubit_param_category_key(gate).is_some())
+            .collect();
+
+        if target_gates.is_empty() {
+            return Err(
+                "Transform rule not found: instruction set does not contain any supported single-qubit parameterized target gate"
+                    .to_string(),
+            );
+        }
+
+        let mut rules: Vec<TransformStep> = Vec::new();
+        for target in &target_gates {
+            let target_cate = get_single_qubit_param_category_key(target).ok_or_else(|| {
+                format!(
+                    "Transform rule not found: target gate {:?} is not in any known single-qubit parameterized category",
+                    target
+                )
+            })?;
+
+            let mut curr_rules: Vec<TransformStep> = Vec::new();
+            if source_cate == target_cate {
+                if source == source_cate || *target == target_cate {
+                    curr_rules.push(TransformStep::new(
+                        source,
+                        make_single_qubit_param_rule(&source, target),
+                    ));
+                } else {
+                    curr_rules.push(TransformStep::new(
+                        source,
+                        make_single_qubit_param_rule(&source, &source_cate),
+                    ));
+                    curr_rules.push(TransformStep::new(
+                        target_cate,
+                        make_single_qubit_param_rule(&target_cate, target),
+                    ));
+                }
+            } else {
+                if source != source_cate {
+                    curr_rules.push(TransformStep::new(
+                        source,
+                        make_single_qubit_param_rule(&source, &source_cate),
+                    ));
+                }
+
+                curr_rules.push(TransformStep::new(
+                    source_cate,
+                    make_single_qubit_param_rule(&source_cate, &target_cate),
+                ));
+
+                if *target != target_cate {
+                    curr_rules.push(TransformStep::new(
+                        target_cate,
+                        make_single_qubit_param_rule(&target_cate, target),
+                    ));
+                }
+            }
+
+            if rules.is_empty() || curr_rules.len() < rules.len() {
+                rules = curr_rules;
             }
         }
 
-        // Should have selected multiple different target gates
-        assert!(selected_targets.len() > 0);
+        self.single_qubit_rule_map.insert(source, rules.clone());
+        Ok(rules)
     }
 
-    #[test]
-    fn test_multi_double_qubit_gate_category_handling() {
-        // Test with multiple gates from different categories
-        let mut iset = InstructionSet::new(
-            vec![StandardGate::RZ, StandardGate::RX],
-            vec![StandardGate::CX, StandardGate::RZZ], // From different categories
-            None,
-        );
-
-        // Test transformation from CX category to any target
-        let result = iset.select_transform_rule(StandardGate::CY);
-        assert!(result.is_ok());
-        let rules = result.unwrap();
-        // Rules should be generated (length depends on random target selection)
-        assert!(rules.len() == 1);
-
-        // Test transformation from RZZ category to any target
-        let result = iset.select_transform_rule(StandardGate::RXX);
-        assert!(result.is_ok());
-        let rules = result.unwrap();
-        // Rules should be generated (length depends on random target selection)
-        assert!(rules.len() == 1);
+    /// Get the cached symbolic single-qubit transform rule map.
+    pub fn get_single_qubit_rule_map(&self) -> &HashMap<StandardGate, Vec<TransformStep>> {
+        &self.single_qubit_rule_map
     }
 }
+
+#[cfg(test)]
+#[path = "./instruction_set_test.rs"]
+mod instruction_set_test;

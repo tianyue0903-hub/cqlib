@@ -1,43 +1,9 @@
 use crate::circuit::Parameter;
 use crate::circuit::gate::StandardGate;
+use crate::compile::gate_transform::transform_rules::decomposed_gate::DecomposedGate;
 use smallvec::{SmallVec, smallvec};
 
 use std::f64::consts::PI;
-
-/// Represents a decomposed two-qubit gate with qubit indices.
-/// Each gate in `gates` has corresponding qubit indices in `qubits`.
-/// For single-qubit gates: one index (applied to that qubit)
-/// For two-qubit gates: two indices [control, target] or [qubit0, qubit1]
-#[derive(Debug, Clone)]
-pub struct DecomposedTwoQubitGate {
-    pub gates: Vec<(StandardGate, SmallVec<[Parameter; 3]>)>,
-    pub qubits: Vec<Vec<i32>>,
-}
-
-impl DecomposedTwoQubitGate {
-    pub fn new() -> Self {
-        DecomposedTwoQubitGate {
-            gates: Vec::new(),
-            qubits: Vec::new(),
-        }
-    }
-
-    pub fn push_single(&mut self, gate: StandardGate, params: SmallVec<[Parameter; 3]>, qubit: i32) {
-        self.gates.push((gate, params));
-        self.qubits.push(vec![qubit]);
-    }
-
-    pub fn push_two(
-        &mut self,
-        gate: StandardGate,
-        params: SmallVec<[Parameter; 3]>,
-        qubit0: i32,
-        qubit1: i32,
-    ) {
-        self.gates.push((gate, params));
-        self.qubits.push(vec![qubit0, qubit1]);
-    }
-}
 
 fn fixed(value: f64) -> Parameter {
     Parameter::from(value)
@@ -74,8 +40,8 @@ impl DoubleQubitRule {
     pub fn cx2rzz_rule(
         _gate: &StandardGate,
         _parameters: &SmallVec<[Parameter; 3]>,
-    ) -> DecomposedTwoQubitGate {
-        let mut result = DecomposedTwoQubitGate::new();
+    ) -> DecomposedGate {
+        let mut result = DecomposedGate::new();
 
         result.push_single(StandardGate::H, smallvec![], 1);
         result.push_single(StandardGate::RZ, smallvec![fixed(-PI / 2.0)], 0);
@@ -90,9 +56,9 @@ impl DoubleQubitRule {
     pub fn rzz2cx_rule(
         _gate: &StandardGate,
         parameters: &SmallVec<[Parameter; 3]>,
-    ) -> DecomposedTwoQubitGate {
+    ) -> DecomposedGate {
         let theta = parameters[0].clone();
-        let mut result = DecomposedTwoQubitGate::new();
+        let mut result = DecomposedGate::new();
 
         result.push_two(StandardGate::CX, smallvec![], 0, 1);
         result.push_single(StandardGate::RZ, smallvec![theta], 1);
@@ -105,8 +71,8 @@ impl DoubleQubitRule {
     pub fn cx2fsim_rule(
         _gate: &StandardGate,
         _parameters: &SmallVec<[Parameter; 3]>,
-    ) -> DecomposedTwoQubitGate {
-        let mut result = DecomposedTwoQubitGate::new();
+    ) -> DecomposedGate {
+        let mut result = DecomposedGate::new();
 
         result.push_single(StandardGate::H, smallvec![], 1);
         result.push_two(StandardGate::FSIM, smallvec![fixed(0.0), fixed(PI)], 0, 1);
@@ -119,10 +85,10 @@ impl DoubleQubitRule {
     pub fn fsim2cx_rule(
         _gate: &StandardGate,
         parameters: &SmallVec<[Parameter; 3]>,
-    ) -> DecomposedTwoQubitGate {
+    ) -> DecomposedGate {
         let theta = parameters[0].clone();
         let phi = parameters[1].clone();
-        let mut result = DecomposedTwoQubitGate::new();
+        let mut result = DecomposedGate::new();
 
         result.push_two(StandardGate::CX, smallvec![], 0, 1);
         result.push_single(StandardGate::H, smallvec![], 0);
@@ -145,9 +111,9 @@ impl DoubleQubitRule {
     pub fn rzz2fsim_rule(
         _gate: &StandardGate,
         parameters: &SmallVec<[Parameter; 3]>,
-    ) -> DecomposedTwoQubitGate {
+    ) -> DecomposedGate {
         let theta = parameters[0].clone();
-        let mut result = DecomposedTwoQubitGate::new();
+        let mut result = DecomposedGate::new();
 
         result.push_single(StandardGate::H, smallvec![], 1);
         result.push_two(StandardGate::FSIM, smallvec![fixed(0.0), fixed(PI)], 0, 1);
@@ -162,10 +128,10 @@ impl DoubleQubitRule {
     pub fn fsim2rzz_rule(
         _gate: &StandardGate,
         parameters: &SmallVec<[Parameter; 3]>,
-    ) -> DecomposedTwoQubitGate {
+    ) -> DecomposedGate {
         let theta = parameters[0].clone();
         let phi = parameters[1].clone();
-        let mut result = DecomposedTwoQubitGate::new();
+        let mut result = DecomposedGate::new();
 
         result.push_single(StandardGate::H, smallvec![], 0);
         result.push_single(StandardGate::H, smallvec![], 1);
@@ -206,8 +172,8 @@ impl DoubleQubitRule {
     pub fn cx2cy_rule(
         _gate: &StandardGate,
         _parameters: &SmallVec<[Parameter; 3]>,
-    ) -> DecomposedTwoQubitGate {
-        let mut result = DecomposedTwoQubitGate::new();
+    ) -> DecomposedGate {
+        let mut result = DecomposedGate::new();
 
         result.push_single(StandardGate::S, smallvec![], 1);
         result.push_two(StandardGate::CY, smallvec![], 0, 1);
@@ -220,8 +186,8 @@ impl DoubleQubitRule {
     pub fn cy2cx_rule(
         _gate: &StandardGate,
         _parameters: &SmallVec<[Parameter; 3]>,
-    ) -> DecomposedTwoQubitGate {
-        let mut result = DecomposedTwoQubitGate::new();
+    ) -> DecomposedGate {
+        let mut result = DecomposedGate::new();
 
         result.push_single(StandardGate::SDG, smallvec![], 1);
         result.push_two(StandardGate::CX, smallvec![], 0, 1);
@@ -234,8 +200,8 @@ impl DoubleQubitRule {
     pub fn cx2cz_rule(
         _gate: &StandardGate,
         _parameters: &SmallVec<[Parameter; 3]>,
-    ) -> DecomposedTwoQubitGate {
-        let mut result = DecomposedTwoQubitGate::new();
+    ) -> DecomposedGate {
+        let mut result = DecomposedGate::new();
 
         result.push_single(StandardGate::H, smallvec![], 1);
         result.push_two(StandardGate::CZ, smallvec![], 0, 1);
@@ -248,8 +214,8 @@ impl DoubleQubitRule {
     pub fn cz2cx_rule(
         _gate: &StandardGate,
         _parameters: &SmallVec<[Parameter; 3]>,
-    ) -> DecomposedTwoQubitGate {
-        let mut result = DecomposedTwoQubitGate::new();
+    ) -> DecomposedGate {
+        let mut result = DecomposedGate::new();
 
         result.push_single(StandardGate::H, smallvec![], 1);
         result.push_two(StandardGate::CX, smallvec![], 0, 1);
@@ -267,9 +233,9 @@ impl DoubleQubitRule {
     pub fn rzz2rxx_rule(
         _gate: &StandardGate,
         parameters: &SmallVec<[Parameter; 3]>,
-    ) -> DecomposedTwoQubitGate {
+    ) -> DecomposedGate {
         let theta = parameters[0].clone();
-        let mut result = DecomposedTwoQubitGate::new();
+        let mut result = DecomposedGate::new();
 
         result.push_single(StandardGate::H, smallvec![], 0);
         result.push_single(StandardGate::H, smallvec![], 1);
@@ -283,9 +249,9 @@ impl DoubleQubitRule {
     pub fn rxx2rzz_rule(
         _gate: &StandardGate,
         parameters: &SmallVec<[Parameter; 3]>,
-    ) -> DecomposedTwoQubitGate {
+    ) -> DecomposedGate {
         let theta = parameters[0].clone();
-        let mut result = DecomposedTwoQubitGate::new();
+        let mut result = DecomposedGate::new();
 
         result.push_single(StandardGate::H, smallvec![], 0);
         result.push_single(StandardGate::H, smallvec![], 1);
@@ -299,9 +265,9 @@ impl DoubleQubitRule {
     pub fn rzz2ryy_rule(
         _gate: &StandardGate,
         parameters: &SmallVec<[Parameter; 3]>,
-    ) -> DecomposedTwoQubitGate {
+    ) -> DecomposedGate {
         let theta = parameters[0].clone();
-        let mut result = DecomposedTwoQubitGate::new();
+        let mut result = DecomposedGate::new();
 
         result.push_single(StandardGate::RX, smallvec![fixed(-PI / 2.0)], 0);
         result.push_single(StandardGate::RX, smallvec![fixed(-PI / 2.0)], 1);
@@ -316,9 +282,9 @@ impl DoubleQubitRule {
     pub fn ryy2rzz_rule(
         _gate: &StandardGate,
         parameters: &SmallVec<[Parameter; 3]>,
-    ) -> DecomposedTwoQubitGate {
+    ) -> DecomposedGate {
         let theta = parameters[0].clone();
-        let mut result = DecomposedTwoQubitGate::new();
+        let mut result = DecomposedGate::new();
 
         result.push_single(StandardGate::RX, smallvec![fixed(PI / 2.0)], 0);
         result.push_single(StandardGate::RX, smallvec![fixed(PI / 2.0)], 1);
@@ -333,9 +299,9 @@ impl DoubleQubitRule {
     pub fn rzz2rzx_rule(
         _gate: &StandardGate,
         parameters: &SmallVec<[Parameter; 3]>,
-    ) -> DecomposedTwoQubitGate {
+    ) -> DecomposedGate {
         let theta = parameters[0].clone();
-        let mut result = DecomposedTwoQubitGate::new();
+        let mut result = DecomposedGate::new();
 
         result.push_single(StandardGate::H, smallvec![], 1);
         result.push_two(StandardGate::RZX, smallvec![theta], 0, 1);
@@ -348,9 +314,9 @@ impl DoubleQubitRule {
     pub fn rzx2rzz_rule(
         _gate: &StandardGate,
         parameters: &SmallVec<[Parameter; 3]>,
-    ) -> DecomposedTwoQubitGate {
+    ) -> DecomposedGate {
         let theta = parameters[0].clone();
-        let mut result = DecomposedTwoQubitGate::new();
+        let mut result = DecomposedGate::new();
         result.push_single(StandardGate::H, smallvec![], 1);
         result.push_two(StandardGate::RZZ, smallvec![theta], 0, 1);
         result.push_single(StandardGate::H, smallvec![], 1);
@@ -362,9 +328,9 @@ impl DoubleQubitRule {
     pub fn rzz2crz_rule(
         _gate: &StandardGate,
         parameters: &SmallVec<[Parameter; 3]>,
-    ) -> DecomposedTwoQubitGate {
+    ) -> DecomposedGate {
         let theta = parameters[0].clone();
-        let mut result = DecomposedTwoQubitGate::new();
+        let mut result = DecomposedGate::new();
 
         result.push_single(StandardGate::RZ, smallvec![theta.clone()], 1);
         result.push_two(StandardGate::CRZ, smallvec![-2.0 * theta], 0, 1);
@@ -376,9 +342,9 @@ impl DoubleQubitRule {
     pub fn crz2rzz_rule(
         _gate: &StandardGate,
         parameters: &SmallVec<[Parameter; 3]>,
-    ) -> DecomposedTwoQubitGate {
+    ) -> DecomposedGate {
         let theta = parameters[0].clone();
-        let mut result = DecomposedTwoQubitGate::new();
+        let mut result = DecomposedGate::new();
 
         result.push_single(StandardGate::RZ, smallvec![theta.clone() / 2.0], 1);
         result.push_two(StandardGate::RZZ, smallvec![theta / -2.0], 0, 1);
@@ -391,9 +357,9 @@ impl DoubleQubitRule {
     pub fn rzz2crx_rule(
         _gate: &StandardGate,
         parameters: &SmallVec<[Parameter; 3]>,
-    ) -> DecomposedTwoQubitGate {
+    ) -> DecomposedGate {
         let theta = parameters[0].clone();
-        let mut result = DecomposedTwoQubitGate::new();
+        let mut result = DecomposedGate::new();
 
         result.push_single(StandardGate::RZ, smallvec![theta.clone()], 1);
         result.push_single(StandardGate::H, smallvec![], 1);
@@ -408,9 +374,9 @@ impl DoubleQubitRule {
     pub fn crx2rzz_rule(
         _gate: &StandardGate,
         parameters: &SmallVec<[Parameter; 3]>,
-    ) -> DecomposedTwoQubitGate {
+    ) -> DecomposedGate {
         let theta = parameters[0].clone();
-        let mut result = DecomposedTwoQubitGate::new();
+        let mut result = DecomposedGate::new();
 
         result.push_single(StandardGate::H, smallvec![], 1);
         result.push_single(StandardGate::RZ, smallvec![theta.clone() / 2.0], 1);
@@ -424,9 +390,9 @@ impl DoubleQubitRule {
     pub fn rzz2cry_rule(
         _gate: &StandardGate,
         parameters: &SmallVec<[Parameter; 3]>,
-    ) -> DecomposedTwoQubitGate {
+    ) -> DecomposedGate {
         let theta = parameters[0].clone();
-        let mut result = DecomposedTwoQubitGate::new();
+        let mut result = DecomposedGate::new();
 
         result.push_single(StandardGate::RZ, smallvec![theta.clone()], 1);
         result.push_single(StandardGate::RX, smallvec![fixed(-PI / 2.0)], 1);
@@ -440,9 +406,9 @@ impl DoubleQubitRule {
     pub fn cry2rzz_rule(
         _gate: &StandardGate,
         parameters: &SmallVec<[Parameter; 3]>,
-    ) -> DecomposedTwoQubitGate {
+    ) -> DecomposedGate {
         let theta = parameters[0].clone();
-        let mut result = DecomposedTwoQubitGate::new();
+        let mut result = DecomposedGate::new();
 
         result.push_single(StandardGate::RX, smallvec![fixed(PI / 2.0)], 1);
         result.push_single(StandardGate::RZ, smallvec![theta.clone() / 2.0], 1);
@@ -538,7 +504,7 @@ mod tests {
         expand_mat
     }
 
-    fn matrix_from_decomposed_gate(decomposed: &DecomposedTwoQubitGate) -> Array2<Complex<f64>> {
+    fn matrix_from_decomposed_gate(decomposed: &DecomposedGate) -> Array2<Complex<f64>> {
         let mut total_u: Array2<Complex<f64>> = Array2::eye(4);
 
         // Gates are applied in temporal order (left-to-right in circuit),
@@ -557,7 +523,7 @@ mod tests {
     }
 
     fn assert_rule_decomposition(
-        rule: fn(&StandardGate, &SmallVec<[Parameter; 3]>) -> DecomposedTwoQubitGate,
+        rule: fn(&StandardGate, &SmallVec<[Parameter; 3]>) -> DecomposedGate,
         gate: &StandardGate,
         params: &SmallVec<[Parameter; 3]>,
         rule_name: &str,
@@ -589,7 +555,7 @@ mod tests {
     }
 
     fn assert_rule_special_angles_1(
-        rule: fn(&StandardGate, &SmallVec<[Parameter; 3]>) -> DecomposedTwoQubitGate,
+        rule: fn(&StandardGate, &SmallVec<[Parameter; 3]>) -> DecomposedGate,
         gate: StandardGate,
         rule_name: &str,
     ) {
@@ -604,7 +570,7 @@ mod tests {
     }
 
     fn assert_rule_special_angles_2(
-        rule: fn(&StandardGate, &SmallVec<[Parameter; 3]>) -> DecomposedTwoQubitGate,
+        rule: fn(&StandardGate, &SmallVec<[Parameter; 3]>) -> DecomposedGate,
         gate: StandardGate,
         rule_name: &str,
     ) {
