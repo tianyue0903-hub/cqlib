@@ -267,9 +267,12 @@ impl PyStandardGate {
             )));
         }
 
-        // StandardGate::matrix returns Cow<Array2>
+        // StandardGate::matrix returns Result<Cow<Array2>, CircuitError>
         // Use rust-numpy to_pyarray for efficient conversion
-        let mat_cow = self.inner.matrix(&eval_params);
+        let mat_cow = self
+            .inner
+            .matrix(&eval_params)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
         Ok(mat_cow.to_pyarray(py))
     }
 

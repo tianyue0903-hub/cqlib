@@ -83,6 +83,8 @@ class UnitaryGate:
     ) -> npt.NDArray[np.complex128]:
         """Returns the matrix as a numpy array (for numpy interoperability).
 
+        Compatible with NumPy 2.0+ array protocol.
+
         Args:
             dtype: The desired data type of the array.
             copy: Whether to copy the data. Defaults to None.

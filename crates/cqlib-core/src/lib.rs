@@ -18,5 +18,8 @@ pub mod compile;
 pub mod device;
 pub mod error_mitigation;
 pub mod ir;
+pub mod qis;
 
 pub use error_mitigation::ZNEMitigation;
+
+pub mod visualization;

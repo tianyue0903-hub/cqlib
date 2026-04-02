@@ -4,7 +4,7 @@
 #
 # This code is licensed under the Apache License, Version 2.0. You may
 # obtain a copy of this license in the LICENSE.txt file in the root directory
-# of this source tree or at http:#www.apache.org/licenses/LICENSE-2.0.
+# of this source tree or at http://www.apache.org/licenses/LICENSE-2.0.
 #
 # Any modifications or derivative works of this code must retain this
 # copyright notice, and modified files need to carry a notice indicating
@@ -23,7 +23,6 @@
 
 import pytest
 import numpy as np
-from cqlib.circuit import Circuit
 
 
 class TestControlledNotGates:
@@ -187,6 +186,7 @@ class TestMultiControlMethod:
     def test_multi_control_x_one_control(self, two_qubit_circuit):
         """测试单控X门（等效于CNOT）"""
         from cqlib.circuit.gates import X
+
         c = two_qubit_circuit
         c.multi_control(X, [0], [1])
         assert len(c) == 1
@@ -194,6 +194,7 @@ class TestMultiControlMethod:
     def test_multi_control_x_two_controls(self, three_qubit_circuit):
         """测试双控X门（等效于CCX）"""
         from cqlib.circuit.gates import X
+
         c = three_qubit_circuit
         c.multi_control(X, [0, 1], [2])
         assert len(c) == 1
@@ -201,6 +202,7 @@ class TestMultiControlMethod:
     def test_multi_control_hadamard(self, two_qubit_circuit):
         """测试受控Hadamard"""
         from cqlib.circuit.gates import H
+
         c = two_qubit_circuit
         c.multi_control(H, [0], [1])
         assert len(c) == 1
@@ -208,6 +210,7 @@ class TestMultiControlMethod:
     def test_multi_control_with_params(self, two_qubit_circuit, theta_param):
         """测试多控门使用参数"""
         from cqlib.circuit.gates import RX
+
         c = two_qubit_circuit
         c.multi_control(RX(theta_param), [0], [1])
         assert len(c) == 1

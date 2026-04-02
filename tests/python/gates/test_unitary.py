@@ -4,7 +4,7 @@
 #
 # This code is licensed under the Apache License, Version 2.0. You may
 # obtain a copy of this license in the LICENSE.txt file in the root directory
-# of this source tree or at http:#www.apache.org/licenses/LICENSE-2.0.
+# of this source tree or at http://www.apache.org/licenses/LICENSE-2.0.
 #
 # Any modifications or derivative works of this code must retain this
 # copyright notice, and modified files need to carry a notice indicating
@@ -21,8 +21,6 @@ Test coverage:
 - Gate application in circuits
 - Unitary property verification
 """
-
-from typing import Optional
 
 import pytest
 import numpy as np
@@ -103,12 +101,9 @@ class TestUnitaryGateWithMatrix:
 
     def test_two_qubit_gate_matrix(self):
         """Two-qubit matrix - CNOT"""
-        cnot_mat = np.array([
-            [1, 0, 0, 0],
-            [0, 1, 0, 0],
-            [0, 0, 0, 1],
-            [0, 0, 1, 0]
-        ], dtype=complex)
+        cnot_mat = np.array(
+            [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 0, 1], [0, 0, 1, 0]], dtype=complex
+        )
         gate = UnitaryGate("CustomCNOT", 2).with_matrix(cnot_mat)
         mat = gate.matrix()
         assert np.allclose(mat, cnot_mat), "CNOT matrix mismatch"
@@ -116,12 +111,9 @@ class TestUnitaryGateWithMatrix:
 
     def test_swap_matrix(self):
         """SWAP gate matrix"""
-        swap_mat = np.array([
-            [1, 0, 0, 0],
-            [0, 0, 1, 0],
-            [0, 1, 0, 0],
-            [0, 0, 0, 1]
-        ], dtype=complex)
+        swap_mat = np.array(
+            [[1, 0, 0, 0], [0, 0, 1, 0], [0, 1, 0, 0], [0, 0, 0, 1]], dtype=complex
+        )
         gate = UnitaryGate("CustomSWAP", 2).with_matrix(swap_mat)
         mat = gate.matrix()
         assert np.allclose(mat, swap_mat), "SWAP matrix mismatch"
@@ -157,12 +149,9 @@ class TestUnitaryGateUnitaryProperty:
 
     def test_cnot_square_is_identity(self):
         """CNOT² = I"""
-        cnot_mat = np.array([
-            [1, 0, 0, 0],
-            [0, 1, 0, 0],
-            [0, 0, 0, 1],
-            [0, 0, 1, 0]
-        ], dtype=complex)
+        cnot_mat = np.array(
+            [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 0, 1], [0, 0, 1, 0]], dtype=complex
+        )
         gate = UnitaryGate("CNOT", 2).with_matrix(cnot_mat)
         mat = gate.matrix()
         product = mat @ mat
@@ -200,12 +189,9 @@ class TestUnitaryGateInCircuit:
     def test_apply_two_qubit_unitary(self):
         """Apply two-qubit gate to circuit"""
         c = Circuit(3)
-        cnot_mat = np.array([
-            [1, 0, 0, 0],
-            [0, 1, 0, 0],
-            [0, 0, 0, 1],
-            [0, 0, 1, 0]
-        ], dtype=complex)
+        cnot_mat = np.array(
+            [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 0, 1], [0, 0, 1, 0]], dtype=complex
+        )
         gate = UnitaryGate("CustomCNOT", 2).with_matrix(cnot_mat)
         c.unitary(gate, [0, 1])
         assert len(c) == 1

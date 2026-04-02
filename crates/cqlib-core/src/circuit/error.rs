@@ -10,7 +10,42 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
+//! # Circuit Error Types
+//!
+//! This module defines error types for quantum circuit operations.
+//! It provides comprehensive error handling for parameter evaluation,
+//! circuit validation, and symbolic computation errors.
+
+use symb_anafis::DiffError;
 use thiserror::Error;
+
+/// A unified error type for operations involving symbolic parameters.
+#[derive(Debug, Error)]
+pub enum ParameterError {
+    /// Wraps symbolic errors from the underlying math engine (parsing, syntax, diff, simplify).
+    #[error(transparent)]
+    SymbolicError(#[from] DiffError),
+
+    /// Indicates that a symbolic variable required for evaluation was missing.
+    #[error("Symbol not found: {0}")]
+    UndefinedSymbol(String),
+
+    /// Indicates an arithmetic error where a division or modulo operation by zero occurred.
+    #[error("Division by zero")]
+    DivisionByZero,
+
+    /// Indicates that a mathematical function was called with an argument outside its defined domain.
+    #[error("Domain error: {0}")]
+    DomainError(String),
+
+    /// Indicates that a calculation resulted in NaN (Not a Number).
+    #[error("Calculation resulted in NaN: {0}")]
+    NaN(String),
+
+    /// Indicates an error occurred during parsing.
+    #[error("Parse error: {0}")]
+    ParseError(String),
+}
 
 /// Errors that can occur during the numerical evaluation of symbolic parameters.
 ///
@@ -46,6 +81,21 @@ pub enum EvalError {
     /// This serves as a catch-all for undefined numerical behaviors not covered by other variants.
     #[error("Calculation resulted in NaN: {0}")]
     NaN(String),
+
+    /// Indicates that the expression tree exceeded the maximum allowed recursion depth during evaluation.
+    ///
+    /// This typically occurs with deeply nested expressions (e.g., `((((x+1)+1)+1)...)`).
+    /// Consider simplifying the expression or increasing the depth limit.
+    #[error("Maximum recursion depth exceeded during evaluation (depth limit: {0})")]
+    MaxRecursionDepthExceeded(usize),
+}
+
+/// Errors that can occur during symbolic differentiation.
+#[derive(Debug, Error)]
+pub enum DerivativeError {
+    /// Indicates that an expression is not differentiable with respect to a given variable.
+    #[error("Cannot differentiate expression: {0}")]
+    NonDifferentiable(String),
 }
 
 /// A comprehensive error type for operations involving Quantum Circuits.
@@ -100,6 +150,45 @@ pub enum CircuitError {
 
     #[error("Symbolic parameter cannot be evaluated in this context")]
     SymbolicParameterError,
+
+    /// Thrown when a parameter cannot be resolved during circuit decomposition.
+    ///
+    /// This occurs when a sub-circuit or control flow body contains symbolic parameters
+    /// that are not bound to concrete values and cannot be evaluated.
+    #[error("Unresolved parameter in decomposition: {0}")]
+    UnresolvedParameter(String),
+
+    /// Thrown when a parameter index is out of range.
+    ///
+    /// This indicates internal data corruption or an inconsistency between the
+    /// circuit's parameter table and the indices stored in operations.
+    #[error("Parameter index {0} out of range")]
+    InvalidParameterIndex(u32),
+
+    /// Thrown when a gate parameter has an invalid value (NaN or Infinity).
+    ///
+    /// This occurs when evaluating gate matrices with non-finite parameter values.
+    #[error("Invalid parameter value at index {0}: {1}")]
+    InvalidParameterValue(usize, f64),
+
+    /// Thrown when the control flow graph (CFG) has an invalid or inconsistent structure.
+    ///
+    /// This error indicates that the DAG representation of the circuit is malformed,
+    /// which can occur when:
+    /// - A Branch terminator lacks required TrueBranch or FalseBranch edges
+    /// - A Jump terminator references a non-existent block
+    /// - The entry block is not set
+    /// - Edges reference nodes that don't exist in the graph
+    ///
+    /// # Examples
+    ///
+    /// This error is returned when converting an invalid `CircuitDag` back to a `Circuit`
+    /// if the DAG structure was manually modified and left in an inconsistent state.
+    #[error("Invalid control flow graph structure: {0}")]
+    InvalidControlFlow(String),
+
+    #[error("Invalid Operation: {0}")]
+    InvalidOperation(String),
 }
 
 #[derive(Debug, Error)]

@@ -10,12 +10,19 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
+//! # Device Error Types
+//!
+//! This module defines error types for quantum device operations.
+//! It provides error handling for device topology validation,
+//! layout mapping, and qubit connectivity issues.
+
 use crate::circuit::Qubit;
 use std::fmt;
 use thiserror::Error;
 
 #[derive(Error, Debug, Clone, PartialEq, Eq)]
 pub enum DeviceError {
+    InvalidOnlineQubit(Qubit),
     QubitNotInTopology(Qubit),
     EdgeNotInTopology(Qubit, Qubit),
 }
@@ -23,6 +30,13 @@ pub enum DeviceError {
 impl fmt::Display for DeviceError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::InvalidOnlineQubit(q) => {
+                write!(
+                    f,
+                    "Specified online qubit {} does not exist in the device topology",
+                    q
+                )
+            }
             Self::QubitNotInTopology(q) => {
                 write!(f, "Qubit {} is not in the device topology", q)
             }

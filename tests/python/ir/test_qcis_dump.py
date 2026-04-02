@@ -332,7 +332,7 @@ class TestQcisDumpsFileIO:
         c.h(0)
         c.cz(0, 1)
 
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.qcis', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".qcis", delete=False) as f:
             temp_path = f.name
 
         try:
@@ -340,7 +340,7 @@ class TestQcisDumpsFileIO:
             assert os.path.exists(temp_path)
 
             # Verify file content
-            with open(temp_path, 'r') as f:
+            with open(temp_path, "r") as f:
                 content = f.read()
             assert "H Q0" in content
             assert "CZ Q0 Q1" in content
@@ -355,14 +355,14 @@ class TestQcisDumpsFileIO:
         c2 = Circuit(1)
         c2.x(0)
 
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.qcis', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".qcis", delete=False) as f:
             temp_path = f.name
 
         try:
             dump(c1, temp_path)
             dump(c2, temp_path)
 
-            with open(temp_path, 'r') as f:
+            with open(temp_path, "r") as f:
                 content = f.read()
             assert "X Q0" in content
             assert "H Q0" not in content

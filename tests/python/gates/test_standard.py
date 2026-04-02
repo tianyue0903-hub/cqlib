@@ -4,7 +4,7 @@
 #
 # This code is licensed under the Apache License, Version 2.0. You may
 # obtain a copy of this license in the LICENSE.txt file in the root directory
-# of this source tree or at http:#www.apache.org/licenses/LICENSE-2.0.
+# of this source tree or at http://www.apache.org/licenses/LICENSE-2.0.
 #
 # Any modifications or derivative works of this code must retain this
 # copyright notice, and modified files need to carry a notice indicating
@@ -27,12 +27,43 @@ Test coverage:
 import pytest
 import numpy as np
 from cqlib.circuit.gates import (
-    StandardGate, I, H, X, Y, Z, S, SDG, T, TDG,
-    RX, RY, RZ, U, Phase, GPhase,
-    CX, CY, CZ, SWAP, CCX,
-    CRX, CRY, CRZ,
-    RXX, RYY, RZZ, RZX, RXY, FSIM,
-    X2P, X2M, Y2P, Y2M, XY, XY2P, XY2M
+    StandardGate,
+    I,
+    H,
+    X,
+    Y,
+    Z,
+    S,
+    SDG,
+    T,
+    TDG,
+    RX,
+    RY,
+    RZ,
+    U,
+    Phase,
+    GPhase,
+    CX,
+    CY,
+    CZ,
+    SWAP,
+    CCX,
+    CRX,
+    CRY,
+    CRZ,
+    RXX,
+    RYY,
+    RZZ,
+    RZX,
+    RXY,
+    FSIM,
+    X2P,
+    X2M,
+    Y2P,
+    Y2M,
+    XY,
+    XY2P,
+    XY2M,
 )
 from cqlib.circuit import Parameter
 
@@ -151,12 +182,20 @@ class TestGateProperties:
         (FSIM, 2, 2, 0),
     ]
 
-    @pytest.mark.parametrize("gate, num_qubits, num_params, num_ctrl_qubits", GATE_PROPERTIES)
+    @pytest.mark.parametrize(
+        "gate, num_qubits, num_params, num_ctrl_qubits", GATE_PROPERTIES
+    )
     def test_gate_properties(self, gate, num_qubits, num_params, num_ctrl_qubits):
         """Verify each gate's property values"""
-        assert gate.num_qubits == num_qubits, f"{gate} num_qubits should be {num_qubits}"
-        assert gate.num_params == num_params, f"{gate} num_params should be {num_params}"
-        assert gate.num_ctrl_qubits == num_ctrl_qubits, f"{gate} num_ctrl_qubits should be {num_ctrl_qubits}"
+        assert gate.num_qubits == num_qubits, (
+            f"{gate} num_qubits should be {num_qubits}"
+        )
+        assert gate.num_params == num_params, (
+            f"{gate} num_params should be {num_params}"
+        )
+        assert gate.num_ctrl_qubits == num_ctrl_qubits, (
+            f"{gate} num_ctrl_qubits should be {num_ctrl_qubits}"
+        )
 
 
 class TestGateMatrixUnitary:
@@ -247,34 +286,19 @@ class TestGateMatricesExact:
     def test_cnot_matrix_exact(self):
         """CNOT gate matrix exact value"""
         mat = CX.matrix()
-        expected = np.array([
-            [1, 0, 0, 0],
-            [0, 1, 0, 0],
-            [0, 0, 0, 1],
-            [0, 0, 1, 0]
-        ])
+        expected = np.array([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 0, 1], [0, 0, 1, 0]])
         assert np.allclose(mat, expected), "CX matrix mismatch"
 
     def test_swap_matrix_exact(self):
         """SWAP gate matrix exact value"""
         mat = SWAP.matrix()
-        expected = np.array([
-            [1, 0, 0, 0],
-            [0, 0, 1, 0],
-            [0, 1, 0, 0],
-            [0, 0, 0, 1]
-        ])
+        expected = np.array([[1, 0, 0, 0], [0, 0, 1, 0], [0, 1, 0, 0], [0, 0, 0, 1]])
         assert np.allclose(mat, expected), "SWAP matrix mismatch"
 
     def test_cz_matrix_exact(self):
         """CZ gate matrix exact value"""
         mat = CZ.matrix()
-        expected = np.array([
-            [1, 0, 0, 0],
-            [0, 1, 0, 0],
-            [0, 0, 1, 0],
-            [0, 0, 0, -1]
-        ])
+        expected = np.array([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, -1]])
         assert np.allclose(mat, expected), "CZ matrix mismatch"
 
     def test_sqrt_x_matrix_exact(self):
@@ -317,10 +341,12 @@ class TestParametricGateMatrices:
         """RX(pi/2) verification"""
         theta = np.pi / 2
         mat = RX(theta).matrix()
-        expected = np.array([
-            [np.cos(theta / 2), -1j * np.sin(theta / 2)],
-            [-1j * np.sin(theta / 2), np.cos(theta / 2)]
-        ])
+        expected = np.array(
+            [
+                [np.cos(theta / 2), -1j * np.sin(theta / 2)],
+                [-1j * np.sin(theta / 2), np.cos(theta / 2)],
+            ]
+        )
         assert np.allclose(mat, expected), "RX(pi/2) matrix mismatch"
         assert is_unitary(mat), "RX(pi/2) should be unitary"
 
@@ -340,10 +366,12 @@ class TestParametricGateMatrices:
         """RY(pi/2) verification"""
         theta = np.pi / 2
         mat = RY(theta).matrix()
-        expected = np.array([
-            [np.cos(theta / 2), -np.sin(theta / 2)],
-            [np.sin(theta / 2), np.cos(theta / 2)]
-        ])
+        expected = np.array(
+            [
+                [np.cos(theta / 2), -np.sin(theta / 2)],
+                [np.sin(theta / 2), np.cos(theta / 2)],
+            ]
+        )
         assert np.allclose(mat, expected), "RY(pi/2) matrix mismatch"
         assert is_unitary(mat), "RY(pi/2) should be unitary"
 
@@ -357,10 +385,7 @@ class TestParametricGateMatrices:
         """RZ(phi) = diag(e^(-iφ/2), e^(iφ/2))"""
         phi = np.pi / 3
         mat = RZ(phi).matrix()
-        expected = np.array([
-            [np.exp(-1j * phi / 2), 0],
-            [0, np.exp(1j * phi / 2)]
-        ])
+        expected = np.array([[np.exp(-1j * phi / 2), 0], [0, np.exp(1j * phi / 2)]])
         assert np.allclose(mat, expected), "RZ matrix mismatch"
 
     def test_phase_gate(self):
@@ -384,10 +409,15 @@ class TestParametricGateMatrices:
         mat = U(theta, phi, lam).matrix()
         # U(θ, φ, λ) = [[cos(θ/2), -e^(iλ)sin(θ/2)],
         #               [e^(iφ)sin(θ/2), e^(i(φ+λ))cos(θ/2)]]
-        expected = np.array([
-            [np.cos(theta / 2), -np.exp(1j * lam) * np.sin(theta / 2)],
-            [np.exp(1j * phi) * np.sin(theta / 2), np.exp(1j * (phi + lam)) * np.cos(theta / 2)]
-        ])
+        expected = np.array(
+            [
+                [np.cos(theta / 2), -np.exp(1j * lam) * np.sin(theta / 2)],
+                [
+                    np.exp(1j * phi) * np.sin(theta / 2),
+                    np.exp(1j * (phi + lam)) * np.cos(theta / 2),
+                ],
+            ]
+        )
         assert np.allclose(mat, expected), "U gate matrix mismatch"
         assert is_unitary(mat), "U gate should be unitary"
 
@@ -398,12 +428,14 @@ class TestParametricGateMatrices:
         # CRX = |0⟩⟨0| ⊗ I + |1⟩⟨1| ⊗ RX(θ)
         cos_half = np.cos(theta / 2)
         sin_half = np.sin(theta / 2)
-        expected = np.array([
-            [1, 0, 0, 0],
-            [0, 1, 0, 0],
-            [0, 0, cos_half, -1j * sin_half],
-            [0, 0, -1j * sin_half, cos_half]
-        ])
+        expected = np.array(
+            [
+                [1, 0, 0, 0],
+                [0, 1, 0, 0],
+                [0, 0, cos_half, -1j * sin_half],
+                [0, 0, -1j * sin_half, cos_half],
+            ]
+        )
         assert np.allclose(mat, expected), "CRX matrix mismatch"
 
     def test_crz_matrix(self):
@@ -411,12 +443,14 @@ class TestParametricGateMatrices:
         phi = np.pi / 3
         mat = CRZ(phi).matrix()
         # CRZ = |0⟩⟨0| ⊗ I + |1⟩⟨1| ⊗ RZ(φ)
-        expected = np.array([
-            [1, 0, 0, 0],
-            [0, 1, 0, 0],
-            [0, 0, np.exp(-1j * phi / 2), 0],
-            [0, 0, 0, np.exp(1j * phi / 2)]
-        ])
+        expected = np.array(
+            [
+                [1, 0, 0, 0],
+                [0, 1, 0, 0],
+                [0, 0, np.exp(-1j * phi / 2), 0],
+                [0, 0, 0, np.exp(1j * phi / 2)],
+            ]
+        )
         assert np.allclose(mat, expected), "CRZ matrix mismatch"
 
 
@@ -475,8 +509,9 @@ class TestGateInverse:
         # Mathematical verification: G @ G = I
         mat = gate.matrix()
         product = mat @ mat
-        assert np.allclose(product, np.eye(mat.shape[0])), \
+        assert np.allclose(product, np.eye(mat.shape[0])), (
             f"{gate} @ {gate} should be identity"
+        )
 
     def test_paired_inverse_gates(self):
         """Paired inverse gates: S† = SDG, T† = TDG"""
@@ -517,8 +552,9 @@ class TestGateInverse:
         rx_mat = rx.matrix()
         rx_inv_mat = rx_inv.matrix()
         product = rx_mat @ rx_inv_mat
-        assert np.allclose(product, np.eye(2), atol=1e-10), \
+        assert np.allclose(product, np.eye(2), atol=1e-10), (
             "RX(θ) @ RX(-θ) should be identity"
+        )
 
     def test_ry_inverse_negates_angle(self):
         """RY(θ)† = RY(-θ)"""
@@ -528,8 +564,9 @@ class TestGateInverse:
         ry_mat = ry.matrix()
         ry_inv_mat = ry_inv.matrix()
         product = ry_mat @ ry_inv_mat
-        assert np.allclose(product, np.eye(2), atol=1e-10), \
+        assert np.allclose(product, np.eye(2), atol=1e-10), (
             "RY(θ) @ RY(-θ) should be identity"
+        )
 
     def test_rz_inverse_negates_angle(self):
         """RZ(θ)† = RZ(-θ)"""
@@ -539,8 +576,9 @@ class TestGateInverse:
         rz_mat = rz.matrix()
         rz_inv_mat = rz_inv.matrix()
         product = rz_mat @ rz_inv_mat
-        assert np.allclose(product, np.eye(2), atol=1e-10), \
+        assert np.allclose(product, np.eye(2), atol=1e-10), (
             "RZ(θ) @ RZ(-θ) should be identity"
+        )
 
     def test_phase_inverse_negates_angle(self):
         """P(λ)† = P(-λ)"""
@@ -550,8 +588,9 @@ class TestGateInverse:
         p_mat = p.matrix()
         p_inv_mat = p_inv.matrix()
         product = p_mat @ p_inv_mat
-        assert np.allclose(product, np.eye(2), atol=1e-10), \
+        assert np.allclose(product, np.eye(2), atol=1e-10), (
             "P(λ) @ P(-λ) should be identity"
+        )
 
     def test_u_inverse_parameter_swap(self):
         """U(θ, φ, λ)† = U(-θ, -λ, -φ)"""
@@ -561,14 +600,17 @@ class TestGateInverse:
         # Verify parameters: -θ, -λ, -φ
         inv_params = [p.evaluate({}) for p in u_inv.params]
         assert np.isclose(inv_params[0], -theta), "U inverse should negate theta"
-        assert np.isclose(inv_params[1], -lam), "U inverse should swap and negate phi/lam"
-        assert np.isclose(inv_params[2], -phi), "U inverse should swap and negate phi/lam"
+        assert np.isclose(inv_params[1], -lam), (
+            "U inverse should swap and negate phi/lam"
+        )
+        assert np.isclose(inv_params[2], -phi), (
+            "U inverse should swap and negate phi/lam"
+        )
         # Mathematical verification
         u_mat = u.matrix()
         u_inv_mat = u_inv.matrix()
         product = u_mat @ u_inv_mat
-        assert np.allclose(product, np.eye(2), atol=1e-10), \
-            "U @ U† should be identity"
+        assert np.allclose(product, np.eye(2), atol=1e-10), "U @ U† should be identity"
 
 
 class TestGateControl:
@@ -666,8 +708,9 @@ class TestGateMatrixCaching:
         """Different parameters produce different matrices"""
         rx_pi = RX(np.pi).matrix()
         rx_pi_half = RX(np.pi / 2).matrix()
-        assert not np.allclose(rx_pi, rx_pi_half), \
+        assert not np.allclose(rx_pi, rx_pi_half), (
             "Different params should give different matrices"
+        )
 
 
 class TestGateEdgeCases:

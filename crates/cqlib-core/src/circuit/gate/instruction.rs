@@ -79,8 +79,8 @@ impl Instruction {
     /// - `None`: If the instruction is non-unitary (e.g., `Measure`, `Barrier`, `Reset`).
     pub fn matrix(&self, params: &[f64]) -> Option<Cow<'_, Array2<Complex64>>> {
         match self {
-            Instruction::Standard(g) => Some(g.matrix(params)),
-            Instruction::McGate(g) => Some(g.matrix(params)),
+            Instruction::Standard(g) => g.matrix(params).ok(),
+            Instruction::McGate(g) => g.matrix(params).ok(),
             Instruction::UnitaryGate(g) => g.matrix().map(Cow::Borrowed),
             Instruction::CircuitGate(g) => circuit_to_matrix(&g.circuit.circuit, None)
                 .ok()
@@ -239,7 +239,11 @@ impl Instruction {
                 );
                 if let Some(m) = uni.matrix() {
                     let controlled = gate_matrix::control_matrix(m, num_new_ctrls);
-                    g = g.with_matrix(controlled).unwrap();
+                    // Handle possible matrix dimension error, return None on failure
+                    g = match g.with_matrix(controlled) {
+                        Ok(gate) => gate,
+                        Err(_) => return None,
+                    };
                 }
                 // Copy circuit field if present
                 if let Some(c) = uni.circuit() {
@@ -248,9 +252,7 @@ impl Instruction {
 
                 Some(Instruction::UnitaryGate(Box::from(g)))
             }
-            Instruction::CircuitGate(_) => {
-                panic!("CircuitGate instructions are not supported yet");
-            }
+            Instruction::CircuitGate(_) => None, // CircuitGate does not support control yet
             Instruction::Directive(_) => None,
             Instruction::Delay => None,
             Instruction::ControlFlowGate(_) => None,

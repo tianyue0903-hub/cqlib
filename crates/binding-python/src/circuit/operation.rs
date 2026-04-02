@@ -28,8 +28,8 @@
 
 use crate::circuit::bit::PyQubit;
 use crate::circuit::instruction::PyInstruction;
+use cqlib_core::circuit::circuit_param::CircuitParam;
 use cqlib_core::circuit::operation::Operation;
-use cqlib_core::circuit::param::CircuitParam;
 use numpy::ToPyArray;
 use pyo3::IntoPyObjectExt;
 use pyo3::prelude::*;

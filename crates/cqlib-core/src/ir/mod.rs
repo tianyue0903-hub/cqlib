@@ -57,7 +57,8 @@
 //! ### Dumping to Format
 //!
 //! ```rust
-//! use cqlib_core::{Circuit, Qubit, qasm2_dumps, qcis_dumps};
+//! use cqlib_core::circuit::{Circuit, Qubit};
+//! use cqlib_core::ir::{qasm2_dumps, qcis_dumps};
 //!
 //! let mut circuit = Circuit::new(2);
 //! circuit.h(Qubit::new(0)).unwrap();

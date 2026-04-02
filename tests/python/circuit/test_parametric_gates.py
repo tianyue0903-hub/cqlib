@@ -4,7 +4,7 @@
 #
 # This code is licensed under the Apache License, Version 2.0. You may
 # obtain a copy of this license in the LICENSE.txt file in the root directory
-# of this source tree or at http:#www.apache.org/licenses/LICENSE-2.0.
+# of this source tree or at http://www.apache.org/licenses/LICENSE-2.0.
 #
 # Any modifications or derivative works of this code must retain this
 # copyright notice, and modified files need to carry a notice indicating
@@ -23,9 +23,7 @@
 - 使用表达式参数
 """
 
-import pytest
 import numpy as np
-from cqlib.circuit import Circuit, Parameter
 
 
 class TestRotationGatesWithFloat:
@@ -119,7 +117,9 @@ class TestRotationGatesWithExpression:
         c.rx(0, 2.0 * theta_param)
         assert len(c) == 1
 
-    def test_rx_with_complex_expression(self, single_qubit_circuit, theta_param, phi_param):
+    def test_rx_with_complex_expression(
+        self, single_qubit_circuit, theta_param, phi_param
+    ):
         """RX门使用复杂表达式"""
         c = single_qubit_circuit
         c.rx(0, theta_param + phi_param)

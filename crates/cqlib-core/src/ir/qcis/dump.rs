@@ -63,11 +63,11 @@
 use crate::circuit::Circuit;
 use crate::circuit::bit::Qubit;
 
+use crate::circuit::circuit_param::CircuitParam;
 use crate::circuit::gate::directive::Directive;
 use crate::circuit::gate::instruction::Instruction;
 use crate::circuit::gate::standard_gate::StandardGate;
 use crate::circuit::operation::Operation;
-use crate::circuit::param::CircuitParam;
 use std::fmt::Write;
 
 const PI: f64 = std::f64::consts::PI;
@@ -212,7 +212,7 @@ fn format_circuit_param(param: &CircuitParam, circuit: &Circuit) -> Result<Strin
                 // Try to evaluate the parameter to a numeric value
                 match param.evaluate(&None) {
                     Ok(value) => Ok(format_float(value)),
-                    Err(_) => Ok(param.to_string()),
+                    Err(_) => Ok(param.to_string().replace("π", "pi")),
                 }
             } else {
                 // Parameter index not found

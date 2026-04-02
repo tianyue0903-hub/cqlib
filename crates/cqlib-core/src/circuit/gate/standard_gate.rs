@@ -21,8 +21,8 @@
 //! - [`StandardGate`]: The central enum representing gates like `H`, `CX`, `RX`, etc.
 //! - Gate Properties: Metadata such as qubit count, parameter count, and matrix representations.
 
-use crate::circuit::Parameter;
 use crate::circuit::gate::gate_matrix;
+use crate::circuit::{CircuitError, Parameter};
 use ndarray::prelude::*;
 use num::complex::Complex;
 use smallvec::{SmallVec, smallvec};
@@ -223,8 +223,15 @@ impl StandardGate {
     /// # Panics
     ///
     /// Panics if `params` does not contain enough values for the specific gate type.
-    pub fn matrix(&self, params: &[f64]) -> Cow<'_, Array2<Complex<f64>>> {
-        match self {
+    pub fn matrix(&self, params: &[f64]) -> Result<Cow<'_, Array2<Complex<f64>>>, CircuitError> {
+        // Validate all parameters are finite
+        for (i, &p) in params.iter().enumerate() {
+            if !p.is_finite() {
+                return Err(CircuitError::InvalidParameterValue(i, p));
+            }
+        }
+
+        Ok(match self {
             Self::H => Cow::Borrowed(&gate_matrix::H_GATE),
             Self::I => Cow::Borrowed(&gate_matrix::I_GATE),
             Self::S => Cow::Borrowed(&gate_matrix::S_GATE),
@@ -264,7 +271,7 @@ impl StandardGate {
             Self::FSIM => Cow::Owned(gate_matrix::fsim_gate(params[0], params[1])),
 
             Self::U => Cow::Owned(gate_matrix::u_gate(params[0], params[1], params[2])),
-        }
+        })
     }
 
     /// Computes the inverse (Hermitian conjugate) of the gate.

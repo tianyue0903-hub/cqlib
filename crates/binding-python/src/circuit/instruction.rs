@@ -13,9 +13,7 @@
 use cqlib_core::circuit::gate::instruction::Instruction;
 use pyo3::prelude::*;
 
-use crate::circuit::{
-    PyControlFlow, PyDelay, PyDirective, PyMcGate, PyStandardGate, PyUnitaryGate,
-};
+use crate::circuit::{PyControlFlow, PyDirective, PyMcGate, PyStandardGate, PyUnitaryGate};
 
 #[pyclass(name = "Instruction", module = "cqlib.circuit")]
 #[derive(Debug, Clone)]
@@ -82,11 +80,8 @@ impl PyInstruction {
     }
 
     /// Creates a delay instruction.
-    ///
-    /// Args:
-    ///     delay: The delay operation.
     #[staticmethod]
-    fn from_delay(_delay: PyDelay) -> Self {
+    fn from_delay() -> Self {
         PyInstruction {
             inner: Instruction::Delay,
         }

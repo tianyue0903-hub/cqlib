@@ -4,7 +4,7 @@
 #
 # This code is licensed under the Apache License, Version 2.0. You may
 # obtain a copy of this license in the LICENSE.txt file in the root directory
-# of this source tree or at http:#www.apache.org/licenses/LICENSE-2.0.
+# of this source tree or at http://www.apache.org/licenses/LICENSE-2.0.
 #
 # Any modifications or derivative works of this code must retain this
 # copyright notice, and modified files need to carry a notice indicating
@@ -20,7 +20,6 @@
 - 资源限制
 """
 
-import pytest
 import numpy as np
 from cqlib.circuit import Circuit, Parameter
 
@@ -80,7 +79,7 @@ class TestEmptyAndMinimalCircuits:
         # 各种操作对空电路应该正常工作
         assert len(c) == 0
         assert list(c.operations) == []
-        
+
         # 切片空电路
         ops = c[:]
         assert len(ops) == 0
@@ -118,7 +117,7 @@ class TestCircuitModification:
         c = Circuit(2)
         c.h(0)
         c.cx(0, 1)
-        
+
         # 基于原电路创建新操作
         c2 = Circuit(2)
         for op in c:
@@ -126,13 +125,13 @@ class TestCircuitModification:
                 c2.h(op.qubits[0].index)
             elif op.name == "CX":
                 c2.cx(op.qubits[0].index, op.qubits[1].index)
-        
+
         assert len(c2) == 2
 
     def test_build_circuit_incrementally(self):
         """增量构建电路"""
         c = Circuit(2)
-        
+
         # 逐步添加门
         for i in range(10):
             c.h(0)
@@ -145,11 +144,11 @@ class TestSpecialCharactersInLabels:
     def test_long_gate_name(self):
         """长门名称"""
         from cqlib.circuit import UnitaryGate
-        
+
         long_name = "A" * 1000
         mat = np.eye(2, dtype=complex)
         gate = UnitaryGate(long_name, 1).with_matrix(mat)
-        
+
         c = Circuit(1)
         c.unitary(gate, [0])
         assert c[0].name == long_name
@@ -157,11 +156,11 @@ class TestSpecialCharactersInLabels:
     def test_unicode_gate_name(self):
         """Unicode门名称"""
         from cqlib.circuit import UnitaryGate
-        
+
         unicode_name = "自定义门_αβγ"
         mat = np.eye(2, dtype=complex)
         gate = UnitaryGate(unicode_name, 1).with_matrix(mat)
-        
+
         c = Circuit(1)
         c.unitary(gate, [0])
         assert c[0].name == unicode_name
@@ -175,21 +174,21 @@ class TestMemoryEfficiency:
         # 创建有100个qubit的电路
         c = Circuit(100)
         assert c.num_qubits == 100
-        
+
         # 添加一些操作
         for i in range(50):
             c.h(i)
-        
+
         assert len(c) == 50
 
     def test_many_operations(self):
         """大量操作"""
         c = Circuit(2)
-        
+
         # 添加1000个操作
         for _ in range(1000):
             c.h(0)
-        
+
         assert len(c) == 1000
 
 
@@ -201,11 +200,11 @@ class TestCircuitComparison:
         c1 = Circuit(2)
         c1.h(0)
         c1.cx(0, 1)
-        
+
         c2 = Circuit(2)
         c2.h(0)
         c2.cx(0, 1)
-        
+
         # 电路应该相等（如果实现了__eq__）
         # assert c1 == c2
         assert len(c1) == len(c2)
@@ -214,10 +213,10 @@ class TestCircuitComparison:
         """不同电路不等"""
         c1 = Circuit(2)
         c1.h(0)
-        
+
         c2 = Circuit(2)
         c2.x(0)
-        
+
         # 电路应该不等
         # assert c1 != c2
         assert c1[0].name != c2[0].name
@@ -231,7 +230,7 @@ class TestCircuitHashAndRepr:
         c = Circuit(2)
         c.h(0)
         c.cx(0, 1)
-        
+
         repr_str = repr(c)
         assert "Circuit" in repr_str or "circuit" in repr_str.lower()
 
@@ -239,7 +238,7 @@ class TestCircuitHashAndRepr:
         """电路字符串表示"""
         c = Circuit(2)
         c.h(0)
-        
+
         str_repr = str(c)
         assert isinstance(str_repr, str)
 
@@ -251,7 +250,7 @@ class TestParameterEdgeCases:
         """超长参数名"""
         long_name = "param_" + "x" * 1000
         param = Parameter(long_name)
-        
+
         c = Circuit(1)
         c.rx(0, param)
         assert len(c) == 1
@@ -259,23 +258,23 @@ class TestParameterEdgeCases:
     def test_many_parameters(self):
         """大量不同参数"""
         c = Circuit(10)
-        
+
         for i in range(10):
             param = Parameter(f"theta_{i}")
             c.rx(i, param)
-        
+
         assert len(c) == 10
         assert len(c.parameters) >= 10
 
     def test_reuse_same_parameter(self):
         """重用相同参数"""
         theta = Parameter("theta")
-        
+
         c = Circuit(3)
         c.rx(0, theta)
         c.rx(1, theta)
         c.rx(2, theta)
-        
+
         # 应该只追踪一次该参数
         assert len(c) == 3
 
@@ -293,7 +292,7 @@ class TestInverseEdgeCases:
         """单门电路逆"""
         c = Circuit(1)
         c.h(0)
-        
+
         c_inv = c.inverse()
         assert len(c_inv) == 1
         # H门是自逆的
@@ -304,6 +303,6 @@ class TestInverseEdgeCases:
         c = Circuit(2)
         c.h(0)
         c.cx(0, 1)
-        
+
         c_inv_inv = c.inverse().inverse()
         assert len(c_inv_inv) == len(c)

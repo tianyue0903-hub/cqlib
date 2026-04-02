@@ -741,6 +741,7 @@ impl Vf2Mapping {
     }
 
     /// Internal helper for collect partial monomorphisms dfs.
+    #[allow(clippy::too_many_arguments)]
     fn collect_partial_monomorphisms_dfs(
         &self,
         depth: usize,
@@ -1082,13 +1083,14 @@ impl Vf2Mapping {
                 }
             }
 
+            #[allow(clippy::question_mark)]
             let Some((chosen, _, _)) = best else {
                 return None;
             };
             used.insert(chosen);
             layout[logical] = chosen;
         }
-
+        #[allow(clippy::manual_contains)]
         if layout.iter().any(|&p| p == usize::MAX) {
             return None;
         }
@@ -1277,6 +1279,7 @@ impl Vf2Mapping {
         });
 
         let mut cursor = 0usize;
+        #[allow(clippy::needless_range_loop)]
         for logical in 0..logical_width {
             if result[logical] != usize::MAX {
                 continue;

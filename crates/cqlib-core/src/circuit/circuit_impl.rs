@@ -47,6 +47,7 @@
 //! ```
 
 use crate::circuit::bit::Qubit;
+use crate::circuit::circuit_param::{CircuitParam, ParameterValue};
 use crate::circuit::circuit_to_matrix;
 use crate::circuit::error::CircuitError;
 use crate::circuit::gate::circuit_gate::{CircuitGate, FrozenCircuit};
@@ -55,7 +56,6 @@ use crate::circuit::gate::{
     ControlFlow, Directive, IfElseGate, Instruction, StandardGate, UnitaryGate,
 };
 use crate::circuit::operation::Operation;
-use crate::circuit::param::{CircuitParam, ParameterValue};
 use crate::circuit::parameter::Parameter;
 use indexmap::IndexSet;
 use ndarray::Array2;
@@ -1264,8 +1264,14 @@ impl Circuit {
     ///
     /// # Returns
     ///
-    /// A new flattened `Circuit` containing only base instructions (Standard, Unitary, Directives).
-    pub fn decompose(&self) -> Self {
+    /// - `Ok(Circuit)`: A new flattened `Circuit` containing only base instructions (Standard, Unitary, Directives).
+    /// - `Err(CircuitError)`: If a parameter cannot be resolved during decomposition.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CircuitError::UnresolvedParameter`] if a symbolic parameter in a sub-circuit
+    /// or control flow body cannot be evaluated to a concrete value.
+    pub fn decompose(&self) -> Result<Circuit, CircuitError> {
         let mut new_circuit = Circuit::from_qubits(self.qubits()).unwrap();
         // Preserve the order of symbols from the original circuit.
         new_circuit.symbols = self.symbols.clone();
@@ -1296,10 +1302,10 @@ impl Circuit {
                 &initial_qubit_map,
                 &initial_param_map,
                 &mut new_circuit,
-            );
+            )?;
         }
 
-        new_circuit
+        Ok(new_circuit)
     }
 
     fn decompose_recursive(
@@ -1308,7 +1314,7 @@ impl Circuit {
         qubit_map: &HashMap<Qubit, Qubit>,
         param_map: &HashMap<String, Parameter>,
         target_circuit: &mut Circuit,
-    ) {
+    ) -> Result<(), CircuitError> {
         match &op.instruction {
             Instruction::CircuitGate(cg) => {
                 // 1. Resolve Parameters in current context
@@ -1356,8 +1362,9 @@ impl Circuit {
                         &next_qubit_map,
                         &next_param_map,
                         target_circuit,
-                    );
+                    )?;
                 }
+                Ok(())
             }
             Instruction::ControlFlowGate(cf) => {
                 use crate::circuit::gate::control_flow::{
@@ -1371,10 +1378,11 @@ impl Circuit {
                     qubit_map: &HashMap<Qubit, Qubit>,
                     param_map: &HashMap<String, Parameter>,
                     target: &mut Vec<Operation>,
-                ) {
+                ) -> Result<(), CircuitError> {
                     for op in ops {
-                        decompose_op(op, context, qubit_map, param_map, target);
+                        decompose_op(op, context, qubit_map, param_map, target)?;
                     }
+                    Ok(())
                 }
 
                 // Helper: decompose a single operation
@@ -1384,7 +1392,7 @@ impl Circuit {
                     qubit_map: &HashMap<Qubit, Qubit>,
                     param_map: &HashMap<String, Parameter>,
                     target: &mut Vec<Operation>,
-                ) {
+                ) -> Result<(), CircuitError> {
                     let mapped_qubits: SmallVec<[Qubit; 3]> = op
                         .qubits
                         .iter()
@@ -1432,7 +1440,8 @@ impl Circuit {
                                 &next_qubit_map,
                                 &next_param_map,
                                 target,
-                            );
+                            )?;
+                            Ok(())
                         }
                         Instruction::ControlFlowGate(cf) => {
                             // Recurse into control flow bodies but preserve structure
@@ -1445,12 +1454,16 @@ impl Circuit {
                                         qubit_map,
                                         param_map,
                                         &mut true_body,
-                                    );
-                                    let false_body = gate.false_body().map(|fb| {
+                                    )?;
+                                    let false_body = if let Some(fb) = gate.false_body() {
                                         let mut body = Vec::new();
-                                        decompose_ops(fb, context, qubit_map, param_map, &mut body);
-                                        body
-                                    });
+                                        decompose_ops(
+                                            fb, context, qubit_map, param_map, &mut body,
+                                        )?;
+                                        Some(body)
+                                    } else {
+                                        None
+                                    };
                                     let mapped_cond = ConditionView::new(
                                         *qubit_map
                                             .get(&gate.condition().qubit)
@@ -1478,7 +1491,7 @@ impl Circuit {
                                         qubit_map,
                                         param_map,
                                         &mut body,
-                                    );
+                                    )?;
                                     let mapped_cond = ConditionView::new(
                                         *qubit_map
                                             .get(&gate.condition().qubit)
@@ -1498,37 +1511,39 @@ impl Circuit {
                                     });
                                 }
                             }
+                            Ok(())
                         }
                         _ => {
                             // Base case: map parameters and push
-                            let mapped_params: SmallVec<[CircuitParam; 1]> = op
-                                .params
-                                .iter()
-                                .map(|p| {
-                                    match p {
-                                        CircuitParam::Fixed(v) => CircuitParam::Fixed(*v),
-                                        CircuitParam::Index(idx) => {
-                                            let param = context.parameters[*idx as usize].clone();
-                                            let new_param =
-                                                Circuit::apply_param_map(param, param_map);
-                                            if let Ok(val) = new_param.evaluate(&None) {
-                                                CircuitParam::Fixed(val)
-                                            } else {
-                                                // For unresolved params, use Fixed(0.0) as placeholder
-                                                // In practice, symbolic params in control flow bodies
-                                                // should have been resolved or are handled by the caller
-                                                CircuitParam::Fixed(0.0)
-                                            }
+                            let mut mapped_params: SmallVec<[CircuitParam; 1]> = smallvec![];
+                            for p in &op.params {
+                                let param = match p {
+                                    CircuitParam::Fixed(v) => CircuitParam::Fixed(*v),
+                                    CircuitParam::Index(idx) => {
+                                        let param = context.parameters[*idx as usize].clone();
+                                        let new_param = Circuit::apply_param_map(param, param_map);
+                                        if let Ok(val) = new_param.evaluate(&None) {
+                                            CircuitParam::Fixed(val)
+                                        } else {
+                                            // Parameter cannot be resolved - return error instead of using placeholder
+                                            return Err(CircuitError::UnresolvedParameter(
+                                                format!(
+                                                    "Cannot resolve parameter '{}' in control flow body. Symbolic parameters in control flow must be bound before decomposition.",
+                                                    new_param
+                                                ),
+                                            ));
                                         }
                                     }
-                                })
-                                .collect();
+                                };
+                                mapped_params.push(param);
+                            }
                             target.push(Operation {
                                 instruction: op.instruction.clone(),
                                 qubits: mapped_qubits,
                                 params: mapped_params,
                                 label: op.label.clone(),
                             });
+                            Ok(())
                         }
                     }
                 }
@@ -1543,12 +1558,14 @@ impl Circuit {
                             qubit_map,
                             param_map,
                             &mut true_body,
-                        );
-                        let false_body = gate.false_body().map(|fb| {
+                        )?;
+                        let false_body = if let Some(fb) = gate.false_body() {
                             let mut body = Vec::new();
-                            decompose_ops(fb, context_circuit, qubit_map, param_map, &mut body);
-                            body
-                        });
+                            decompose_ops(fb, context_circuit, qubit_map, param_map, &mut body)?;
+                            Some(body)
+                        } else {
+                            None
+                        };
                         let mapped_cond = ConditionView::new(
                             *qubit_map
                                 .get(&gate.condition().qubit)
@@ -1576,7 +1593,7 @@ impl Circuit {
                             qubit_map,
                             param_map,
                             &mut body,
-                        );
+                        )?;
                         let mapped_cond = ConditionView::new(
                             *qubit_map
                                 .get(&gate.condition().qubit)
@@ -1597,6 +1614,7 @@ impl Circuit {
                         });
                     }
                 }
+                Ok(())
             }
             _ => {
                 // Base case: Standard/Unitary/Directive
@@ -1630,6 +1648,7 @@ impl Circuit {
                         op.label.as_deref(),
                     )
                     .unwrap();
+                Ok(())
             }
         }
     }
@@ -1646,13 +1665,13 @@ impl Circuit {
             // Use a specific internal prefix to avoid collisions during the two-step replacement.
             // This acts as a simultaneous substitution.
             let temp_key = format!("__INTERNAL_SUB_{}", key);
-            param = param.replace(key, &Parameter::try_from(temp_key.as_str()).unwrap());
+            param = param.replace(key, Parameter::try_from(temp_key.as_str()).unwrap());
             temp_map.insert(temp_key, val);
         }
 
         // 2. Replace temp symbols with actual values
         for (temp_key, val) in temp_map {
-            param = param.replace(&temp_key, val);
+            param = param.replace(&temp_key, val.clone());
         }
 
         param
@@ -1664,44 +1683,36 @@ impl Circuit {
 
     pub fn assign_parameters(
         &self,
-        bindings: &Option<HashMap<String, f64>>,
+        bindings: &Option<HashMap<&str, f64>>,
     ) -> Result<Circuit, CircuitError> {
-        use crate::circuit::parameter::expr_node::ExprNode;
-
         let mut new_circuit = Circuit::from_qubits(self.qubits())?;
 
         // Map from old parameter index to new CircuitParam (either Fixed or Index)
         let mut index_map: Vec<CircuitParam> = Vec::with_capacity(self.parameters.len());
 
-        let empty_bindings = HashMap::new();
-        let bind_map = bindings.as_ref().unwrap_or(&empty_bindings);
-
         for param in self.parameters.iter() {
             if let Ok(val) = param.evaluate(bindings) {
                 index_map.push(CircuitParam::Fixed(val));
             } else {
-                // Otherwise perform partial evaluation/simplification
-                let expr = param.node.evaluate_partial(bind_map)?;
-                match expr {
-                    ExprNode::Integer(i) => index_map.push(CircuitParam::Fixed(i as f64)),
-                    ExprNode::Float(f) => index_map.push(CircuitParam::Fixed(f)),
-                    ExprNode::Pi => index_map.push(CircuitParam::Fixed(std::f64::consts::PI)),
-                    ExprNode::E => index_map.push(CircuitParam::Fixed(std::f64::consts::E)),
-                    _ => {
-                        // Still symbolic
-                        let new_param = Parameter::new(expr);
-                        // Intern the new parameter (deduplicates automatically)
-                        let (idx, is_new) = new_circuit.parameters.insert_full(new_param.clone());
+                let mut tp = param.clone();
+                if let Some(bindings) = bindings {
+                    for (k, v) in bindings.iter() {
+                        tp = tp.replace(k, Parameter::from(*v));
+                    }
+                    let s = tp.simplify();
+                    tp = s.map_err(|e| CircuitError::UnresolvedParameter(format!("{:?}", e)))?;
+                }
 
-                        // If it's a new symbolic parameter, track its symbols
-                        if is_new {
-                            for sym in new_param.get_symbols() {
-                                new_circuit.symbols.insert(sym);
-                            }
-                        }
-                        index_map.push(CircuitParam::Index(idx as u32));
+                // Intern the new parameter (deduplicates automatically)
+                let (idx, is_new) = new_circuit.parameters.insert_full(tp.clone());
+
+                // If it's a new symbolic parameter, track its symbols
+                if is_new {
+                    for sym in tp.get_symbols() {
+                        new_circuit.symbols.insert(sym);
                     }
                 }
+                index_map.push(CircuitParam::Index(idx as u32));
             }
         }
 
@@ -1711,7 +1722,10 @@ impl Circuit {
             let mut new_op = op.clone();
             for p in &mut new_op.params {
                 if let CircuitParam::Index(old_idx) = p {
-                    *p = index_map[*old_idx as usize].clone();
+                    *p = index_map
+                        .get(*old_idx as usize)
+                        .cloned()
+                        .ok_or(CircuitError::InvalidParameterIndex(*old_idx))?;
                 }
             }
             new_circuit.data.push(new_op);
@@ -1720,7 +1734,10 @@ impl Circuit {
         // Remap global phase
         match self.global_phase {
             CircuitParam::Index(old_idx) => {
-                new_circuit.global_phase = index_map[old_idx as usize].clone();
+                new_circuit.global_phase = index_map
+                    .get(old_idx as usize)
+                    .cloned()
+                    .ok_or(CircuitError::InvalidParameterIndex(old_idx))?;
             }
             CircuitParam::Fixed(val) => {
                 new_circuit.global_phase = CircuitParam::Fixed(val);
@@ -1728,6 +1745,166 @@ impl Circuit {
         }
 
         Ok(new_circuit)
+    }
+
+    /// Composes another circuit into this circuit.
+    ///
+    /// This method merges the operations from `other` circuit into `self`. Qubits from `other`
+    /// can either be mapped to existing qubits in `self` (via `qubits_map`) or appended as new qubits.
+    ///
+    /// # Arguments
+    ///
+    /// * `other` - The circuit to compose into this circuit.
+    /// * `qubits_map` - An optional slice mapping qubits from `other` to qubits in `self`.
+    ///   - If `Some(mapping)` is provided, each qubit in `other` (in their natural iteration order)
+    ///     is mapped to the corresponding qubit in `mapping`.
+    ///   - If `None` is provided, all qubits from `other` are appended as new qubits to `self`.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` - If composition succeeds.
+    /// * `Err(CircuitError)` - If the mapping is invalid (wrong length or non-existent qubits).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use cqlib_core::circuit::circuit_impl::Circuit;
+    /// use cqlib_core::circuit::Qubit;
+    ///
+    /// // Create qc1 with qubits 1, 3, 5
+    /// let mut qc1 = Circuit::new(0);
+    /// let q1 = Qubit::new(1);
+    /// let q3 = Qubit::new(3);
+    /// let q5 = Qubit::new(5);
+    /// qc1.add_qubits(vec![q1, q3, q5]).unwrap();
+    /// qc1.h(q1).unwrap();
+    ///
+    /// // Create qc2 with qubits 1, 2
+    /// let mut qc2 = Circuit::new(0);
+    /// let q2 = Qubit::new(2);
+    /// qc2.add_qubits(vec![q1, q2]).unwrap();
+    /// qc2.x(q1).unwrap();
+    ///
+    /// // Compose qc2 into qc1, mapping qc2's qubits: q1->q3, q2->q1
+    /// qc1.compose(&qc2, Some(&[q3, q1])).unwrap();
+    /// ```
+    pub fn compose(
+        &mut self,
+        other: &Circuit,
+        qubits_map: Option<&[Qubit]>,
+    ) -> Result<(), CircuitError> {
+        // Build qubit mapping: other_qubit -> target_qubit
+        let qubit_mapping: HashMap<Qubit, Qubit> = if let Some(mapping) = qubits_map {
+            // Validate mapping length
+            if mapping.len() != other.qubits.len() {
+                return Err(CircuitError::QubitCountMismatch {
+                    expected: other.qubits.len(),
+                    actual: mapping.len(),
+                });
+            }
+
+            // Build map and validate target qubits exist in self
+            let mut map = HashMap::with_capacity(mapping.len());
+            for (other_qubit, target_qubit) in other.qubits.iter().zip(mapping.iter()) {
+                if !self.qubits.contains(target_qubit) {
+                    return Err(CircuitError::QubitNotFound(target_qubit.id()));
+                }
+                map.insert(*other_qubit, *target_qubit);
+            }
+            map
+        } else {
+            // No mapping: append other qubits as new qubits
+            let mut map = HashMap::with_capacity(other.qubits.len());
+            for other_qubit in other.qubits.iter() {
+                // Add the qubit to self (it will be a new unique qubit)
+                self.qubits.insert(*other_qubit);
+                map.insert(*other_qubit, *other_qubit);
+            }
+            map
+        };
+
+        // Merge parameters and build index mapping
+        let mut param_index_map: Vec<CircuitParam> = Vec::with_capacity(other.parameters.len());
+        for param in other.parameters.iter() {
+            let (idx, _) = self.add_parameter(param.clone());
+            param_index_map.push(CircuitParam::Index(idx as u32));
+        }
+
+        // Reserve space for new operations
+        self.data.reserve(other.data.len());
+
+        // Append operations with remapped qubits and parameters
+        for op in &other.data {
+            let mut new_op = op.clone();
+
+            // Remap qubits
+            for q in &mut new_op.qubits {
+                *q = qubit_mapping
+                    .get(q)
+                    .copied()
+                    .ok_or(CircuitError::QubitNotFound(q.id()))?;
+            }
+
+            // Remap parameter indices
+            for p in &mut new_op.params {
+                if let CircuitParam::Index(old_idx) = p {
+                    *p = param_index_map
+                        .get(*old_idx as usize)
+                        .cloned()
+                        .ok_or(CircuitError::InvalidParameterIndex(*old_idx))?;
+                }
+            }
+
+            self.data.push(new_op);
+        }
+
+        // Merge global phase (if both have fixed values, add them; otherwise keep symbolic)
+        self.global_phase = match (self.global_phase.clone(), other.global_phase.clone()) {
+            (CircuitParam::Fixed(a), CircuitParam::Fixed(b)) => CircuitParam::Fixed(a + b),
+            (CircuitParam::Fixed(a), CircuitParam::Index(idx)) => {
+                // Add fixed value to symbolic parameter
+                let sym_param = other
+                    .parameters
+                    .get_index(idx as usize)
+                    .cloned()
+                    .ok_or(CircuitError::InvalidParameterIndex(idx))?;
+                let new_expr = Parameter::from(a) + sym_param;
+                let (new_idx, _) = self.parameters.insert_full(new_expr);
+                CircuitParam::Index(new_idx as u32)
+            }
+            (CircuitParam::Index(idx), CircuitParam::Fixed(b)) => {
+                // Add symbolic parameter to fixed value
+                let sym_param = self
+                    .parameters
+                    .get_index(idx as usize)
+                    .cloned()
+                    .ok_or(CircuitError::InvalidParameterIndex(idx))?;
+                let new_expr = sym_param + Parameter::from(b);
+                let (new_idx, _) = self.parameters.insert_full(new_expr);
+                CircuitParam::Index(new_idx as u32)
+            }
+            (CircuitParam::Index(idx_a), CircuitParam::Index(idx_b)) => {
+                // Add two symbolic parameters
+                let param_a = self
+                    .parameters
+                    .get_index(idx_a as usize)
+                    .cloned()
+                    .ok_or(CircuitError::InvalidParameterIndex(idx_a))?;
+                let param_b = other
+                    .parameters
+                    .get_index(idx_b as usize)
+                    .cloned()
+                    .ok_or(CircuitError::InvalidParameterIndex(idx_b))?;
+                // param_b needs to be merged into self's parameter set first
+                let (merged_b_idx, _) = self.parameters.insert_full(param_b);
+                let merged_b = self.parameters.get_index(merged_b_idx).cloned().unwrap();
+                let new_expr = param_a + merged_b;
+                let (new_idx, _) = self.parameters.insert_full(new_expr);
+                CircuitParam::Index(new_idx as u32)
+            }
+        };
+
+        Ok(())
     }
 
     pub(crate) fn from_parts(

@@ -4,7 +4,7 @@
 #
 # This code is licensed under the Apache License, Version 2.0. You may
 # obtain a copy of this license in the LICENSE.txt file in the root directory
-# of this source tree or at http:#www.apache.org/licenses/LICENSE-2.0.
+# of this source tree or at http://www.apache.org/licenses/LICENSE-2.0.
 #
 # Any modifications or derivative works of this code must retain this
 # copyright notice, and modified files need to carry a notice indicating
@@ -22,7 +22,6 @@
 """
 
 import pytest
-from cqlib.circuit import Circuit
 
 
 class TestCircuitIndexing:
@@ -208,14 +207,14 @@ class TestOperationProperties:
         """测试操作名称"""
         c = bell_state_circuit
         op = c[0]
-        assert hasattr(op, 'name')
+        assert hasattr(op, "name")
         assert isinstance(op.name, str)
 
     def test_operation_qubits(self, bell_state_circuit):
         """测试操作qubits"""
         c = bell_state_circuit
         op = c[1]  # CNOT
-        assert hasattr(op, 'qubits')
+        assert hasattr(op, "qubits")
         assert len(op.qubits) == 2
 
     def test_operation_params(self, single_qubit_circuit, theta_param):
@@ -223,5 +222,5 @@ class TestOperationProperties:
         c = single_qubit_circuit
         c.rx(0, theta_param)
         op = c[0]
-        assert hasattr(op, 'params')
+        assert hasattr(op, "params")
         assert op.num_params == 1

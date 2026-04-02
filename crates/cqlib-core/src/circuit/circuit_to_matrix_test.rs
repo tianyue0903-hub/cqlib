@@ -17,8 +17,8 @@
 
 use super::*;
 use crate::circuit::Qubit;
+use crate::circuit::circuit_param::ParameterValue;
 use crate::circuit::gate::{StandardGate, UnitaryGate};
-use crate::circuit::param::ParameterValue;
 use crate::circuit::parameter::Parameter;
 use ndarray::array;
 use num_complex::Complex64;
@@ -329,10 +329,6 @@ fn test_two_qubit_rxx() {
     assert_is_unitary(&matrix, 1e-10);
 }
 
-// ============================================================================
-// Three Qubit Gate Tests
-// ============================================================================
-
 #[test]
 fn test_three_qubit_ccx() {
     // CCX (Toffoli) gate
@@ -460,10 +456,6 @@ fn test_unitary_gate_two_qubit() {
     assert!((matrix[[1, 2]] - c(1.0, 0.0)).norm() < 1e-10);
 }
 
-// ============================================================================
-// CircuitGate (Nested Circuit) Tests
-// ============================================================================
-
 #[test]
 fn test_circuit_gate_bell_state() {
     // Create a Bell state preparation circuit as a gate
@@ -516,10 +508,6 @@ fn test_circuit_gate_with_params() {
 
     assert_matrix_approx_eq(&matrix, &expected, 1e-10);
 }
-
-// ============================================================================
-// Composite Circuit Tests
-// ============================================================================
 
 #[test]
 fn test_composite_h_cnot() {

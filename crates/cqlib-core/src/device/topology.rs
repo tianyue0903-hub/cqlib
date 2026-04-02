@@ -18,7 +18,7 @@
 
 use crate::circuit::Qubit;
 use crate::device::error::TopologyError;
-use rustworkx_core::petgraph::prelude::{NodeIndex, StableGraph};
+use rustworkx_core::petgraph::prelude::{NodeIndex, StableDiGraph, StableGraph};
 use rustworkx_core::petgraph::visit::EdgeRef;
 use std::collections::HashMap;
 
@@ -36,7 +36,7 @@ use std::collections::HashMap;
 ///     (Qubit::new(1), Qubit::new(2), "G1".to_string()),
 /// ];
 ///
-/// let topology = Topology::new(qubits, couplings);
+/// let topology = Topology::new(qubits, couplings).unwrap();
 /// assert_eq!(topology.num_qubits(), 3);
 /// assert!(topology.is_connected(Qubit::new(0), Qubit::new(1)));
 /// ```
@@ -50,8 +50,11 @@ pub struct Topology {
 
 impl Topology {
     /// Creates a new Topology with given qubits and coupling map.
-    pub fn new(qubits: Vec<Qubit>, coupling_map: Vec<(Qubit, Qubit, String)>) -> Self {
-        let mut graph = StableGraph::<Qubit, String>::new();
+    pub fn new(
+        qubits: Vec<Qubit>,
+        coupling_map: Vec<(Qubit, Qubit, String)>,
+    ) -> Result<Self, TopologyError> {
+        let mut graph = StableDiGraph::<Qubit, String>::new();
         let mut node_indices = HashMap::new();
 
         for qubit in qubits {
@@ -60,11 +63,29 @@ impl Topology {
         }
 
         for (control, target, name) in coupling_map {
-            if let (Some(&c_idx), Some(&t_idx)) =
-                (node_indices.get(&control), node_indices.get(&target))
-            {
-                graph.add_edge(c_idx, t_idx, name);
+            if !node_indices.contains_key(&target) {
+                return Err(TopologyError::QubitNotFound(target));
             }
+            if !node_indices.contains_key(&control) {
+                return Err(TopologyError::QubitNotFound(control));
+            }
+            graph.add_edge(node_indices[&control], node_indices[&target], name.clone());
+        }
+
+        Ok(Self {
+            node_indices,
+            graph,
+        })
+    }
+
+    pub fn line(qubits: Vec<Qubit>) -> Self {
+        let mut graph = StableDiGraph::<Qubit, String>::new();
+        let mut node_indices = HashMap::new();
+        for qubit in &qubits {
+            node_indices.insert(*qubit, graph.add_node(*qubit));
+        }
+        for qs in qubits.windows(2) {
+            graph.add_edge(node_indices[&qs[0]], node_indices[&qs[1]], "".to_string());
         }
 
         Self {

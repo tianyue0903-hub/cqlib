@@ -1,0 +1,8 @@
+# Ruff configuration for Cqlib Python bindings
+# https://docs.astral.sh/ruff/configuration/
+[lint]
+ignore = []
+
+[lint.extend-per-file-ignores]
+"**/gates/*" = ["E741"]
+"**/circuit/__init__.py" = ["E741"]

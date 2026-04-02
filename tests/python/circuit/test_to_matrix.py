@@ -4,7 +4,7 @@
 #
 # This code is licensed under the Apache License, Version 2.0. You may
 # obtain a copy of this license in the LICENSE.txt file in the root directory
-# of this source tree or at http:#www.apache.org/licenses/LICENSE-2.0.
+# of this source tree or at http://www.apache.org/licenses/LICENSE-2.0.
 #
 # Any modifications or derivative works of this code must retain this
 # copyright notice, and modified files need to carry a notice indicating
@@ -20,7 +20,6 @@
 - 验证幺正性
 """
 
-import pytest
 import numpy as np
 from cqlib.circuit import Circuit, circuit_to_matrix
 
@@ -60,12 +59,9 @@ class TestCircuitToMatrix:
 
         mat = c.to_matrix()
         # 实际的矩阵（基于当前实现的qubit顺序）
-        expected = np.array([
-            [1, 0, 0, 0],
-            [0, 0, 0, 1],
-            [0, 0, 1, 0],
-            [0, 1, 0, 0]
-        ], dtype=complex)
+        expected = np.array(
+            [[1, 0, 0, 0], [0, 0, 0, 1], [0, 0, 1, 0], [0, 1, 0, 0]], dtype=complex
+        )
         assert np.allclose(mat, expected)
 
     def test_bell_state_matrix(self):

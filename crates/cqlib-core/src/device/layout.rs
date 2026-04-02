@@ -52,6 +52,13 @@ use std::collections::{HashMap, HashSet};
 /// The layout maintains bidirectional mappings:
 /// - `v2p`: virtual qubit → physical qubit
 /// - `p2v`: physical qubit → virtual qubit
+///
+/// # Ancilla Qubit IDs
+///
+/// Ancilla qubits are automatically generated to fill unused physical qubits. They are
+/// assigned IDs starting from `max(logical_qubit_id) + 1`. These IDs may overlap with
+/// physical qubit IDs (e.g., if physical qubits start from 0), but this is safe because
+/// ancilla and physical qubits are used in different contexts (virtual vs physical).
 #[derive(Debug, Clone, Default)]
 pub struct Layout {
     /// Set of logical (virtual) qubits in the circuit.
@@ -152,6 +159,9 @@ impl Layout {
         }
 
         // Generate ancilla qubits to fill the gap between logical and physical counts
+        // Ancilla IDs start from max(logical_id) + 1, which may overlap with physical qubit IDs.
+        // This is safe because ancilla and physical qubits are used in different contexts
+        // (virtual qubits as keys in v2p vs physical qubits as keys in p2v).
         let num_ancilla = physical.len() - logical.len();
         let mut ancilla_qubits = HashSet::new();
         let mut ancilla_vec = Vec::new();
@@ -309,9 +319,9 @@ impl Layout {
     /// * `phys_a` - First physical qubit
     /// * `phys_b` - Second physical qubit
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if either physical qubit is not in the layout.
+    /// Returns [`LayoutError::InvalidPhysicalQubit`] if either physical qubit is not in the layout.
     ///
     /// # Example
     ///
@@ -329,29 +339,25 @@ impl Layout {
     /// let phys_before = layout.get_physical(Qubit::new(0)).unwrap();
     ///
     /// // Perform SWAP on physical qubits 100 and 101
-    /// layout.swap_physical(Qubit::new(100), Qubit::new(101));
+    /// layout.swap_physical(Qubit::new(100), Qubit::new(101)).unwrap();
     ///
     /// // After swap, Q0 is on the other physical qubit
     /// let phys_after = layout.get_physical(Qubit::new(0)).unwrap();
     /// assert_ne!(phys_before, phys_after);
     /// ```
-    pub fn swap_physical(&mut self, phys_a: Qubit, phys_b: Qubit) {
+    pub fn swap_physical(&mut self, phys_a: Qubit, phys_b: Qubit) -> Result<(), LayoutError> {
         // Early return if swapping the same qubit
         if phys_a == phys_b {
-            return;
+            return Ok(());
         }
 
         // Verify physical qubits exist in layout
-        assert!(
-            self.physical_qubits.contains(&phys_a),
-            "Physical qubit {} not in layout",
-            phys_a
-        );
-        assert!(
-            self.physical_qubits.contains(&phys_b),
-            "Physical qubit {} not in layout",
-            phys_b
-        );
+        if !self.physical_qubits.contains(&phys_a) {
+            return Err(LayoutError::InvalidPhysicalQubit(phys_a));
+        }
+        if !self.physical_qubits.contains(&phys_b) {
+            return Err(LayoutError::InvalidPhysicalQubit(phys_b));
+        }
 
         // Get virtual qubits currently on these physical qubits
         let virt_a = self.get_virtual(phys_a);
@@ -386,6 +392,8 @@ impl Layout {
                 // Neither has virtual qubit: nothing to do
             }
         }
+
+        Ok(())
     }
 }
 

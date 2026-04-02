@@ -1,0 +1,10 @@
+[default.extend-words]
+ket = "ket"
+bra = "bra"
+ba = "ba"
+cqlib = "cqlib"
+tianyan = "tianyan"
+IY = "IY"
+IX = "IX"
+IZ = "IZ"
+XY = "XY"

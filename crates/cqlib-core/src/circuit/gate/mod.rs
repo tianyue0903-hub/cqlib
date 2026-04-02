@@ -39,11 +39,11 @@
 //! use cqlib_core::circuit::gate::StandardGate;
 //!
 //! // Get the Hadamard gate matrix
-//! let h_matrix = StandardGate::H.matrix(&[]);
+//! let h_matrix = StandardGate::H.matrix(&[]).unwrap();
 //! assert_eq!(h_matrix.shape(), &[2, 2]);
 //!
 //! // Get the parametric RX gate matrix
-//! let rx_matrix = StandardGate::RX.matrix(&[std::f64::consts::PI / 2.0]);
+//! let rx_matrix = StandardGate::RX.matrix(&[std::f64::consts::PI / 2.0]).unwrap();
 //! assert_eq!(rx_matrix.shape(), &[2, 2]);
 //!
 //! // Check gate properties
@@ -73,7 +73,6 @@
 
 pub mod circuit_gate;
 pub mod control_flow;
-pub mod delay;
 pub mod directive;
 pub mod gate_matrix;
 pub mod instruction;
@@ -84,7 +83,6 @@ pub mod unitary_gate;
 // Re-export key types for easier access
 pub use circuit_gate::{CircuitGate, FrozenCircuit};
 pub use control_flow::{ConditionView, ControlFlow, IfElseGate, WhileLoopGate};
-pub use delay::DelayOp;
 pub use directive::Directive;
 pub use instruction::Instruction;
 pub use mc_gate::MCGate;
