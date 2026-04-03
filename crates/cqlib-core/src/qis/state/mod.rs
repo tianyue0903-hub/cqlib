@@ -24,13 +24,18 @@
 //! - [`DensityMatrixNoise`]: Extends the density matrix simulator with a configurable
 //!   noise model for realistic quantum simulations including gate errors and readout noise.
 //!
+//! - [`StabilizerState`]: Simulates Clifford circuits exponentially faster than
+//!   state-vector methods using the Aaronson-Gottesman symplectic tableau algorithm.
+//!   Supports thousands of qubits; rejects non-Clifford gates with a clear error.
+//!
 //! # Choosing a Simulator
 //!
-//! | Simulator | Use Case | Performance | Noise Support |
-//! |-----------|----------|-------------|---------------|
-//! | [`Statevector`] | Ideal circuits, large qubit counts | Fastest | No |
-//! | [`DensityMatrix`] | Mixed states, quantum channels | Moderate | Kraus operators only |
-//! | [`DensityMatrixNoise`] | Realistic device simulation | Slower | Full noise model |
+//! | Simulator | Use Case | Max Qubits | Noise Support |
+//! |-----------|----------|------------|---------------|
+//! | [`Statevector`] | Ideal universal circuits | ~30 | No |
+//! | [`DensityMatrix`] | Mixed states, quantum channels | ~15 | Kraus operators |
+//! | [`DensityMatrixNoise`] | Realistic device simulation | ~15 | Full noise model |
+//! | [`StabilizerState`] | Clifford-only circuits | 10 000+ | No |
 //!
 //! # Examples
 //!
@@ -52,13 +57,28 @@
 //! // Results should be identical for pure states
 //! assert!((probs_sv[0] - probs_dm[0]).abs() < 1e-10);
 //! ```
+//!
+//! Stabilizer simulation of a large Bell state:
+//!
+//! ```rust
+//! use cqlib_core::qis::StabilizerState;
+//!
+//! let mut s = StabilizerState::new(2);
+//! s.apply_h(0).unwrap();
+//! s.apply_cx(0, 1).unwrap();
+//! // Measure: outcomes are always correlated (both 0 or both 1)
+//! let shots = s.sample_shots(1000);
+//! assert!(shots.iter().all(|v| v[0] == v[1]));
+//! ```
 
 pub mod density_matrix;
 pub mod density_matrix_noise;
+pub mod stabilizer;
 pub mod statevector;
 
 pub use density_matrix::DensityMatrix;
 pub use density_matrix_noise::DensityMatrixNoise;
+pub use stabilizer::StabilizerState;
 pub use statevector::Statevector;
 
 #[cfg(test)]

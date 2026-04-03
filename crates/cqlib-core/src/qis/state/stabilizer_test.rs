@@ -1,0 +1,867 @@
+// This code is part of Cqlib.
+//
+// (C) Copyright China Telecom Quantum Group 2026
+//
+// This code is licensed under the Apache License, Version 2.0. You may
+// obtain a copy of this license in the LICENSE.txt file in the root directory
+// of this source tree or at http://www.apache.org/licenses/LICENSE-2.0.
+//
+// Any modifications or derivative works of this code must retain this
+// copyright notice, and modified files need to carry a notice indicating
+// that they have been altered from the originals.
+
+use super::*;
+
+#[test]
+fn test_new_single_qubit() {
+    let s = StabilizerState::new(1);
+    // Destabilizer row 0: X on qubit 0, phase +1
+    assert!(s.x_bit(0, 0));
+    assert!(!s.z_bit(0, 0));
+    assert_eq!(s.phase(0), 0);
+    // Stabilizer row 1: Z on qubit 0, phase +1
+    assert!(!s.x_bit(1, 0));
+    assert!(s.z_bit(1, 0));
+    assert_eq!(s.phase(1), 0);
+}
+
+#[test]
+fn test_new_two_qubits() {
+    let s = StabilizerState::new(2);
+    // Destabilizer row 0: X on q0 only
+    assert!(s.x_bit(0, 0));
+    assert!(!s.x_bit(0, 1));
+    // Destabilizer row 1: X on q1 only
+    assert!(!s.x_bit(1, 0));
+    assert!(s.x_bit(1, 1));
+    // Stabilizer row 2: Z on q0 only
+    assert!(s.z_bit(2, 0));
+    assert!(!s.z_bit(2, 1));
+    // Stabilizer row 3: Z on q1 only
+    assert!(!s.z_bit(3, 0));
+    assert!(s.z_bit(3, 1));
+}
+
+#[test]
+fn test_get_stabilizers_initial() {
+    let s = StabilizerState::new(2);
+    let stabs = s.get_stabilizers();
+    assert_eq!(stabs.len(), 2);
+    // |00⟩ stabilizers: Z₀ = +ZI, Z₁ = +IZ
+    // (PauliString display: highest index first)
+    assert_eq!(stabs[0].to_string(), "+IZ");
+    assert_eq!(stabs[1].to_string(), "+ZI");
+}
+
+#[test]
+fn test_apply_h_plus_state() {
+    // H|0⟩ = |+⟩, stabilized by +X
+    let mut s = StabilizerState::new(1);
+    s.apply_h(0).unwrap();
+    let stabs = s.get_stabilizers();
+    assert_eq!(stabs[0].to_string(), "+X");
+}
+
+#[test]
+fn test_apply_h_twice_is_identity() {
+    let mut s = StabilizerState::new(2);
+    s.apply_h(0).unwrap();
+    s.apply_h(0).unwrap();
+    // Should be back to initial |00⟩ stabilizers
+    let stabs = s.get_stabilizers();
+    assert_eq!(stabs[0].to_string(), "+IZ");
+    assert_eq!(stabs[1].to_string(), "+ZI");
+}
+
+#[test]
+fn test_apply_s_on_plus_state() {
+    // S|+⟩ = |Y+⟩ stabilized by +Y (since S·X·S† = Y)
+    let mut s = StabilizerState::new(1);
+    s.apply_h(0).unwrap();
+    s.apply_s(0).unwrap();
+    let stabs = s.get_stabilizers();
+    assert_eq!(stabs[0].to_string(), "+Y");
+}
+
+#[test]
+fn test_swap_twice_is_identity() {
+    let mut s = StabilizerState::new(2);
+    s.apply_h(0).unwrap(); // |+0⟩
+    s.apply_swap(0, 1).unwrap();
+    s.apply_swap(0, 1).unwrap();
+    let stabs = s.get_stabilizers();
+    // Should be back to |+0⟩ stabilizers: +XI, +IZ
+    let stab_strs: Vec<String> = stabs.iter().map(|p| p.to_string()).collect();
+    assert!(
+        stab_strs.contains(&"+IX".to_string()),
+        "got {:?}",
+        stab_strs
+    );
+    assert!(
+        stab_strs.contains(&"+ZI".to_string()),
+        "got {:?}",
+        stab_strs
+    );
+}
+
+#[test]
+fn test_swap_exchanges_qubits() {
+    // |+0⟩ → SWAP → |0+⟩: stabilizers +XI on q1 and +IZ on q0
+    let mut s = StabilizerState::new(2);
+    s.apply_h(0).unwrap(); // q0=|+⟩, q1=|0⟩
+    s.apply_swap(0, 1).unwrap(); // q0=|0⟩, q1=|+⟩
+    let stabs = s.get_stabilizers();
+    let stab_strs: Vec<String> = stabs.iter().map(|p| p.to_string()).collect();
+    // q0 stabilized by Z, q1 stabilized by X
+    assert!(
+        stab_strs.contains(&"+IZ".to_string()),
+        "got {:?}",
+        stab_strs
+    );
+    assert!(
+        stab_strs.contains(&"+XI".to_string()),
+        "got {:?}",
+        stab_strs
+    );
+}
+
+#[test]
+fn test_cz_twice_is_identity() {
+    let mut s = StabilizerState::new(2);
+    s.apply_cz(0, 1).unwrap();
+    s.apply_cz(0, 1).unwrap();
+    let stabs = s.get_stabilizers();
+    assert_eq!(stabs[0].to_string(), "+IZ");
+    assert_eq!(stabs[1].to_string(), "+ZI");
+}
+
+#[test]
+fn test_cz_creates_entanglement() {
+    // |++⟩ → (H⊗H)|00⟩, then CZ → entangled
+    let mut s = StabilizerState::new(2);
+    s.apply_h(0).unwrap();
+    s.apply_h(1).unwrap();
+    s.apply_cz(0, 1).unwrap();
+    // CZ|++⟩ = (|00⟩+|01⟩+|10⟩-|11⟩)/2
+    // Stabilizers: +XZ, +ZX
+    let stabs = s.get_stabilizers();
+    let stab_strs: Vec<String> = stabs.iter().map(|p| p.to_string()).collect();
+    assert!(
+        stab_strs.contains(&"+XZ".to_string()) || stab_strs.contains(&"+ZX".to_string()),
+        "Got: {:?}",
+        stab_strs
+    );
+}
+
+#[test]
+fn test_cy_twice_is_identity() {
+    let mut s = StabilizerState::new(2);
+    s.apply_cy(0, 1).unwrap();
+    s.apply_cy(0, 1).unwrap();
+    let stabs = s.get_stabilizers();
+    assert_eq!(stabs[0].to_string(), "+IZ");
+    assert_eq!(stabs[1].to_string(), "+ZI");
+}
+
+#[test]
+fn test_bell_state_stabilizers() {
+    // H on q0, then CX(q0, q1) → Bell state |Φ+⟩
+    // Stabilizers: +XX (index order: qubit 1 highest), +ZZ
+    let mut s = StabilizerState::new(2);
+    s.apply_h(0).unwrap();
+    s.apply_cx(0, 1).unwrap();
+    let stabs = s.get_stabilizers();
+    // PauliString display: highest qubit index first
+    // Stabilizer 0 (from destab q0 path): XX on both qubits
+    // Stabilizer 1 (from stab q0 path): ZZ on both qubits
+    let stab_strs: Vec<String> = stabs.iter().map(|p| p.to_string()).collect();
+    assert!(
+        stab_strs.contains(&"+XX".to_string()),
+        "Expected +XX, got {:?}",
+        stab_strs
+    );
+    assert!(
+        stab_strs.contains(&"+ZZ".to_string()),
+        "Expected +ZZ, got {:?}",
+        stab_strs
+    );
+}
+
+#[test]
+fn test_cx_twice_is_identity() {
+    let mut s = StabilizerState::new(2);
+    s.apply_cx(0, 1).unwrap();
+    s.apply_cx(0, 1).unwrap();
+    let stabs = s.get_stabilizers();
+    assert_eq!(stabs[0].to_string(), "+IZ");
+    assert_eq!(stabs[1].to_string(), "+ZI");
+}
+
+#[test]
+fn test_apply_x_flips_z_stabilizer() {
+    // X on |0⟩ gives |1⟩, stabilized by -Z
+    let mut s = StabilizerState::new(1);
+    s.apply_x(0).unwrap();
+    let stabs = s.get_stabilizers();
+    assert_eq!(stabs[0].to_string(), "-Z");
+}
+
+#[test]
+fn test_apply_z_on_plus_state() {
+    // Z|+⟩ = |-⟩, stabilized by -X
+    let mut s = StabilizerState::new(1);
+    s.apply_h(0).unwrap();
+    s.apply_z(0).unwrap();
+    let stabs = s.get_stabilizers();
+    assert_eq!(stabs[0].to_string(), "-X");
+}
+
+#[test]
+fn test_apply_y_on_zero_state() {
+    // Y|0⟩ = i|1⟩, stabilizer -Z (phase flips for rows with Z, but row has Z in stab)
+    let mut s = StabilizerState::new(1);
+    s.apply_y(0).unwrap();
+    let stabs = s.get_stabilizers();
+    assert_eq!(stabs[0].to_string(), "-Z");
+}
+
+#[test]
+fn test_pauli_xx_is_identity() {
+    // X followed by X = identity
+    let mut s = StabilizerState::new(1);
+    s.apply_x(0).unwrap();
+    s.apply_x(0).unwrap();
+    let stabs = s.get_stabilizers();
+    assert_eq!(stabs[0].to_string(), "+Z");
+}
+
+#[test]
+fn test_apply_s_sdg_inverse() {
+    // S followed by S† should be identity
+    let mut s = StabilizerState::new(1);
+    s.apply_h(0).unwrap(); // |+⟩
+    s.apply_s(0).unwrap();
+    s.apply_sdg(0).unwrap();
+    let stabs = s.get_stabilizers();
+    // Should be back to |+⟩ stabilized by +X
+    assert_eq!(stabs[0].to_string(), "+X");
+}
+
+#[test]
+fn test_apply_sdg_on_plus_state() {
+    // S†|+⟩ = |Y-⟩ stabilized by -Y (since S†·X·S = -Y)
+    let mut s = StabilizerState::new(1);
+    s.apply_h(0).unwrap();
+    s.apply_sdg(0).unwrap();
+    let stabs = s.get_stabilizers();
+    assert_eq!(stabs[0].to_string(), "-Y");
+}
+
+#[test]
+fn test_ghz_state_stabilizers() {
+    // GHZ = H(q0), CX(0,1), CX(0,2) → stabilizers +XXX, +ZZI, +IZZ
+    let mut s = StabilizerState::new(3);
+    s.apply_h(0).unwrap();
+    s.apply_cx(0, 1).unwrap();
+    s.apply_cx(0, 2).unwrap();
+    let stab_strs: Vec<String> = s.get_stabilizers().iter().map(|p| p.to_string()).collect();
+    // Expected (display: highest qubit index first): +XXX, +ZZI, +IZZ
+    assert!(
+        stab_strs.contains(&"+XXX".to_string()),
+        "+XXX not found, got {:?}",
+        stab_strs
+    );
+    // The other two stabilizers are +ZZI and +IZZ (or equivalent)
+    let has_zz = stab_strs.iter().any(|s| s.contains("ZZ"));
+    assert!(has_zz, "No ZZ stabilizer found, got {:?}", stab_strs);
+}
+
+#[test]
+fn test_pauli_expectation_on_stabilized_state() {
+    use crate::qis::pauli::{Pauli, PauliString};
+    // |+⟩ is stabilized by +X
+    let mut s = StabilizerState::new(1);
+    s.apply_h(0).unwrap();
+    let mut zx = PauliString::new(1);
+    zx.set_pauli(0, Pauli::X);
+    assert_eq!(s.pauli_expectation(&zx).unwrap(), 1);
+}
+
+#[test]
+fn test_pauli_expectation_qubit_mismatch_returns_error() {
+    use crate::qis::pauli::PauliString;
+    let s = StabilizerState::new(2);
+    let wrong = PauliString::new(3); // 3 qubits vs state's 2
+    let result = s.pauli_expectation(&wrong);
+    assert!(
+        matches!(
+            result,
+            Err(QisError::QubitMismatch {
+                expected: 2,
+                actual: 3
+            })
+        ),
+        "Expected QubitMismatch, got {result:?}"
+    );
+}
+
+#[test]
+fn test_to_stim_format() {
+    let s = StabilizerState::new(1);
+    let out = s.to_stim_format();
+    // Initial state |0⟩ has stabilizer +Z
+    assert!(out.contains("+Z"), "to_stim_format: got '{}'", out.trim());
+}
+
+#[test]
+fn test_measure_statistics_approx_50_50() {
+    // After 200 measurements of |+⟩, should see ~50% 0 and ~50% 1.
+    let mut ones = 0usize;
+    let total = 200;
+    for _ in 0..total {
+        let mut s = StabilizerState::new(1);
+        s.apply_h(0).unwrap();
+        if s.measure(0).unwrap() {
+            ones += 1;
+        }
+    }
+    // Generous bounds: 30% to 70%
+    assert!(
+        ones >= 60 && ones <= 140,
+        "Expected ~50% ones, got {ones}/{total}"
+    );
+}
+
+#[test]
+fn test_from_circuit_bell_state() {
+    use crate::circuit::circuit_impl::Circuit;
+    let mut c = Circuit::new(2);
+    c.h(0.into()).unwrap();
+    c.cx(0.into(), 1.into()).unwrap();
+    let stab = StabilizerState::from_circuit(&c).unwrap();
+    let stab_strs: Vec<String> = stab
+        .get_stabilizers()
+        .iter()
+        .map(|p| p.to_string())
+        .collect();
+    assert!(
+        stab_strs.contains(&"+XX".to_string()),
+        "got {:?}",
+        stab_strs
+    );
+    assert!(
+        stab_strs.contains(&"+ZZ".to_string()),
+        "got {:?}",
+        stab_strs
+    );
+}
+
+#[test]
+fn test_from_circuit_rejects_non_clifford() {
+    use crate::circuit::circuit_impl::Circuit;
+    let mut c = Circuit::new(1);
+    c.t(0.into()).unwrap(); // T gate is not Clifford
+    let result = StabilizerState::from_circuit(&c);
+    assert!(result.is_err(), "Expected error for T gate");
+}
+
+#[test]
+fn test_measure_zero_state_deterministic() {
+    // |0⟩ measured always gives 0
+    let mut s = StabilizerState::new(1);
+    let result = s.measure(0).unwrap();
+    assert!(!result, "Expected 0 from |0⟩");
+    // State collapses to |0⟩: stabilizer still +Z
+    let stabs = s.get_stabilizers();
+    assert_eq!(stabs[0].to_string(), "+Z");
+}
+
+#[test]
+fn test_measure_one_state_deterministic() {
+    // X|0⟩ = |1⟩ measured always gives 1
+    let mut s = StabilizerState::new(1);
+    s.apply_x(0).unwrap();
+    let result = s.measure(0).unwrap();
+    assert!(result, "Expected 1 from |1⟩");
+}
+
+#[test]
+fn test_measure_plus_state_random() {
+    // |+⟩ should give 0 or 1 randomly. Run many trials, both should appear.
+    let mut saw_zero = false;
+    let mut saw_one = false;
+    for _ in 0..100 {
+        let mut s = StabilizerState::new(1);
+        s.apply_h(0).unwrap();
+        let b = s.measure(0).unwrap();
+        if b {
+            saw_one = true;
+        } else {
+            saw_zero = true;
+        }
+        if saw_zero && saw_one {
+            break;
+        }
+    }
+    assert!(saw_zero, "Never saw outcome 0 from |+⟩");
+    assert!(saw_one, "Never saw outcome 1 from |+⟩");
+}
+
+#[test]
+fn test_measure_collapses_superposition() {
+    // After measuring |+⟩, the state is deterministic: measure again gives same result.
+    let mut s = StabilizerState::new(1);
+    s.apply_h(0).unwrap();
+    let b1 = s.measure(0).unwrap();
+    let b2 = s.measure(0).unwrap();
+    assert_eq!(b1, b2, "Repeated measurement should be consistent");
+}
+
+#[test]
+fn test_measure_bell_state_correlated() {
+    // |Φ+⟩ = (|00⟩+|11⟩)/√2: measuring q0 and q1 gives same result.
+    for _ in 0..20 {
+        let mut s = StabilizerState::new(2);
+        s.apply_h(0).unwrap();
+        s.apply_cx(0, 1).unwrap();
+        let b0 = s.measure(0).unwrap();
+        let b1 = s.measure(1).unwrap();
+        assert_eq!(b0, b1, "Bell state measurements must be correlated");
+    }
+}
+
+#[test]
+fn test_measure_all() {
+    let mut s = StabilizerState::new(2);
+    let results = s.measure_all();
+    assert_eq!(results, vec![false, false], "|00⟩ measures to 00");
+}
+
+#[test]
+fn test_clone() {
+    let s = StabilizerState::new(3);
+    let c = s.clone();
+    assert_eq!(s.n, c.n);
+    assert_eq!(s.row_len, c.row_len);
+    assert_eq!(s.tableau.len(), c.tableau.len());
+    assert_eq!(&*s.tableau, &*c.tableau);
+    assert_eq!(&*s.phases, &*c.phases);
+}
+
+/// Verifies that the SIMD-dispatched rowsum produces the same tableau as
+/// sequential gate application for a large (≥ 64 qubit) state, exercising
+/// the full word-level popcount phase path and SIMD XOR loop.
+#[test]
+fn test_rowsum_simd_large_state() {
+    // n=128 forces row_len=2 data words + 6 padding = 8, exercising SIMD paths.
+    let n = 128;
+    let mut s = StabilizerState::new(n);
+
+    // GHZ preparation: H on qubit 0, then CNOT(0→k) for all k.
+    // Result: (|00...0⟩ + |11...1⟩)/√2 — all qubits fully correlated.
+    s.apply_h(0).unwrap();
+    for q in 1..n {
+        s.apply_cx(0, q).unwrap(); // rowsum exercises SIMD on wide rows
+    }
+
+    // All measurements must agree (all-0 or all-1).
+    let outcome0 = s.measure(0).unwrap();
+    for q in 1..n {
+        let outcome_q = s.measure(q).unwrap();
+        assert_eq!(
+            outcome_q, outcome0,
+            "GHZ correlation broken at qubit {q}: expected {outcome0}, got {outcome_q}"
+        );
+    }
+}
+
+/// Verifies g_phase_word matches the scalar g_phase on random inputs.
+#[test]
+fn test_g_phase_word_matches_scalar() {
+    // Construct deterministic test patterns covering all 4 Pauli types.
+    // Pattern: qubit 0 = I, qubit 1 = X, qubit 2 = Y, qubit 3 = Z.
+    // Encode as bit 0..3 of a single u64 word.
+    // h-row: xh = 0b0110 (bits 1,2 set), zh = 0b0100_u64 | 0b1000 (bits 2,3 set)
+    let xh: u64 = 0b0110; // bits 1,2 → qubits 1(X) and 2(Y)
+    let zh: u64 = 0b1100; // bits 2,3 → qubits 2(Y) and 3(Z)
+
+    // i-row: all four combinations across bits 0..3.
+    let xi: u64 = 0b1010; // bits 1,3
+    let zi: u64 = 0b0011; // bits 0,1
+
+    // Compute expected sum via per-bit scalar g_phase.
+    let mut expected = 0i32;
+    for bit in 0..4 {
+        let x1 = (xh >> bit) & 1 == 1;
+        let z1 = (zh >> bit) & 1 == 1;
+        let x2 = (xi >> bit) & 1 == 1;
+        let z2 = (zi >> bit) & 1 == 1;
+        expected += StabilizerState::g_phase(x1, z1, x2, z2);
+    }
+
+    let got = StabilizerState::g_phase_word(xh, zh, xi, zi);
+    assert_eq!(got, expected, "g_phase_word mismatch");
+}
+
+/// Exhaustively checks g_phase_word against scalar g_phase for all 16
+/// combinations of single-bit (xh, zh, xi, zi) input patterns.
+#[test]
+fn test_g_phase_word_exhaustive() {
+    for xh in 0u64..=1 {
+        for zh in 0u64..=1 {
+            for xi in 0u64..=1 {
+                for zi in 0u64..=1 {
+                    let scalar = StabilizerState::g_phase(xh == 1, zh == 1, xi == 1, zi == 1);
+                    let word = StabilizerState::g_phase_word(xh, zh, xi, zi);
+                    assert_eq!(
+                        word, scalar,
+                        "g_phase_word({xh},{zh},{xi},{zi}) = {word} ≠ {scalar}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// sample_shots on Bell state: all outcomes must be (0,0) or (1,1), ~50/50.
+#[test]
+fn test_sample_shots_bell_state() {
+    let mut s = StabilizerState::new(2);
+    s.apply_h(0).unwrap();
+    s.apply_cx(0, 1).unwrap(); // |Φ⁺⟩ = (|00⟩+|11⟩)/√2
+
+    let shots = 500;
+    let results = s.sample_shots(shots);
+    assert_eq!(results.len(), shots);
+
+    let mut zeros = 0usize;
+    for shot in &results {
+        assert_eq!(shot.len(), 2);
+        assert_eq!(shot[0], shot[1], "Bell state: qubits must agree");
+        if !shot[0] {
+            zeros += 1;
+        }
+    }
+    // Expect roughly 50% zeros; accept anything in [15%, 85%] for robustness.
+    let ratio = zeros as f64 / shots as f64;
+    assert!(
+        (0.15..=0.85).contains(&ratio),
+        "Expected ~50% |00⟩, got {zeros}/{shots} = {ratio:.2}"
+    );
+}
+
+/// sample_shots on deterministic |0⟩ state: all outcomes must be [false].
+#[test]
+fn test_sample_shots_deterministic() {
+    let s = StabilizerState::new(3);
+    let results = s.sample_shots(200);
+    for shot in &results {
+        assert_eq!(shot, &vec![false, false, false], "Expected |000⟩");
+    }
+}
+
+// ── √-gate tests ─────────────────────────────────────────────────────────
+
+/// X2P⁴ = X2M⁴ = identity (4 applications restore the original state).
+#[test]
+fn test_x2p_four_is_identity() {
+    let original = StabilizerState::new(2);
+    let mut s = StabilizerState::new(2);
+    for _ in 0..4 {
+        s.apply_x2p(0).unwrap();
+    }
+    assert_eq!(&*s.tableau, &*original.tableau);
+    assert_eq!(&*s.phases, &*original.phases);
+}
+
+#[test]
+fn test_x2m_four_is_identity() {
+    let original = StabilizerState::new(2);
+    let mut s = StabilizerState::new(2);
+    for _ in 0..4 {
+        s.apply_x2m(0).unwrap();
+    }
+    assert_eq!(&*s.tableau, &*original.tableau);
+    assert_eq!(&*s.phases, &*original.phases);
+}
+
+/// Y2P⁴ = Y2M⁴ = identity.
+#[test]
+fn test_y2p_four_is_identity() {
+    let original = StabilizerState::new(2);
+    let mut s = StabilizerState::new(2);
+    for _ in 0..4 {
+        s.apply_y2p(0).unwrap();
+    }
+    assert_eq!(&*s.tableau, &*original.tableau);
+    assert_eq!(&*s.phases, &*original.phases);
+}
+
+#[test]
+fn test_y2m_four_is_identity() {
+    let original = StabilizerState::new(2);
+    let mut s = StabilizerState::new(2);
+    for _ in 0..4 {
+        s.apply_y2m(0).unwrap();
+    }
+    assert_eq!(&*s.tableau, &*original.tableau);
+    assert_eq!(&*s.phases, &*original.phases);
+}
+
+/// X2P followed by X2M = identity.
+#[test]
+fn test_x2p_x2m_inverse() {
+    let original = StabilizerState::new(1);
+    let mut s = StabilizerState::new(1);
+    s.apply_x2p(0).unwrap();
+    s.apply_x2m(0).unwrap();
+    assert_eq!(&*s.tableau, &*original.tableau);
+    assert_eq!(&*s.phases, &*original.phases);
+}
+
+/// Y2P followed by Y2M = identity.
+#[test]
+fn test_y2p_y2m_inverse() {
+    let original = StabilizerState::new(1);
+    let mut s = StabilizerState::new(1);
+    s.apply_y2p(0).unwrap();
+    s.apply_y2m(0).unwrap();
+    assert_eq!(&*s.tableau, &*original.tableau);
+    assert_eq!(&*s.phases, &*original.phases);
+}
+
+/// X2P² = X (two √X gates give X gate).
+#[test]
+fn test_x2p_squared_is_x() {
+    let mut after_x2p2 = StabilizerState::new(2);
+    after_x2p2.apply_x2p(0).unwrap();
+    after_x2p2.apply_x2p(0).unwrap();
+
+    let mut after_x = StabilizerState::new(2);
+    after_x.apply_x(0).unwrap();
+
+    assert_eq!(&*after_x2p2.tableau, &*after_x.tableau);
+    assert_eq!(&*after_x2p2.phases, &*after_x.phases);
+}
+
+/// Y2P² = Y (two √Y gates give Y gate).
+#[test]
+fn test_y2p_squared_is_y() {
+    let mut after_y2p2 = StabilizerState::new(2);
+    after_y2p2.apply_y2p(0).unwrap();
+    after_y2p2.apply_y2p(0).unwrap();
+
+    let mut after_y = StabilizerState::new(2);
+    after_y.apply_y(0).unwrap();
+
+    assert_eq!(&*after_y2p2.tableau, &*after_y.tableau);
+    assert_eq!(&*after_y2p2.phases, &*after_y.phases);
+}
+
+/// NonCliffordGate returned for T gate (verify renamed error variant).
+#[test]
+fn test_non_clifford_error_variant() {
+    use crate::circuit::circuit_impl::Circuit;
+    let mut c = Circuit::new(1);
+    c.t(0.into()).unwrap();
+    let result = StabilizerState::from_circuit(&c);
+    assert!(
+        matches!(result, Err(QisError::NonCliffordGate(_))),
+        "Expected NonCliffordGate, got {result:?}"
+    );
+}
+
+// ── Probability API tests ─────────────────────────────────────────────────────
+
+/// |0⟩ state: probability_of([false]) = 1.0, probability_of([true]) = 0.0.
+#[test]
+fn test_probability_of_zero_state() {
+    let s = StabilizerState::new(1);
+    assert!((s.probability_of(&[false]).unwrap() - 1.0).abs() < 1e-12);
+    assert_eq!(s.probability_of(&[true]).unwrap(), 0.0);
+}
+
+/// |+⟩ state: both outcomes equally probable.
+#[test]
+fn test_probability_of_plus_state() {
+    let mut s = StabilizerState::new(1);
+    s.apply_h(0).unwrap();
+    assert!((s.probability_of(&[false]).unwrap() - 0.5).abs() < 1e-12);
+    assert!((s.probability_of(&[true]).unwrap() - 0.5).abs() < 1e-12);
+}
+
+/// Bell state |Φ⁺⟩: only |00⟩ and |11⟩ have nonzero probability (0.5 each).
+#[test]
+fn test_probability_of_bell_state() {
+    let mut s = StabilizerState::new(2);
+    s.apply_h(0).unwrap();
+    s.apply_cx(0, 1).unwrap();
+    assert!((s.probability_of(&[false, false]).unwrap() - 0.5).abs() < 1e-12);
+    assert!((s.probability_of(&[true, true]).unwrap() - 0.5).abs() < 1e-12);
+    assert_eq!(s.probability_of(&[false, true]).unwrap(), 0.0);
+    assert_eq!(s.probability_of(&[true, false]).unwrap(), 0.0);
+}
+
+/// `probability_of` is non-destructive: calling it does not change the state.
+#[test]
+fn test_probability_of_is_non_destructive() {
+    let mut s = StabilizerState::new(2);
+    s.apply_h(0).unwrap();
+    s.apply_cx(0, 1).unwrap();
+
+    let stabs_before = s.get_stabilizers();
+    let _ = s.probability_of(&[false, false]).unwrap();
+    let stabs_after = s.get_stabilizers();
+    assert_eq!(stabs_before, stabs_after);
+}
+
+/// probabilities() sums to 1.0 for a 3-qubit GHZ state.
+#[test]
+fn test_probabilities_ghz_sums_to_one() {
+    let mut s = StabilizerState::new(3);
+    s.apply_h(0).unwrap();
+    s.apply_cx(0, 1).unwrap();
+    s.apply_cx(0, 2).unwrap();
+    let probs = s.probabilities().unwrap();
+    let sum: f64 = probs.iter().sum();
+    assert!((sum - 1.0).abs() < 1e-10, "sum = {sum}");
+    // Only |000⟩ (index 0) and |111⟩ (index 7) have nonzero probability
+    assert!((probs[0b000] - 0.5).abs() < 1e-12);
+    assert!((probs[0b111] - 0.5).abs() < 1e-12);
+    for i in [0b001usize, 0b010, 0b011, 0b100, 0b101, 0b110] {
+        assert_eq!(probs[i], 0.0, "probs[{i:03b}] = {}", probs[i]);
+    }
+}
+
+/// probabilities() returns Err for n > 20.
+#[test]
+fn test_probabilities_rejects_large_n() {
+    let s = StabilizerState::new(21);
+    assert!(matches!(
+        s.probabilities(),
+        Err(QisError::InvalidParameterValue(_))
+    ));
+}
+
+/// probability_of returns QubitMismatch for wrong bits length.
+#[test]
+fn test_probability_of_qubit_mismatch() {
+    let s = StabilizerState::new(3);
+    let result = s.probability_of(&[false, false]); // only 2 bits for 3-qubit state
+    assert!(matches!(
+        result,
+        Err(QisError::QubitMismatch {
+            expected: 3,
+            actual: 2
+        })
+    ));
+}
+
+// ── Edge-case tests (R-IV-D) ──────────────────────────────────────────────────
+
+/// SIMD boundary test: n = 63, 64, 65.
+///
+/// These are the most likely sizes to trigger off-by-one errors or incorrect
+/// padding in the row_len calculation, especially when row data spans two
+/// 64-word blocks. We apply a CX gate across qubit 0 → qubit n-1 and verify
+/// the resulting stabilizers are consistent with a maximally entangled state.
+#[test]
+fn test_simd_boundary_n63() {
+    let n = 63;
+    let mut s = StabilizerState::new(n);
+    s.apply_h(0).unwrap();
+    for q in 0..n - 1 {
+        s.apply_cx(q, q + 1).unwrap();
+    }
+    // All qubits must measure identically (GHZ-like)
+    let mut copy = s.clone();
+    let result = copy.measure_all();
+    let first = result[0];
+    assert!(
+        result.iter().all(|&b| b == first),
+        "n=63: not all qubits equal"
+    );
+}
+
+#[test]
+fn test_simd_boundary_n64() {
+    let n = 64;
+    let mut s = StabilizerState::new(n);
+    s.apply_h(0).unwrap();
+    for q in 0..n - 1 {
+        s.apply_cx(q, q + 1).unwrap();
+    }
+    let mut copy = s.clone();
+    let result = copy.measure_all();
+    let first = result[0];
+    assert!(
+        result.iter().all(|&b| b == first),
+        "n=64: not all qubits equal"
+    );
+}
+
+#[test]
+fn test_simd_boundary_n65() {
+    let n = 65;
+    let mut s = StabilizerState::new(n);
+    s.apply_h(0).unwrap();
+    for q in 0..n - 1 {
+        s.apply_cx(q, q + 1).unwrap();
+    }
+    let mut copy = s.clone();
+    let result = copy.measure_all();
+    let first = result[0];
+    assert!(
+        result.iter().all(|&b| b == first),
+        "n=65: not all qubits equal"
+    );
+}
+
+/// Repeated deterministic measurements must not contaminate each other.
+///
+/// After measuring |0...0⟩, every qubit is deterministically 0. The scratch row
+/// is cleared between measurements, so the second measurement must also return 0.
+#[test]
+fn test_repeated_deterministic_measurements() {
+    let mut s = StabilizerState::new(4);
+    // First pass: all deterministically 0
+    for q in 0..4 {
+        assert_eq!(s.measure(q).unwrap(), false, "qubit {q} first pass");
+    }
+    // Second pass: state now collapsed but still |0000⟩, all deterministic
+    for q in 0..4 {
+        assert_eq!(s.measure(q).unwrap(), false, "qubit {q} second pass");
+    }
+}
+
+/// Deep circuit collapse: chain CX, measure middle qubit, verify stabilizer split.
+///
+/// Prepare |+⟩^n → apply chain CNOT 0→1→2→…→n-1 → measure qubit n/2.
+/// After measurement the qubits on each side remain entangled within their group
+/// but are now in a product state across the cut.  Both halves' measure_all
+/// calls should yield internally-uniform bitstrings.
+#[test]
+fn test_deep_circuit_collapse() {
+    let n = 10;
+    let mid = n / 2;
+    let mut s = StabilizerState::new(n);
+    // Create a chain-entangled state
+    s.apply_h(0).unwrap();
+    for q in 0..n - 1 {
+        s.apply_cx(q, q + 1).unwrap();
+    }
+    // Measure the middle qubit — collapses the global GHZ
+    let _mid_outcome = s.measure(mid).unwrap();
+    // After collapse, remaining qubits must still agree with each other
+    // (the chain forces all qubits to the same value in a GHZ)
+    let rest: Vec<bool> = (0..n)
+        .filter(|&q| q != mid)
+        .map(|q| s.clone().measure(q).unwrap())
+        .collect();
+    // All remaining outcomes must equal the first remaining qubit's value
+    let first = rest[0];
+    assert!(
+        rest.iter().all(|&b| b == first),
+        "deep collapse: inconsistent outcomes"
+    );
+}

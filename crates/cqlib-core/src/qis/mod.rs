@@ -13,14 +13,15 @@
 //! Quantum Information Science (QIS) module for quantum simulation.
 //!
 //! This module provides core quantum computing primitives including:
-//! - State representations: [`Statevector`] for pure states and [`DensityMatrix`] for mixed states
+//! - State representations: [`Statevector`] for pure states, [`DensityMatrix`] for mixed states,
+//!   and [`StabilizerState`] for efficient Clifford-circuit simulation
 //! - Noise modeling: [`DensityMatrixNoise`] for realistic quantum simulations
 //! - Observables: [`Hamiltonian`] and [`PauliString`] for expectation value calculations
 //! - Pauli operators: [`Pauli`] and [`Phase`] for quantum error correction and stabilizer formalism
 //!
 //! # Module Structure
 //!
-//! - [`state`]: Quantum state representations (statevector and density matrix)
+//! - [`state`]: Quantum state representations (statevector, density matrix, stabilizer)
 //! - [`pauli`]: Pauli operators and Pauli strings with symplectic encoding
 //! - [`hamiltonian`]: Hamiltonian construction from Pauli strings
 //! - [`observable`]: Trait for computing expectation values
@@ -43,6 +44,22 @@
 //! let mut dm = DensityMatrix::new(2);
 //! dm.apply_h(0);
 //! dm.apply_cx(0, 1);
+//! ```
+//!
+//! Large-scale Clifford simulation with [`StabilizerState`]:
+//!
+//! ```rust
+//! use cqlib_core::qis::StabilizerState;
+//!
+//! // 1000-qubit GHZ state preparation
+//! let mut s = StabilizerState::new(1000);
+//! s.apply_h(0).unwrap();
+//! for q in 0..999 {
+//!     s.apply_cx(q, q + 1).unwrap();
+//! }
+//! // Sample 100 measurement shots in parallel (via Rayon)
+//! let shots = s.sample_shots(100);
+//! assert_eq!(shots.len(), 100);
 //! ```
 //!
 //! Working with observables:
@@ -72,4 +89,5 @@ pub use observable::Observable;
 pub use pauli::{Pauli, PauliString, Phase};
 pub use state::density_matrix::DensityMatrix;
 pub use state::density_matrix_noise::DensityMatrixNoise;
+pub use state::stabilizer::StabilizerState;
 pub use state::statevector::Statevector;
