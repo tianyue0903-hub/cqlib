@@ -49,7 +49,7 @@ class Topology:
     def __init__(
         self,
         qubits: list[int] | list[Qubit],
-        couplings: list[tuple[int | Qubit, int | Qubit, str]]
+        couplings: list[tuple[int | Qubit, int | Qubit, str]],
     ) -> None:
         """
         Creates a new topology with specified qubits and directed couplings.
@@ -114,7 +114,9 @@ class Topology:
         """
         ...
 
-    def add_couplings(self, couplings: list[tuple[int | Qubit, int | Qubit, str]]) -> None:
+    def add_couplings(
+        self, couplings: list[tuple[int | Qubit, int | Qubit, str]]
+    ) -> None:
         """
         Adds directed couplings to the topology.
 
@@ -148,7 +150,9 @@ class Topology:
         """
         ...
 
-    def remove_couplings(self, couplings: list[tuple[int | Qubit, int | Qubit]]) -> None:
+    def remove_couplings(
+        self, couplings: list[tuple[int | Qubit, int | Qubit]]
+    ) -> None:
         """
         Removes directed couplings from the topology.
 

@@ -34,7 +34,7 @@ class TestUnitaryGateInCircuit:
         c = Circuit(2)
         h_mat = np.array([[1, 1], [1, -1]], dtype=complex) / np.sqrt(2)
         gate = UnitaryGate("CustomH", 1).with_matrix(h_mat)
-        
+
         c.unitary(gate, [0])
         assert len(c) == 1
         assert c[0].name == "CustomH"
@@ -42,14 +42,11 @@ class TestUnitaryGateInCircuit:
     def test_apply_two_qubit_unitary(self):
         """应用双量子比特自定义门"""
         c = Circuit(3)
-        cnot_mat = np.array([
-            [1, 0, 0, 0],
-            [0, 1, 0, 0],
-            [0, 0, 0, 1],
-            [0, 0, 1, 0]
-        ], dtype=complex)
+        cnot_mat = np.array(
+            [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 0, 1], [0, 0, 1, 0]], dtype=complex
+        )
         gate = UnitaryGate("CustomCNOT", 2).with_matrix(cnot_mat)
-        
+
         c.unitary(gate, [0, 1])
         assert len(c) == 1
         assert c[0].name == "CustomCNOT"
@@ -59,14 +56,14 @@ class TestUnitaryGateInCircuit:
         c = Circuit(3)
         x_mat = np.array([[0, 1], [1, 0]], dtype=complex)
         h_mat = np.array([[1, 1], [1, -1]], dtype=complex) / np.sqrt(2)
-        
+
         x_gate = UnitaryGate("X", 1).with_matrix(x_mat)
         h_gate = UnitaryGate("H", 1).with_matrix(h_mat)
-        
+
         c.unitary(x_gate, [0])
         c.unitary(h_gate, [1])
         c.unitary(x_gate, [2])
-        
+
         assert len(c) == 3
 
     def test_mixed_standard_and_unitary(self):
@@ -74,11 +71,11 @@ class TestUnitaryGateInCircuit:
         c = Circuit(2)
         custom_mat = np.array([[0, 1], [1, 0]], dtype=complex)
         custom_gate = UnitaryGate("CustomX", 1).with_matrix(custom_mat)
-        
+
         c.h(0)
         c.unitary(custom_gate, [1])
         c.cx(0, 1)
-        
+
         assert len(c) == 3
         assert c[0].name == "H"
         assert c[1].name == "CustomX"
@@ -89,24 +86,21 @@ class TestUnitaryGateInCircuit:
         c = Circuit(4)
         mat = np.array([[1, 1], [1, -1]], dtype=complex) / np.sqrt(2)
         gate = UnitaryGate("H", 1).with_matrix(mat)
-        
+
         c.unitary(gate, [0])
         c.unitary(gate, [2])
         c.unitary(gate, [3])
-        
+
         assert len(c) == 3
 
     def test_apply_to_non_adjacent_qubits(self):
         """应用双量子比特门到非相邻qubit"""
         c = Circuit(4)
-        swap_mat = np.array([
-            [1, 0, 0, 0],
-            [0, 0, 1, 0],
-            [0, 1, 0, 0],
-            [0, 0, 0, 1]
-        ], dtype=complex)
+        swap_mat = np.array(
+            [[1, 0, 0, 0], [0, 0, 1, 0], [0, 1, 0, 0], [0, 0, 0, 1]], dtype=complex
+        )
         gate = UnitaryGate("SWAP", 2).with_matrix(swap_mat)
-        
+
         c.unitary(gate, [0, 3])  # 非相邻qubit
         assert len(c) == 1
 
@@ -119,7 +113,7 @@ class TestUnitaryGateErrors:
         c = Circuit(2)
         mat = np.eye(2, dtype=complex)
         gate = UnitaryGate("I", 1).with_matrix(mat)
-        
+
         # 尝试应用到2个qubit但门只需要1个
         with pytest.raises(Exception):
             c.unitary(gate, [0, 1])
@@ -129,7 +123,7 @@ class TestUnitaryGateErrors:
         c = Circuit(2)
         mat = np.eye(2, dtype=complex)
         gate = UnitaryGate("I", 1).with_matrix(mat)
-        
+
         with pytest.raises(Exception):
             c.unitary(gate, [5])  # qubit 5不存在
 
@@ -137,7 +131,7 @@ class TestUnitaryGateErrors:
         """未定义矩阵的自定义门"""
         c = Circuit(2)
         gate = UnitaryGate("Undefined", 1)  # 未设置矩阵
-        
+
         # 应用时可能接受，但后续操作可能失败
         c.unitary(gate, [0])
         assert len(c) == 1
@@ -151,7 +145,7 @@ class TestUnitaryGateMatrixValidation:
         c = Circuit(1)
         h_mat = np.array([[1, 1], [1, -1]], dtype=complex) / np.sqrt(2)
         gate = UnitaryGate("H", 1).with_matrix(h_mat)
-        
+
         c.unitary(gate, [0])
         # 获取操作并验证矩阵
         op = c[0]
@@ -162,7 +156,7 @@ class TestUnitaryGateMatrixValidation:
         c = Circuit(1)
         i_mat = np.eye(2, dtype=complex)
         gate = UnitaryGate("I", 1).with_matrix(i_mat)
-        
+
         c.x(0)
         c.unitary(gate, [0])  # 单位门不应改变状态
         assert len(c) == 2

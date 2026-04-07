@@ -27,10 +27,6 @@ use num_complex;
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_double};
 
-// =============================================================================
-// Statevector Wrapper
-// =============================================================================
-
 pub struct StatevectorWrapper {
     pub inner: Statevector,
 }
@@ -165,10 +161,6 @@ pub extern "C" fn statevector_probabilities(
     0
 }
 
-// =============================================================================
-// DensityMatrix Wrapper
-// =============================================================================
-
 pub struct DensityMatrixWrapper {
     pub inner: DensityMatrix,
 }
@@ -275,10 +267,6 @@ pub extern "C" fn density_matrix_probabilities(
     0
 }
 
-// =============================================================================
-// DensityMatrixNoise Wrapper
-// =============================================================================
-
 pub struct DensityMatrixNoiseWrapper {
     pub inner: DensityMatrixNoise,
 }
@@ -369,10 +357,6 @@ pub extern "C" fn density_matrix_noise_cx(
         Err(_) => -3,
     }
 }
-
-// =============================================================================
-// PauliString Wrapper
-// =============================================================================
 
 pub struct PauliStringWrapper {
     pub inner: PauliString,
@@ -487,10 +471,6 @@ pub extern "C" fn pauli_string_free_string(s: *mut c_char) {
     }
 }
 
-// =============================================================================
-// Hamiltonian Wrapper
-// =============================================================================
-
 pub struct HamiltonianWrapper {
     pub inner: Hamiltonian,
 }
@@ -558,10 +538,6 @@ pub extern "C" fn hamiltonian_num_terms(ptr: *const HamiltonianWrapper) -> usize
     }
     unsafe { (*ptr).inner.terms.len() }
 }
-
-// =============================================================================
-// Observable Operations
-// =============================================================================
 
 /// Compute expectation value of Hamiltonian on statevector.
 #[unsafe(no_mangle)]

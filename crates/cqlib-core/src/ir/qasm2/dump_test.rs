@@ -768,10 +768,6 @@ fn test_dump_while_loop_error() {
     }
 }
 
-// =============================================================================
-// Comprehensive New Tests
-// =============================================================================
-
 #[test]
 fn test_dump_empty_circuit() {
     let circuit = Circuit::new(2);

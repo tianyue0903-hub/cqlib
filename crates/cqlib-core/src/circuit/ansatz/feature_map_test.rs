@@ -58,10 +58,6 @@ fn is_cnot_gate(op: &Operation, control: usize, target: usize) -> bool {
     }
 }
 
-// ============================================================================
-// Parameter Prefix Tests
-// ============================================================================
-
 #[test]
 fn test_pauli_feature_map_uses_default_parameter_prefix() {
     // Create feature map with default prefix "x"
@@ -95,10 +91,6 @@ fn test_pauli_feature_map_explicit_prefix_overrides() {
     assert!(syms.contains("theta_1"));
 }
 
-// ============================================================================
-// Basic Structure Tests
-// ============================================================================
-
 #[test]
 fn test_pauli_feature_map_num_parameters_equals_num_qubits() {
     // For feature maps, each qubit has one input feature
@@ -131,10 +123,6 @@ fn test_pauli_feature_map_zero_reps_empty_circuit() {
     // Zero reps should produce an empty circuit
     assert_eq!(ops.len(), 0);
 }
-
-// ============================================================================
-// Default Configuration Tests (Z + ZZ)
-// ============================================================================
 
 #[test]
 fn test_pauli_feature_map_default_z_only_structure() {
@@ -223,10 +211,6 @@ fn test_pauli_feature_map_default_z_and_zz_structure() {
     assert!(is_cnot_gate(&ops[6], 0, 1));
 }
 
-// ============================================================================
-// Multi-Qubit Tests
-// ============================================================================
-
 #[test]
 fn test_pauli_feature_map_3qubits_linear_entanglement() {
     // 3 qubits with ZZ and linear entanglement (pairs: 0-1, 1-2)
@@ -298,10 +282,6 @@ fn test_pauli_feature_map_3qubits_circular_entanglement() {
     assert!(is_cnot_gate(&ops[11], 0, 2));
 }
 
-// ============================================================================
-// Custom Entanglement Tests
-// ============================================================================
-
 #[test]
 fn test_pauli_feature_map_custom_topology() {
     // Custom topology with specific pairs
@@ -332,10 +312,6 @@ fn test_pauli_feature_map_custom_topology() {
     assert!(is_rz_gate_with_param(&ops[8], 3));
     assert!(is_cnot_gate(&ops[9], 1, 3));
 }
-
-// ============================================================================
-// Pauli String Variants Tests
-// ============================================================================
 
 #[test]
 fn test_pauli_feature_map_x_pauli_structure() {
@@ -407,10 +383,6 @@ fn test_pauli_feature_map_xy_pauli_structure() {
     // Total: 2 (initial H) + 9 = 11
     assert_eq!(ops.len(), 11);
 }
-
-// ============================================================================
-// Validation Error Tests
-// ============================================================================
 
 #[test]
 fn test_pauli_feature_map_validation_zero_qubits() {
@@ -505,10 +477,6 @@ fn test_pauli_feature_map_zzz_4qubits_full_topology() {
     assert_eq!(fm.num_parameters(), 4);
 }
 
-// ============================================================================
-// Parameter Value Tests
-// ============================================================================
-
 #[test]
 fn test_pauli_feature_map_z_parameter_value() {
     // Verify that Z evolution uses the correct angle factor (2*x)
@@ -538,10 +506,6 @@ fn test_pauli_feature_map_z_parameter_value() {
     }
 }
 
-// ============================================================================
-// Full Entanglement Tests
-// ============================================================================
-
 #[test]
 fn test_pauli_feature_map_full_entanglement_3qubits() {
     // Full entanglement on 3 qubits: pairs (0,1), (0,2), (1,2)
@@ -561,10 +525,6 @@ fn test_pauli_feature_map_full_entanglement_3qubits() {
         assert!(is_h_gate_on_qubit(&ops[i], i));
     }
 }
-
-// ============================================================================
-// Integration Tests
-// ============================================================================
 
 #[test]
 fn test_pauli_feature_map_matches_zz_feature_map_for_equivalent_config() {

@@ -11,8 +11,59 @@
 # that they have been altered from the originals.
 
 from typing import Dict, List, Optional, Tuple, TypedDict
-from cqlib.circuit import Circuit
+from cqlib.circuit import Circuit, Operation
 
+class CommutativeOptimization:
+    """Optimize the given Circuit by merging the adjacent gates with
+    the commutative relation between gates in consideration.
+
+    During the process, several parameterization and deparameterization process could be included, as listed
+        `'x'`: Rx <--> X, SX, SX_dagger
+        `'y'`: Ry <--> Y, SY, SY_dagger
+        `'z'`: Rz <--> Z, S, T, S_dagger, T_dagger
+    Whether to parameterize or deparameterize certain kinds of gates could be specified
+    by listing them in `para` and `depara`.
+    """
+    def __init__(
+        self,
+        para: Optional[List[str]],
+        depara: Optional[List[str]],
+        keep_phase: bool,
+        keep_order: bool,
+    ) -> None:
+        """Initializes the CommutativeOptimization instance.
+
+        Args:
+            para: A list of parameters to be parameterized.
+            depara: A list of parameters to be deparameterized.
+            keep_phase: Whether to keep the global phase of the circuit.
+            keep_order: Force to ignore parameterization and deparameterization.
+        """
+        ...
+
+    @staticmethod
+    def is_commutative(a: Operation, b: Operation) -> bool:
+        """Checks whether two operations are commutative.
+
+        Args:
+            a: The first operation.
+            b: The second operation.
+
+        Returns:
+            bool: `True` if the operations commute, `False` otherwise.
+        """
+        ...
+
+    def execute(self, circuit: Circuit) -> Circuit:
+        """Executes the commutative optimization on the given circuit.
+
+        Args:
+            circuit: The input circuit to be optimized.
+
+        Returns:
+            Circuit: The optimized circuit.
+        """
+        ...
 
 class Vf2CandidateScoreDict(TypedDict):
     """Scoring breakdown for one VF2 initial-layout candidate.
@@ -29,7 +80,6 @@ class Vf2CandidateScoreDict(TypedDict):
     topology_fit: float
     gate_distribution: float
 
-
 class Vf2LayoutCandidateDict(TypedDict):
     """A candidate logical-to-physical layout produced by VF2 search.
 
@@ -43,7 +93,6 @@ class Vf2LayoutCandidateDict(TypedDict):
     layout: List[int]
     score: Vf2CandidateScoreDict
 
-
 class Topology:
     """Hardware topology used by VF2 and SABRE mapping.
 
@@ -51,7 +100,9 @@ class Topology:
     checks and route planning.
     """
 
-    def __init__(self, qubits: List[int], couplings: List[Tuple[int, int] | Tuple[int, int, str]]) -> None:
+    def __init__(
+        self, qubits: List[int], couplings: List[Tuple[int, int] | Tuple[int, int, str]]
+    ) -> None:
         """Creates a topology from physical qubits and couplings.
 
         Args:
@@ -97,7 +148,9 @@ class Topology:
         """Adds physical qubits to topology."""
         ...
 
-    def add_couplings(self, couplings: List[Tuple[int, int] | Tuple[int, int, str]]) -> None:
+    def add_couplings(
+        self, couplings: List[Tuple[int, int] | Tuple[int, int, str]]
+    ) -> None:
         """Adds coupling edges to topology."""
         ...
 
@@ -140,7 +193,6 @@ class Topology:
         """Returns the degree (number of couplings) of `qubit`."""
         ...
 
-
 class SabreConfig:
     """Configuration object for `map_with_vf2_sabre`."""
 
@@ -177,7 +229,6 @@ class SabreConfig:
             ValueError: If `vf2_policy` is not recognized.
         """
         ...
-
 
 class TemplateMatching:
     """Template-matching engine for compile-ready circuits."""
@@ -324,8 +375,6 @@ class CliffordRzOptimization:
             ValueError: If optimization fails.
         """
         ...
-
-
 def vf2_is_subgraph_isomorphic(
     circuit: Circuit,
     topology: Topology,
@@ -348,7 +397,6 @@ def vf2_is_subgraph_isomorphic(
         >>> ok = vf2_is_subgraph_isomorphic(circuit, topology)
     """
     ...
-
 
 def vf2_find_initial_layout(
     circuit: Circuit,
@@ -375,7 +423,6 @@ def vf2_find_initial_layout(
         >>> layout = vf2_find_initial_layout(circuit, topology)
     """
     ...
-
 
 def vf2_find_initial_layout_candidates(
     circuit: Circuit,
@@ -420,7 +467,6 @@ def vf2_find_initial_layout_candidates(
     """
     ...
 
-
 def vf2_map(
     circuit: Circuit,
     topology: Topology,
@@ -443,7 +489,6 @@ def vf2_map(
         >>> mapped = vf2_map(circuit, topology)
     """
     ...
-
 
 def map_with_vf2_sabre(
     circuit: Circuit,

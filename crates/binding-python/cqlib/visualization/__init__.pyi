@@ -12,7 +12,6 @@
 
 from ..circuit import Circuit
 
-
 def draw_text(
     circuit: Circuit,
     *,
@@ -24,7 +23,6 @@ def draw_text(
 ) -> str:
     """Render a circuit as unicode text."""
     ...
-
 
 def draw_figure(
     circuit: Circuit,

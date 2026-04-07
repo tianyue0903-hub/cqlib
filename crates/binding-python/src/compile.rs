@@ -21,8 +21,9 @@
 //! The implementation intentionally keeps data conversion explicit so errors can
 //! be mapped to Python `ValueError` with actionable messages.
 
-use crate::circuit::PyCircuit;
+use crate::circuit::{PyCircuit, PyOperation};
 use crate::device::topology::PyTopology;
+use cqlib_core::compile::optimization::commutative::CommutativeOptimization;
 use cqlib_core::compile::{
     CliffordRzConfig as CoreCliffordRzConfig, CliffordRzLevel as CoreCliffordRzLevel,
     CliffordRzOptimization as CoreCliffordRzOptimization,
@@ -34,6 +35,64 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use std::collections::{HashMap, HashSet};
+
+/// Python wrapper for CommutativeOptimization
+#[pyclass(name = "CommutativeOptimization", module = "cqlib.compiler")]
+pub struct PyCommutativeOptimization {
+    /// Internal CommutativeOptimization object.
+    pub(crate) inner: CommutativeOptimization,
+}
+
+#[pymethods]
+impl PyCommutativeOptimization {
+    #[new]
+    #[pyo3(signature = (para, depara, keep_phase, keep_order))]
+    fn new(
+        para: Option<Vec<char>>,
+        depara: Option<Vec<char>>,
+        keep_phase: bool,
+        keep_order: bool,
+    ) -> PyResult<Self> {
+        // Validate para
+        if let Some(ref p) = para {
+            for &c in p {
+                if !['x', 'y', 'z'].contains(&c) {
+                    return Err(PyValueError::new_err(format!(
+                        "Invalid para '{}', should be a subset of ['x', 'y', 'z']",
+                        c
+                    )));
+                }
+            }
+        }
+        // Validate depara
+        if let Some(ref d) = depara {
+            for &c in d {
+                if !['x', 'y', 'z'].contains(&c) {
+                    return Err(PyValueError::new_err(format!(
+                        "Invalid depara '{}', should be a subset of ['x', 'y', 'z']",
+                        c
+                    )));
+                }
+            }
+        }
+        Ok(Self {
+            inner: CommutativeOptimization::new(para, depara, keep_phase, keep_order),
+        })
+    }
+
+    #[staticmethod]
+    pub fn is_commutative(a: PyOperation, b: PyOperation) -> PyResult<bool> {
+        Ok(CommutativeOptimization::is_commutative(
+            &a.operation,
+            &b.operation,
+        ))
+    }
+
+    fn execute(&mut self, circuit: &PyCircuit) -> PyResult<PyCircuit> {
+        let optimized = self.inner.execute(&circuit.inner);
+        Ok(PyCircuit::from(optimized))
+    }
+}
 
 /// Python wrapper for SABRE configuration.
 #[pyclass(name = "SabreConfig", module = "cqlib.compiler")]
@@ -90,6 +149,7 @@ impl PySabreConfig {
         gate_cost_weight = 1.0,
         predicted_fidelity_weight = 0.1,
     ))]
+    #[allow(clippy::too_many_arguments)]
     fn new(
         vf2_policy: String,
         field_mode: bool,
@@ -743,6 +803,7 @@ pub fn py_vf2_find_initial_layout(
     region_beam_width = 32,
     region_oversample_factor = 3,
 ))]
+#[allow(clippy::too_many_arguments)]
 pub fn py_vf2_find_initial_layout_candidates(
     py: Python<'_>,
     circuit: &PyCircuit,

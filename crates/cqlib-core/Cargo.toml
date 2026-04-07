@@ -30,6 +30,7 @@ approx.workspace = true
 bitvec.workspace = true
 faer.workspace = true
 lalrpop-util = { workspace = true, features = ["lexer"] }
+lazy_static.workspace = true
 indexmap.workspace = true
 ndarray.workspace = true
 num.workspace = true

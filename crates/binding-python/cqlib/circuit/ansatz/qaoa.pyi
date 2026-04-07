@@ -15,7 +15,6 @@ from typing import final
 from ...circuit import Circuit
 from ...qis import Hamiltonian
 
-
 @final
 class QAOAAnsatz:
     """Quantum Approximate Optimization Algorithm (QAOA) ansatz.

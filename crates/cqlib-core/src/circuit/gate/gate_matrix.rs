@@ -45,10 +45,6 @@ use num_complex::Complex;
 use std::f64::consts::FRAC_1_SQRT_2;
 use std::sync::LazyLock;
 
-// =============================================================================
-// Complex Constants
-// =============================================================================
-
 /// The complex number $0 + 0i$.
 const ZERO: Complex<f64> = Complex::new(0., 0.);
 

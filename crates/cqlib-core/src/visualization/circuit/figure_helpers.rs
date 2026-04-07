@@ -32,6 +32,7 @@ pub(super) fn svg_line(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn svg_rect(
     x: f64,
     y: f64,
@@ -89,6 +90,7 @@ pub(super) fn svg_text(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn draw_gate_label_svg(
     x_px: f64,
     y_px: f64,
@@ -123,8 +125,7 @@ pub(super) fn draw_gate_label_svg(
             }
             let s = (avail_w / need_w)
                 .min(avail_h / need_h)
-                .min(LABEL_FIT_MAX_STEP)
-                .max(LABEL_FIT_MIN_STEP);
+                .clamp(LABEL_FIT_MIN_STEP, LABEL_FIT_MAX_STEP);
             nfs = (nfs * s).max(1.0);
             pfs = (nfs * PARAM_FONT_SCALE).max(1.0);
         }
@@ -144,6 +145,7 @@ pub(super) fn draw_gate_label_svg(
     out
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn draw_box_svg(
     x: f64,
     y: f64,
@@ -177,6 +179,7 @@ pub(super) fn draw_box_svg(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn draw_span_box_svg(
     x: f64,
     y_min: f64,
@@ -210,6 +213,7 @@ pub(super) fn draw_span_box_svg(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn draw_flow_box_svg(
     x: f64,
     y_min: f64,
@@ -243,6 +247,7 @@ pub(super) fn draw_flow_box_svg(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn draw_labeled_rect_svg(
     x: f64,
     y: f64,
@@ -285,6 +290,7 @@ pub(super) fn draw_labeled_rect_svg(
     out
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn draw_measure_svg(
     x: f64,
     y: f64,

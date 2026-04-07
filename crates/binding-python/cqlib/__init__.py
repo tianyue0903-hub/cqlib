@@ -11,22 +11,20 @@
 # that they have been altered from the originals.
 
 from .circuit import Parameter, Circuit, Qubit
-from .compiler import SabreConfig
+from .compiler import CommutativeOptimization, SabreConfig
 from .device import Topology
 from .qis import DensityMatrix, Pauli, PauliString, Phase, Statevector
-from .visualization import draw_text, draw_figure
 
 __all__ = [
     "Parameter",
     "Circuit",
     "Qubit",
     "Topology",
+    "CommutativeOptimization",
     "SabreConfig",
     "Pauli",
     "PauliString",
     "Phase",
     "Statevector",
     "DensityMatrix",
-    "draw_text",
-    "draw_figure",
 ]

@@ -21,7 +21,6 @@
 - 表达式参数赋值
 """
 
-import pytest
 import numpy as np
 from cqlib.circuit import Circuit, Parameter
 
@@ -34,10 +33,10 @@ class TestAssignSingleParameter:
         theta = Parameter("theta")
         c = Circuit(1)
         c.rx(0, theta)
-        
+
         # 赋值前应该有参数
         assert len(c.parameters) >= 1
-        
+
         # 赋值参数
         c_assigned = c.assign_parameters({"theta": np.pi / 2})
         assert len(c_assigned) == 1
@@ -47,7 +46,7 @@ class TestAssignSingleParameter:
         theta = Parameter("theta")
         c = Circuit(1)
         c.rx(0, theta)
-        
+
         c_assigned = c.assign_parameters({"theta": 0.0})
         assert len(c_assigned) == 1
 
@@ -56,7 +55,7 @@ class TestAssignSingleParameter:
         theta = Parameter("theta")
         c = Circuit(1)
         c.rx(0, theta)
-        
+
         c_assigned = c.assign_parameters({"theta": -np.pi / 2})
         assert len(c_assigned) == 1
 
@@ -71,11 +70,8 @@ class TestAssignMultipleParameters:
         c = Circuit(2)
         c.rx(0, theta)
         c.ry(1, phi)
-        
-        c_assigned = c.assign_parameters({
-            "theta": np.pi / 2,
-            "phi": np.pi / 4
-        })
+
+        c_assigned = c.assign_parameters({"theta": np.pi / 2, "phi": np.pi / 4})
         assert len(c_assigned) == 2
 
     def test_assign_all_parameters(self):
@@ -83,15 +79,13 @@ class TestAssignMultipleParameters:
         theta = Parameter("theta")
         phi = Parameter("phi")
         lam = Parameter("lambda")
-        
+
         c = Circuit(1)
         c.u(0, theta, phi, lam)
-        
-        c_assigned = c.assign_parameters({
-            "theta": np.pi / 2,
-            "phi": np.pi / 4,
-            "lambda": np.pi / 8
-        })
+
+        c_assigned = c.assign_parameters(
+            {"theta": np.pi / 2, "phi": np.pi / 4, "lambda": np.pi / 8}
+        )
         assert len(c_assigned) == 1
 
 
@@ -105,7 +99,7 @@ class TestPartialParameterAssignment:
         c = Circuit(2)
         c.rx(0, theta)
         c.ry(1, phi)
-        
+
         # 只赋值theta
         c_partial = c.assign_parameters({"theta": np.pi / 2})
         assert len(c_partial) == 2
@@ -116,7 +110,7 @@ class TestPartialParameterAssignment:
         theta = Parameter("theta")
         c = Circuit(1)
         c.rx(0, theta)
-        
+
         c_same = c.assign_parameters({})
         assert len(c_same) == 1
 
@@ -129,7 +123,7 @@ class TestAssignExpressionParameters:
         theta = Parameter("theta")
         c = Circuit(1)
         c.rx(0, theta + 1.0)  # theta + 1
-        
+
         c_assigned = c.assign_parameters({"theta": 0.5})
         assert len(c_assigned) == 1
 
@@ -138,7 +132,7 @@ class TestAssignExpressionParameters:
         theta = Parameter("theta")
         c = Circuit(1)
         c.rx(0, 2.0 * theta)  # 2 * theta
-        
+
         c_assigned = c.assign_parameters({"theta": np.pi / 4})
         # 结果应该是 2 * pi/4 = pi/2
         assert len(c_assigned) == 1
@@ -152,7 +146,7 @@ class TestParameterAssignmentErrors:
         theta = Parameter("theta")
         c = Circuit(1)
         c.rx(0, theta)
-        
+
         # 赋值不存在的参数应该被忽略或报错
         try:
             c.assign_parameters({"unknown": 1.0})
@@ -164,7 +158,7 @@ class TestParameterAssignmentErrors:
         theta = Parameter("theta")
         c = Circuit(1)
         c.rx(0, theta)
-        
+
         # 根据实现，这可能报错或尝试转换
         try:
             c.assign_parameters({"theta": "invalid"})
@@ -180,9 +174,9 @@ class TestAssignmentResultIndependence:
         theta = Parameter("theta")
         c = Circuit(1)
         c.rx(0, theta)
-        
+
         c_assigned = c.assign_parameters({"theta": np.pi / 2})
-        
+
         # 原始电路应该仍然有符号参数
         assert len(c.parameters) >= 1
         assert len(c_assigned.parameters) >= 0  # 赋值后的电路
@@ -192,8 +186,8 @@ class TestAssignmentResultIndependence:
         theta = Parameter("theta")
         c = Circuit(1)
         c.rx(0, theta)
-        
+
         c1 = c.assign_parameters({"theta": np.pi / 2})
         c2 = c.assign_parameters({"theta": np.pi / 4})
-        
+
         assert len(c1) == len(c2) == 1

@@ -22,13 +22,20 @@ Test coverage:
 """
 
 import numpy as np
-import pytest
 from cqlib.circuit.gates import (
-    RXX, RYY, RZZ, RZX, RXY,
+    RXX,
+    RYY,
+    RZZ,
+    RZX,
+    RXY,
     FSIM,
-    XY, XY2P, XY2M,
-    X2P, X2M, Y2P, Y2M,
-    X, Y, Z, H
+    XY,
+    XY2P,
+    XY2M,
+    X2P,
+    X2M,
+    Y2P,
+    Y2M,
 )
 
 
@@ -97,12 +104,14 @@ class TestIsingGatesMatrixStructure:
         """RZZ(θ) diagonal elements are phase factors"""
         theta = np.pi / 2
         mat = RZZ(theta).matrix()
-        expected = np.diag([
-            np.exp(-1j * theta / 2),
-            np.exp(1j * theta / 2),
-            np.exp(1j * theta / 2),
-            np.exp(-1j * theta / 2)
-        ])
+        expected = np.diag(
+            [
+                np.exp(-1j * theta / 2),
+                np.exp(1j * theta / 2),
+                np.exp(1j * theta / 2),
+                np.exp(-1j * theta / 2),
+            ]
+        )
         assert np.allclose(mat, expected), "RZZ diagonal phases incorrect"
 
 
@@ -235,7 +244,6 @@ class TestSqrtGates:
         """X2P @ X2P = X (up to global phase)"""
         x2p_mat = X2P.matrix()
         product = x2p_mat @ x2p_mat
-        x_mat = X.matrix()
         # Should be equivalent up to global phase
         assert np.allclose(product @ product.conj().T, np.eye(2))
 

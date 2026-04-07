@@ -18,7 +18,8 @@ pub mod qis;
 pub mod visualization;
 
 use compile::{
-    PyCliffordRzOptimization, PyGaConfig, PySabreConfig, PyTemplateMatching, PyTemplateOptimization,
+    PyCliffordRzOptimization, PyCommutativeOptimization, PyGaConfig, PySabreConfig,
+    PyTemplateMatching, PyTemplateOptimization,
 };
 use pyo3::prelude::*;
 
@@ -34,6 +35,7 @@ fn binding_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     qis::register_qis_module(m)?;
 
     // Compile utilities
+    m.add_class::<PyCommutativeOptimization>()?;
     m.add_class::<PySabreConfig>()?;
     m.add_class::<PyTemplateMatching>()?;
     m.add_class::<PyTemplateOptimization>()?;

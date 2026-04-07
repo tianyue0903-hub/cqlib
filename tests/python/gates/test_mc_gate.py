@@ -22,7 +22,6 @@ Test coverage:
 - McGate unitary property
 """
 
-import pytest
 import numpy as np
 from cqlib.circuit.gates import McGate, X, H, RX, RZ, Phase, CX
 from cqlib.circuit import Parameter
@@ -101,12 +100,9 @@ class TestMcGateMatrix:
         """CNOT matrix (X with 1 control)"""
         cnot = McGate(1, X)
         mat = cnot.matrix([])
-        expected = np.array([
-            [1, 0, 0, 0],
-            [0, 1, 0, 0],
-            [0, 0, 0, 1],
-            [0, 0, 1, 0]
-        ], dtype=complex)
+        expected = np.array(
+            [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 0, 1], [0, 0, 1, 0]], dtype=complex
+        )
         assert np.allclose(mat, expected), "CNOT matrix mismatch"
 
     def test_ccx_matrix(self):
@@ -140,12 +136,15 @@ class TestMcGateMatrix:
         cos_half = np.cos(theta / 2)
         sin_half = np.sin(theta / 2)
         # |00⟩|00⟩, |01⟩|01⟩, |10⟩ stays, |11⟩ applies RX
-        expected = np.array([
-            [1, 0, 0, 0],
-            [0, 1, 0, 0],
-            [0, 0, cos_half, -1j * sin_half],
-            [0, 0, -1j * sin_half, cos_half]
-        ], dtype=complex)
+        expected = np.array(
+            [
+                [1, 0, 0, 0],
+                [0, 1, 0, 0],
+                [0, 0, cos_half, -1j * sin_half],
+                [0, 0, -1j * sin_half, cos_half],
+            ],
+            dtype=complex,
+        )
         assert np.allclose(mat, expected), "CRX matrix mismatch"
 
 
@@ -175,7 +174,9 @@ class TestMcGateUnitary:
         for n_ctrls, gate, params in test_cases:
             mc_gate = McGate(n_ctrls, gate)
             mat = mc_gate.matrix(params)
-            assert is_unitary(mat), f"MC-{gate} with {n_ctrls} controls should be unitary"
+            assert is_unitary(mat), (
+                f"MC-{gate} with {n_ctrls} controls should be unitary"
+            )
 
 
 class TestMcGateInverse:
@@ -195,7 +196,6 @@ class TestMcGateInverse:
     def test_mc_rx_inverse_negates_angle(self):
         """Controlled-RX inverse negates the angle"""
         crx = McGate(1, RX)
-        theta = 0.5
         inv_result = crx.inverse([Parameter("theta")])
         assert inv_result is not None
         inv_gate, inv_params = inv_result
@@ -226,8 +226,9 @@ class TestMcGateMatrixShape:
         for n_ctrls, gate, expected_dim in test_cases:
             mc_gate = McGate(n_ctrls, gate)
             mat = mc_gate.matrix([])
-            assert mat.shape == (expected_dim, expected_dim), \
+            assert mat.shape == (expected_dim, expected_dim), (
                 f"MC-{gate} with {n_ctrls} controls should have {expected_dim}x{expected_dim} matrix"
+            )
 
 
 class TestMcGateEdgeCases:

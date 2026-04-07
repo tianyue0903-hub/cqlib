@@ -12,6 +12,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+
 #include "cqlib_c.h"
 
 int main() {

@@ -11,11 +11,13 @@
 // that they have been altered from the originals.
 
 use crate::circuit::{Qubit, StandardGate};
+use crate::device::Outcome;
 use crate::device::noise::{NoiseModel, OperationKey};
 use crate::qis::error::QisError;
 use crate::qis::state::density_matrix::DensityMatrix;
 use ndarray::Array2;
 use num_complex::Complex64;
+use rayon::prelude::*;
 
 /// A density matrix quantum simulator with noise modeling capabilities.
 ///
@@ -956,6 +958,51 @@ impl DensityMatrixNoise {
     /// ```
     pub fn expectation(&self, h: &crate::qis::hamiltonian::Hamiltonian) -> Result<f64, QisError> {
         self.state.expectation(h)
+    }
+
+    /// Measures `qubit` in the Z basis, collapsing the underlying density matrix.
+    ///
+    /// Returns `true` for outcome |1⟩ and `false` for outcome |0⟩.
+    /// Noise is not applied to measurement operations.
+    pub fn measure(&mut self, qubit: usize) -> bool {
+        self.state.measure(qubit)
+    }
+
+    /// Measures all qubits sequentially, returning a bit-packed [`Outcome`].
+    ///
+    /// Equivalent to calling `measure(q)` for each qubit `q` in order `0..num_qubits`.
+    /// The density matrix is fully collapsed after this call.
+    /// Use [`Outcome::is_one(q)`](crate::device::Outcome::is_one) to read qubit `q`'s result.
+    pub fn measure_all(&mut self) -> Outcome {
+        self.state.measure_all()
+    }
+
+    /// Samples `shots` independent measurement outcomes in parallel.
+    ///
+    /// Each Rayon worker thread reuses a single pre-allocated clone of the simulator
+    /// (via an internal reset), avoiding per-shot heap allocation.
+    /// Returns a [`Vec<Outcome>`] of bit-packed results.
+    ///
+    /// # Example
+    /// ```rust
+    /// use cqlib_core::qis::DensityMatrixNoise;
+    ///
+    /// let mut sim = DensityMatrixNoise::new(2, None);
+    /// sim.apply_h(0).unwrap();
+    /// sim.apply_cx(0, 1).unwrap(); // |Φ⁺⟩ Bell state (no noise)
+    ///
+    /// let shots = sim.sample_shots(200);
+    /// // All outcomes must be |00⟩ or |11⟩
+    /// assert!(shots.iter().all(|v| v.is_one(0) == v.is_one(1)));
+    /// ```
+    pub fn sample_shots(&self, shots: usize) -> Vec<Outcome> {
+        (0..shots)
+            .into_par_iter()
+            .map_with(self.clone(), |work, _| {
+                work.state.reset_from(&self.state);
+                work.state.measure_all()
+            })
+            .collect()
     }
 }
 

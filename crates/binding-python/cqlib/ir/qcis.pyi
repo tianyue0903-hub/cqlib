@@ -46,7 +46,6 @@ def loads(qcis: str) -> Circuit:
     """
     ...
 
-
 def load(path: str) -> Circuit:
     """Load and parse a QCIS file into a Circuit.
 
@@ -64,7 +63,6 @@ def load(path: str) -> Circuit:
         >>> circuit = load("/path/to/circuit.qcis")
     """
     ...
-
 
 def dumps(circuit: Circuit) -> str:
     """Serialize a Circuit to a QCIS string.
@@ -99,7 +97,6 @@ def dumps(circuit: Circuit) -> str:
         CZ Q0 Q1
     """
     ...
-
 
 def dump(circuit: Circuit, path: str) -> None:
     """Serialize a Circuit to a QCIS file.

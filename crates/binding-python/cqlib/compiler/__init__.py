@@ -12,6 +12,7 @@
 
 from .._native import (
     CliffordRzOptimization,
+    CommutativeOptimization,
     SabreConfig,
     TemplateMatching,
     TemplateOptimization,
@@ -26,6 +27,7 @@ from .._native import (
 
 __all__ = [
     "CliffordRzOptimization",
+    "CommutativeOptimization",
     "SabreConfig",
     "TemplateMatching",
     "TemplateOptimization",

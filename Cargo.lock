@@ -147,6 +147,7 @@ dependencies = [
  "cbindgen",
  "cqlib-core",
  "libc",
+ "num-complex",
 ]
 
 [[package]]
@@ -376,6 +377,7 @@ dependencies = [
  "indexmap",
  "lalrpop",
  "lalrpop-util",
+ "lazy_static",
  "ndarray 0.17.2",
  "num",
  "num-complex",

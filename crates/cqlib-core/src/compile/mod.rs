@@ -46,4 +46,5 @@ pub use mapping::{
 pub use optimization::{
     CliffordRzConfig, CliffordRzLevel, CliffordRzOptimization, CliffordRzStrategy, TemplateLibrary,
     TemplateMatch, TemplateMatching, TemplateOptimization, TemplateOptimizationConfig,
+    CommutativeOptimization,
 };

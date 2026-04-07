@@ -206,7 +206,7 @@ impl PyStatevector {
     ///     A 1D NumPy array of complex amplitudes with length 2^num_qubits.
     #[getter]
     fn data<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray1<Complex64>>> {
-        Ok(PyArray1::from_vec(py, self.inner.data.clone()))
+        Ok(PyArray1::from_vec(py, self.inner.data().to_vec()))
     }
 
     /// Returns the measurement probabilities for all basis states.
@@ -577,7 +577,7 @@ impl PyStatevector {
         format!(
             "Statevector(num_qubits={}, amplitudes={})",
             self.inner.num_qubits,
-            self.inner.data.len()
+            self.inner.data().len()
         )
     }
 

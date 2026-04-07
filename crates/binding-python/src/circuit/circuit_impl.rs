@@ -1337,10 +1337,6 @@ impl PyCircuit {
     fn __str__(&self) -> PyResult<String> {
         py_draw_text(self, None, false, false, true, false)
     }
-
-    fn __repr__(&self) -> PyResult<String> {
-        self.__str__()
-    }
 }
 
 /// A tuple representing an operation for control flow bodies.

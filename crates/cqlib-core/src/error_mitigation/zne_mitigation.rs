@@ -182,7 +182,7 @@ impl ZNEMitigation {
     ///   delegates to [`ZNEMitigation::exp_extrapolate`].
     pub fn extrapolate(
         &self,
-        noisy_results: &Vec<f64>,
+        noisy_results: &[f64],
         method: ExtrapolateMethod,
         degree: usize,
     ) -> f64 {
@@ -198,7 +198,7 @@ impl ZNEMitigation {
     /// - `degree`: the degree of the polynomial to use for extrapolation.
     ///
     /// Returns the extrapolated expectation value.
-    pub fn poly_extrapolate(&self, noisy_results: &Vec<f64>, degree: usize) -> f64 {
+    pub fn poly_extrapolate(&self, noisy_results: &[f64], degree: usize) -> f64 {
         let n = self.noise_factors.len();
         assert!(
             !noisy_results.is_empty(),
@@ -250,7 +250,7 @@ impl ZNEMitigation {
     /// `ln(y) = ln(A) + m * x`, where `m = -1 / tau`.
     ///
     /// Returns `A`, which is the extrapolated value at `x = 0`.
-    pub fn exp_extrapolate(&self, noisy_results: &Vec<f64>) -> f64 {
+    pub fn exp_extrapolate(&self, noisy_results: &[f64]) -> f64 {
         let n = self.noise_factors.len();
         assert!(
             !noisy_results.is_empty(),
@@ -300,6 +300,8 @@ impl ZNEMitigation {
             // Partial pivoting for numerical stability.
             let mut pivot_row = i;
             let mut pivot_abs = a[i][i].abs();
+
+            #[allow(clippy::needless_range_loop)]
             for r in (i + 1)..n {
                 let cand = a[r][i].abs();
                 if cand > pivot_abs {
@@ -321,6 +323,7 @@ impl ZNEMitigation {
             for r in (i + 1)..n {
                 let factor = a[r][i] / a[i][i];
                 a[r][i] = 0.0;
+                #[allow(clippy::needless_range_loop)]
                 for c in (i + 1)..n {
                     a[r][c] -= factor * a[i][c];
                 }

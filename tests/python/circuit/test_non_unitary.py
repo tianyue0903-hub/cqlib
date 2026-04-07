@@ -21,7 +21,6 @@
 """
 
 import pytest
-from cqlib.circuit import Circuit, Parameter
 
 
 class TestMeasureOperation:

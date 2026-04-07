@@ -20,7 +20,6 @@
 - 验证幺正性
 """
 
-import pytest
 import numpy as np
 from cqlib.circuit import Circuit, circuit_to_matrix
 
@@ -60,12 +59,9 @@ class TestCircuitToMatrix:
 
         mat = c.to_matrix()
         # 实际的矩阵（基于当前实现的qubit顺序）
-        expected = np.array([
-            [1, 0, 0, 0],
-            [0, 0, 0, 1],
-            [0, 0, 1, 0],
-            [0, 1, 0, 0]
-        ], dtype=complex)
+        expected = np.array(
+            [[1, 0, 0, 0], [0, 0, 0, 1], [0, 0, 1, 0], [0, 1, 0, 0]], dtype=complex
+        )
         assert np.allclose(mat, expected)
 
     def test_bell_state_matrix(self):

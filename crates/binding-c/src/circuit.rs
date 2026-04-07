@@ -24,10 +24,6 @@ use std::collections::HashMap;
 use std::ffi::CStr;
 use std::os::raw::c_char;
 
-// =============================================================================
-// Circuit Wrapper
-// =============================================================================
-
 pub struct CircuitWrapper {
     pub inner: Circuit,
 }
@@ -58,10 +54,6 @@ pub extern "C" fn circuit_num_qubits(ptr: *const CircuitWrapper) -> usize {
     }
     unsafe { (*ptr).inner.num_qubits() }
 }
-
-// =============================================================================
-// Single-Qubit Gates
-// =============================================================================
 
 /// Apply H (Hadamard) gate to a qubit.
 #[unsafe(no_mangle)]
@@ -255,10 +247,6 @@ pub extern "C" fn circuit_y2m(ptr: *mut CircuitWrapper, qubit_idx: u32) -> i32 {
     }
 }
 
-// =============================================================================
-// Two-Qubit Gates
-// =============================================================================
-
 /// Apply CX (CNOT) gate.
 #[unsafe(no_mangle)]
 pub extern "C" fn circuit_cx(ptr: *mut CircuitWrapper, ctrl_idx: u32, target_idx: u32) -> i32 {
@@ -339,10 +327,6 @@ pub extern "C" fn circuit_swap(ptr: *mut CircuitWrapper, idx1: u32, idx2: u32) -
         Err(_) => -3,
     }
 }
-
-// =============================================================================
-// Parameterized Gates (with concrete float values)
-// =============================================================================
 
 /// Apply RX gate with concrete float value.
 #[unsafe(no_mangle)]
@@ -651,10 +635,6 @@ pub extern "C" fn circuit_reset(ptr: *mut CircuitWrapper, qubit_idx: u32) -> i32
     }
 }
 
-// =============================================================================
-// Other Operations
-// =============================================================================
-
 /// Apply barrier to qubits.
 #[unsafe(no_mangle)]
 pub extern "C" fn circuit_barrier(ptr: *mut CircuitWrapper, num_qubits: u32) -> i32 {
@@ -673,10 +653,6 @@ pub extern "C" fn circuit_barrier(ptr: *mut CircuitWrapper, num_qubits: u32) -> 
         Err(_) => -3,
     }
 }
-
-// =============================================================================
-// Parameter Wrapper (for symbolic parameters)
-// =============================================================================
 
 pub struct ParameterWrapper {
     pub inner: Parameter,
