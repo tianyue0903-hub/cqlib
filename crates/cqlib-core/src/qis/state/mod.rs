@@ -68,7 +68,7 @@
 //! s.apply_cx(0, 1).unwrap();
 //! // Measure: outcomes are always correlated (both 0 or both 1)
 //! let shots = s.sample_shots(1000);
-//! assert!(shots.iter().all(|v| v[0] == v[1]));
+//! assert!(shots.iter().all(|v| v.is_one(0) == v.is_one(1)));
 //! ```
 
 pub mod density_matrix;

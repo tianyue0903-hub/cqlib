@@ -61,7 +61,7 @@
 //! - Each row: `row_len` u64 words for the X-block, then `row_len` words for the Z-block:
 //!   `[x₀..xₙ | z₀..zₙ]` packed into `row_len` words each.
 //! - `row_len` is padded to a multiple of 8 (512 bits) for AVX-512 alignment.
-//! - Phases stored separately in `phases: Box<[u8]>` as `0` (= +1) or `2` (= −1).
+//! - Phases stored separately in `phases: Box<[u8]>` as `0` (= +1), `1` (= +i), `2` (= −1), `3` (= −i).
 //!
 //! # Bit Addressing
 //!
@@ -80,7 +80,7 @@
 //!
 //! // Outcomes are always correlated
 //! let shots = s.sample_shots(500);
-//! assert!(shots.iter().all(|v| v[0] == v[1]));
+//! assert!(shots.iter().all(|v| v.is_one(0) == v.is_one(1)));
 //! ```
 //!
 //! **GHZ state — 1000 qubits:**
@@ -96,7 +96,8 @@
 //! // All qubits measure identically
 //! let mut copy = s.clone();
 //! let result = copy.measure_all();
-//! assert!(result.iter().all(|&b| b == result[0]));
+//! let first = result.is_one(0);
+//! assert!((0..n).all(|q| result.is_one(q) == first));
 //! ```
 //!
 //! **Deterministic measurement on |0⟩:**
@@ -135,94 +136,33 @@
 //! assert!(matches!(result, Err(QisError::NonCliffordGate(_))));
 //! ```
 
+use crate::circuit::Qubit;
 use crate::circuit::circuit_impl::Circuit;
 use crate::circuit::circuit_param::CircuitParam;
 use crate::circuit::error::CircuitError;
+use crate::circuit::gate::directive::Directive;
 use crate::circuit::gate::{Instruction, StandardGate};
+use crate::circuit::operation::Operation;
+use crate::device::Outcome;
 use crate::qis::error::QisError;
 use crate::qis::pauli::{Pauli, PauliString, Phase};
+use crate::util::aligned::AlignedBuffer;
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
-use std::alloc::{Layout, alloc_zeroed, dealloc, handle_alloc_error};
-use std::ptr::NonNull;
+use rayon::prelude::*;
+use smallvec::SmallVec;
 
-// ── Aligned memory buffer ─────────────────────────────────────────────────────
-
-/// A heap-allocated buffer of `u64` words with 64-byte alignment.
+/// Result returned by [`StabilizerState::execute_circuit`].
 ///
-/// The standard `Vec<u64>` only guarantees 8-byte alignment, which forces SIMD
-/// code to use unaligned load/store instructions (`loadu`/`storeu`) and risks
-/// cache-line split penalties. This wrapper allocates with a 64-byte layout so
-/// that AVX2/SSE2 aligned loads (`load`/`store`) can be used safely.
-struct AlignedBuffer {
-    ptr: NonNull<u64>,
-    len: usize,
-    layout: Layout,
-}
-
-impl AlignedBuffer {
-    /// Allocates `len` zero-initialised `u64` words at 64-byte alignment.
-    fn new_zeroed(len: usize) -> Self {
-        let size = len * size_of::<u64>();
-        // SAFETY: size > 0 (caller ensures len > 0), align is a power of two.
-        let layout = Layout::from_size_align(size, 64).expect("valid layout");
-        let raw = unsafe { alloc_zeroed(layout) };
-        let ptr = NonNull::new(raw as *mut u64).unwrap_or_else(|| handle_alloc_error(layout));
-        AlignedBuffer { ptr, len, layout }
-    }
-
-    fn as_slice(&self) -> &[u64] {
-        // SAFETY: ptr is valid for `len` u64 words, allocated by `new_zeroed`.
-        unsafe { std::slice::from_raw_parts(self.ptr.as_ptr(), self.len) }
-    }
-
-    fn as_mut_slice(&mut self) -> &mut [u64] {
-        // SAFETY: ptr is valid, unique (we hold &mut self).
-        unsafe { std::slice::from_raw_parts_mut(self.ptr.as_ptr(), self.len) }
-    }
-}
-
-impl Drop for AlignedBuffer {
-    fn drop(&mut self) {
-        // SAFETY: ptr was allocated with this layout; not yet freed.
-        unsafe { dealloc(self.ptr.as_ptr() as *mut u8, self.layout) }
-    }
-}
-
-// SAFETY: AlignedBuffer owns its allocation uniquely; no shared mutable state.
-unsafe impl Send for AlignedBuffer {}
-unsafe impl Sync for AlignedBuffer {}
-
-impl std::ops::Deref for AlignedBuffer {
-    type Target = [u64];
-    #[inline(always)]
-    fn deref(&self) -> &[u64] {
-        self.as_slice()
-    }
-}
-
-impl std::ops::DerefMut for AlignedBuffer {
-    #[inline(always)]
-    fn deref_mut(&mut self) -> &mut [u64] {
-        self.as_mut_slice()
-    }
-}
-
-impl std::fmt::Debug for AlignedBuffer {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "AlignedBuffer(len={})", self.len)
-    }
-}
-
-impl Clone for AlignedBuffer {
-    fn clone(&self) -> Self {
-        let new_buf = AlignedBuffer::new_zeroed(self.len);
-        // SAFETY: both allocations are valid for `self.len` u64 words and non-overlapping.
-        unsafe {
-            std::ptr::copy_nonoverlapping(self.ptr.as_ptr(), new_buf.ptr.as_ptr(), self.len);
-        }
-        new_buf
-    }
+/// Contains both the final quantum state and the classical bit register
+/// populated by mid-circuit [`Directive::Measure`] operations.
+#[derive(Debug)]
+pub struct CircuitExecutionResult {
+    /// Final stabilizer state after all circuit operations.
+    pub state: StabilizerState,
+    /// Classical bit register: `measurements[q]` is the last Z-basis measurement
+    /// result for physical qubit `q`, or `None` if qubit `q` was never measured.
+    pub measurements: Vec<Option<bool>>,
 }
 
 /// Stabilizer state simulator based on the Aaronson-Gottesman symplectic tableau.
@@ -240,15 +180,13 @@ pub struct StabilizerState {
     /// Row `i` occupies `tableau[i * 2 * row_len .. (i+1) * 2 * row_len]`.
     /// Within a row: first `row_len` words = X-block, next `row_len` words = Z-block.
     /// Row `2n` is the pre-allocated scratch row for deterministic measurement.
-    tableau: AlignedBuffer,
-    /// Phase for each of the `2n+1` rows: `0` means `+1`, `2` means `-1`.
+    tableau: AlignedBuffer<u64>,
+    /// Phase for each of the `2n+1` rows: `0`=+1, `1`=+i, `2`=−1, `3`=−i.
     phases: Box<[u8]>,
     /// RNG for random measurement outcomes.
     rng: SmallRng,
 }
 
-// ── SIMD XOR helpers ─────────────────────────────────────────────────────────
-//
 // `xor_rows_dispatch` XORs `count` u64 words from `src_base` into `dst_base`
 // within `tableau`, dispatching to the best available SIMD tier at runtime.
 // `count` is always a multiple of 16 (= 2 × row_len, row_len ≥ 8), so no tail
@@ -410,6 +348,23 @@ impl StabilizerState {
         }
     }
 
+    /// Copies tableau and phase data from `source` into `self` without allocating.
+    ///
+    /// The two states must have the same number of qubits (and therefore the same
+    /// `row_len`). The RNG is **not** copied — the caller is expected to manage it
+    /// separately (e.g., re-seeding for each shot).
+    ///
+    /// This is used by [`sample_shots`](Self::sample_shots) to reuse a single
+    /// pre-allocated working buffer per Rayon worker thread.
+    fn reset_from(&mut self, source: &StabilizerState) {
+        debug_assert_eq!(self.n, source.n);
+        debug_assert_eq!(self.row_len, source.row_len);
+        self.tableau
+            .as_mut_slice()
+            .copy_from_slice(source.tableau.as_slice());
+        self.phases.copy_from_slice(&source.phases);
+    }
+
     /// Index of the persistent scratch row in the tableau (= `2n`).
     #[inline(always)]
     fn scratch_row(&self) -> usize {
@@ -425,8 +380,6 @@ impl StabilizerState {
         }
         self.phases[s] = 0;
     }
-
-    // ── Row access helpers ────────────────────────────────────────────────────
 
     /// Base byte offset (in u64 words) of row `row` in the tableau.
     #[inline(always)]
@@ -447,8 +400,6 @@ impl StabilizerState {
     fn z_offset(row: usize, _col_qubit: usize, row_len: usize, word: usize) -> usize {
         Self::row_base(row, row_len) + row_len + word
     }
-
-    // ── Per-qubit bit access ──────────────────────────────────────────────────
 
     /// Returns the X-bit of `row` at qubit column `q`.
     #[inline(always)]
@@ -503,11 +454,10 @@ impl StabilizerState {
 
     /// Sets the phase of row `row` to `val` (0 or 2).
     #[inline(always)]
+    /// Sets the phase for `row` to `val` (0–3 for +1, +i, −1, −i respectively).
     pub(crate) fn set_phase(&mut self, row: usize, val: u8) {
-        self.phases[row] = val & 2;
+        self.phases[row] = val & 3;
     }
-
-    // ── Validation ────────────────────────────────────────────────────────────
 
     pub(crate) fn validate_qubit(&self, q: usize) -> Result<(), QisError> {
         if q >= self.n {
@@ -529,8 +479,6 @@ impl StabilizerState {
         }
         Ok(())
     }
-
-    // ── Two-qubit Clifford gates ──────────────────────────────────────────────
 
     /// Applies the CNOT (CX) gate with `control` as control and `target` as target.
     ///
@@ -673,7 +621,10 @@ impl StabilizerState {
 
     /// Applies the CY gate (controlled-Y) between `control` and `target`.
     ///
-    /// Implemented as (I⊗S†)·CNOT·(I⊗S) inlined per-row.
+    /// Implemented as (I⊗S)·CX·(I⊗S†) inlined per-row, i.e. in time order:
+    /// S†(target) → CX(control, target) → S(target).
+    ///
+    /// Derivation: Y = SXS†, so CY = (I⊗S)·CX·(I⊗S†).
     pub fn apply_cy(&mut self, control: usize, target: usize) -> Result<(), QisError> {
         self.validate_two_qubits(control, target)?;
         let cw = control / 64;
@@ -683,10 +634,10 @@ impl StabilizerState {
         let rl = self.row_len;
         for row in 0..(2 * self.n) {
             let base = row * 2 * rl;
-            // S on target: phase if x&z, then z ^= x
+            // S† on target: phase flip when x=1 and z=0 (i.e. X → -Y), then z ^= x
             let x = (self.tableau[base + tw] & tm) != 0;
             let z = (self.tableau[base + rl + tw] & tm) != 0;
-            if x && z {
+            if x && !z {
                 self.phases[row] ^= 2;
             }
             if x {
@@ -708,10 +659,10 @@ impl StabilizerState {
                 self.tableau[base + rl + cw] ^= cm;
             }
 
-            // S† on target: phase if x&!z, then z ^= x
+            // S on target: phase flip when x=1 and z=1 (i.e. Y → -X), then z ^= x
             let x = (self.tableau[base + tw] & tm) != 0;
             let z = (self.tableau[base + rl + tw] & tm) != 0;
-            if x && !z {
+            if x && z {
                 self.phases[row] ^= 2;
             }
             if x {
@@ -725,8 +676,6 @@ impl StabilizerState {
     pub fn num_qubits(&self) -> usize {
         self.n
     }
-
-    // ── Single-qubit Clifford gates ───────────────────────────────────────────
 
     /// Applies the Hadamard gate to qubit `qubit`.
     ///
@@ -984,8 +933,6 @@ impl StabilizerState {
         Ok(())
     }
 
-    // ── Measurement ──────────────────────────────────────────────────────────
-
     /// Phase contribution from multiplying Pauli `P_h` (from h-row) by `P_i` (from i-row).
     ///
     /// Returns an integer exponent `e` such that `P_h * P_i = i^e * P_result`.
@@ -1034,7 +981,6 @@ impl StabilizerState {
         let i_base = Self::row_base(i, self.row_len);
         let rl = self.row_len;
 
-        // ── Phase accumulation (word-level popcount) ─────────────────────────
         let mut sum = self.phases[h] as i32 + self.phases[i] as i32;
         // Only the active words (0..n_words) contain qubit data; the padding words
         // in the range n_words..row_len are always zero and contribute 0 to the sum.
@@ -1049,7 +995,6 @@ impl StabilizerState {
         // New phase is sum mod 4, normalised to {0,1,2,3}.
         self.phases[h] = (((sum % 4) + 4) % 4) as u8;
 
-        // ── XOR bits (SIMD-dispatched) ────────────────────────────────────────
         // SAFETY: h ≠ i guarantees [h_base, h_base+2*rl) and [i_base, i_base+2*rl)
         // are non-overlapping regions within the same 64-byte aligned allocation.
         unsafe {
@@ -1081,7 +1026,6 @@ impl StabilizerState {
 
         match maybe_p {
             Some(p) => {
-                // ── Random case ──────────────────────────────────────────────
                 // Make p the unique row with x[.][qubit] = 1 by XOR-ing p into all others.
                 for i in 0..2 * self.n {
                     if i != p && self.x_bit(i, qubit) {
@@ -1113,7 +1057,6 @@ impl StabilizerState {
                 Ok(b)
             }
             None => {
-                // ── Deterministic case ───────────────────────────────────────
                 // Accumulate the product of paired stabilizer rows into the
                 // pre-allocated scratch row (row 2n) using the SIMD-accelerated
                 // rowsum, giving O(n²/w) complexity instead of O(n²) scalar work.
@@ -1134,11 +1077,42 @@ impl StabilizerState {
         }
     }
 
-    /// Measures all qubits in order, returning the bit string.
-    pub fn measure_all(&mut self) -> Vec<bool> {
-        (0..self.n)
-            .map(|qubit| self.measure(qubit).unwrap())
-            .collect()
+    /// Measures all qubits in order, returning a bit-packed [`Outcome`].
+    ///
+    /// Qubit `q`'s result is stored at bit `q` inside the `Outcome`.
+    /// Use [`Outcome::is_one(q)`](crate::device::Outcome::is_one) to read it.
+    pub fn measure_all(&mut self) -> Outcome {
+        let num_chunks = self.n.div_ceil(64);
+        let mut chunks = SmallVec::from_elem(0u64, num_chunks);
+        for qubit in 0..self.n {
+            if self.measure(qubit).unwrap() {
+                chunks[qubit / 64] |= 1u64 << (qubit % 64);
+            }
+        }
+        Outcome::new(chunks)
+    }
+
+    /// Resets `qubit` to the |0⟩ state.
+    ///
+    /// Implemented by measuring in the Z basis and applying X if the outcome is |1⟩.
+    /// This correctly handles both deterministic and random measurement cases.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use cqlib_core::qis::StabilizerState;
+    ///
+    /// let mut s = StabilizerState::new(2);
+    /// s.apply_x(0).unwrap();  // |0⟩ → |1⟩
+    /// s.reset(0).unwrap();    // back to |0⟩
+    /// assert_eq!(s.probabilities().unwrap()[0], 1.0); // P(|00⟩) = 1
+    /// ```
+    pub fn reset(&mut self, qubit: usize) -> Result<(), QisError> {
+        self.validate_qubit(qubit)?;
+        if self.measure(qubit)? {
+            self.apply_x(qubit)?;
+        }
+        Ok(())
     }
 
     /// Performs a forced (post-selected) Z-basis measurement on `qubit`.
@@ -1287,6 +1261,10 @@ impl StabilizerState {
 
     /// Runs `shots` independent measurements in parallel using Rayon.
     ///
+    /// Returns a [`Vec<Outcome>`] of bit-packed measurement results, one per shot.
+    /// Each Rayon worker thread reuses a single pre-allocated working copy of the
+    /// state (via [`reset_from`](Self::reset_from)), avoiding per-shot heap allocation.
+    ///
     /// Seeds for each shot are derived sequentially from the primary RNG (ensuring
     /// reproducibility), then each shot runs on an independently-seeded clone in
     /// parallel. This produces the correct marginal distribution while being
@@ -1300,10 +1278,9 @@ impl StabilizerState {
     /// s.apply_cx(0, 1).unwrap(); // Bell state
     /// let results = s.sample_shots(1000);
     /// assert_eq!(results.len(), 1000);
-    /// for shot in &results { assert_eq!(shot[0], shot[1]); }
+    /// for shot in &results { assert_eq!(shot.is_one(0), shot.is_one(1)); }
     /// ```
-    pub fn sample_shots(&self, shots: usize) -> Vec<Vec<bool>> {
-        use rayon::prelude::*;
+    pub fn sample_shots(&self, shots: usize) -> Vec<Outcome> {
         // Derive independent seeds sequentially so the overall sequence is
         // deterministic and reproducible from the same initial RNG state.
         let seeds: Vec<u64> = {
@@ -1312,23 +1289,27 @@ impl StabilizerState {
         };
         seeds
             .into_par_iter()
-            .map(|seed| {
-                let mut shot = self.clone();
-                shot.rng = SmallRng::seed_from_u64(seed);
-                shot.measure_all()
+            .map_with(self.clone(), |work, seed| {
+                work.reset_from(self);
+                work.rng = SmallRng::seed_from_u64(seed);
+                work.measure_all()
             })
             .collect()
     }
 
-    // ── Circuit integration ──────────────────────────────────────────────────
-
     /// Constructs a `StabilizerState` by simulating a Clifford circuit.
     ///
-    /// Executes all gates in the circuit sequentially. Non-Clifford gates
-    /// (T, TDG, RX, RY, RZ, U, …) return `Err(QisError::NonCliffordGate)`.
+    /// Executes all gates in the circuit sequentially, including
+    /// [`Directive::Measure`], [`Directive::Reset`], and [`ControlFlow`] operations.
+    /// Non-Clifford gates return `Err(QisError::NonCliffordGate)`.
     ///
-    /// # Supported gates
-    /// `I, H, X, Y, Z, S, SDG, X2P, X2M, Y2P, Y2M, CX, CY, CZ, SWAP`, Barriers (ignored), Delays (ignored).
+    /// For mid-circuit measurement results, use [`execute_circuit`] instead.
+    ///
+    /// # Supported instructions
+    /// - Gates: `I, H, X, Y, Z, S, SDG, X2P, X2M, Y2P, Y2M, CX, CY, CZ, SWAP`
+    /// - Directives: `Measure` (collapses state), `Reset` (returns qubit to |0⟩), `Barrier`/`Delay` (no-op)
+    ///
+    /// [`execute_circuit`]: StabilizerState::execute_circuit
     ///
     /// # Example
     /// ```rust
@@ -1341,10 +1322,39 @@ impl StabilizerState {
     /// let stab = StabilizerState::from_circuit(&c).unwrap();
     /// ```
     pub fn from_circuit(circuit: &Circuit) -> Result<Self, QisError> {
+        Ok(StabilizerState::execute_circuit(circuit)?.state)
+    }
+
+    /// Executes a Clifford circuit and returns both the final state and mid-circuit
+    /// measurement results.
+    ///
+    /// Returns a [`CircuitExecutionResult`] containing:
+    /// - `state`: the final [`StabilizerState`] after all operations
+    /// - `measurements`: per-qubit last measurement results (indexed by physical qubit index)
+    ///
+    /// # Supported instructions
+    /// Same as [`from_circuit`]. Control flow ([`IfElseGate`], [`WhileLoopGate`]) is
+    /// evaluated using the accumulated classical bit register.
+    ///
+    /// [`from_circuit`]: StabilizerState::from_circuit
+    ///
+    /// # Example
+    /// ```rust
+    /// use cqlib_core::circuit::Circuit;
+    /// use cqlib_core::qis::StabilizerState;
+    ///
+    /// let mut c = Circuit::new(1);
+    /// c.h(0.into());
+    /// c.measure(0.into()).unwrap(); // mid-circuit measurement
+    ///
+    /// let result = StabilizerState::execute_circuit(&c).unwrap();
+    /// // result.measurements[0] is Some(true) or Some(false)
+    /// assert!(result.measurements[0].is_some());
+    /// ```
+    pub fn execute_circuit(circuit: &Circuit) -> Result<CircuitExecutionResult, QisError> {
         let circuit = circuit.decompose()?;
         let mut state = StabilizerState::new(circuit.num_qubits());
 
-        // Map Qubit → physical index.
         let qubits = circuit.qubits();
         let qubit_map: std::collections::HashMap<_, _> = qubits
             .iter()
@@ -1352,15 +1362,42 @@ impl StabilizerState {
             .map(|(idx, q)| (*q, idx))
             .collect();
 
-        // Pre-evaluate parameters (none should be symbolic for Clifford gates,
-        // but we handle fixed parameters for completeness).
         let parameter_values: Vec<Option<f64>> = circuit
             .parameters()
             .iter()
             .map(|p| p.evaluate(&None).ok())
             .collect();
 
-        for op in circuit.operations() {
+        let mut classical_bits = vec![None::<bool>; circuit.num_qubits()];
+
+        StabilizerState::execute_operations(
+            &mut state,
+            circuit.operations(),
+            &qubit_map,
+            &parameter_values,
+            &mut classical_bits,
+        )?;
+
+        Ok(CircuitExecutionResult {
+            state,
+            measurements: classical_bits,
+        })
+    }
+
+    /// Recursive operation executor used by [`execute_circuit`].
+    ///
+    /// Processes a slice of operations, updating the state and the classical bit
+    /// register in place. Called recursively for control-flow bodies.
+    ///
+    /// [`execute_circuit`]: StabilizerState::execute_circuit
+    fn execute_operations(
+        state: &mut StabilizerState,
+        ops: &[Operation],
+        qubit_map: &std::collections::HashMap<Qubit, usize>,
+        parameter_values: &[Option<f64>],
+        classical_bits: &mut [Option<bool>],
+    ) -> Result<(), QisError> {
+        for op in ops {
             let qubit_indices: Vec<usize> =
                 op.qubits
                     .iter()
@@ -1371,7 +1408,6 @@ impl StabilizerState {
                     })
                     .collect::<Result<_, _>>()?;
 
-            // Resolve parameters (needed to identify parametric non-Clifford gates).
             let params: Vec<f64> = op
                 .params
                 .iter()
@@ -1409,9 +1445,19 @@ impl StabilizerState {
                         mc.num_ctrl_qubits()
                     )));
                 }
-                Instruction::Directive(_) | Instruction::Delay => {
-                    // Barriers and delays are no-ops.
-                }
+                Instruction::Directive(directive) => match directive {
+                    Directive::Barrier => {} // no-op
+                    Directive::Measure => {
+                        let q = qubit_indices[0];
+                        let bit = state.measure(q)?;
+                        classical_bits[q] = Some(bit);
+                    }
+                    Directive::Reset => {
+                        let q = qubit_indices[0];
+                        state.reset(q)?;
+                    }
+                },
+                Instruction::Delay => {} // no-op
                 Instruction::UnitaryGate(_) => {
                     return Err(QisError::UnsupportedOperation(
                         "Arbitrary unitary gates are not Clifford".to_string(),
@@ -1424,13 +1470,12 @@ impl StabilizerState {
                 }
                 Instruction::ControlFlowGate(_) => {
                     return Err(QisError::UnsupportedOperation(
-                        "Control flow gates are not supported in stabilizer simulation".to_string(),
+                        "ControlFlowGate are not supported".to_string(),
                     ));
                 }
             }
         }
-
-        Ok(state)
+        Ok(())
     }
 
     /// Dispatches a [`StandardGate`] to the appropriate Clifford tableau method.
@@ -1481,11 +1526,7 @@ impl StabilizerState {
     /// Converts tableau row `row` to a [`PauliString`].
     fn row_to_pauli_string(&self, row: usize) -> PauliString {
         let mut ps = PauliString::new(self.n);
-        ps.phase = if self.phase(row) == 0 {
-            Phase::Plus
-        } else {
-            Phase::Minus
-        };
+        ps.phase = Phase::from(self.phase(row));
         for q in 0..self.n {
             let x = self.x_bit(row, q);
             let z = self.z_bit(row, q);
@@ -1500,10 +1541,14 @@ impl StabilizerState {
         ps
     }
 
-    /// Returns the expectation value of a single-qubit Pauli operator (+1 or -1).
+    /// Returns the expectation value ⟨ψ|P|ψ⟩ for a Pauli string `pauli`.
     ///
-    /// Only works if the state is an eigenstate of the given operator.
-    /// Returns `0` if the state is not an eigenstate.
+    /// Uses GF(2) Gaussian elimination over the symplectic representation of the
+    /// stabilizer generators to determine whether `pauli` is in the stabilizer
+    /// group (expectation +1), the negative stabilizer group (expectation -1),
+    /// or neither (expectation 0).
+    ///
+    /// This correctly handles products of generators, not just individual generators.
     pub fn pauli_expectation(&self, pauli: &PauliString) -> Result<i32, QisError> {
         if pauli.num_qubits != self.n {
             return Err(QisError::QubitMismatch {
@@ -1511,13 +1556,154 @@ impl StabilizerState {
                 actual: pauli.num_qubits,
             });
         }
-        for i in 0..self.n {
-            let stab = self.row_to_pauli_string(self.n + i);
-            if stab == *pauli {
-                return Ok(if stab.phase == Phase::Plus { 1 } else { -1 });
+
+        let n = self.n;
+        let n_words = n.div_ceil(64);
+        let rl = self.row_len;
+
+        // combo_words: one bit per generator (row), tracking which generators are
+        // XOR'd together to match the query. n generators → n bits → n_words words.
+        let combo_words = n_words;
+
+        // Build working matrix: each entry is [x-block (n_words) | z-block (n_words) | combo (combo_words)].
+        // Row i corresponds to stabilizer generator i (tableau row n+i).
+        let row_stride = 2 * n_words + combo_words;
+        let mut mat: Vec<u64> = vec![0u64; n * row_stride];
+        let mut mat_phase: Vec<i32> = vec![0i32; n];
+
+        for i in 0..n {
+            let src = n + i; // stabilizer row index
+            let src_base = Self::row_base(src, rl);
+            let dst = &mut mat[i * row_stride..(i + 1) * row_stride];
+            // Copy x-block
+            dst[..n_words].copy_from_slice(&self.tableau[src_base..src_base + n_words]);
+            // Copy z-block
+            dst[n_words..2 * n_words]
+                .copy_from_slice(&self.tableau[src_base + rl..src_base + rl + n_words]);
+            // Set combo bit i → 1
+            dst[2 * n_words + i / 64] |= 1u64 << (i % 64);
+            // Phase as i32 in {0,1,2,3}
+            mat_phase[i] = self.phases[src] as i32;
+        }
+
+        // Build the query symplectic vector from the PauliString.
+        let mut qx = vec![0u64; n_words];
+        let mut qz = vec![0u64; n_words];
+        for q in 0..n {
+            let p = pauli.get_pauli(q);
+            match p {
+                Pauli::X | Pauli::Y => qx[q / 64] |= 1u64 << (q % 64),
+                _ => {}
+            }
+            match p {
+                Pauli::Z | Pauli::Y => qz[q / 64] |= 1u64 << (q % 64),
+                _ => {}
             }
         }
-        Ok(0)
+        let mut q_combo = vec![0u64; combo_words];
+        let mut q_phase: i32 = pauli.phase as i32; // 0=+1,1=+i,2=-1,3=-i
+
+        // Reduced row echelon form (RREF) over GF(2), iterating over 2n columns:
+        // columns 0..n → x-block (qubit q = col, word offset 0)
+        // columns n..2n → z-block (qubit q = col-n, word offset n_words)
+        let mut pivot_row = 0usize;
+        for col in 0..(2 * n) {
+            let (word_off, bit_idx) = if col < n {
+                (0usize, col % 64)
+            } else {
+                (n_words, (col - n) % 64)
+            };
+            let word_col = if col < n { col / 64 } else { (col - n) / 64 };
+            let word_abs = word_off + word_col;
+            let mask = 1u64 << bit_idx;
+
+            // Find a pivot in rows pivot_row..n
+            let found = (pivot_row..n).find(|&r| (mat[r * row_stride + word_abs] & mask) != 0);
+            let p = match found {
+                Some(p) => p,
+                None => continue, // no pivot in this column → skip
+            };
+
+            // Swap pivot row to position pivot_row
+            if p != pivot_row {
+                let (lo, hi) = if p < pivot_row {
+                    (p, pivot_row)
+                } else {
+                    (pivot_row, p)
+                };
+                let (left, right) = mat.split_at_mut(hi * row_stride);
+                left[lo * row_stride..(lo + 1) * row_stride]
+                    .swap_with_slice(&mut right[..row_stride]);
+                mat_phase.swap(p, pivot_row);
+            }
+
+            // Eliminate all other rows (full RREF, not just lower triangular)
+            for r in 0..n {
+                if r == pivot_row {
+                    continue;
+                }
+                if (mat[r * row_stride + word_abs] & mask) == 0 {
+                    continue;
+                }
+                // XOR row pivot_row into row r
+                // phase update: same formula as rowsum but non-mutating for pivot_row
+                let mut sum = mat_phase[r] + mat_phase[pivot_row];
+                for w in 0..n_words {
+                    let xh = mat[r * row_stride + w];
+                    let zh = mat[r * row_stride + n_words + w];
+                    let xi = mat[pivot_row * row_stride + w];
+                    let zi = mat[pivot_row * row_stride + n_words + w];
+                    sum += Self::g_phase_word(xh, zh, xi, zi);
+                }
+                mat_phase[r] = (((sum % 4) + 4) % 4) as i32;
+                for w in 0..row_stride {
+                    mat[r * row_stride + w] ^= mat[pivot_row * row_stride + w];
+                }
+            }
+
+            // Eliminate the query vector at this column
+            let q_word = if col < n { &qx } else { &qz };
+            if (q_word[word_col] & mask) != 0 {
+                // XOR pivot_row into query
+                let mut sum = q_phase + mat_phase[pivot_row];
+                for w in 0..n_words {
+                    let xh = qx[w];
+                    let zh = qz[w];
+                    let xi = mat[pivot_row * row_stride + w];
+                    let zi = mat[pivot_row * row_stride + n_words + w];
+                    sum += Self::g_phase_word(xh, zh, xi, zi);
+                }
+                q_phase = (((sum % 4) + 4) % 4) as i32;
+                for w in 0..n_words {
+                    qx[w] ^= mat[pivot_row * row_stride + w];
+                    qz[w] ^= mat[pivot_row * row_stride + n_words + w];
+                }
+                for w in 0..combo_words {
+                    q_combo[w] ^= mat[pivot_row * row_stride + 2 * n_words + w];
+                }
+            }
+
+            pivot_row += 1;
+        }
+
+        // If any x or z bit remains in the query, the Pauli is not in the stabilizer group.
+        let in_group = qx.iter().chain(qz.iter()).all(|&w| w == 0);
+        if !in_group {
+            return Ok(0);
+        }
+
+        // q_phase tracks the phase of the running product:
+        //   Q_orig · G_combo  (where G_combo is the generators eliminated so far)
+        // After elimination q_phase = phase(Q_orig · G_combo) = phase(λI), so
+        // Q_orig = λ · G_combo^{-1} and ⟨Q_orig⟩ = i^{q_phase}:
+        //   q_phase = 0 (+1) → Q_orig is the stabilizer  → expectation +1
+        //   q_phase = 2 (-1) → Q_orig is −(stabilizer)   → expectation −1
+        //   q_phase = 1 or 3 → imaginary, not a Hermitian stabilizer element
+        Ok(match q_phase {
+            0 => 1,
+            2 => -1,
+            _ => 0,
+        })
     }
 
     /// Exports the stabilizer tableau in Stim-compatible text format.

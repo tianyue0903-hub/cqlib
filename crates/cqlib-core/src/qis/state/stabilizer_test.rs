@@ -433,8 +433,11 @@ fn test_measure_bell_state_correlated() {
 #[test]
 fn test_measure_all() {
     let mut s = StabilizerState::new(2);
-    let results = s.measure_all();
-    assert_eq!(results, vec![false, false], "|00⟩ measures to 00");
+    let result = s.measure_all();
+    assert!(
+        !result.is_one(0) && !result.is_one(1),
+        "|00⟩ measures to 00"
+    );
 }
 
 #[test]
@@ -536,9 +539,12 @@ fn test_sample_shots_bell_state() {
 
     let mut zeros = 0usize;
     for shot in &results {
-        assert_eq!(shot.len(), 2);
-        assert_eq!(shot[0], shot[1], "Bell state: qubits must agree");
-        if !shot[0] {
+        assert_eq!(
+            shot.is_one(0),
+            shot.is_one(1),
+            "Bell state: qubits must agree"
+        );
+        if !shot.is_one(0) {
             zeros += 1;
         }
     }
@@ -550,13 +556,16 @@ fn test_sample_shots_bell_state() {
     );
 }
 
-/// sample_shots on deterministic |0⟩ state: all outcomes must be [false].
+/// sample_shots on deterministic |0⟩ state: all outcomes must be |000⟩.
 #[test]
 fn test_sample_shots_deterministic() {
     let s = StabilizerState::new(3);
     let results = s.sample_shots(200);
     for shot in &results {
-        assert_eq!(shot, &vec![false, false, false], "Expected |000⟩");
+        assert!(
+            !shot.is_one(0) && !shot.is_one(1) && !shot.is_one(2),
+            "Expected |000⟩"
+        );
     }
 }
 
@@ -776,9 +785,9 @@ fn test_simd_boundary_n63() {
     // All qubits must measure identically (GHZ-like)
     let mut copy = s.clone();
     let result = copy.measure_all();
-    let first = result[0];
+    let first = result.is_one(0);
     assert!(
-        result.iter().all(|&b| b == first),
+        (0..n).all(|q| result.is_one(q) == first),
         "n=63: not all qubits equal"
     );
 }
@@ -793,9 +802,9 @@ fn test_simd_boundary_n64() {
     }
     let mut copy = s.clone();
     let result = copy.measure_all();
-    let first = result[0];
+    let first = result.is_one(0);
     assert!(
-        result.iter().all(|&b| b == first),
+        (0..n).all(|q| result.is_one(q) == first),
         "n=64: not all qubits equal"
     );
 }
@@ -810,9 +819,9 @@ fn test_simd_boundary_n65() {
     }
     let mut copy = s.clone();
     let result = copy.measure_all();
-    let first = result[0];
+    let first = result.is_one(0);
     assert!(
-        result.iter().all(|&b| b == first),
+        (0..n).all(|q| result.is_one(q) == first),
         "n=65: not all qubits equal"
     );
 }
@@ -837,6 +846,145 @@ fn test_repeated_deterministic_measurements() {
 /// Deep circuit collapse: chain CX, measure middle qubit, verify stabilizer split.
 ///
 /// Prepare |+⟩^n → apply chain CNOT 0→1→2→…→n-1 → measure qubit n/2.
+// ── Bug-fix regression tests ─────────────────────────────────────────────────
+//
+// Tests added to cover the three bugs fixed:
+//   1. apply_cy had S and S† swapped.
+//   2. pauli_expectation only matched individual generators, not products.
+//   3. row_to_pauli_string / set_phase ignored odd phases (1, 3).
+
+/// CY conjugation sign: H(0) then CY(0,1) on |+0⟩.
+///
+/// |+0⟩ has stabilizer +XI.
+/// After CY(0,1): the stabilizer must map as X₀⊗I₁ → X₀⊗Y₁ (= +YX in display order).
+/// The *wrong* implementation (S before CX) would yield −YX instead.
+#[test]
+fn test_cy_conjugation_sign() {
+    use crate::qis::pauli::{Pauli, PauliString, Phase};
+    let mut s = StabilizerState::new(2);
+    s.apply_h(0).unwrap();
+    s.apply_cy(0, 1).unwrap();
+    // Stabilizers: +YX (from X₀I₁ → X₀Y₁) and +ZZ (from Z₀I₁ → Z₀Z₁)
+    let stab_strs: Vec<String> = s.get_stabilizers().iter().map(|p| p.to_string()).collect();
+    assert!(
+        stab_strs.contains(&"+YX".to_string()),
+        "apply_cy sign bug: expected +YX among stabilizers, got {:?}",
+        stab_strs
+    );
+    // Verify directly via pauli_expectation
+    let mut yx = PauliString::new(2);
+    yx.set_pauli(0, Pauli::X);
+    yx.set_pauli(1, Pauli::Y);
+    yx.phase = Phase::Plus;
+    assert_eq!(
+        s.pauli_expectation(&yx).unwrap(),
+        1,
+        "apply_cy: +YX should have expectation +1"
+    );
+    let mut neg_yx = PauliString::new(2);
+    neg_yx.set_pauli(0, Pauli::X);
+    neg_yx.set_pauli(1, Pauli::Y);
+    neg_yx.phase = Phase::Minus;
+    assert_eq!(
+        s.pauli_expectation(&neg_yx).unwrap(),
+        -1,
+        "apply_cy: -YX should have expectation -1"
+    );
+}
+
+/// Bell state: generators are +XX and +ZZ.
+/// Their product is -YY (since iZ·iX = -ZX = -iY per Pauli algebra, but more directly
+/// XX·ZZ = (XZ)⊗(XZ) = (-iY)⊗(-iY) = i²·YY = -YY).
+/// So ⟨Φ+|YY|Φ+⟩ = -1 and ⟨Φ+|(-YY)|Φ+⟩ = +1.
+/// The old implementation returned 0 for both (not a generator match).
+#[test]
+fn test_pauli_expectation_product_yy_bell() {
+    use crate::qis::pauli::{Pauli, PauliString, Phase};
+    let mut s = StabilizerState::new(2);
+    s.apply_h(0).unwrap();
+    s.apply_cx(0, 1).unwrap();
+    // +YY
+    let mut yy = PauliString::new(2);
+    yy.set_pauli(0, Pauli::Y);
+    yy.set_pauli(1, Pauli::Y);
+    yy.phase = Phase::Plus;
+    assert_eq!(
+        s.pauli_expectation(&yy).unwrap(),
+        -1,
+        "Bell state: ⟨+YY⟩ should be -1"
+    );
+    // -YY
+    let mut neg_yy = PauliString::new(2);
+    neg_yy.set_pauli(0, Pauli::Y);
+    neg_yy.set_pauli(1, Pauli::Y);
+    neg_yy.phase = Phase::Minus;
+    assert_eq!(
+        s.pauli_expectation(&neg_yy).unwrap(),
+        1,
+        "Bell state: ⟨-YY⟩ should be +1"
+    );
+}
+
+/// Bell state: +ZI is not in the stabilizer group (expectation = 0).
+#[test]
+fn test_pauli_expectation_not_in_group_bell() {
+    use crate::qis::pauli::{Pauli, PauliString, Phase};
+    let mut s = StabilizerState::new(2);
+    s.apply_h(0).unwrap();
+    s.apply_cx(0, 1).unwrap();
+    let mut zi = PauliString::new(2);
+    zi.set_pauli(0, Pauli::Z);
+    zi.set_pauli(1, Pauli::I);
+    zi.phase = Phase::Plus;
+    assert_eq!(
+        s.pauli_expectation(&zi).unwrap(),
+        0,
+        "Bell state: ⟨ZI⟩ should be 0"
+    );
+}
+
+/// Bell state: direct generator +XX should still return +1.
+#[test]
+fn test_pauli_expectation_direct_generator_bell() {
+    use crate::qis::pauli::{Pauli, PauliString, Phase};
+    let mut s = StabilizerState::new(2);
+    s.apply_h(0).unwrap();
+    s.apply_cx(0, 1).unwrap();
+    let mut xx = PauliString::new(2);
+    xx.set_pauli(0, Pauli::X);
+    xx.set_pauli(1, Pauli::X);
+    xx.phase = Phase::Plus;
+    assert_eq!(
+        s.pauli_expectation(&xx).unwrap(),
+        1,
+        "Bell state: ⟨XX⟩ should be +1"
+    );
+}
+
+/// row_to_pauli_string should propagate the full 4-phase.
+/// After creating a state with an imaginary-phase row (via rowsum of anti-commuting rows),
+/// get_destabilizers() must display the correct ±i phase, not garbage.
+///
+/// Concrete construction: start with |0⟩ (destabilizer = +X, stabilizer = +Z).
+/// rowsum(destab_row=0, stab_row=1) sets destabilizer to X·Z with accumulated phase.
+/// X·Z = -iY (g_phase(X, Z) = -1), so net phase = 0 + 0 + (-1) → (−1 mod 4) = 3 → -i.
+#[test]
+fn test_row_to_pauli_string_imaginary_phase() {
+    let mut s = StabilizerState::new(1);
+    // Manually call rowsum(0, 1): destab row 0 += stab row 1
+    // destab row 0: X (phase 0), stab row 1: Z (phase 0)
+    // product: XZ = -iY → phase 3
+    s.rowsum(0, 1);
+    let destabs = s.get_destabilizers();
+    // Phase should be 3 (-i) and Pauli Y
+    assert_eq!(
+        destabs[0].to_string(),
+        "-iY",
+        "rowsum destab: expected -iY, got {}",
+        destabs[0]
+    );
+}
+
 /// After measurement the qubits on each side remain entangled within their group
 /// but are now in a product state across the cut.  Both halves' measure_all
 /// calls should yield internally-uniform bitstrings.
@@ -863,5 +1011,164 @@ fn test_deep_circuit_collapse() {
     assert!(
         rest.iter().all(|&b| b == first),
         "deep collapse: inconsistent outcomes"
+    );
+}
+/// reset() on |1⟩ returns qubit to |0⟩.
+#[test]
+fn test_reset_from_one() {
+    let mut s = StabilizerState::new(1);
+    s.apply_x(0).unwrap(); // |0⟩ → |1⟩
+    s.reset(0).unwrap(); // → |0⟩
+    assert_eq!(s.measure(0).unwrap(), false, "after reset should be |0⟩");
+}
+
+/// reset() on |0⟩ is a no-op.
+#[test]
+fn test_reset_from_zero() {
+    let mut s = StabilizerState::new(1);
+    s.reset(0).unwrap();
+    assert_eq!(s.measure(0).unwrap(), false);
+}
+
+/// reset() on a superposition state always yields |0⟩.
+#[test]
+fn test_reset_from_superposition() {
+    for _ in 0..20 {
+        let mut s = StabilizerState::new(1);
+        s.apply_h(0).unwrap(); // |+⟩ random collapse
+        s.reset(0).unwrap(); // must always be |0⟩ after
+        assert_eq!(s.measure(0).unwrap(), false);
+    }
+}
+
+/// Mid-circuit Measure directive is executed (not a no-op) and result recorded.
+#[test]
+fn test_execute_circuit_measure_directive() {
+    use crate::circuit::circuit_impl::Circuit;
+
+    // |1⟩: X then Measure should always record true.
+    let mut c = Circuit::new(1);
+    c.x(0.into()).unwrap();
+    c.measure(0.into()).unwrap();
+
+    let result = StabilizerState::execute_circuit(&c).unwrap();
+    assert_eq!(
+        result.measurements[0],
+        Some(true),
+        "X → Measure should record |1⟩"
+    );
+}
+
+/// Reset directive in circuit actually resets the qubit.
+#[test]
+fn test_execute_circuit_reset_directive() {
+    use crate::circuit::circuit_impl::Circuit;
+
+    // X then Reset: final state should be |0⟩.
+    let mut c = Circuit::new(1);
+    c.x(0.into()).unwrap();
+    c.reset(0.into()).unwrap();
+    c.measure(0.into()).unwrap();
+
+    let result = StabilizerState::execute_circuit(&c).unwrap();
+    assert_eq!(
+        result.measurements[0],
+        Some(false),
+        "X → Reset → Measure should yield |0⟩"
+    );
+}
+
+/// from_circuit() backward-compat: still returns just the state.
+#[test]
+fn test_from_circuit_with_measure_collapses_state() {
+    use crate::circuit::circuit_impl::Circuit;
+
+    let mut c = Circuit::new(2);
+    c.h(0.into()).unwrap();
+    c.cx(0.into(), 1.into()).unwrap();
+    c.measure(0.into()).unwrap(); // mid-circuit collapse
+
+    // Should not error; state is in a definite product state after measurement.
+    let _state = StabilizerState::from_circuit(&c).unwrap();
+}
+
+/// IfElse: if measure is 1, apply X correction to qubit 1.
+/// Teleportation-style correction test.
+#[test]
+fn test_ifelse_x_correction() {
+    use crate::circuit::circuit_impl::Circuit;
+    use crate::circuit::gate::control_flow::{ConditionView, ControlFlow};
+    use crate::circuit::gate::instruction::Instruction;
+    use crate::circuit::gate::standard_gate::StandardGate;
+    use crate::circuit::operation::Operation;
+    use smallvec::smallvec;
+
+    // Qubit 0 = |1⟩, qubit 1 = |0⟩
+    // Measure qubit 0; if result == 1, apply X on qubit 1.
+    let q0 = 0u32.into();
+    let q1 = 1u32.into();
+
+    let true_body = vec![Operation {
+        instruction: Instruction::Standard(StandardGate::X),
+        qubits: smallvec![q1],
+        params: smallvec![],
+        label: None,
+    }];
+    let condition = ConditionView::new(q0, 1);
+    let cf = ControlFlow::if_else(condition, true_body, None);
+
+    let mut c = Circuit::new(2);
+    c.x(q0).unwrap();
+    c.measure(q0).unwrap();
+    c.append(Instruction::ControlFlowGate(cf), [q0, q1], [], None)
+        .unwrap();
+    c.measure(q1).unwrap();
+
+    let result = StabilizerState::execute_circuit(&c).unwrap();
+    // qubit 0 measured 1, so X was applied to qubit 1 → qubit 1 should be |1⟩
+    assert_eq!(result.measurements[0], Some(true), "qubit 0 should be 1");
+    assert_eq!(
+        result.measurements[1],
+        Some(true),
+        "X correction should flip qubit 1 to |1⟩"
+    );
+}
+
+/// IfElse false branch: if measure is 0, apply nothing; if measure is 1, apply X.
+/// |0⟩ → measure 0 → false branch → qubit 1 stays |0⟩.
+#[test]
+fn test_ifelse_false_branch_not_taken() {
+    use crate::circuit::circuit_impl::Circuit;
+    use crate::circuit::gate::control_flow::{ConditionView, ControlFlow};
+    use crate::circuit::gate::instruction::Instruction;
+    use crate::circuit::gate::standard_gate::StandardGate;
+    use crate::circuit::operation::Operation;
+    use smallvec::smallvec;
+
+    let q0 = 0u32.into();
+    let q1 = 1u32.into();
+
+    let true_body = vec![Operation {
+        instruction: Instruction::Standard(StandardGate::X),
+        qubits: smallvec![q1],
+        params: smallvec![],
+        label: None,
+    }];
+    let condition = ConditionView::new(q0, 1);
+    let cf = ControlFlow::if_else(condition, true_body, None);
+
+    let mut c = Circuit::new(2);
+    // qubit 0 stays |0⟩ → measure 0 → true_body NOT taken
+    c.measure(q0).unwrap();
+    c.append(Instruction::ControlFlowGate(cf), [q0, q1], [], None)
+        .unwrap();
+    c.measure(q1).unwrap();
+
+    let result = StabilizerState::execute_circuit(&c).unwrap();
+    assert_eq!(result.measurements[0], Some(false));
+    assert_eq!(
+        result.measurements[1],
+        Some(false),
+        "qubit 1 should remain |0⟩"
     );
 }
