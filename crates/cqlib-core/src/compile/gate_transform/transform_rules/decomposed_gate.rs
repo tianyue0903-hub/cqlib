@@ -15,6 +15,12 @@ pub struct DecomposedGate {
     pub ops: Vec<DecomposedOp>,
 }
 
+impl Default for DecomposedGate {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DecomposedGate {
     pub fn new() -> Self {
         Self { ops: Vec::new() }

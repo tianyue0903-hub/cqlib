@@ -1,8 +1,8 @@
 use super::*;
-use crate::circuit::{Parameter, ParameterValue, Qubit};
 use crate::circuit::gate::MCGate;
 use crate::circuit::gate::control_flow::ConditionView;
 use crate::circuit::gate::{CircuitGate, FrozenCircuit, UnitaryGate};
+use crate::circuit::{Parameter, ParameterValue, Qubit};
 use num::complex::Complex;
 use num::complex::ComplexFloat;
 use std::sync::Arc;
@@ -191,7 +191,10 @@ fn complex_inner_product(vec1: &[Complex<f64>], vec2: &[Complex<f64>]) -> Comple
         .sum()
 }
 
-fn is_matrix_differ_by_phase(matrix1: &Array2<Complex<f64>>, matrix2: &Array2<Complex<f64>>) -> bool {
+fn is_matrix_differ_by_phase(
+    matrix1: &Array2<Complex<f64>>,
+    matrix2: &Array2<Complex<f64>>,
+) -> bool {
     let vec1: Vec<Complex<f64>> = matrix1.iter().copied().collect();
     let vec2: Vec<Complex<f64>> = matrix2.iter().copied().collect();
     let inner: Complex<f64> = complex_inner_product(&vec1, &vec2);
@@ -443,11 +446,8 @@ fn generate_circuit_with_special_operation() -> Circuit {
         .unwrap();
     ugate = ugate.with_circuit(Arc::new(frozen_sub_circuit));
 
-    let cgate = CircuitGate::new(
-        "TestCircuit",
-        FrozenCircuit::new(generate_full_circuit()),
-    )
-    .unwrap();
+    let cgate =
+        CircuitGate::new("TestCircuit", FrozenCircuit::new(generate_full_circuit())).unwrap();
 
     let mut circuit = generate_full_circuit();
     circuit
@@ -677,10 +677,11 @@ fn test_gate_transform_preserves_symbolic_rzz_parameters() {
     let result = gt.execute(&circuit);
 
     assert!(result.symbols().contains("theta"));
-    assert!(result
-        .operations()
-        .iter()
-        .any(|op| op.params.iter().any(|param| matches!(param, CircuitParam::Index(_)))));
+    assert!(result.operations().iter().any(|op| {
+        op.params
+            .iter()
+            .any(|param| matches!(param, CircuitParam::Index(_)))
+    }));
 
     let mut bindings = HashMap::new();
     bindings.insert("theta", 0.37);
@@ -705,10 +706,11 @@ fn test_gate_transform_symbolic_single_qubit_rx_to_target_basis() {
 
     assert!(check_all_gates_in_instruction_set(&result, &iset));
     assert!(result.symbols().contains("theta"));
-    assert!(result
-        .operations()
-        .iter()
-        .any(|op| op.params.iter().any(|param| matches!(param, CircuitParam::Index(_)))));
+    assert!(result.operations().iter().any(|op| {
+        op.params
+            .iter()
+            .any(|param| matches!(param, CircuitParam::Index(_)))
+    }));
 
     let mut bindings = HashMap::new();
     bindings.insert("theta", 0.37);
@@ -771,7 +773,9 @@ fn test_gate_transform_preserves_mixed_symbolic_single_and_double_qubit_paramete
     let theta = Parameter::symbol("theta");
     let phi = Parameter::symbol("phi");
     let lambda = Parameter::symbol("lambda");
-    circuit.u(q0, theta.clone(), phi.clone(), lambda.clone()).unwrap();
+    circuit
+        .u(q0, theta.clone(), phi.clone(), lambda.clone())
+        .unwrap();
     circuit.rzz(q0, q1, theta.clone() + phi.clone()).unwrap();
 
     let mut gt = GateTransform::new(iset.clone());
@@ -781,10 +785,11 @@ fn test_gate_transform_preserves_mixed_symbolic_single_and_double_qubit_paramete
     assert!(result.symbols().contains("theta"));
     assert!(result.symbols().contains("phi"));
     assert!(result.symbols().contains("lambda"));
-    assert!(result
-        .operations()
-        .iter()
-        .any(|op| op.params.iter().any(|param| matches!(param, CircuitParam::Index(_)))));
+    assert!(result.operations().iter().any(|op| {
+        op.params
+            .iter()
+            .any(|param| matches!(param, CircuitParam::Index(_)))
+    }));
 
     let mut bindings = HashMap::new();
     bindings.insert("theta", 0.29);

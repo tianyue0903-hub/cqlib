@@ -14,7 +14,10 @@ fn complex_inner_product(vec1: &[Complex<f64>], vec2: &[Complex<f64>]) -> Comple
         .sum()
 }
 
-fn is_matrix_differ_by_phase(matrix1: &Array2<Complex<f64>>, matrix2: &Array2<Complex<f64>>) -> bool {
+fn is_matrix_differ_by_phase(
+    matrix1: &Array2<Complex<f64>>,
+    matrix2: &Array2<Complex<f64>>,
+) -> bool {
     let vec1: Vec<Complex<f64>> = matrix1.iter().copied().collect();
     let vec2: Vec<Complex<f64>> = matrix2.iter().copied().collect();
     let inner = complex_inner_product(&vec1, &vec2);
@@ -37,8 +40,11 @@ fn matrix_from_decomposed_gate(decomposed: &DecomposedGate) -> Array2<Complex<f6
             &[0],
             "Expected single-qubit decomposition on qubit 0"
         );
-        let gate_params: SmallVec<[f64; 3]> =
-            op.params.iter().map(|p| p.evaluate(&None).unwrap()).collect();
+        let gate_params: SmallVec<[f64; 3]> = op
+            .params
+            .iter()
+            .map(|p| p.evaluate(&None).unwrap())
+            .collect();
         total_u = op
             .gate
             .matrix(&gate_params)
@@ -56,7 +62,8 @@ fn assert_rule_decomposition(
     rule_name: &str,
 ) {
     let decomposed = rule(&gate, params);
-    let gate_params: SmallVec<[f64; 3]> = params.iter().map(|p| p.evaluate(&None).unwrap()).collect();
+    let gate_params: SmallVec<[f64; 3]> =
+        params.iter().map(|p| p.evaluate(&None).unwrap()).collect();
     let original_matrix = gate
         .matrix(&gate_params)
         .expect("single-qubit gate matrix should be well-formed")
@@ -206,7 +213,6 @@ fn test_rxy_u_rules() {
             &smallvec![Parameter::from(*phi)],
             "xy2m2rxy_rule",
         );
-
     }
 }
 
@@ -274,7 +280,12 @@ fn test_pairwise_rx_ry_rz_rules() {
 
 #[test]
 fn test_rx_u_rxy_rules_random_angles() {
-    test_random_angles_1(ParamTransformRule::rx2u_rule, StandardGate::RX, "rx2u_rule", 10);
+    test_random_angles_1(
+        ParamTransformRule::rx2u_rule,
+        StandardGate::RX,
+        "rx2u_rule",
+        10,
+    );
     test_random_angles_1(
         ParamTransformRule::rx2rxy_rule,
         StandardGate::RX,
@@ -339,7 +350,12 @@ fn test_rxy_u_rules_random_angles() {
         "rxy2xy2m_rule",
         10,
     );
-    test_random_angles_1(ParamTransformRule::xy2rxy_rule, StandardGate::XY, "xy2rxy_rule", 10);
+    test_random_angles_1(
+        ParamTransformRule::xy2rxy_rule,
+        StandardGate::XY,
+        "xy2rxy_rule",
+        10,
+    );
     test_random_angles_1(
         ParamTransformRule::xy2p2rxy_rule,
         StandardGate::XY2P,
@@ -352,12 +368,16 @@ fn test_rxy_u_rules_random_angles() {
         "xy2m2rxy_rule",
         10,
     );
-
 }
 
 #[test]
 fn test_u_rx_rxy_rules_random_angles() {
-    test_random_angles_3(ParamTransformRule::u2rx_rule, StandardGate::U, "u2rx_rule", 10);
+    test_random_angles_3(
+        ParamTransformRule::u2rx_rule,
+        StandardGate::U,
+        "u2rx_rule",
+        10,
+    );
     test_random_angles_3(
         ParamTransformRule::u2rxy_rule,
         StandardGate::U,
@@ -380,7 +400,11 @@ fn test_symbolic_params_preserved_for_rxy2u() {
         .iter()
         .map(|p| p.get_symbols())
         .collect();
-    assert!(param_symbols.iter().any(|symbols| symbols.contains("theta")));
+    assert!(
+        param_symbols
+            .iter()
+            .any(|symbols| symbols.contains("theta"))
+    );
     assert!(param_symbols.iter().any(|symbols| symbols.contains("phi")));
 }
 
@@ -400,9 +424,21 @@ fn test_symbolic_params_preserved_for_u2rx() {
         .map(|param| param.get_symbols())
         .collect();
 
-    assert!(symbolic_params.iter().any(|symbols| symbols.contains("theta")));
-    assert!(symbolic_params.iter().any(|symbols| symbols.contains("phi")));
-    assert!(symbolic_params.iter().any(|symbols| symbols.contains("lambda")));
+    assert!(
+        symbolic_params
+            .iter()
+            .any(|symbols| symbols.contains("theta"))
+    );
+    assert!(
+        symbolic_params
+            .iter()
+            .any(|symbols| symbols.contains("phi"))
+    );
+    assert!(
+        symbolic_params
+            .iter()
+            .any(|symbols| symbols.contains("lambda"))
+    );
 
     let mut bindings = HashMap::new();
     bindings.insert("theta", 0.7);
@@ -416,7 +452,15 @@ fn test_symbolic_params_preserved_for_u2rx() {
         .map(|param| param.evaluate(&Some(bindings.clone())).unwrap())
         .collect();
 
-    assert!(evaluated.iter().any(|v| (v - (0.4 + PI / 2.0)).abs() < 1e-10));
+    assert!(
+        evaluated
+            .iter()
+            .any(|v| (v - (0.4 + PI / 2.0)).abs() < 1e-10)
+    );
     assert!(evaluated.iter().any(|v| (v - 0.7).abs() < 1e-10));
-    assert!(evaluated.iter().any(|v| (v - (-1.1 - PI / 2.0)).abs() < 1e-10));
+    assert!(
+        evaluated
+            .iter()
+            .any(|v| (v - (-1.1 - PI / 2.0)).abs() < 1e-10)
+    );
 }

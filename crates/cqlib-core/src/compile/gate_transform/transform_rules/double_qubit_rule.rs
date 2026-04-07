@@ -513,7 +513,8 @@ mod tests {
         // Gates are applied in temporal order (left-to-right in circuit),
         // so we use right-multiplication: U = G1 · G2 · G3 · ...
         for op in &decomposed.ops {
-            let gate_mat = gate_expand_rust(op.gate, &op.params, op.qubits.iter().copied().collect(), 2);
+            let gate_mat =
+                gate_expand_rust(op.gate, &op.params, op.qubits.iter().copied().collect(), 2);
             total_u = gate_mat.dot(&total_u);
         }
         total_u
@@ -566,12 +567,7 @@ mod tests {
         rule_name: &str,
     ) {
         for theta in special_pi_over_8_angles() {
-            assert_rule_decomposition(
-                rule,
-                &gate,
-                &smallvec![Parameter::from(theta)],
-                rule_name,
-            );
+            assert_rule_decomposition(rule, &gate, &smallvec![Parameter::from(theta)], rule_name);
         }
     }
 
@@ -620,7 +616,11 @@ mod tests {
                 "rzz2cx_rule",
             );
         }
-        assert_rule_special_angles_1(DoubleQubitRule::rzz2cx_rule, StandardGate::RZZ, "rzz2cx_rule");
+        assert_rule_special_angles_1(
+            DoubleQubitRule::rzz2cx_rule,
+            StandardGate::RZZ,
+            "rzz2cx_rule",
+        );
     }
 
     #[test]
@@ -985,16 +985,29 @@ mod tests {
         let mut bindings = HashMap::new();
         bindings.insert("theta", 0.7);
 
-        assert!((decomposed.ops[0].params[0].evaluate(&Some(bindings.clone())).unwrap() - 0.7).abs() < 1e-10);
-        assert!((decomposed.ops[1].params[0].evaluate(&Some(bindings)).unwrap() + 1.4).abs() < 1e-10);
+        assert!(
+            (decomposed.ops[0].params[0]
+                .evaluate(&Some(bindings.clone()))
+                .unwrap()
+                - 0.7)
+                .abs()
+                < 1e-10
+        );
+        assert!(
+            (decomposed.ops[1].params[0]
+                .evaluate(&Some(bindings))
+                .unwrap()
+                + 1.4)
+                .abs()
+                < 1e-10
+        );
     }
 
     #[test]
     fn test_fsim2cx_rule_preserves_symbolic_parameters() {
         let theta = Parameter::symbol("theta");
         let phi = Parameter::symbol("phi");
-        let decomposed =
-            DoubleQubitRule::fsim2cx_rule(&StandardGate::FSIM, &smallvec![theta, phi]);
+        let decomposed = DoubleQubitRule::fsim2cx_rule(&StandardGate::FSIM, &smallvec![theta, phi]);
 
         let symbolic_params: Vec<_> = decomposed
             .ops
@@ -1004,7 +1017,15 @@ mod tests {
             .map(|param| param.get_symbols())
             .collect();
 
-        assert!(symbolic_params.iter().any(|symbols| symbols.contains("theta")));
-        assert!(symbolic_params.iter().any(|symbols| symbols.contains("phi")));
+        assert!(
+            symbolic_params
+                .iter()
+                .any(|symbols| symbols.contains("theta"))
+        );
+        assert!(
+            symbolic_params
+                .iter()
+                .any(|symbols| symbols.contains("phi"))
+        );
     }
 }

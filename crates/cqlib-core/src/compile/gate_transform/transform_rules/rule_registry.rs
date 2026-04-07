@@ -1,5 +1,5 @@
-use crate::circuit::gate::StandardGate;
 use crate::circuit::Parameter;
+use crate::circuit::gate::StandardGate;
 use crate::compile::gate_transform::transform_rules::decomposed_gate::DecomposedGate;
 use crate::compile::gate_transform::transform_rules::double_qubit_rule::DoubleQubitRule;
 use crate::compile::gate_transform::transform_rules::param_transform_rule::ParamTransformRule;
@@ -168,22 +168,14 @@ impl TransformRuleExecutor {
             SingleQubitParamTransformRule::U2Rx => ParamTransformRule::u2rx_rule(gate, params),
             SingleQubitParamTransformRule::U2Rxy => ParamTransformRule::u2rxy_rule(gate, params),
             SingleQubitParamTransformRule::Rxy2U => ParamTransformRule::rxy2u_rule(gate, params),
-            SingleQubitParamTransformRule::Rx2Rxy => {
-                ParamTransformRule::rx2rxy_rule(gate, params)
-            }
-            SingleQubitParamTransformRule::Rxy2Rx => {
-                ParamTransformRule::rxy2rx_rule(gate, params)
-            }
+            SingleQubitParamTransformRule::Rx2Rxy => ParamTransformRule::rx2rxy_rule(gate, params),
+            SingleQubitParamTransformRule::Rxy2Rx => ParamTransformRule::rxy2rx_rule(gate, params),
             SingleQubitParamTransformRule::Rx2Ry => ParamTransformRule::rx2ry_rule(gate, params),
             SingleQubitParamTransformRule::Ry2Rx => ParamTransformRule::ry2rx_rule(gate, params),
             SingleQubitParamTransformRule::Rx2Rz => ParamTransformRule::rx2rz_rule(gate, params),
             SingleQubitParamTransformRule::Rz2Rx => ParamTransformRule::rz2rx_rule(gate, params),
-            SingleQubitParamTransformRule::Xy2Rxy => {
-                ParamTransformRule::xy2rxy_rule(gate, params)
-            }
-            SingleQubitParamTransformRule::Rxy2Xy => {
-                ParamTransformRule::rxy2xy_rule(gate, params)
-            }
+            SingleQubitParamTransformRule::Xy2Rxy => ParamTransformRule::xy2rxy_rule(gate, params),
+            SingleQubitParamTransformRule::Rxy2Xy => ParamTransformRule::rxy2xy_rule(gate, params),
             SingleQubitParamTransformRule::Xy2p2Rxy => {
                 ParamTransformRule::xy2p2rxy_rule(gate, params)
             }

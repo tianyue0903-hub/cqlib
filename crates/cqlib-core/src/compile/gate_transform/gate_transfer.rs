@@ -242,7 +242,7 @@ impl GateTransform {
                         let transformed_ops = self.append_two_qubit_transformed(
                             sgate,
                             &param_values,
-                            &qubits,
+                            qubits,
                             parameters,
                             symbols,
                         );
@@ -311,7 +311,7 @@ impl GateTransform {
         let mut new_dg_operations: Vec<Operation> = Vec::new();
         let steps = self
             .instruction_set
-            .select_transform_rule(gate.clone())
+            .select_transform_rule(*gate)
             .unwrap_or_else(|e| panic!("Failed to select transform rule: {}", e));
 
         if steps.is_empty() {
@@ -321,8 +321,8 @@ impl GateTransform {
 
         // Apply the transformation chain
         // We need to track current gates, their parameters, and qubits
-        let mut current_gates: Vec<(StandardGate, SmallVec<[Parameter; 3]>, Vec<i32>)> = Vec::new();
-        current_gates.push((gate.clone(), params.clone(), Vec::from([0, 1])));
+        let mut current_gates: Vec<(StandardGate, SmallVec<[Parameter; 3]>, Vec<i32>)> =
+            vec![(*gate, params.clone(), Vec::from([0, 1]))];
 
         for step in &steps {
             let mut next_gates: Vec<(StandardGate, SmallVec<[Parameter; 3]>, Vec<i32>)> =
@@ -337,15 +337,11 @@ impl GateTransform {
                         // Map decomp_qubits to actual circuit qubits
                         let mapped_qubits: Vec<i32> =
                             decomp_op.qubits.iter().map(|&q| qs[q as usize]).collect();
-                        next_gates.push((
-                            decomp_op.gate,
-                            decomp_op.params.clone(),
-                            mapped_qubits,
-                        ));
+                        next_gates.push((decomp_op.gate, decomp_op.params.clone(), mapped_qubits));
                     }
                 } else {
                     // Gate doesn't match this step, keep as-is
-                    next_gates.push((g.clone(), gate_params.clone(), qs.clone()));
+                    next_gates.push((*g, gate_params.clone(), qs.clone()));
                 }
             }
 
@@ -455,18 +451,18 @@ impl GateTransform {
             || !Self::has_symbolic_rule_params(params)
             || self.instruction_set.single_qubit_gates.contains(gate)
         {
-            return vec![(gate.clone(), params.clone())];
+            return vec![(*gate, params.clone())];
         }
 
         let steps = match self
             .instruction_set
-            .select_single_qubit_param_transform_rule(gate.clone())
+            .select_single_qubit_param_transform_rule(*gate)
         {
             Ok(steps) if !steps.is_empty() => steps,
-            _ => return vec![(gate.clone(), params.clone())],
+            _ => return vec![(*gate, params.clone())],
         };
 
-        let mut current_gates = vec![(gate.clone(), params.clone())];
+        let mut current_gates = vec![(*gate, params.clone())];
         for step in &steps {
             let mut next_gates = Vec::new();
             for (g, gate_params) in &current_gates {
@@ -481,7 +477,7 @@ impl GateTransform {
                         (op.gate, op.params.clone())
                     }));
                 } else {
-                    next_gates.push((g.clone(), gate_params.clone()));
+                    next_gates.push((*g, gate_params.clone()));
                 }
             }
             current_gates = next_gates;
@@ -534,11 +530,15 @@ impl GateTransform {
             match instruction {
                 Instruction::Standard(sgate) => {
                     if sgate.num_qubits() == 1 {
-                        let Some(param_values) = Self::try_resolve_numeric_params(params, parameters)
+                        let Some(param_values) =
+                            Self::try_resolve_numeric_params(params, parameters)
                         else {
                             let q = qubits[0];
-                            let front_layer_operator =
-                                self.flush_front_layer(&mut front_layer, q.id(), &single_qubit_rule);
+                            let front_layer_operator = self.flush_front_layer(
+                                &mut front_layer,
+                                q.id(),
+                                &single_qubit_rule,
+                            );
                             if !front_layer_operator.is_empty() {
                                 new_operations.extend(front_layer_operator);
                             }
@@ -548,11 +548,10 @@ impl GateTransform {
 
                         // Single-qubit gate: accumulate into front layer
                         let q = qubits[0];
-                        let gate_matrix: Array2<Complex<f64>> =
-                            sgate
-                                .matrix(&param_values)
-                                .expect("single-qubit gate matrix should be well-formed")
-                                .into_owned();
+                        let gate_matrix: Array2<Complex<f64>> = sgate
+                            .matrix(&param_values)
+                            .expect("single-qubit gate matrix should be well-formed")
+                            .into_owned();
 
                         if let Some(existing) = front_layer.get(&q.id()) {
                             front_layer.insert(q.id(), gate_matrix.dot(existing));

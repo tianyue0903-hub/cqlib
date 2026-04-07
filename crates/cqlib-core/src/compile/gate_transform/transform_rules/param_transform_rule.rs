@@ -6,7 +6,6 @@ use smallvec::{SmallVec, smallvec};
 use std::f64::consts::PI;
 
 /// ParamTransformRule provides transformation rules for single-qubit parametrized gates.
-
 pub struct ParamTransformRule {
     pub name: String,
 }
@@ -127,7 +126,11 @@ impl ParamTransformRule {
 
         let mut result = DecomposedGate::new();
         result.push_single(StandardGate::H, smallvec![], 0);
-        result.push_single(StandardGate::RX, smallvec![Parameter::from(0.0) - phi.clone()], 0);
+        result.push_single(
+            StandardGate::RX,
+            smallvec![Parameter::from(0.0) - phi.clone()],
+            0,
+        );
         result.push_single(StandardGate::H, smallvec![], 0);
         result.push_single(StandardGate::RX, smallvec![theta], 0);
         result.push_single(StandardGate::H, smallvec![], 0);
@@ -242,7 +245,11 @@ impl ParamTransformRule {
         let phi = parameters[0].clone();
 
         let mut result = DecomposedGate::new();
-        result.push_single(StandardGate::RXY, smallvec![Parameter::from(PI / 2.0), phi], 0);
+        result.push_single(
+            StandardGate::RXY,
+            smallvec![Parameter::from(PI / 2.0), phi],
+            0,
+        );
         result
     }
 
@@ -256,8 +263,16 @@ impl ParamTransformRule {
 
         let mut result = DecomposedGate::new();
         result.push_single(StandardGate::X, smallvec![], 0);
-        result.push_single(StandardGate::XY2P, smallvec![Parameter::from(0.0) - phi.clone() / 2.0], 0);
-        result.push_single(StandardGate::XY2P, smallvec![Parameter::from(0.0) - phi.clone() / 2.0], 0);
+        result.push_single(
+            StandardGate::XY2P,
+            smallvec![Parameter::from(0.0) - phi.clone() / 2.0],
+            0,
+        );
+        result.push_single(
+            StandardGate::XY2P,
+            smallvec![Parameter::from(0.0) - phi.clone() / 2.0],
+            0,
+        );
         result.push_single(StandardGate::RY, smallvec![Parameter::from(PI / 2.0)], 0);
         result.push_single(StandardGate::XY2P, smallvec![theta.clone() / 2.0], 0);
         result.push_single(StandardGate::XY2P, smallvec![theta / 2.0], 0);
@@ -275,7 +290,11 @@ impl ParamTransformRule {
         let phi = parameters[0].clone();
 
         let mut result = DecomposedGate::new();
-        result.push_single(StandardGate::RXY, smallvec![Parameter::from(-PI / 2.0), phi], 0);
+        result.push_single(
+            StandardGate::RXY,
+            smallvec![Parameter::from(-PI / 2.0), phi],
+            0,
+        );
         result
     }
 
@@ -289,8 +308,16 @@ impl ParamTransformRule {
 
         let mut result = DecomposedGate::new();
         result.push_single(StandardGate::X, smallvec![], 0);
-        result.push_single(StandardGate::XY2M, smallvec![Parameter::from(0.0) - phi.clone() / 2.0], 0);
-        result.push_single(StandardGate::XY2M, smallvec![Parameter::from(0.0) - phi.clone() / 2.0], 0);
+        result.push_single(
+            StandardGate::XY2M,
+            smallvec![Parameter::from(0.0) - phi.clone() / 2.0],
+            0,
+        );
+        result.push_single(
+            StandardGate::XY2M,
+            smallvec![Parameter::from(0.0) - phi.clone() / 2.0],
+            0,
+        );
         result.push_single(StandardGate::RY, smallvec![Parameter::from(PI / 2.0)], 0);
         result.push_single(StandardGate::XY2M, smallvec![theta.clone() / 2.0], 0);
         result.push_single(StandardGate::XY2M, smallvec![theta / 2.0], 0);
@@ -299,7 +326,6 @@ impl ParamTransformRule {
         result.push_single(StandardGate::XY2M, smallvec![phi / 2.0], 0);
         result
     }
-
 }
 
 #[cfg(test)]

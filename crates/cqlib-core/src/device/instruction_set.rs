@@ -77,7 +77,7 @@ fn get_category_key(gate: &StandardGate) -> Option<StandardGate> {
     let categories = get_two_qubit_categories();
     for (key, members) in categories.iter() {
         if members.contains(gate) {
-            return Some(key.clone());
+            return Some(*key);
         }
     }
     None
@@ -148,10 +148,7 @@ fn make_two_qubit_rule(source: &StandardGate, target: &StandardGate) -> Transfor
     )
 }
 
-fn make_single_qubit_param_rule(
-    source: &StandardGate,
-    target: &StandardGate,
-) -> TransformRuleKind {
+fn make_single_qubit_param_rule(source: &StandardGate, target: &StandardGate) -> TransformRuleKind {
     TransformRuleKind::SingleQubitParam(
         SingleQubitParamTransformRule::from_gates(source, target).unwrap_or_else(|| {
             panic!(
@@ -265,8 +262,7 @@ impl InstructionSet {
         // If source is already the target gate, no transformation needed
         if self.double_qubit_gate.contains(&source) {
             let empty_rules = Vec::new();
-            self.two_qubit_rule_map
-                .insert(source.clone(), empty_rules.clone());
+            self.two_qubit_rule_map.insert(source, empty_rules.clone());
             return Ok(empty_rules);
         }
 
@@ -295,19 +291,16 @@ impl InstructionSet {
                 // Source and target are in the same category
                 if source == source_cate || *dg == target_cate {
                     // Direct transform if either is the key gate
-                    curr_rules.push(TransformStep::new(
-                        source.clone(),
-                        make_two_qubit_rule(&source, dg),
-                    ));
+                    curr_rules.push(TransformStep::new(source, make_two_qubit_rule(&source, dg)));
                 } else {
                     // Need to go through the key gate
                     // source -> key -> target
                     curr_rules.push(TransformStep::new(
-                        source.clone(),
+                        source,
                         make_two_qubit_rule(&source, &source_cate),
                     ));
                     curr_rules.push(TransformStep::new(
-                        target_cate.clone(),
+                        target_cate,
                         make_two_qubit_rule(&target_cate, dg),
                     ));
                 }
@@ -318,21 +311,21 @@ impl InstructionSet {
                 // Step 1: source -> source_key (if source is not already the key)
                 if source != source_cate {
                     curr_rules.push(TransformStep::new(
-                        source.clone(),
+                        source,
                         make_two_qubit_rule(&source, &source_cate),
                     ));
                 }
 
                 // Step 2: source_key -> target_key
                 curr_rules.push(TransformStep::new(
-                    source_cate.clone(),
+                    source_cate,
                     make_two_qubit_rule(&source_cate, &target_cate),
                 ));
 
                 // Step 3: target_key -> target (if target is not the key)
                 if *dg != target_cate {
                     curr_rules.push(TransformStep::new(
-                        target_cate.clone(),
+                        target_cate,
                         make_two_qubit_rule(&target_cate, dg),
                     ));
                 }
@@ -344,8 +337,7 @@ impl InstructionSet {
         }
 
         // Cache the result
-        self.two_qubit_rule_map
-            .insert(source.clone(), rules.clone());
+        self.two_qubit_rule_map.insert(source, rules.clone());
 
         Ok(rules)
     }
