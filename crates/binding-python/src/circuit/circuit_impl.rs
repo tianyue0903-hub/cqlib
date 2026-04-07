@@ -45,7 +45,10 @@
 //! ```
 
 use super::bit::{PyIntListOrQubitList, PyIntOrQubit, PyIntQubitList, PyQubit};
-use super::gate::{PyCircuitGate, PyConditionView, PyMcGate, PyStandardGate, PyUnitaryGate};
+use super::gate::{
+    PyCircuitGate, PyConditionView, PyControlFlow, PyDirective, PyMcGate, PyStandardGate,
+    PyUnitaryGate,
+};
 use super::operation::PyOperation;
 use super::parameter::PyParameter;
 use crate::circuit::operation::PyOperationIter;
@@ -1202,7 +1205,7 @@ impl PyCircuit {
     ///     condition: The classical condition to evaluate (ConditionView)
     ///     true_body: List of operation tuples for the true branch.
     ///         Each tuple is (gate, qubits) or (gate, qubits, params).
-    ///         - gate: The gate to apply (StandardGate, McGate, UnitaryGate)
+    ///         - gate: The gate to apply (StandardGate, McGate, UnitaryGate, Directive, or ControlFlow)
     ///         - qubits: List of qubit indices
     ///         - params: Optional list of float parameters
     ///     false_body: Optional list of operation tuples for the false branch.
@@ -1251,7 +1254,7 @@ impl PyCircuit {
     ///     condition: The classical condition to evaluate before each iteration
     ///     body: List of operation tuples for the loop body.
     ///         Each tuple is (gate, qubits) or (gate, qubits, params).
-    ///         - gate: The gate to apply (StandardGate, McGate, UnitaryGate)
+    ///         - gate: The gate to apply (StandardGate, McGate, UnitaryGate, Directive, or ControlFlow)
     ///         - qubits: List of qubit indices
     ///         - params: Optional list of float parameters
     ///
@@ -1338,7 +1341,7 @@ impl PyCircuit {
 
 /// A tuple representing an operation for control flow bodies.
 /// Format: (gate, qubits) or (gate, qubits, params)
-/// - gate: StandardGate, McGate, or UnitaryGate
+/// - gate: StandardGate, McGate, UnitaryGate, Directive, or ControlFlow
 /// - qubits: List of qubit indices or Qubit objects
 /// - params: Optional list of parameters (float or Parameter objects)
 pub struct PyOpTuple {
@@ -1400,9 +1403,15 @@ fn convert_op_tuples(
             } else if let Ok(u_gate) = gate_obj.cast_bound::<PyUnitaryGate>(py) {
                 let py_gate = u_gate.extract::<PyUnitaryGate>()?;
                 instruction = Instruction::UnitaryGate(Box::new(py_gate.into()));
+            } else if let Ok(directive) = gate_obj.cast_bound::<PyDirective>(py) {
+                let py_gate = directive.extract::<PyDirective>()?;
+                instruction = Instruction::Directive(py_gate.into());
+            } else if let Ok(control_flow) = gate_obj.cast_bound::<PyControlFlow>(py) {
+                let py_gate = control_flow.extract::<PyControlFlow>()?;
+                instruction = Instruction::ControlFlowGate(py_gate.into());
             } else {
                 return Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
-                    "Gate must be StandardGate, McGate, or UnitaryGate",
+                    "Gate must be StandardGate, McGate, UnitaryGate, Directive, or ControlFlow",
                 ));
             }
 

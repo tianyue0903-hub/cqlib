@@ -30,6 +30,64 @@ def assert_all_2q_on_topology(circuit: Circuit, topology: Topology) -> None:
         assert c0 or c1, f"2q op {op.name} on non-edge ({q0.index}, {q1.index})"
 
 
+def assert_ops_on_topology_recursive(ops, topology: Topology) -> None:
+    for op in ops:
+        if op.num_qubits == 2:
+            q0, q1 = op.qubits
+            assert topology.is_connected(q0.index, q1.index) or topology.is_connected(
+                q1.index, q0.index
+            )
+        control_flow = op.instruction.control_flow
+        if control_flow is None:
+            continue
+        if control_flow.is_if_else:
+            gate = control_flow.as_if_else
+            assert_ops_on_topology_recursive(gate.true_body, topology)
+            if gate.false_body is not None:
+                assert_ops_on_topology_recursive(gate.false_body, topology)
+        if control_flow.is_while_loop:
+            gate = control_flow.as_while_loop
+            assert_ops_on_topology_recursive(gate.body, topology)
+
+
+def count_swaps_recursive(ops) -> int:
+    total = 0
+    for op in ops:
+        if op.name.upper() == "SWAP":
+            total += 1
+        control_flow = op.instruction.control_flow
+        if control_flow is None:
+            continue
+        if control_flow.is_if_else:
+            gate = control_flow.as_if_else
+            total += count_swaps_recursive(gate.true_body)
+            if gate.false_body is not None:
+                total += count_swaps_recursive(gate.false_body)
+        if control_flow.is_while_loop:
+            gate = control_flow.as_while_loop
+            total += count_swaps_recursive(gate.body)
+    return total
+
+
+def directive_names_recursive(ops) -> list[str]:
+    names = []
+    for op in ops:
+        if op.instruction.is_directive:
+            names.append(op.name)
+        control_flow = op.instruction.control_flow
+        if control_flow is None:
+            continue
+        if control_flow.is_if_else:
+            gate = control_flow.as_if_else
+            names.extend(directive_names_recursive(gate.true_body))
+            if gate.false_body is not None:
+                names.extend(directive_names_recursive(gate.false_body))
+        if control_flow.is_while_loop:
+            gate = control_flow.as_while_loop
+            names.extend(directive_names_recursive(gate.body))
+    return names
+
+
 def random_circuit(
     num_qubits: int,
     rng: random.Random = None,

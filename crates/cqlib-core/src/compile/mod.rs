@@ -26,15 +26,27 @@
 
 /// Error types emitted by compile and mapping workflows.
 pub mod error;
+/// Shared gate-graph construction utilities for compile passes.
+pub(crate) mod graph;
 /// Mapping/routing algorithms and related data structures.
 pub mod mapping;
+/// Template-matching based optimization utilities.
 pub mod optimization;
+/// Shared flat-circuit preparation helpers for compile passes.
+pub(crate) mod prepared;
+/// Shared structured-program helpers for control-flow-aware compile passes.
+pub(crate) mod structured;
 
 pub use error::CompileError;
 pub use mapping::{
-    FidelityMap, SabreConfig, SabreMapping, Vf2CandidateOptions, Vf2CandidateScore,
-    Vf2LayoutCandidate, Vf2Mapping, Vf2Policy, Vf2ScoreWeights, map_with_vf2_sabre,
+    FidelityMap, GaConfig, GeneticAlgMapping, SabreConfig, SabreMapping, Vf2CandidateOptions,
+    Vf2CandidateScore, Vf2LayoutCandidate, Vf2Mapping, Vf2Policy, Vf2ScoreWeights, map_with_ga,
+    map_with_vf2_sabre,
 };
 
 pub mod gate_transform;
-pub use optimization::commutative::CommutativeOptimization;
+pub use optimization::{
+    CliffordRzConfig, CliffordRzLevel, CliffordRzOptimization, CliffordRzStrategy, TemplateLibrary,
+    TemplateMatch, TemplateMatching, TemplateOptimization, TemplateOptimizationConfig,
+    CommutativeOptimization,
+};
