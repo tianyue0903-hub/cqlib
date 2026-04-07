@@ -11,7 +11,59 @@
 # that they have been altered from the originals.
 
 from typing import Dict, List, Optional, Tuple, TypedDict
-from cqlib.circuit import Circuit
+from cqlib.circuit import Circuit, Operation
+
+class CommutativeOptimization:
+    """Optimize the given Circuit by merging the adjacent gates with
+    the commutative relation between gates in consideration.
+
+    During the process, several parameterization and deparameterization process could be included, as listed
+        `'x'`: Rx <--> X, SX, SX_dagger
+        `'y'`: Ry <--> Y, SY, SY_dagger
+        `'z'`: Rz <--> Z, S, T, S_dagger, T_dagger
+    Whether to parameterize or deparameterize certain kinds of gates could be specified
+    by listing them in `para` and `depara`.
+    """
+    def __init__(
+        self,
+        para: Optional[List[str]],
+        depara: Optional[List[str]],
+        keep_phase: bool,
+        keep_order: bool,
+    ) -> None:
+        """Initializes the CommutativeOptimization instance.
+
+        Args:
+            para: A list of parameters to be parameterized.
+            depara: A list of parameters to be deparameterized.
+            keep_phase: Whether to keep the global phase of the circuit.
+            keep_order: Force to ignore parameterization and deparameterization.
+        """
+        ...
+
+    @staticmethod
+    def is_commutative(a: Operation, b: Operation) -> bool:
+        """Checks whether two operations are commutative.
+
+        Args:
+            a: The first operation.
+            b: The second operation.
+
+        Returns:
+            bool: `True` if the operations commute, `False` otherwise.
+        """
+        ...
+
+    def execute(self, circuit: Circuit) -> Circuit:
+        """Executes the commutative optimization on the given circuit.
+
+        Args:
+            circuit: The input circuit to be optimized.
+
+        Returns:
+            Circuit: The optimized circuit.
+        """
+        ...
 
 class Vf2CandidateScoreDict(TypedDict):
     """Scoring breakdown for one VF2 initial-layout candidate.

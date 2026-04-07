@@ -28,9 +28,11 @@
 pub mod error;
 /// Mapping/routing algorithms and related data structures.
 pub mod mapping;
+pub mod optimization;
 
 pub use error::CompileError;
 pub use mapping::{
     FidelityMap, SabreConfig, SabreMapping, Vf2CandidateOptions, Vf2CandidateScore,
     Vf2LayoutCandidate, Vf2Mapping, Vf2Policy, Vf2ScoreWeights, map_with_vf2_sabre,
 };
+pub use optimization::commutative::CommutativeOptimization;
