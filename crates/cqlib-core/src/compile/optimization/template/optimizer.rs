@@ -178,8 +178,34 @@ impl TemplateOptimization {
         let _ = &self.config;
 
         let mut current = circuit.clone();
-        for template in self.library.compiled_templates() {
-            current = apply_template_substitutions(&current, template)?;
+        for template_group in self.library.compiled_template_groups() {
+            let mut best = current.clone();
+            let mut best_cost = estimate_circuit_cost(&best);
+            let mut best_penalty = estimate_circuit_penalty(&best);
+            let mut best_len = best.operations().len();
+
+            for template in template_group {
+                let candidate = apply_template_substitutions(&current, template)?;
+                let candidate_cost = estimate_circuit_cost(&candidate);
+                let candidate_penalty = estimate_circuit_penalty(&candidate);
+                let candidate_len = candidate.operations().len();
+
+                let better_cost = candidate_cost < best_cost;
+                let better_penalty =
+                    candidate_cost == best_cost && candidate_penalty + 1e-12 < best_penalty;
+                let better_len = candidate_cost == best_cost
+                    && (candidate_penalty - best_penalty).abs() <= 1e-12
+                    && candidate_len < best_len;
+
+                if better_cost || better_penalty || better_len {
+                    best = candidate;
+                    best_cost = candidate_cost;
+                    best_penalty = candidate_penalty;
+                    best_len = candidate_len;
+                }
+            }
+
+            current = best;
         }
 
         Ok(current)
@@ -367,10 +393,15 @@ fn assignment_is_consistent(
         let Some(other_c) = other_c_opt else {
             continue;
         };
-        if template_view.is_reachable(other_t, t_id) && !circuit_view.is_reachable(*other_c, c_id) {
+        let template_before = template_view.is_reachable(other_t, t_id);
+        let template_after = template_view.is_reachable(t_id, other_t);
+        let circuit_before = circuit_view.is_reachable(*other_c, c_id);
+        let circuit_after = circuit_view.is_reachable(c_id, *other_c);
+
+        if template_before != circuit_before {
             return false;
         }
-        if template_view.is_reachable(t_id, other_t) && !circuit_view.is_reachable(c_id, *other_c) {
+        if template_after != circuit_after {
             return false;
         }
     }
@@ -880,6 +911,14 @@ fn estimate_op_cost(op: &Operation) -> i64 {
         Instruction::CircuitGate(_) => 10,
         Instruction::Directive(_) | Instruction::ControlFlowGate(_) | Instruction::Delay => 1000,
     }
+}
+
+fn estimate_circuit_cost(circuit: &Circuit) -> i64 {
+    circuit.operations().iter().map(estimate_op_cost).sum()
+}
+
+fn estimate_circuit_penalty(circuit: &Circuit) -> f64 {
+    circuit.operations().iter().map(estimate_fidelity_penalty).sum()
 }
 
 /// Returns static costs for standard gates.

@@ -16,6 +16,7 @@ Template matching compiler tests.
 Test coverage:
 - basic template matching behavior
 - strict parameter compatibility behavior
+- matching does not skip intermediate gates
 - heuristic argument path acceptance
 - no-match behavior
 """
@@ -41,6 +42,22 @@ def _simple_template() -> Circuit:
     return template
 
 
+def _hh_template() -> Circuit:
+    """Builds H-H identity template."""
+    template = Circuit(1)
+    template.h(0)
+    template.h(0)
+    return template
+
+
+def _cxcx_template() -> Circuit:
+    """Builds CX-CX identity template."""
+    template = Circuit(2)
+    template.cx(0, 1)
+    template.cx(0, 1)
+    return template
+
+
 class TestTemplateMatching:
     """Tests template matching API behavior."""
 
@@ -62,6 +79,30 @@ class TestTemplateMatching:
         matcher = TemplateMatching()
         matches = matcher.run(circuit, template)
         assert matches == []
+
+    def test_hh_template_does_not_match_hxh(self) -> None:
+        """Does not match H-H across a non-commuting middle X gate."""
+        circuit = Circuit(1)
+        circuit.h(0)
+        circuit.x(0)
+        circuit.h(0)
+
+        matcher = TemplateMatching()
+        matches = matcher.run(circuit, _hh_template())
+        assert matches == []
+
+    def test_cxcx_template_does_not_match_cx_h_cx(self) -> None:
+        """Does not match CX-CX across a middle Hadamard gate."""
+        matcher = TemplateMatching()
+
+        for hadamard_qubit in (0, 1):
+            circuit = Circuit(2)
+            circuit.cx(0, 1)
+            circuit.h(hadamard_qubit)
+            circuit.cx(0, 1)
+
+            matches = matcher.run(circuit, _cxcx_template())
+            assert matches == []
 
     def test_symbolic_parameter_exactness(self) -> None:
         """Matches symbolic parameters only when expressions are equal."""

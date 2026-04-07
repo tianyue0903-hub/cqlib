@@ -16,7 +16,7 @@ use crate::circuit::gate::{Instruction, StandardGate};
 use crate::circuit::{Circuit, ParameterValue, Qubit};
 use crate::compile::error::CompileError;
 use crate::compile::graph::{CommutationView, GateGraph};
-use crate::compile::prepared::{PreparedCircuit, preprocess_circuit};
+use crate::compile::prepared::{PreparedCircuit, append_operation, preprocess_circuit};
 use crate::ir::qcis_loads;
 use serde::Deserialize;
 use std::fs;
@@ -37,7 +37,7 @@ pub(crate) struct CompiledTemplate {
 #[derive(Debug, Clone, Default)]
 pub struct TemplateLibrary {
     templates: Vec<Circuit>,
-    compiled_templates: Vec<CompiledTemplate>,
+    compiled_template_groups: Vec<Vec<CompiledTemplate>>,
 }
 
 impl TemplateLibrary {
@@ -91,9 +91,9 @@ impl TemplateLibrary {
 
     /// Registers one template rule after compile-layer validation.
     pub fn register_rule(&mut self, template: Circuit) -> Result<(), CompileError> {
-        let compiled = compile_template(&template)?;
+        let compiled = compile_template_rotations(&template)?;
         self.templates.push(template);
-        self.compiled_templates.push(compiled);
+        self.compiled_template_groups.push(compiled);
         Ok(())
     }
 
@@ -103,14 +103,14 @@ impl TemplateLibrary {
         I: IntoIterator<Item = Circuit>,
     {
         let mut new_templates = Vec::new();
-        let mut compiled_templates = Vec::new();
+        let mut compiled_template_groups = Vec::new();
         for template in templates {
-            compiled_templates.push(compile_template(&template)?);
+            compiled_template_groups.push(compile_template_rotations(&template)?);
             new_templates.push(template);
         }
 
         self.templates.extend(new_templates);
-        self.compiled_templates.extend(compiled_templates);
+        self.compiled_template_groups.extend(compiled_template_groups);
         Ok(())
     }
 
@@ -129,8 +129,8 @@ impl TemplateLibrary {
         &self.templates
     }
 
-    pub(crate) fn compiled_templates(&self) -> &[CompiledTemplate] {
-        &self.compiled_templates
+    pub(crate) fn compiled_template_groups(&self) -> &[Vec<CompiledTemplate>] {
+        &self.compiled_template_groups
     }
 }
 
@@ -146,6 +146,34 @@ pub(crate) fn compile_template(template: &Circuit) -> Result<CompiledTemplate, C
         view,
         node_subsets,
     })
+}
+
+fn compile_template_rotations(template: &Circuit) -> Result<Vec<CompiledTemplate>, CompileError> {
+    let prepared = preprocess_circuit(template)?;
+    if prepared.operations.is_empty() {
+        return Ok(vec![compile_template(template)?]);
+    }
+
+    let width = prepared.operations.len();
+    let parameter_pool: Vec<crate::circuit::Parameter> =
+        template.parameters().iter().cloned().collect();
+    let qubits = template.qubits();
+    let mut compiled = Vec::with_capacity(width);
+
+    for start in 0..width {
+        let mut rotated = Circuit::from_qubits(qubits.clone())?;
+        for offset in 0..width {
+            let op_index = (start + offset) % width;
+            append_operation(
+                &mut rotated,
+                &prepared.operations[op_index].op,
+                &parameter_pool,
+            )?;
+        }
+        compiled.push(compile_template(&rotated)?);
+    }
+
+    Ok(compiled)
 }
 
 /// JSON template file wrapper.
@@ -190,17 +218,15 @@ fn enumerate_template_node_subsets(template_size: usize) -> Vec<Vec<usize>> {
     }
 
     let mut subsets = Vec::<Vec<usize>>::new();
-    let total = 1usize << template_size;
-    for mask in 1..total {
-        let mut subset = Vec::new();
-        for bit in 0..template_size {
-            if (mask >> bit) & 1 == 1 {
-                subset.push(bit);
+    for len in (1..=template_size).rev() {
+        for start in 0..=(template_size - len) {
+            let mut subset = Vec::with_capacity(len);
+            for node_id in start..(start + len) {
+                subset.push(node_id);
             }
+            subsets.push(subset);
         }
-        subsets.push(subset);
     }
-    subsets.sort_by(|a, b| b.len().cmp(&a.len()).then_with(|| a.cmp(b)));
     subsets
 }
 

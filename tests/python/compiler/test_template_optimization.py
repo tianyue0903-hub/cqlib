@@ -23,6 +23,8 @@ Test coverage:
 
 from pathlib import Path
 
+import numpy as np
+
 from cqlib.circuit import Circuit
 from cqlib.compiler import TemplateOptimization
 
@@ -35,6 +37,14 @@ def _hh_template() -> Circuit:
     return template
 
 
+def _cxcx_template() -> Circuit:
+    """Builds CX-CX cancellation template."""
+    template = Circuit(2)
+    template.cx(0, 1)
+    template.cx(0, 1)
+    return template
+
+
 def _hcxh_cz_identity_template() -> Circuit:
     """Builds identity template H-CX-H-CZ."""
     template = Circuit(2)
@@ -43,6 +53,14 @@ def _hcxh_cz_identity_template() -> Circuit:
     template.h(1)
     template.cz(0, 1)
     return template
+
+
+def _op_names(circuit: Circuit) -> list[str]:
+    return [op.instruction.name for op in circuit.operations]
+
+
+def _assert_same_matrix(lhs: Circuit, rhs: Circuit) -> None:
+    assert np.allclose(lhs.to_matrix(), rhs.to_matrix())
 
 
 class TestTemplateOptimization:
@@ -68,9 +86,42 @@ class TestTemplateOptimization:
         circuit.h(0)
         circuit.cx(0, 1)
 
-        optimizer = TemplateOptimization([_hh_template()], qubit_fixing_cnt=1, prune_depth=3, prune_width=1)
+        optimizer = TemplateOptimization(
+            [_hh_template()],
+            qubit_fixing_cnt=1,
+            prune_depth=3,
+            prune_width=1,
+        )
         optimized = optimizer.execute(circuit)
         assert len(optimized.operations) == 1
+
+    def test_hxh_is_not_reduced_by_hh_template(self) -> None:
+        """Does not cancel H gates across a non-matching middle X gate."""
+        circuit = Circuit(1)
+        circuit.h(0)
+        circuit.x(0)
+        circuit.h(0)
+
+        optimizer = TemplateOptimization([_hh_template()])
+        optimized = optimizer.execute(circuit)
+
+        assert _op_names(optimized) == ["H", "X", "H"]
+        _assert_same_matrix(circuit, optimized)
+
+    def test_cx_h_cx_is_not_reduced_by_cxcx_template(self) -> None:
+        """Does not cancel CX gates across a middle Hadamard gate."""
+        optimizer = TemplateOptimization([_cxcx_template()])
+
+        for hadamard_qubit in (0, 1):
+            circuit = Circuit(2)
+            circuit.cx(0, 1)
+            circuit.h(hadamard_qubit)
+            circuit.cx(0, 1)
+
+            optimized = optimizer.execute(circuit)
+
+            assert _op_names(optimized) == ["CX", "H", "CX"]
+            _assert_same_matrix(circuit, optimized)
 
     def test_iterative_optimization(self) -> None:
         """Runs iterative optimization until no further size decrease occurs."""
@@ -93,6 +144,18 @@ class TestTemplateOptimization:
         optimizer = TemplateOptimization([_hcxh_cz_identity_template()])
         optimized = optimizer.execute(circuit)
         assert len(optimized.operations) == 1
+
+    def test_replacement_cz_cx(self) -> None:
+        """Finds the cyclic identity rewrite H-CZ-H -> CX from H-CX-H-CZ."""
+        circuit = Circuit(2)
+        circuit.h(1)
+        circuit.cz(0, 1)
+        circuit.h(1)
+
+        optimizer = TemplateOptimization([_hcxh_cz_identity_template()])
+        optimized = optimizer.execute(circuit)
+        assert _op_names(optimized) == ["CX"]
+        _assert_same_matrix(circuit, optimized)
 
     def test_replacement_skips_worse_fidelity_tie(self) -> None:
         """Skips replacement when gate cost ties and predicted fidelity degrades."""
