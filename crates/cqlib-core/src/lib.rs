@@ -20,6 +20,8 @@ pub mod error_mitigation;
 pub mod ir;
 pub mod qis;
 
+pub use error_mitigation::VirtualDistillation;
+pub use error_mitigation::VirtualDistillationError;
 pub use error_mitigation::ZNEMitigation;
 
 pub mod visualization;
