@@ -17,7 +17,10 @@ pub mod ir;
 pub mod qis;
 pub mod visualization;
 
-use compile::{PyCommutativeOptimization, PySabreConfig};
+use compile::{
+    PyCliffordRzOptimization, PyCommutativeOptimization, PyGaConfig, PySabreConfig,
+    PyTemplateMatching, PyTemplateOptimization,
+};
 use pyo3::prelude::*;
 
 /// A Python module implemented in Rust.
@@ -34,6 +37,10 @@ fn binding_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Compile utilities
     m.add_class::<PyCommutativeOptimization>()?;
     m.add_class::<PySabreConfig>()?;
+    m.add_class::<PyTemplateMatching>()?;
+    m.add_class::<PyTemplateOptimization>()?;
+    m.add_class::<PyCliffordRzOptimization>()?;
+    m.add_class::<PyGaConfig>()?;
     m.add_function(wrap_pyfunction!(compile::py_vf2_is_subgraph_isomorphic, m)?)?;
     m.add_function(wrap_pyfunction!(compile::py_vf2_find_initial_layout, m)?)?;
     m.add_function(wrap_pyfunction!(
@@ -42,7 +49,7 @@ fn binding_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     m.add_function(wrap_pyfunction!(compile::py_vf2_map, m)?)?;
     m.add_function(wrap_pyfunction!(compile::py_map_with_vf2_sabre, m)?)?;
-
+    m.add_function(wrap_pyfunction!(compile::py_map_with_ga, m)?)?;
     // Register visualization functions
     m.add_function(wrap_pyfunction!(visualization::py_draw_text, m)?)?;
     m.add_function(wrap_pyfunction!(visualization::py_draw_figure, m)?)?;

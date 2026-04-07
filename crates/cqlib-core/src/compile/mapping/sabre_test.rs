@@ -13,12 +13,34 @@
 use super::*;
 use std::collections::HashSet;
 
+fn line_topology(ids: &[u32]) -> Topology {
+    let qubits: Vec<Qubit> = ids.iter().copied().map(Qubit::new).collect();
+    let couplings = ids
+        .windows(2)
+        .map(|w| (Qubit::new(w[0]), Qubit::new(w[1]), "CX".to_string()))
+        .collect();
+    Topology::new(qubits, couplings).unwrap()
+}
+
 fn star_topology() -> Topology {
     Topology::new(
         vec![Qubit::new(0), Qubit::new(1), Qubit::new(2)],
         vec![
             (Qubit::new(0), Qubit::new(1), "CX".to_string()),
             (Qubit::new(0), Qubit::new(2), "CX".to_string()),
+        ],
+    )
+    .unwrap()
+}
+
+fn square_topology() -> Topology {
+    Topology::new(
+        vec![Qubit::new(0), Qubit::new(1), Qubit::new(2), Qubit::new(3)],
+        vec![
+            (Qubit::new(0), Qubit::new(1), "CX".to_string()),
+            (Qubit::new(1), Qubit::new(2), "CX".to_string()),
+            (Qubit::new(2), Qubit::new(3), "CX".to_string()),
+            (Qubit::new(3), Qubit::new(0), "CX".to_string()),
         ],
     )
     .unwrap()
@@ -68,9 +90,15 @@ fn build_star_state(
     }
 }
 
+fn count_swap_ops(ops: &[Operation]) -> usize {
+    ops.iter()
+        .filter(|op| matches!(&op.instruction, Instruction::Standard(StandardGate::SWAP)))
+        .count()
+}
+
 #[test]
 fn test_initial_layout_candidates_use_ranked_vf2_seed_first() {
-    let topology = Topology::line(vec![0.into(), 1.into(), 2.into()]);
+    let topology = line_topology(&[0, 1, 2]);
     let circuit = triangle_circuit();
     let cfg = SabreConfig {
         vf2_policy: Vf2Policy::InitialOnly,
@@ -115,6 +143,98 @@ fn test_initial_layout_candidates_use_ranked_vf2_seed_first() {
 }
 
 #[test]
+fn test_best_prepared_layouts_use_bounded_top_k_for_structured_candidates() {
+    let topology = square_topology();
+    let cfg = SabreConfig {
+        vf2_policy: Vf2Policy::InitialOnly,
+        vf2_seed_top_k: 4,
+        ..SabreConfig::default()
+    };
+
+    let mapper = SabreMapping::new(topology, None, cfg).unwrap();
+    let prepared = preprocess_circuit(&single_cx_circuit()).unwrap();
+    let states = mapper.best_prepared_layouts(&prepared).unwrap();
+
+    assert!(states.len() > 1);
+    assert!(states.len() <= 4);
+}
+
+#[test]
+fn test_continuation_entry_states_preserve_explicit_seed_before_vf2_candidates() {
+    let topology = square_topology();
+    let cfg = SabreConfig {
+        vf2_policy: Vf2Policy::InitialOnly,
+        vf2_seed_top_k: 4,
+        ..SabreConfig::default()
+    };
+
+    let mapper = SabreMapping::new(topology, None, cfg).unwrap();
+    let program = preprocess_program(&single_cx_circuit()).unwrap();
+    let explicit = StructuredLayoutState::new(&[3, 0]);
+    let states = mapper
+        .continuation_entry_states(&program, &program.items, vec![explicit.clone()])
+        .unwrap();
+
+    assert_eq!(states.first(), Some(&explicit));
+    assert!(states.len() > 1);
+}
+
+#[test]
+fn test_merge_branch_routes_uses_worst_case_cost_and_preserves_empty_false_body() {
+    let topology = line_topology(&[0, 1, 2]);
+    let mapper = SabreMapping::new(topology, None, SabreConfig::default()).unwrap();
+    let true_route = StructuredRoute {
+        exit_l2p: vec![0, 2],
+        ops: Vec::new(),
+        cost: 5,
+        log_fidelity: -1.0,
+        objective: 0.0,
+    };
+    let false_route = StructuredRoute {
+        exit_l2p: vec![0, 1],
+        ops: Vec::new(),
+        cost: 2,
+        log_fidelity: -0.25,
+        objective: 0.0,
+    };
+
+    let merged = mapper
+        .merge_branch_routes(
+            &true_route,
+            &false_route,
+            &StructuredLayoutState::new(&[0, 1]),
+            true,
+        )
+        .unwrap();
+
+    assert_eq!(count_swap_ops(&merged.true_body), 1);
+    assert!(matches!(merged.false_body.as_ref(), Some(body) if body.is_empty()));
+    assert_eq!(merged.cost, 8);
+    assert_eq!(merged.log_fidelity, -1.0);
+}
+
+#[test]
+fn test_close_loop_body_reconciles_back_to_loop_layout() {
+    let topology = line_topology(&[0, 1, 2]);
+    let mapper = SabreMapping::new(topology, None, SabreConfig::default()).unwrap();
+    let body_route = StructuredRoute {
+        exit_l2p: vec![0, 2],
+        ops: Vec::new(),
+        cost: 4,
+        log_fidelity: -0.5,
+        objective: 0.0,
+    };
+
+    let closed = mapper
+        .close_loop_body(&body_route, &StructuredLayoutState::new(&[0, 1]))
+        .unwrap();
+
+    assert_eq!(count_swap_ops(&closed.body_ops), 1);
+    assert_eq!(closed.cost, 7);
+    assert_eq!(closed.log_fidelity, -0.5);
+}
+
+#[test]
 fn test_local_swap_scoring_prefers_higher_fidelity_when_weighted() {
     let topology = star_topology();
     let fidelity = star_fidelity_map();
@@ -129,7 +249,9 @@ fn test_local_swap_scoring_prefers_higher_fidelity_when_weighted() {
 
     let mapper = SabreMapping::new(topology, Some(fidelity), cfg).unwrap();
     let prepared = preprocess_circuit(&circuit).unwrap();
-    let info = mapper.build_circuit_info(&prepared, prepared.logical_qubits.len());
+    let info = mapper
+        .build_circuit_info(&prepared, prepared.logical_qubits.len())
+        .unwrap();
     let mut state = build_star_state(&mapper, &info, &[1, 2]);
 
     let swaps = mapper.obtain_swaps(&info, &mut state);
@@ -165,7 +287,9 @@ fn test_equal_cost_routes_prefer_higher_predicted_fidelity() {
 
     let mut mapper = SabreMapping::new(topology, Some(fidelity), cfg).unwrap();
     let prepared = preprocess_circuit(&circuit).unwrap();
-    let info = mapper.build_circuit_info(&prepared, prepared.logical_qubits.len());
+    let info = mapper
+        .build_circuit_info(&prepared, prepared.logical_qubits.len())
+        .unwrap();
     let group = mapper
         .execute_routing(&info, &prepared, &[1, 2], 32)
         .unwrap();

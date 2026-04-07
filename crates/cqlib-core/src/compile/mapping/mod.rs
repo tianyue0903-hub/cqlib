@@ -24,25 +24,33 @@
 //! These helpers are intentionally kept in one place to avoid duplicated
 //! validation and conversion logic between algorithms.
 
+/// Genetic Algorithm-based mapping optimizer.
+pub mod ga_mapping;
 /// SABRE mapper implementation and its configuration model.
 pub mod sabre;
 /// VF2-based structural mapper and candidate-layout search.
 pub mod vf2;
 
+pub(crate) use crate::compile::structured::{
+    PreparedIfElse, PreparedPassthroughOp, PreparedProgram, PreparedProgramItem, PreparedSegment,
+    PreparedWhileLoop, build_if_else_operation, build_while_loop_operation, map_program_static,
+    preprocess_program,
+};
+pub use ga_mapping::{GaConfig, GeneticAlgMapping};
 pub use sabre::{SabreConfig, SabreMapping, Vf2Policy};
 pub use vf2::{
     Vf2CandidateOptions, Vf2CandidateScore, Vf2LayoutCandidate, Vf2Mapping, Vf2ScoreWeights,
 };
 
 use crate::circuit::circuit_param::CircuitParam;
-use crate::circuit::circuit_param::ParameterValue;
-use crate::circuit::dag::Terminator;
+use crate::circuit::gate::control_flow::ControlFlow;
 use crate::circuit::gate::{Instruction, StandardGate};
-use crate::circuit::{Circuit, CircuitDag, Operation, Parameter, Qubit};
+use crate::circuit::{Circuit, Operation, Parameter, Qubit};
 use crate::compile::error::CompileError;
+pub(crate) use crate::compile::prepared::{PreparedCircuit, preprocess_circuit};
 use crate::device::Topology;
+use indexmap::IndexSet;
 use rustworkx_core::petgraph::visit::{EdgeRef, IntoEdgeReferences};
-use smallvec::{SmallVec, smallvec};
 use std::collections::{HashMap, HashSet};
 
 /// Optional fidelity map keyed by physical qubit edge.
@@ -50,26 +58,6 @@ use std::collections::{HashMap, HashSet};
 /// The mapping is treated as undirected by normalizing `(u, v)` and `(v, u)`
 /// to the same canonical key.
 pub type FidelityMap = HashMap<(Qubit, Qubit), f64>;
-
-#[derive(Debug, Clone)]
-/// Internal struct `PreparedOperation` used by compile mapping workflows.
-pub(crate) struct PreparedOperation {
-    /// Original operation from the source circuit.
-    pub(crate) op: Operation,
-    /// Logical-qubit indices corresponding to `op.qubits`.
-    pub(crate) logical_qubits: SmallVec<[usize; 2]>,
-}
-
-#[derive(Debug, Clone)]
-/// Internal struct `PreparedCircuit` used by compile mapping workflows.
-pub(crate) struct PreparedCircuit {
-    /// Logical qubits in circuit ordering.
-    pub(crate) logical_qubits: Vec<Qubit>,
-    /// Parameter pool copied from source circuit.
-    pub(crate) parameters: Vec<Parameter>,
-    /// Validated operations with cached logical indices.
-    pub(crate) operations: Vec<PreparedOperation>,
-}
 
 #[derive(Debug, Clone)]
 /// Internal struct `TopologyAdapter` used by compile mapping workflows.
@@ -86,6 +74,8 @@ pub(crate) struct TopologyAdapter {
     pub(crate) fidelity: Vec<Vec<f64>>,
     /// Indices in the largest connected component.
     pub(crate) largest_component: Vec<usize>,
+    /// Physical -> Index mapping.
+    pub(crate) qubit_to_index: HashMap<Qubit, usize>,
 }
 
 impl TopologyAdapter {
@@ -189,6 +179,7 @@ impl TopologyAdapter {
             dist,
             fidelity,
             largest_component,
+            qubit_to_index,
         })
     }
 
@@ -225,138 +216,69 @@ pub(crate) fn map_operation_qubits(op: &Operation, mapped_qubits: &[Qubit]) -> O
     mapped
 }
 
-/// Appends one mapped operation to output while resolving parameter references.
-pub(crate) fn append_operation(
-    output: &mut Circuit,
-    op: &Operation,
-    parameter_pool: &[Parameter],
-) -> Result<(), CompileError> {
-    let mut params: SmallVec<[ParameterValue; 3]> = smallvec![];
-    for p in &op.params {
-        match p {
-            CircuitParam::Fixed(v) => params.push(ParameterValue::Fixed(*v)),
-            CircuitParam::Index(index) => {
-                let idx = *index as usize;
-                let Some(param) = parameter_pool.get(idx) else {
-                    return Err(CompileError::Internal(format!(
-                        "operation references missing parameter index {}",
-                        idx
-                    )));
-                };
-                params.push(ParameterValue::Param(param.clone()));
-            }
-        }
-    }
-
-    output.append(
-        op.instruction.clone(),
-        op.qubits.clone(),
-        params,
-        op.label.as_deref(),
-    )?;
-    Ok(())
-}
-
-/// Builds output circuit from mapped operations and preserved parameters.
-pub(crate) fn build_output_circuit(
-    mapped_ops: &[Operation],
-    parameter_pool: &[Parameter],
-) -> Result<Circuit, CompileError> {
-    let mut used_set: HashSet<Qubit> = HashSet::new();
-    for op in mapped_ops {
-        for &q in &op.qubits {
-            used_set.insert(q);
-        }
-    }
-
+/// Builds mapped output from source metadata while preserving recursive control-flow qubits.
+pub(crate) fn build_output_circuit_from_source(
+    source: &Circuit,
+    mapped_ops: Vec<Operation>,
+) -> Circuit {
+    let mut used_set = HashSet::new();
+    collect_program_qubits(&mapped_ops, &mut used_set);
     let mut used_qubits: Vec<Qubit> = used_set.into_iter().collect();
     used_qubits.sort_by_key(Qubit::id);
 
-    let mut output = Circuit::from_qubits(used_qubits)?;
-    for op in mapped_ops {
-        append_operation(&mut output, op, parameter_pool)?;
-    }
+    let mut symbols = source.symbols().clone();
+    let mut parameters = source.parameters().clone();
+    let global_phase = preserve_global_phase(source, &mut symbols, &mut parameters);
 
-    Ok(output)
+    Circuit::from_parts(
+        used_qubits.into_iter().collect::<IndexSet<Qubit>>(),
+        symbols,
+        parameters,
+        mapped_ops,
+        global_phase,
+    )
 }
 
-/// Validates and flattens a circuit into compile-friendly internal form.
-///
-/// The pass currently accepts only single-block, return-terminated DAGs and
-/// only 1q/2q operations with no control-flow nodes.
-pub(crate) fn preprocess_circuit(circuit: &Circuit) -> Result<PreparedCircuit, CompileError> {
-    let dag = CircuitDag::from_circuit(circuit)
-        .map_err(|err| CompileError::DagBuildFailed(err.to_string()))?;
-
-    if dag.num_blocks() != 1 {
-        return Err(CompileError::UnsupportedControlFlow);
-    }
-
-    let entry = dag.entry_block().ok_or(CompileError::MissingEntryBlock)?;
-    let block = dag
-        .data
-        .node_weight(entry)
-        .ok_or(CompileError::MissingEntryBlock)?;
-
-    if !matches!(block.terminator, None | Some(Terminator::Return)) {
-        return Err(CompileError::UnsupportedControlFlow);
-    }
-
-    let logical_qubits = circuit.qubits();
-    let parameters = circuit.parameters().iter().cloned().collect();
-    let logical_index_map: HashMap<Qubit, usize> = logical_qubits
-        .iter()
-        .copied()
-        .enumerate()
-        .map(|(idx, q)| (q, idx))
-        .collect();
-
-    let mut operations = Vec::with_capacity(block.operations.len());
-
-    for (op_index, op) in block.operations.iter().enumerate() {
-        match &op.instruction {
-            Instruction::ControlFlowGate(_) => return Err(CompileError::UnsupportedControlFlow),
-            Instruction::Directive(d) => {
-                return Err(CompileError::UnsupportedInstruction {
-                    op_index,
-                    instruction: format!("Directive::{d}"),
-                });
+fn preserve_global_phase(
+    source: &Circuit,
+    symbols: &mut IndexSet<String>,
+    parameters: &mut IndexSet<Parameter>,
+) -> CircuitParam {
+    let phase_param = source.global_phase();
+    if let Ok(value) = phase_param.evaluate(&None) {
+        CircuitParam::Fixed(value)
+    } else {
+        let (index, is_new) = parameters.insert_full(phase_param.clone());
+        if is_new {
+            for sym in phase_param.get_symbols() {
+                symbols.insert(sym);
             }
-            Instruction::Delay => {
-                return Err(CompileError::UnsupportedInstruction {
-                    op_index,
-                    instruction: "Delay".to_string(),
-                });
-            }
-            _ => {}
         }
+        CircuitParam::Index(index as u32)
+    }
+}
 
-        let arity = op.qubits.len();
-        if arity != 1 && arity != 2 {
-            return Err(CompileError::UnsupportedArity { op_index, arity });
-        }
-
-        let mut logical = SmallVec::<[usize; 2]>::with_capacity(arity);
+fn collect_program_qubits(ops: &[Operation], out: &mut HashSet<Qubit>) {
+    for op in ops {
         for &q in &op.qubits {
-            let Some(&logical_idx) = logical_index_map.get(&q) else {
-                return Err(CompileError::Internal(format!(
-                    "qubit {q} not found in circuit logical ordering"
-                )));
-            };
-            logical.push(logical_idx);
+            out.insert(q);
         }
-
-        operations.push(PreparedOperation {
-            op: op.clone(),
-            logical_qubits: logical,
-        });
+        if let Instruction::ControlFlowGate(control_flow) = &op.instruction {
+            match control_flow {
+                ControlFlow::IfElse(gate) => {
+                    out.insert(gate.condition().qubit);
+                    collect_program_qubits(gate.true_body(), out);
+                    if let Some(false_body) = gate.false_body() {
+                        collect_program_qubits(false_body, out);
+                    }
+                }
+                ControlFlow::WhileLoop(gate) => {
+                    out.insert(gate.condition().qubit);
+                    collect_program_qubits(gate.body(), out);
+                }
+            }
+        }
     }
-
-    Ok(PreparedCircuit {
-        logical_qubits,
-        parameters,
-        operations,
-    })
 }
 
 /// Maps a logical circuit onto topology using VF2-first + SABRE fallback policy.
@@ -393,6 +315,24 @@ pub fn map_with_vf2_sabre(
 
     let mut sabre = SabreMapping::new(topology.clone(), fidelity_owned, config.clone())?;
     sabre.execute(circuit)
+}
+
+pub fn map_with_ga(
+    circuit: &Circuit,
+    topology: &Topology,
+    config: &GaConfig,
+    fidelity_map: Option<&FidelityMap>,
+    invalid_qubits: Option<HashSet<usize>>,
+) -> Result<Circuit, CompileError> {
+    let fidelity_owned = fidelity_map.cloned();
+    let mut ga = GeneticAlgMapping::new(
+        topology.clone(),
+        config.clone(),
+        fidelity_owned.clone(),
+        invalid_qubits.clone(),
+    )
+    .unwrap();
+    ga.execute(circuit)
 }
 
 /// Computes all-pairs shortest path on an unweighted adjacency matrix.
