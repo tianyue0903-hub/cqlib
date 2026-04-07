@@ -30,6 +30,7 @@ use crate::circuit::circuit_param::CircuitParam;
 use crate::circuit::error::CircuitError;
 use crate::circuit::gate::StandardGate;
 use crate::circuit::gate::instruction::Instruction;
+use crate::device::Outcome;
 use crate::qis::Observable;
 use crate::qis::error::QisError;
 use num_complex::Complex64;
@@ -1219,6 +1220,105 @@ impl DensityMatrix {
     /// number of qubits than the density matrix.
     pub fn expectation(&self, h: &dyn Observable) -> Result<f64, QisError> {
         h.expectation_density_matrix(self)
+    }
+
+    /// Copies density matrix data from `source` into `self` without allocating.
+    ///
+    /// Both matrices must have the same `num_qubits`. Used by
+    /// [`sample_shots`](Self::sample_shots) to reuse each thread's working copy.
+    pub(crate) fn reset_from(&mut self, source: &DensityMatrix) {
+        debug_assert_eq!(self.num_qubits, source.num_qubits);
+        self.data.copy_from_slice(&source.data);
+    }
+
+    /// Measures `qubit` in the Z basis, collapsing the density matrix in-place.
+    ///
+    /// Returns `true` for outcome |1⟩ and `false` for outcome |0⟩.
+    /// The density matrix is projected into the subspace consistent with the
+    /// outcome and renormalized: `ρ' = Π_b ρ Π_b / Tr(Π_b ρ)`.
+    pub fn measure(&mut self, qubit: usize) -> bool {
+        let dim = 1 << self.num_qubits;
+        let mask = 1usize << qubit;
+
+        // P(|1⟩) = sum of diagonal elements where bit `qubit` is 1.
+        let p1: f64 = (0..dim)
+            .filter(|i| i & mask != 0)
+            .map(|i| self.data[i * dim + i].re)
+            .sum();
+
+        let outcome = {
+            use rand::Rng;
+            let mut rng = rand::rng();
+            rng.random::<f64>() < p1
+        };
+
+        // Project and renormalise: zero rows/cols inconsistent with outcome.
+        let norm = if outcome { p1 } else { 1.0 - p1 };
+        for row in 0..dim {
+            let row_match = if outcome {
+                (row & mask) != 0
+            } else {
+                (row & mask) == 0
+            };
+            for col in 0..dim {
+                let col_match = if outcome {
+                    (col & mask) != 0
+                } else {
+                    (col & mask) == 0
+                };
+                if row_match && col_match {
+                    self.data[row * dim + col] /= norm;
+                } else {
+                    self.data[row * dim + col] = Complex64::new(0.0, 0.0);
+                }
+            }
+        }
+
+        outcome
+    }
+
+    /// Measures all qubits sequentially, returning a bit-packed [`Outcome`].
+    ///
+    /// Equivalent to calling `measure(q)` for each qubit `q` in order `0..num_qubits`.
+    /// The density matrix is fully collapsed after this call.
+    /// Use [`Outcome::is_one(q)`](crate::device::Outcome::is_one) to read qubit `q`'s result.
+    pub fn measure_all(&mut self) -> Outcome {
+        let num_chunks = self.num_qubits.div_ceil(64);
+        let mut chunks = SmallVec::from_elem(0u64, num_chunks);
+        for q in 0..self.num_qubits {
+            if self.measure(q) {
+                chunks[q / 64] |= 1u64 << (q % 64);
+            }
+        }
+        Outcome::new(chunks)
+    }
+
+    /// Samples `shots` independent measurement outcomes in parallel.
+    ///
+    /// Each Rayon worker thread reuses a single pre-allocated clone of the
+    /// density matrix (via [`reset_from`](Self::reset_from)), avoiding per-shot
+    /// heap allocation. Returns a [`Vec<Outcome>`] of bit-packed results.
+    ///
+    /// # Example
+    /// ```rust
+    /// use cqlib_core::qis::DensityMatrix;
+    ///
+    /// let mut dm = DensityMatrix::new(2);
+    /// dm.apply_h(0).unwrap();
+    /// dm.apply_cx(0, 1).unwrap(); // |Φ⁺⟩ Bell state
+    ///
+    /// let shots = dm.sample_shots(200);
+    /// // All outcomes must be |00⟩ or |11⟩
+    /// assert!(shots.iter().all(|v| v.is_one(0) == v.is_one(1)));
+    /// ```
+    pub fn sample_shots(&self, shots: usize) -> Vec<Outcome> {
+        (0..shots)
+            .into_par_iter()
+            .map_with(self.clone(), |work, _| {
+                work.reset_from(self);
+                work.measure_all()
+            })
+            .collect()
     }
 }
 

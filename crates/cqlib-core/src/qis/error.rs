@@ -80,6 +80,14 @@ pub enum QisError {
     /// Thrown when an operation requires a specific dimension that is not met.
     #[error("Unsupported dimension: expected {expected}, got {actual}")]
     UnsupportedDimension { expected: usize, actual: usize },
+
+    /// Thrown when a gate is applied to a [`StabilizerState`] but is not a Clifford gate
+    /// (i.e., it does not map the Pauli group to itself under conjugation).
+    /// Examples: T, T†, Rx(θ) for generic θ.
+    ///
+    /// Use [`crate::qis::Statevector`] for universal (non-Clifford) simulation.
+    #[error("Non-Clifford gate: {0}")]
+    NonCliffordGate(String),
 }
 
 /// Error type for parsing PauliString from a string representation.

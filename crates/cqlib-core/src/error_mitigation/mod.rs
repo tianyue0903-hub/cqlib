@@ -11,5 +11,7 @@
 // that they have been altered from the originals.
 
 pub mod zne_mitigation;
+pub mod virtual_distillation;
 
+pub use virtual_distillation::{VirtualDistillation, VirtualDistillationError};
 pub use zne_mitigation::{ExtrapolateMethod, ZNEMitigation};

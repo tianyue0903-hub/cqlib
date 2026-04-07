@@ -28,6 +28,7 @@
 pub mod error;
 /// Mapping/routing algorithms and related data structures.
 pub mod mapping;
+pub mod optimization;
 
 pub use error::CompileError;
 pub use mapping::{
@@ -36,3 +37,4 @@ pub use mapping::{
 };
 
 pub mod gate_transform;
+pub use optimization::commutative::CommutativeOptimization;
