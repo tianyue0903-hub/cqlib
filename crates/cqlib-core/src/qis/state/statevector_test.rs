@@ -688,7 +688,7 @@ fn test_hadamard_unitary() {
     sv.apply_ry(0, 0.7).unwrap();
     sv.apply_rx(1, 1.2).unwrap();
 
-    let original: Vec<Complex64> = sv.data.clone();
+    let original: Vec<Complex64> = sv.data.to_vec();
 
     sv.apply_single_qubit_gate(0, h_matrix).unwrap();
     sv.apply_single_qubit_gate(0, h_matrix).unwrap();
@@ -1709,4 +1709,93 @@ fn test_expectation_qubit_mismatch() {
 
     let result = sv.expectation(&h);
     assert!(result.is_err(), "Should error on qubit mismatch");
+}
+
+// ── AVX2 SIMD correctness tests ───────────────────────────────────────────────
+
+/// Applies a complex unitary via `apply_single_qubit_gate` and checks result
+/// matches the analytically expected amplitudes. This exercises the AVX2 path
+/// on x86_64 (or scalar fallback elsewhere) for complex×complex multiplication.
+#[test]
+fn test_sqg_avx2_complex_phase_gate() {
+    // S gate: [[1,0],[0,i]] applied to |+⟩ = (|0⟩+|1⟩)/√2 → (|0⟩+i|1⟩)/√2
+    let mut sv = Statevector::new(1);
+    sv.apply_h(0).unwrap();
+
+    let i = Complex64::new(0.0, 1.0);
+    let s_matrix = [
+        [Complex64::new(1.0, 0.0), Complex64::new(0.0, 0.0)],
+        [Complex64::new(0.0, 0.0), i],
+    ];
+    sv.apply_single_qubit_gate(0, s_matrix).unwrap();
+
+    let inv_sqrt2 = 1.0 / 2.0_f64.sqrt();
+    let d = sv.data();
+    assert!(
+        (d[0].re - inv_sqrt2).abs() < EPSILON,
+        "Re(|0⟩) should be 1/√2, got {}",
+        d[0].re
+    );
+    assert!(d[0].im.abs() < EPSILON, "Im(|0⟩) should be 0");
+    assert!(d[1].re.abs() < EPSILON, "Re(|1⟩) should be 0");
+    assert!(
+        (d[1].im - inv_sqrt2).abs() < EPSILON,
+        "Im(|1⟩) should be 1/√2, got {}",
+        d[1].im
+    );
+}
+
+/// Tests the AVX2 SIMD path on a larger state (n=5, qubit 2) to ensure the
+/// SIMD 2-element loop and scalar tail both produce correct results.
+#[test]
+fn test_sqg_avx2_larger_state() {
+    // Apply T = [[1,0],[0,e^{iπ/4}]] to qubit 2 of |++++⟩ state.
+    // Each amplitude is 1/√(2^4) = 1/4. After T on qubit 2:
+    // Amplitudes with qubit-2 = |0⟩ stay at 1/4.
+    // Amplitudes with qubit-2 = |1⟩ get multiplied by e^{iπ/4}.
+    use std::f64::consts::FRAC_PI_4;
+    let n = 5;
+    let mut sv = Statevector::new(n);
+    for q in 0..n {
+        sv.apply_h(q).unwrap();
+    }
+
+    let phase = Complex64::from_polar(1.0, FRAC_PI_4);
+    let t_matrix = [
+        [Complex64::new(1.0, 0.0), Complex64::new(0.0, 0.0)],
+        [Complex64::new(0.0, 0.0), phase],
+    ];
+    sv.apply_single_qubit_gate(2, t_matrix).unwrap();
+
+    let base_amp = 1.0 / (2.0_f64.powi(n as i32)).sqrt();
+    let d = sv.data();
+    for (idx, &amp) in d.iter().enumerate() {
+        // qubit 2 bit: bit 2 of index
+        let qubit2_is_one = (idx >> 2) & 1 == 1;
+        let expected = if qubit2_is_one {
+            phase * base_amp
+        } else {
+            Complex64::new(base_amp, 0.0)
+        };
+        assert!(
+            (amp - expected).norm() < EPSILON,
+            "idx={}: expected {:?}, got {:?}",
+            idx,
+            expected,
+            amp
+        );
+    }
+}
+
+/// Verifies that AlignedBuffer gives 64-byte alignment, enabling safe AVX-512 loads.
+#[test]
+fn test_statevector_data_alignment() {
+    let sv = Statevector::new(10);
+    let ptr = sv.data().as_ptr() as usize;
+    assert_eq!(
+        ptr % 64,
+        0,
+        "Statevector::data must be 64-byte aligned for AVX2/AVX-512; got alignment {}",
+        ptr % 64
+    );
 }
