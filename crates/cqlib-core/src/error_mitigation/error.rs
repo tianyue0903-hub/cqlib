@@ -28,5 +28,40 @@ pub enum ErrorMitigationError {
 
     #[error("virtual distillation denominator mean is zero")]
     ZeroDenominatorMean,
-}
 
+    #[error("fold level must be non-negative, got {0}")]
+    InvalidFoldLevel(i32),
+
+    #[error("run() must be completed before get_mitigated()")]
+    RunRequiredBeforeMitigation,
+
+    #[error("run() has already been completed for this ErrorMitigation instance")]
+    AlreadyRun,
+
+    #[error("get_mitigated() has already been completed for this ErrorMitigation instance")]
+    AlreadyMitigated,
+
+    #[error("run arguments do not match the configured mitigation method")]
+    RunArgsMethodMismatch,
+
+    #[error("processing arguments do not match the configured mitigation method")]
+    ProcessArgsMethodMismatch,
+
+    #[error("noisy results must not be empty")]
+    EmptyNoisyResults,
+
+    #[error("noisy results length mismatch: expected {expected}, got {actual}")]
+    NoisyResultsLengthMismatch { expected: usize, actual: usize },
+
+    #[error("polynomial degree {degree} must be smaller than number of data points {num_points}")]
+    InvalidPolynomialDegree { degree: usize, num_points: usize },
+
+    #[error("all noisy results must be positive for exponential extrapolation")]
+    NonPositiveNoisyResults,
+
+    #[error("exponential fit failed due to a singular linear-regression system")]
+    SingularExponentialFit,
+
+    #[error("polynomial fit failed due to a singular normal-equation matrix")]
+    SingularPolynomialFit,
+}

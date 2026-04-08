@@ -13,8 +13,8 @@
 use std::collections::HashMap;
 
 use crate::circuit::{Circuit, CircuitError, CircuitParam, ParameterValue, Qubit};
-use crate::error_mitigation::Estimator;
 use crate::error_mitigation::ErrorMitigationError;
+use crate::error_mitigation::Estimator;
 use crate::qis::{Hamiltonian, Pauli, PauliString};
 
 /// Virtual distillation mitigation based on the moment ratio
@@ -99,7 +99,7 @@ impl VirtualDistillation {
     /// so the estimator needs a Hamiltonian of matching width. This helper keeps
     /// the original Pauli operators on their current qubit indices and appends
     /// `n` `Z`s on higher-index qubits.
-    fn expand_hamiltonian(hamiltonian: &Hamiltonian, n: usize) -> Hamiltonian {
+    pub(crate) fn expand_hamiltonian(hamiltonian: &Hamiltonian, n: usize) -> Hamiltonian {
         if hamiltonian.terms.is_empty() {
             return Hamiltonian::new(hamiltonian.num_qubits + n);
         }
@@ -214,7 +214,7 @@ impl VirtualDistillation {
             self.run_numerator_circuit(hamiltonian, shots_numerator, estimator)?;
         let (mu_denominator, var_denominator) =
             self.run_denominator_circuit(shots_denominator, estimator)?;
-        let (mu_vd, var_vd) = self.ratio_mu_var(
+        let (mu_vd, var_vd) = Self::mitigate_from_statistics(
             mu_numerator,
             var_numerator,
             mu_denominator,
@@ -224,8 +224,7 @@ impl VirtualDistillation {
         Ok((mu_vd, var_vd))
     }
 
-    fn ratio_mu_var(
-        &self,
+    pub(crate) fn mitigate_from_statistics(
         mu_numerator: f64,
         var_numerator: f64,
         mu_denominator: f64,

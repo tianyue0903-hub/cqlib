@@ -125,6 +125,17 @@ impl ZNEMitigation {
         hamiltonian: &Hamiltonian,
         estimator: &Estimator<'_>,
     ) -> Result<Vec<f64>, ErrorMitigationError> {
+        self.run_em_sequence_with_shots(gate_set, hamiltonian, None, estimator)
+    }
+
+    /// Run the error-mitigation sequence with an optional shot count.
+    pub fn run_em_sequence_with_shots(
+        &self,
+        gate_set: Option<&[Instruction]>,
+        hamiltonian: &Hamiltonian,
+        shots: Option<usize>,
+        estimator: &Estimator<'_>,
+    ) -> Result<Vec<f64>, ErrorMitigationError> {
         if hamiltonian.num_qubits != self.circuit.width() {
             return Err(ErrorMitigationError::HamiltonianQubitCountMismatch {
                 expected: self.circuit.width(),
@@ -135,7 +146,7 @@ impl ZNEMitigation {
         let mut hexp_seq = Vec::new();
         for level in self.fold_levels() {
             let circuit = self.fold_to_level(*level, gate_set)?;
-            let (expectation, _variance) = estimator(&circuit, Some(hamiltonian), None);
+            let (expectation, _variance) = estimator(&circuit, Some(hamiltonian), shots);
             hexp_seq.push(expectation);
         }
         Ok(hexp_seq)
@@ -152,7 +163,7 @@ impl ZNEMitigation {
         noisy_results: &[f64],
         method: ExtrapolateMethod,
         degree: usize,
-    ) -> f64 {
+    ) -> Result<f64, ErrorMitigationError> {
         match method {
             ExtrapolateMethod::Polynomial => self.poly_extrapolate(noisy_results, degree),
             ExtrapolateMethod::Exponential => self.exp_extrapolate(noisy_results),
@@ -165,21 +176,19 @@ impl ZNEMitigation {
     /// - `degree`: the degree of the polynomial to use for extrapolation.
     ///
     /// Returns the extrapolated expectation value.
-    pub fn poly_extrapolate(&self, noisy_results: &[f64], degree: usize) -> f64 {
+    pub fn poly_extrapolate(
+        &self,
+        noisy_results: &[f64],
+        degree: usize,
+    ) -> Result<f64, ErrorMitigationError> {
         let n = self.noise_factors.len();
-        assert!(
-            !noisy_results.is_empty(),
-            "Noisy results must not be empty."
-        );
-        assert_eq!(
-            noisy_results.len(),
-            n,
-            "Noisy results must have the same length as noise factors."
-        );
-        assert!(
-            degree < n,
-            "Polynomial degree must be smaller than number of data points."
-        );
+        self.validate_noisy_results(noisy_results)?;
+        if degree >= n {
+            return Err(ErrorMitigationError::InvalidPolynomialDegree {
+                degree,
+                num_points: n,
+            });
+        }
 
         let d = degree + 1;
         let x: Vec<f64> = self.noise_factors.iter().map(|&v| v as f64).collect();
@@ -203,8 +212,8 @@ impl ZNEMitigation {
             }
         }
 
-        let coeffs = Self::solve_linear_system(a, b);
-        coeffs[0]
+        let coeffs = Self::solve_linear_system(a, b)?;
+        Ok(coeffs[0])
     }
 
     /// Given the noisy results, extrapolate the expectation value using an
@@ -217,21 +226,12 @@ impl ZNEMitigation {
     /// `ln(y) = ln(A) + m * x`, where `m = -1 / tau`.
     ///
     /// Returns `A`, which is the extrapolated value at `x = 0`.
-    pub fn exp_extrapolate(&self, noisy_results: &[f64]) -> f64 {
+    pub fn exp_extrapolate(&self, noisy_results: &[f64]) -> Result<f64, ErrorMitigationError> {
         let n = self.noise_factors.len();
-        assert!(
-            !noisy_results.is_empty(),
-            "Noisy results must not be empty."
-        );
-        assert_eq!(
-            noisy_results.len(),
-            n,
-            "Noisy results must have the same length as noise factors."
-        );
-        assert!(
-            noisy_results.iter().all(|&v| v > 0.0),
-            "All noisy results must be positive for exponential extrapolation."
-        );
+        self.validate_noisy_results(noisy_results)?;
+        if !noisy_results.iter().all(|&v| v > 0.0) {
+            return Err(ErrorMitigationError::NonPositiveNoisyResults);
+        }
 
         let x: Vec<f64> = self.noise_factors.iter().map(|&v| v as f64).collect();
         let y_log: Vec<f64> = noisy_results.iter().map(|&v| v.ln()).collect();
@@ -243,22 +243,24 @@ impl ZNEMitigation {
         let sum_xy: f64 = x.iter().zip(y_log.iter()).map(|(xi, yi)| xi * yi).sum();
 
         let denom = n_f * sum_xx - sum_x * sum_x;
-        assert!(
-            denom.abs() > 1e-14,
-            "Exponential fit failed: singular linear-regression system."
-        );
+        if denom.abs() <= 1e-14 {
+            return Err(ErrorMitigationError::SingularExponentialFit);
+        }
 
         let slope = (n_f * sum_xy - sum_x * sum_y) / denom;
         let intercept = (sum_y - slope * sum_x) / n_f;
-        intercept.exp()
+        Ok(intercept.exp())
     }
 
-    fn solve_linear_system(mut a: Vec<Vec<f64>>, mut b: Vec<f64>) -> Vec<f64> {
+    fn solve_linear_system(
+        mut a: Vec<Vec<f64>>,
+        mut b: Vec<f64>,
+    ) -> Result<Vec<f64>, ErrorMitigationError> {
         let n = a.len();
-        assert!(n > 0, "Coefficient matrix must not be empty.");
-        assert_eq!(b.len(), n, "Right-hand side length must match matrix size.");
+        debug_assert!(n > 0, "Coefficient matrix must not be empty.");
+        debug_assert_eq!(b.len(), n, "Right-hand side length must match matrix size.");
         for row in &a {
-            assert_eq!(row.len(), n, "Coefficient matrix must be square.");
+            debug_assert_eq!(row.len(), n, "Coefficient matrix must be square.");
         }
 
         let eps = 1e-14_f64;
@@ -277,10 +279,9 @@ impl ZNEMitigation {
                 }
             }
 
-            assert!(
-                pivot_abs > eps,
-                "Polynomial fit failed: singular normal-equation matrix."
-            );
+            if pivot_abs <= eps {
+                return Err(ErrorMitigationError::SingularPolynomialFit);
+            }
 
             if pivot_row != i {
                 a.swap(i, pivot_row);
@@ -307,7 +308,21 @@ impl ZNEMitigation {
             x[i] = sum / a[i][i];
         }
 
-        x
+        Ok(x)
+    }
+
+    fn validate_noisy_results(&self, noisy_results: &[f64]) -> Result<(), ErrorMitigationError> {
+        if noisy_results.is_empty() {
+            return Err(ErrorMitigationError::EmptyNoisyResults);
+        }
+
+        let expected = self.noise_factors.len();
+        let actual = noisy_results.len();
+        if actual != expected {
+            return Err(ErrorMitigationError::NoisyResultsLengthMismatch { expected, actual });
+        }
+
+        Ok(())
     }
 
     fn fold_to_level(

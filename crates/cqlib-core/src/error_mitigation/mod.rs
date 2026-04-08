@@ -14,12 +14,20 @@ use crate::circuit::Circuit;
 use crate::qis::Hamiltonian;
 
 pub mod error;
-pub mod zne_mitigation;
+pub mod unified;
 pub mod virtual_distillation;
+pub mod zne_mitigation;
 
-pub type Estimator<'a> =
-    dyn Fn(&Circuit, Option<&Hamiltonian>, Option<usize>) -> (f64, f64) + 'a;
+pub type Estimator<'a> = dyn Fn(&Circuit, Option<&Hamiltonian>, Option<usize>) -> (f64, f64) + 'a;
 
 pub use error::ErrorMitigationError;
+pub use unified::{
+    ErrorMitigation, MitigatedResult, MitigationMethod, ProcessArgs, RunArgs,
+    VirtualDistillationConfig, ZneConfig,
+};
 pub use virtual_distillation::VirtualDistillation;
 pub use zne_mitigation::{ExtrapolateMethod, ZNEMitigation};
+
+#[cfg(test)]
+#[path = "./error_mitigation_test.rs"]
+mod error_mitigation_test;

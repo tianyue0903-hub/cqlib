@@ -11,10 +11,10 @@
 // that they have been altered from the originals.
 
 use super::VirtualDistillation;
+use crate::circuit::Qubit;
 use crate::circuit::circuit_impl::Circuit;
 use crate::circuit::gate::Instruction;
 use crate::circuit::gate::standard_gate::StandardGate;
-use crate::circuit::Qubit;
 use crate::error_mitigation::ErrorMitigationError;
 use crate::qis::{Hamiltonian, Pauli, PauliString};
 use num_complex::Complex64;
@@ -191,34 +191,29 @@ fn test_run_vd_returns_mu_and_var() {
     let vd = VirtualDistillation::new(base_circuit, 2).unwrap();
     let hamiltonian = single_qubit_z_hamiltonian();
     let (mu_vd, var_vd) = vd
-        .run_vd(
-            &hamiltonian,
-            3,
-            2,
-            &|circuit, hamiltonian_arg, shots| {
-                let ops = circuit.operations();
+        .run_vd(&hamiltonian, 3, 2, &|circuit, hamiltonian_arg, shots| {
+            let ops = circuit.operations();
 
-                assert_eq!(ops.len(), 1);
-                assert!(matches!(
-                    ops[0].instruction,
-                    Instruction::Standard(StandardGate::SWAP)
-                ));
+            assert_eq!(ops.len(), 1);
+            assert!(matches!(
+                ops[0].instruction,
+                Instruction::Standard(StandardGate::SWAP)
+            ));
 
-                if hamiltonian_arg.is_some() {
-                    let expanded_hamiltonian = hamiltonian_arg.unwrap();
-                    assert_eq!(expanded_hamiltonian.num_qubits, 2);
-                    assert_eq!(expanded_hamiltonian.terms.len(), 1);
-                    let (term, _coeff) = &expanded_hamiltonian.terms[0];
-                    assert_eq!((term.x[0], term.z[0]), (false, true));
-                    assert_eq!((term.x[1], term.z[1]), (false, true));
-                    assert_eq!(shots, Some(3));
-                    (1.5, 0.25)
-                } else {
-                    assert_eq!(shots, Some(2));
-                    (2.0, 1.0)
-                }
-            },
-        )
+            if hamiltonian_arg.is_some() {
+                let expanded_hamiltonian = hamiltonian_arg.unwrap();
+                assert_eq!(expanded_hamiltonian.num_qubits, 2);
+                assert_eq!(expanded_hamiltonian.terms.len(), 1);
+                let (term, _coeff) = &expanded_hamiltonian.terms[0];
+                assert_eq!((term.x[0], term.z[0]), (false, true));
+                assert_eq!((term.x[1], term.z[1]), (false, true));
+                assert_eq!(shots, Some(3));
+                (1.5, 0.25)
+            } else {
+                assert_eq!(shots, Some(2));
+                (2.0, 1.0)
+            }
+        })
         .unwrap();
 
     assert!((mu_vd - 0.75).abs() < 1e-12);
@@ -283,8 +278,5 @@ fn test_run_vd_rejects_zero_denominator_mean() {
         })
         .unwrap_err();
 
-    assert!(matches!(
-        err,
-        ErrorMitigationError::ZeroDenominatorMean
-    ));
+    assert!(matches!(err, ErrorMitigationError::ZeroDenominatorMean));
 }

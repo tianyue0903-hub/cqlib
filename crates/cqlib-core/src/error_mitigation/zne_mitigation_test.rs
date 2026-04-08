@@ -16,9 +16,9 @@ use crate::circuit::Qubit;
 use crate::circuit::circuit_impl::Circuit;
 use crate::circuit::gate::{Instruction, StandardGate};
 use crate::error_mitigation::ErrorMitigationError;
+use crate::qis::{Hamiltonian, Pauli, PauliString};
 use ndarray::Array2;
 use num_complex::Complex64;
-use crate::qis::{Hamiltonian, Pauli, PauliString};
 
 fn single_qubit_z_hamiltonian() -> Hamiltonian {
     let mut pauli_string = PauliString::new(1);
@@ -272,7 +272,7 @@ fn test_poly_extrapolate_linear_intercept() {
 
     // y = 0.75 + 2x
     let noisy_results = vec![2.75, 6.75, 10.75];
-    let extrapolated = zne.poly_extrapolate(&noisy_results, 1);
+    let extrapolated = zne.poly_extrapolate(&noisy_results, 1).unwrap();
 
     assert!((extrapolated - 0.75).abs() < 1e-10);
 }
@@ -284,29 +284,43 @@ fn test_poly_extrapolate_quadratic_intercept() {
 
     // y = 1.25 - 0.5x + 0.2x^2
     let noisy_results = vec![0.95, 1.55, 3.75];
-    let extrapolated = zne.poly_extrapolate(&noisy_results, 2);
+    let extrapolated = zne.poly_extrapolate(&noisy_results, 2).unwrap();
 
     assert!((extrapolated - 1.25).abs() < 1e-10);
 }
 
 #[test]
-#[should_panic(expected = "same length as noise factors")]
-fn test_poly_extrapolate_panics_on_length_mismatch() {
+fn test_poly_extrapolate_returns_error_on_length_mismatch() {
     let circuit = Circuit::new(1);
     let zne = ZNEMitigation::new(circuit, vec![0, 1, 2]);
 
     let noisy_results = vec![1.0, 2.0];
-    let _ = zne.poly_extrapolate(&noisy_results, 1);
+    let err = zne.poly_extrapolate(&noisy_results, 1).unwrap_err();
+
+    assert!(matches!(
+        err,
+        ErrorMitigationError::NoisyResultsLengthMismatch {
+            expected: 3,
+            actual: 2
+        }
+    ));
 }
 
 #[test]
-#[should_panic(expected = "degree must be smaller than number of data points")]
-fn test_poly_extrapolate_panics_on_invalid_degree() {
+fn test_poly_extrapolate_returns_error_on_invalid_degree() {
     let circuit = Circuit::new(1);
     let zne = ZNEMitigation::new(circuit, vec![0, 1]);
 
     let noisy_results = vec![1.0, 2.0];
-    let _ = zne.poly_extrapolate(&noisy_results, 2);
+    let err = zne.poly_extrapolate(&noisy_results, 2).unwrap_err();
+
+    assert!(matches!(
+        err,
+        ErrorMitigationError::InvalidPolynomialDegree {
+            degree: 2,
+            num_points: 2
+        }
+    ));
 }
 
 #[test]
@@ -322,28 +336,36 @@ fn test_exp_extrapolate_recover_zero_noise_value() {
         .map(|&x| a * (-(x as f64) / tau).exp())
         .collect();
 
-    let extrapolated = zne.exp_extrapolate(&noisy_results);
+    let extrapolated = zne.exp_extrapolate(&noisy_results).unwrap();
     assert!((extrapolated - a).abs() < 1e-10);
 }
 
 #[test]
-#[should_panic(expected = "same length as noise factors")]
-fn test_exp_extrapolate_panics_on_length_mismatch() {
+fn test_exp_extrapolate_returns_error_on_length_mismatch() {
     let circuit = Circuit::new(1);
     let zne = ZNEMitigation::new(circuit, vec![0, 1, 2]);
 
     let noisy_results = vec![1.0, 2.0];
-    let _ = zne.exp_extrapolate(&noisy_results);
+    let err = zne.exp_extrapolate(&noisy_results).unwrap_err();
+
+    assert!(matches!(
+        err,
+        ErrorMitigationError::NoisyResultsLengthMismatch {
+            expected: 3,
+            actual: 2
+        }
+    ));
 }
 
 #[test]
-#[should_panic(expected = "must be positive")]
-fn test_exp_extrapolate_panics_on_non_positive_values() {
+fn test_exp_extrapolate_returns_error_on_non_positive_values() {
     let circuit = Circuit::new(1);
     let zne = ZNEMitigation::new(circuit, vec![0, 1, 2]);
 
     let noisy_results = vec![1.0, 0.0, 0.5];
-    let _ = zne.exp_extrapolate(&noisy_results);
+    let err = zne.exp_extrapolate(&noisy_results).unwrap_err();
+
+    assert!(matches!(err, ErrorMitigationError::NonPositiveNoisyResults));
 }
 
 #[test]
@@ -353,7 +375,9 @@ fn test_extrapolate_api_polynomial() {
 
     // y = 0.5 + x
     let noisy_results = vec![1.5, 3.5, 5.5];
-    let extrapolated = zne.extrapolate(&noisy_results, ExtrapolateMethod::Polynomial, 1);
+    let extrapolated = zne
+        .extrapolate(&noisy_results, ExtrapolateMethod::Polynomial, 1)
+        .unwrap();
 
     assert!((extrapolated - 0.5).abs() < 1e-10);
 }
@@ -372,6 +396,8 @@ fn test_extrapolate_api_exponential() {
         .collect();
 
     // Degree is ignored for exponential mode.
-    let extrapolated = zne.extrapolate(&noisy_results, ExtrapolateMethod::Exponential, 99);
+    let extrapolated = zne
+        .extrapolate(&noisy_results, ExtrapolateMethod::Exponential, 99)
+        .unwrap();
     assert!((extrapolated - a).abs() < 1e-10);
 }
