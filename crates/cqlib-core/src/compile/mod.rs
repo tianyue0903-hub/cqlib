@@ -43,6 +43,8 @@ pub use mapping::{
     Vf2CandidateScore, Vf2LayoutCandidate, Vf2Mapping, Vf2Policy, Vf2ScoreWeights, map_with_ga,
     map_with_vf2_sabre,
 };
+
+pub mod gate_transform;
 pub use optimization::{
     CliffordRzConfig, CliffordRzLevel, CliffordRzOptimization, CliffordRzStrategy, TemplateLibrary,
     TemplateMatch, TemplateMatching, TemplateOptimization, TemplateOptimizationConfig,
