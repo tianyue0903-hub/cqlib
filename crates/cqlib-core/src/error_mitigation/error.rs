@@ -13,12 +13,16 @@
 use thiserror::Error;
 
 use crate::circuit::CircuitError;
+use crate::qis::error::QisError;
 
 /// Shared errors raised by error-mitigation APIs.
 #[derive(Debug, Error)]
 pub enum ErrorMitigationError {
     #[error(transparent)]
     Circuit(#[from] CircuitError),
+
+    #[error(transparent)]
+    Qis(#[from] QisError),
 
     #[error("virtual distillation requires at least 2 copies, got {0}")]
     InvalidCopies(usize),

@@ -113,7 +113,7 @@ fn test_build_copy_swap_circuit_adds_pairwise_swaps_for_multiple_copies() {
 #[test]
 fn test_expand_hamiltonian_appends_z_on_higher_indices() {
     let hamiltonian = single_qubit_x_hamiltonian();
-    let expanded = VirtualDistillation::expand_hamiltonian(&hamiltonian, 2);
+    let expanded = VirtualDistillation::expand_hamiltonian(&hamiltonian, 2).unwrap();
 
     assert_eq!(expanded.num_qubits, 3);
     assert_eq!(expanded.terms.len(), 1);

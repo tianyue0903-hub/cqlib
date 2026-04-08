@@ -99,9 +99,12 @@ impl VirtualDistillation {
     /// so the estimator needs a Hamiltonian of matching width. This helper keeps
     /// the original Pauli operators on their current qubit indices and appends
     /// `n` `Z`s on higher-index qubits.
-    pub(crate) fn expand_hamiltonian(hamiltonian: &Hamiltonian, n: usize) -> Hamiltonian {
+    pub(crate) fn expand_hamiltonian(
+        hamiltonian: &Hamiltonian,
+        n: usize,
+    ) -> Result<Hamiltonian, ErrorMitigationError> {
         if hamiltonian.terms.is_empty() {
-            return Hamiltonian::new(hamiltonian.num_qubits + n);
+            return Ok(Hamiltonian::new(hamiltonian.num_qubits + n));
         }
 
         let expanded_terms = hamiltonian
@@ -129,8 +132,7 @@ impl VirtualDistillation {
             })
             .collect();
 
-        Hamiltonian::from_list(expanded_terms)
-            .expect("expanded Hamiltonian terms should have consistent qubit counts")
+        Ok(Hamiltonian::from_list(expanded_terms)?)
     }
 
     /// Runs the denominator circuit and returns the estimated mean and variance.
@@ -167,15 +169,16 @@ impl VirtualDistillation {
         hamiltonian: &Hamiltonian,
         shots: usize,
         estimator: &Estimator<'_>,
-    ) -> Result<(f64, f64), CircuitError> {
+    ) -> Result<(f64, f64), ErrorMitigationError> {
         let numerator_circuit = self.build_copy_swap_circuit()?;
         let extra_qubits = (self.copies - 1) * hamiltonian.num_qubits;
-        let expanded_hamiltonian = Self::expand_hamiltonian(hamiltonian, extra_qubits);
+        let expanded_hamiltonian = Self::expand_hamiltonian(hamiltonian, extra_qubits)?;
         if expanded_hamiltonian.num_qubits != numerator_circuit.width() {
             return Err(CircuitError::QubitCountMismatch {
                 expected: numerator_circuit.width(),
                 actual: expanded_hamiltonian.num_qubits,
-            });
+            }
+            .into());
         }
 
         Ok(estimator(

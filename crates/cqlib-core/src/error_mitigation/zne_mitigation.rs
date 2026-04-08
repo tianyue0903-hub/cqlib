@@ -11,8 +11,8 @@
 // that they have been altered from the originals.
 
 use crate::circuit::{Circuit, CircuitError, Instruction, Operation, Parameter};
-use crate::error_mitigation::Estimator;
 use crate::error_mitigation::ErrorMitigationError;
+use crate::error_mitigation::Estimator;
 use crate::qis::Hamiltonian;
 use std::collections::HashSet;
 

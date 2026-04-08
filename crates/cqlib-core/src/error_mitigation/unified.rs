@@ -69,7 +69,7 @@ pub struct MitigatedResult {
 #[derive(Debug, Clone)]
 enum ErrorMitigationState {
     Initialized,
-    RunCompleted(RunRecord),
+    RunCompleted(Box<RunRecord>),
     Mitigated(MitigatedResult),
 }
 
@@ -324,7 +324,7 @@ impl ErrorMitigation {
             }
         };
 
-        self.state = ErrorMitigationState::RunCompleted(run_record);
+        self.state = ErrorMitigationState::RunCompleted(Box::new(run_record));
         Ok(())
     }
 
@@ -397,14 +397,26 @@ impl ErrorMitigation {
             }
             (
                 MitigationMethod::Zne(config),
-                ErrorMitigationState::RunCompleted(RunRecord::Zne(record)),
+                ErrorMitigationState::RunCompleted(record),
                 ProcessArgs::Zne { method, degree },
-            ) => self.get_zne_mitigated(config, record, method, degree)?,
+            ) => match record.as_ref() {
+                RunRecord::Zne(record) => self.get_zne_mitigated(config, record, method, degree)?,
+                RunRecord::VirtualDistillation(_) => {
+                    return Err(ErrorMitigationError::ProcessArgsMethodMismatch);
+                }
+            },
             (
                 MitigationMethod::VirtualDistillation(_),
-                ErrorMitigationState::RunCompleted(RunRecord::VirtualDistillation(record)),
+                ErrorMitigationState::RunCompleted(record),
                 ProcessArgs::VirtualDistillation,
-            ) => self.get_virtual_distillation_mitigated(record)?,
+            ) => match record.as_ref() {
+                RunRecord::VirtualDistillation(record) => {
+                    self.get_virtual_distillation_mitigated(record)?
+                }
+                RunRecord::Zne(_) => {
+                    return Err(ErrorMitigationError::ProcessArgsMethodMismatch);
+                }
+            },
             (MitigationMethod::Zne(_), ErrorMitigationState::RunCompleted(_), _) => {
                 return Err(ErrorMitigationError::ProcessArgsMethodMismatch);
             }
@@ -490,7 +502,7 @@ impl ErrorMitigation {
         let copy_swap_circuit = vd.build_copy_swap_circuit()?;
         let extra_qubits = copy_swap_circuit.width() - hamiltonian.num_qubits;
         let expanded_hamiltonian =
-            VirtualDistillation::expand_hamiltonian(hamiltonian, extra_qubits);
+            VirtualDistillation::expand_hamiltonian(hamiltonian, extra_qubits)?;
         let numerator = estimator(
             &copy_swap_circuit,
             Some(&expanded_hamiltonian),
