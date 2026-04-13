@@ -11,8 +11,16 @@
 // that they have been altered from the originals.
 
 use super::*;
+use crate::circuit::circuit_to_matrix;
+use crate::circuit::gate::StandardGate;
 use crate::circuit::{Circuit, Instruction};
+use crate::qis::Hamiltonian;
+use crate::qis::evolution::TrotterMode;
 use crate::qis::pauli::PauliString;
+use approx::assert_abs_diff_eq;
+use ndarray::array;
+use num_complex::Complex64;
+use std::f64::consts::PI;
 
 #[test]
 fn test_pauli_evolution_x() {
@@ -48,8 +56,6 @@ fn test_pauli_evolution_z() {
 
 #[test]
 fn test_pauli_evolution_multi_qubit() {
-    use crate::circuit::gate::StandardGate;
-
     let mut circuit = Circuit::new(2);
     let qubits = circuit.qubits();
 
@@ -176,8 +182,6 @@ fn test_pauli_evolution_y() {
 
 #[test]
 fn test_pauli_evolution_mixed() {
-    use crate::circuit::gate::StandardGate;
-
     let mut circuit = Circuit::new(3);
     let qubits = circuit.qubits();
 
@@ -215,8 +219,6 @@ fn test_pauli_evolution_mixed() {
 
 #[test]
 fn test_pauli_evolution_zz_two_qubit() {
-    use crate::circuit::gate::StandardGate;
-
     let mut circuit = Circuit::new(2);
     let qubits = circuit.qubits();
 
@@ -258,8 +260,6 @@ fn test_pauli_evolution_zz_two_qubit() {
 
 #[test]
 fn test_pauli_evolution_three_qubit_zzz() {
-    use crate::circuit::gate::StandardGate;
-
     let mut circuit = Circuit::new(3);
     let qubits = circuit.qubits();
 
@@ -310,9 +310,6 @@ fn test_pauli_evolution_three_qubit_zzz() {
     assert_eq!(ops[4].qubits[0], qubits[0]); // control
     assert_eq!(ops[4].qubits[1], qubits[1]); // target
 }
-
-use crate::qis::Hamiltonian;
-use crate::qis::evolution::TrotterMode;
 
 #[test]
 fn test_trotter_first_order_basic() {
@@ -458,9 +455,6 @@ fn test_trotter_circuit_num_qubits() {
 /// The pauli_evolution angle should be θ = 2*c*t (positive for positive c and t).
 #[test]
 fn test_trotter_time_evolution_direction() {
-    use crate::circuit::Instruction;
-    use crate::circuit::gate::StandardGate;
-
     // H = 0.5 * Z
     let mut h = Hamiltonian::new(1);
     h.add_term("Z".parse().unwrap(), 0.5.into()).unwrap();
@@ -502,9 +496,6 @@ fn test_trotter_time_evolution_direction() {
 /// Test that negative time gives opposite angle (time reversal)
 #[test]
 fn test_trotter_negative_time() {
-    use crate::circuit::Instruction;
-    use crate::circuit::gate::StandardGate;
-
     // H = 0.5 * Z
     let mut h = Hamiltonian::new(1);
     h.add_term("Z".parse().unwrap(), 0.5.into()).unwrap();
@@ -556,9 +547,6 @@ fn assert_matrix_approx_eq(
 
 #[test]
 fn test_trotter_matrix_equivalence_z() {
-    use ndarray::array;
-    use num_complex::Complex64;
-
     // H = 0.5 * Z
     let mut h = Hamiltonian::new(1);
     h.add_term("Z".parse().unwrap(), 0.5.into()).unwrap();
@@ -581,9 +569,6 @@ fn test_trotter_matrix_equivalence_z() {
 
 #[test]
 fn test_trotter_matrix_equivalence_xx() {
-    use ndarray::array;
-    use num_complex::Complex64;
-
     // H = 0.5 * XX
     let mut h = Hamiltonian::new(2);
     h.add_term("XX".parse().unwrap(), 0.5.into()).unwrap();
@@ -607,4 +592,106 @@ fn test_trotter_matrix_equivalence_xx() {
     ];
 
     assert_matrix_approx_eq(&matrix, &expected, 1e-10);
+}
+
+#[test]
+fn test_evolution_circuit_exact_for_commuting_hamiltonian() {
+    // ZZ and ZI commute → exact path should be taken (1 gate per term, no Trotter steps)
+    let mut h = Hamiltonian::new(2);
+    h.add_term("ZZ".into(), 0.5.into()).unwrap();
+    h.add_term("ZI".into(), 0.3.into()).unwrap();
+
+    // steps=1 is irrelevant for commuting H; mode is also irrelevant
+    let circuit = h
+        .to_evolution_circuit(1.0, 1, TrotterMode::FirstOrder)
+        .unwrap();
+
+    // Exact path: one pauli_evolution per term (ZZ → 1 gate, ZI → 1 gate = 2 RZ + 2 CNOT chain)
+    // The number of ops is determined by the circuit structure; we just check it builds without error.
+    assert_eq!(circuit.num_qubits(), 2);
+}
+
+#[test]
+fn test_evolution_circuit_exact_matches_to_trotter_circuit_for_commuting() {
+    // For commuting H, to_evolution_circuit should produce the same matrix as
+    // to_trotter_circuit with 1 step (which for commuting H is also exact).
+    let mut h = Hamiltonian::new(1);
+    h.add_term("Z".into(), 0.7.into()).unwrap();
+
+    let t = 0.4_f64;
+    let exact_circ = h
+        .to_evolution_circuit(t, 1, TrotterMode::FirstOrder)
+        .unwrap();
+    let trotter_circ = h.to_trotter_circuit(t, 1, TrotterMode::FirstOrder).unwrap();
+
+    let m_exact = circuit_to_matrix(&exact_circ, None).unwrap();
+    let m_trotter = circuit_to_matrix(&trotter_circ, None).unwrap();
+
+    // Both should give the same 2×2 matrix
+    assert_eq!(m_exact.shape(), m_trotter.shape());
+    for (a, b) in m_exact.iter().zip(m_trotter.iter()) {
+        assert_abs_diff_eq!(a.re, b.re, epsilon = 1e-12);
+        assert_abs_diff_eq!(a.im, b.im, epsilon = 1e-12);
+    }
+}
+
+#[test]
+fn test_evolution_circuit_noncommuting_uses_trotter() {
+    // X and Z do not commute → falls back to Trotter
+    let mut h = Hamiltonian::new(1);
+    h.add_term("X".into(), 1.0.into()).unwrap();
+    h.add_term("Z".into(), 1.0.into()).unwrap();
+
+    let circuit_trotter = h
+        .to_evolution_circuit(0.5, 10, TrotterMode::FirstOrder)
+        .unwrap();
+    let circuit_direct = h
+        .to_trotter_circuit(0.5, 10, TrotterMode::FirstOrder)
+        .unwrap();
+
+    // Both should produce the same gate count since the same logic is used
+    assert_eq!(
+        circuit_trotter.operations().len(),
+        circuit_direct.operations().len()
+    );
+}
+
+#[test]
+fn test_evolution_circuit_rejects_empty_hamiltonian() {
+    let h = Hamiltonian::new(1);
+    assert!(
+        h.to_evolution_circuit(1.0, 1, TrotterMode::FirstOrder)
+            .is_err()
+    );
+}
+
+#[test]
+fn test_evolution_circuit_rejects_zero_steps() {
+    let mut h = Hamiltonian::new(1);
+    h.add_term("X".into(), 1.0.into()).unwrap();
+    assert!(
+        h.to_evolution_circuit(1.0, 0, TrotterMode::FirstOrder)
+            .is_err()
+    );
+}
+
+#[test]
+fn test_evolution_circuit_exact_matrix_correctness() {
+    // H = 0.5*Z, t = π  →  e^{-i*0.5*π*Z} = [[e^{-iπ/2}, 0], [0, e^{iπ/2}]]
+    //                                        = [[-i, 0], [0, i]]
+    let mut h = Hamiltonian::new(1);
+    h.add_term("Z".into(), 0.5.into()).unwrap();
+
+    let circuit = h
+        .to_evolution_circuit(PI, 1, TrotterMode::FirstOrder)
+        .unwrap();
+    let matrix = circuit_to_matrix(&circuit, None).unwrap();
+
+    // Expected: diagonal [e^{-i π/2}, e^{i π/2}] = [-i, i]
+    assert_abs_diff_eq!(matrix[[0, 0]].re, 0.0, epsilon = 1e-12);
+    assert_abs_diff_eq!(matrix[[0, 0]].im, -1.0, epsilon = 1e-12);
+    assert_abs_diff_eq!(matrix[[1, 1]].re, 0.0, epsilon = 1e-12);
+    assert_abs_diff_eq!(matrix[[1, 1]].im, 1.0, epsilon = 1e-12);
+    assert_abs_diff_eq!(matrix[[0, 1]].re, 0.0, epsilon = 1e-12);
+    assert_abs_diff_eq!(matrix[[1, 0]].re, 0.0, epsilon = 1e-12);
 }

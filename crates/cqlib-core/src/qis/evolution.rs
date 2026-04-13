@@ -60,6 +60,7 @@ use crate::circuit::parameter::Parameter;
 use crate::qis::error::QisError;
 use crate::qis::hamiltonian::Hamiltonian;
 use crate::qis::pauli::{Pauli, PauliString};
+use num_complex::Complex64;
 use rand::SeedableRng;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
@@ -68,7 +69,7 @@ use rand::seq::SliceRandom;
 ///
 /// These modes determine how the time evolution operator $U(t) = e^{-iHt}$ is
 /// approximated as a product of Pauli rotations.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrotterMode {
     /// First-order Lie-Trotter decomposition.
     ///
@@ -130,7 +131,9 @@ pub trait PauliEvolution {
     ///
     /// 3. **Basis Transformation**: For each qubit $i$ with non-identity Pauli $P_i$:
     ///    - $P_i = X$: Apply $H$ gate (transforms $X$ to $Z$ basis)
-    ///    - $P_i = Y$: Apply $H \cdot S^\dagger$ (transforms $Y$ to $Z$ basis)
+    ///    - $P_i = Y$: Apply $S^\dagger$ then $H$ (circuit order: $S^\dagger \to H$,
+    ///      i.e. $S^\dagger$ is applied first, then $H$). This transforms $Y \to Z$:
+    ///      $S^\dagger |y+\rangle = |x+\rangle$, $H |x+\rangle = |z+\rangle$.
     ///    - $P_i = Z$: No transformation needed
     ///
     /// 4. **CNOT Chain**: For non-identity qubits $[i_0, i_1, \ldots, i_{n-1}]$,
@@ -256,8 +259,9 @@ impl PauliEvolution for Circuit {
                     self.h(qubit)?;
                 }
                 Pauli::Y => {
-                    // Y -> Z: Apply H · S†
-                    // S† converts Y to X, then H converts X to Z
+                    // Y -> Z basis change: circuit order S† → H
+                    // S† maps |y+⟩→|x+⟩, then H maps |x+⟩→|z+⟩.
+                    // Inverse (uncompute): H → S (see inverse block below).
                     self.sdg(qubit)?;
                     self.h(qubit)?;
                 }
@@ -300,7 +304,8 @@ impl PauliEvolution for Circuit {
                     self.h(*qubit)?;
                 }
                 Pauli::Y => {
-                    // (H · S†)† = S · H
+                    // Inverse of (S† → H): apply H† = H, then S†† = S.
+                    // (H · S†)⁻¹ = S · H
                     self.h(*qubit)?;
                     self.s(*qubit)?;
                 }
@@ -316,7 +321,7 @@ impl PauliEvolution for Circuit {
 }
 
 /// Helper function to multiply an angle parameter by a factor
-fn multiply_angle_by_factor(angle: ParameterValue, factor: f64) -> ParameterValue {
+pub(crate) fn multiply_angle_by_factor(angle: ParameterValue, factor: f64) -> ParameterValue {
     match angle {
         ParameterValue::Fixed(val) => ParameterValue::Fixed(val * factor),
         ParameterValue::Param(param) => ParameterValue::Param(Parameter::from(factor) * param),
@@ -331,11 +336,128 @@ fn parameter_value_to_parameter(pv: ParameterValue) -> Result<Parameter, Circuit
     }
 }
 
+// These `pub(crate)` functions implement the product-formula math for both the
+// numeric API (`to_trotter_circuit` / `to_evolution_circuit`) and the parametric
+// ansatz (`PauliEvolutionAnsatz` in `circuit/ansatz/hamiltonian_evolution.rs`).
+//
+// Angle convention: `pauli_evolution` implements e^{-iθ/2 · P}; to realize
+// e^{-i c t P} we pass θ = 2 c t.
+//
+// Both `ParameterValue::Fixed(f64)` and `ParameterValue::Param(Parameter)` are
+// handled uniformly via `multiply_angle_by_factor`.
+
+/// Applies first-order Lie-Trotter (or randomized product-formula) decomposition.
+///
+/// Realizes:
+/// $$U(t) \approx \left[\prod_k e^{-i c_k t/n \cdot P_k}\right]^n$$
+///
+/// # Arguments
+///
+/// * `terms`  – Pauli terms of the (simplified) Hamiltonian.
+/// * `t`      – Total evolution time, numeric (`Fixed`) or symbolic (`Param`).
+/// * `steps`  – Number of Trotter repetitions $n$.
+/// * `qubits` – Circuit qubits (must cover all Pauli positions).
+/// * `rng`    – If `Some`, term order is shuffled each step (randomized product formula).
+///   If `None`, terms are applied in fixed order (standard first-order).
+///
+/// # Performance
+///
+/// Angle `ParameterValue`s are pre-computed once per term (outside the step loop)
+/// to avoid O(m·n) Arc-node allocations for the symbolic case.
+pub(crate) fn trotter_first_order_core(
+    circuit: &mut Circuit,
+    terms: &[(PauliString, Complex64)],
+    t: ParameterValue,
+    steps: usize,
+    qubits: &[Qubit],
+    mut rng: Option<&mut StdRng>,
+) -> Result<(), CircuitError> {
+    // Pre-compute one ParameterValue per term: θ_k = 2 c_k t / n.
+    let angles: Vec<ParameterValue> = terms
+        .iter()
+        .map(|(_, coeff)| multiply_angle_by_factor(t.clone(), 2.0 * coeff.re / steps as f64))
+        .collect();
+
+    let mut indices: Vec<usize> = (0..terms.len()).collect();
+
+    for _ in 0..steps {
+        if let Some(ref mut r) = rng {
+            indices.shuffle(*r);
+        }
+        for &idx in &indices {
+            let (pauli, _) = &terms[idx];
+            circuit
+                .pauli_evolution(pauli, angles[idx].clone(), qubits)
+                .map_err(|e| {
+                    CircuitError::InvalidOperation(format!("Failed to add Pauli evolution: {}", e))
+                })?;
+        }
+    }
+    Ok(())
+}
+
+/// Applies second-order Suzuki (Strange) splitting decomposition.
+///
+/// Realizes:
+/// $$U(t) \approx \left[\prod_k e^{-i c_k t/(2n) P_k}
+///   \cdot \prod_k^{\leftarrow} e^{-i c_k t/(2n) P_k}\right]^n$$
+///
+/// # Arguments
+///
+/// * `terms`  – Pauli terms of the (simplified) Hamiltonian.
+/// * `t`      – Total evolution time, numeric (`Fixed`) or symbolic (`Param`).
+/// * `steps`  – Number of Suzuki repetitions $n$.
+/// * `qubits` – Circuit qubits.
+///
+/// # Performance
+///
+/// Half-step angles are pre-computed per term (θ_k = c_k t / n) outside the step
+/// loop; forward and backward passes share the same angle array.
+pub(crate) fn trotter_second_order_core(
+    circuit: &mut Circuit,
+    terms: &[(PauliString, Complex64)],
+    t: ParameterValue,
+    steps: usize,
+    qubits: &[Qubit],
+) -> Result<(), CircuitError> {
+    // Half-step angle: θ_k = 2 c_k (t/2n) = c_k t / n.
+    // Forward and backward passes share the same value by symmetry.
+    let angles: Vec<ParameterValue> = terms
+        .iter()
+        .map(|(_, coeff)| multiply_angle_by_factor(t.clone(), coeff.re / steps as f64))
+        .collect();
+
+    for _ in 0..steps {
+        // Forward half-step
+        for (idx, (pauli, _)) in terms.iter().enumerate() {
+            circuit
+                .pauli_evolution(pauli, angles[idx].clone(), qubits)
+                .map_err(|e| {
+                    CircuitError::InvalidOperation(format!("Failed to add Pauli evolution: {}", e))
+                })?;
+        }
+        // Backward half-step in reverse term order
+        for (idx, (pauli, _)) in terms.iter().enumerate().rev() {
+            circuit
+                .pauli_evolution(pauli, angles[idx].clone(), qubits)
+                .map_err(|e| {
+                    CircuitError::InvalidOperation(format!("Failed to add Pauli evolution: {}", e))
+                })?;
+        }
+    }
+    Ok(())
+}
+
 impl Hamiltonian {
     /// Converts the Hamiltonian to a Trotterized time evolution circuit.
     ///
     /// Implements Trotter-Suzuki decomposition to approximate the time evolution
     /// operator $U(t) = e^{-iHt}$ as a sequence of Pauli rotations.
+    ///
+    /// This method **always** applies the product formula regardless of whether
+    /// the Hamiltonian terms commute. For an auto-selecting method that uses the
+    /// mathematically exact single-pass decomposition when all terms commute, see
+    /// [`to_evolution_circuit`](Hamiltonian::to_evolution_circuit).
     ///
     /// # Arguments
     ///
@@ -386,7 +508,6 @@ impl Hamiltonian {
         steps: usize,
         mode: TrotterMode,
     ) -> Result<Circuit, QisError> {
-        // Validate inputs
         if steps == 0 {
             return Err(QisError::InvalidParameterValue(
                 "Trotter steps must be greater than 0".to_string(),
@@ -399,7 +520,6 @@ impl Hamiltonian {
             ));
         }
 
-        // Simplify the Hamiltonian to combine identical terms
         let mut simplified_h = self.clone();
         simplified_h.simplify();
 
@@ -409,78 +529,170 @@ impl Hamiltonian {
             }
         }
 
-        // Create the circuit
+        let mut circuit = Circuit::new(simplified_h.num_qubits);
+        let qubits: Vec<Qubit> = circuit.qubits();
+        let t = ParameterValue::Fixed(time);
+
+        // Dispatch to shared Trotter core helpers.
+        //
+        // NOTE: The parametric counterpart of this logic lives in
+        // `PauliEvolutionAnsatz::build_circuit()` (circuit/ansatz/hamiltonian_evolution.rs),
+        // which calls the same `trotter_first_order_core` / `trotter_second_order_core`
+        // with a symbolic `ParameterValue::Param(t)` instead of `Fixed(f64)`.
+        let err_map = |e: CircuitError| {
+            QisError::UnsupportedOperation(format!("Failed to add Pauli evolution: {}", e))
+        };
+
+        match mode {
+            TrotterMode::FirstOrder => {
+                trotter_first_order_core(
+                    &mut circuit,
+                    &simplified_h.terms,
+                    t,
+                    steps,
+                    &qubits,
+                    None,
+                )
+                .map_err(err_map)?;
+            }
+            TrotterMode::Randomized(seed) => {
+                let mut rng = StdRng::seed_from_u64(seed);
+                trotter_first_order_core(
+                    &mut circuit,
+                    &simplified_h.terms,
+                    t,
+                    steps,
+                    &qubits,
+                    Some(&mut rng),
+                )
+                .map_err(err_map)?;
+            }
+            TrotterMode::SecondOrder => {
+                trotter_second_order_core(&mut circuit, &simplified_h.terms, t, steps, &qubits)
+                    .map_err(err_map)?;
+            }
+        }
+
+        Ok(circuit)
+    }
+
+    /// Converts the Hamiltonian to a time evolution circuit, automatically selecting
+    /// the exact decomposition when possible.
+    ///
+    /// Unlike [`to_trotter_circuit`](Hamiltonian::to_trotter_circuit), this method
+    /// checks whether all Hamiltonian terms mutually commute:
+    ///
+    /// - **Commuting terms**: uses an exact single-pass decomposition
+    ///   $U(t) = \prod_k e^{-i c_k t P_k}$ (no approximation error, `steps` is ignored).
+    /// - **Non-commuting terms**: falls back to the Trotter approximation specified by
+    ///   `mode` and `steps`.
+    ///
+    /// This mirrors the behavior of [`PauliEvolutionAnsatz`] with
+    /// [`EvolutionStrategy::Auto`], closing the capability gap between the numeric
+    /// and parametric APIs.
+    ///
+    /// # Arguments
+    ///
+    /// * `time`  - Total evolution time $t$
+    /// * `steps` - Trotter steps (used only when terms are non-commuting; must be ≥ 1)
+    /// * `mode`  - Trotter mode (used only when terms are non-commuting)
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Circuit)` - The evolution circuit (exact or approximate)
+    /// * `Err(QisError)` - If the Hamiltonian is empty, non-Hermitian, or `steps == 0`
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use cqlib_core::qis::Hamiltonian;
+    /// use cqlib_core::qis::evolution::TrotterMode;
+    ///
+    /// // Commuting Hamiltonian: ZZ and ZI share eigenstates — exact evolution
+    /// let mut h = Hamiltonian::new(2);
+    /// h.add_term("ZZ".into(), 0.5.into()).unwrap();
+    /// h.add_term("ZI".into(), 0.3.into()).unwrap();
+    /// // steps/mode are irrelevant here — exact path is taken automatically
+    /// let circuit = h.to_evolution_circuit(1.0, 1, TrotterMode::FirstOrder).unwrap();
+    ///
+    /// // Non-commuting: uses Trotter
+    /// let mut h2 = Hamiltonian::new(1);
+    /// h2.add_term("X".into(), 1.0.into()).unwrap();
+    /// h2.add_term("Z".into(), 1.0.into()).unwrap();
+    /// let circuit2 = h2.to_evolution_circuit(0.5, 10, TrotterMode::SecondOrder).unwrap();
+    /// ```
+    pub fn to_evolution_circuit(
+        &self,
+        time: f64,
+        steps: usize,
+        mode: TrotterMode,
+    ) -> Result<Circuit, QisError> {
+        if steps == 0 {
+            return Err(QisError::InvalidParameterValue(
+                "Trotter steps must be greater than 0".to_string(),
+            ));
+        }
+
+        if self.terms.is_empty() {
+            return Err(QisError::InvalidParameterValue(
+                "Cannot create evolution circuit from empty Hamiltonian".to_string(),
+            ));
+        }
+
+        let mut simplified_h = self.clone();
+        simplified_h.simplify();
+
+        for (_, coeff) in &simplified_h.terms {
+            if coeff.im.abs() > 1e-10 {
+                return Err(QisError::NotHermitian);
+            }
+        }
+
         let mut circuit = Circuit::new(simplified_h.num_qubits);
         let qubits: Vec<Qubit> = circuit.qubits();
 
-        // Calculate time per step
-        let dt = time / steps as f64;
-
-        // Setup RNG for randomized mode
-        let mut rng = match mode {
-            TrotterMode::Randomized(seed) => Some(StdRng::seed_from_u64(seed)),
-            _ => None,
+        let err_map = |e: CircuitError| {
+            QisError::UnsupportedOperation(format!("Failed to add Pauli evolution: {}", e))
         };
 
-        // Build the circuit for each Trotter step
-        for _step in 0..steps {
+        if simplified_h.all_terms_commute() {
+            // Exact decomposition: ∏_k e^{-i c_k t P_k}
+            // Angle convention: pauli_evolution implements e^{-iθ/2 P}, so θ = 2 c t.
+            for (pauli, coeff) in &simplified_h.terms {
+                circuit
+                    .pauli_evolution(pauli, 2.0 * coeff.re * time, &qubits)
+                    .map_err(err_map)?;
+            }
+        } else {
+            // Non-commuting: Trotter approximation
+            let t = ParameterValue::Fixed(time);
             match mode {
-                TrotterMode::FirstOrder | TrotterMode::Randomized(_) => {
-                    // Get term indices
-                    let mut indices: Vec<usize> = (0..simplified_h.terms.len()).collect();
-
-                    // Shuffle if randomized mode
-                    if let Some(ref mut r) = rng {
-                        indices.shuffle(r);
-                    }
-
-                    // Apply each term's evolution
-                    for idx in indices {
-                        let (pauli_str, coeff) = &simplified_h.terms[idx];
-                        // Angle = 2 * coeff.re * dt
-                        //
-                        // Mathematical derivation:
-                        // Physical evolution: U = e^{-i H t} = e^{-i c P t}
-                        // pauli_evolution implements: R_P(θ) = e^{-i θ/2 P}
-                        // Therefore: θ/2 = c*t => θ = 2*c*t
-                        let angle = 2.0 * coeff.re * dt;
-                        circuit
-                            .pauli_evolution(pauli_str, angle, &qubits)
-                            .map_err(|e| {
-                                QisError::UnsupportedOperation(format!(
-                                    "Failed to add Pauli evolution: {}",
-                                    e
-                                ))
-                            })?;
-                    }
+                TrotterMode::FirstOrder => {
+                    trotter_first_order_core(
+                        &mut circuit,
+                        &simplified_h.terms,
+                        t,
+                        steps,
+                        &qubits,
+                        None,
+                    )
+                    .map_err(err_map)?;
+                }
+                TrotterMode::Randomized(seed) => {
+                    let mut rng = StdRng::seed_from_u64(seed);
+                    trotter_first_order_core(
+                        &mut circuit,
+                        &simplified_h.terms,
+                        t,
+                        steps,
+                        &qubits,
+                        Some(&mut rng),
+                    )
+                    .map_err(err_map)?;
                 }
                 TrotterMode::SecondOrder => {
-                    // Second-order Strange splitting
-                    // Forward half-step
-                    for (pauli_str, coeff) in &simplified_h.terms {
-                        let angle = 2.0 * coeff.re * dt / 2.0; // half time
-                        circuit
-                            .pauli_evolution(pauli_str, angle, &qubits)
-                            .map_err(|e| {
-                                QisError::UnsupportedOperation(format!(
-                                    "Failed to add Pauli evolution: {}",
-                                    e
-                                ))
-                            })?;
-                    }
-
-                    // Backward half-step (reverse order)
-                    for (pauli_str, coeff) in simplified_h.terms.iter().rev() {
-                        let angle = 2.0 * coeff.re * dt / 2.0; // half time
-                        circuit
-                            .pauli_evolution(pauli_str, angle, &qubits)
-                            .map_err(|e| {
-                                QisError::UnsupportedOperation(format!(
-                                    "Failed to add Pauli evolution: {}",
-                                    e
-                                ))
-                            })?;
-                    }
+                    trotter_second_order_core(&mut circuit, &simplified_h.terms, t, steps, &qubits)
+                        .map_err(err_map)?;
                 }
             }
         }

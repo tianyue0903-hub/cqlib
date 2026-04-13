@@ -210,6 +210,48 @@ impl Hamiltonian {
             *coeff *= factor;
         }
     }
+
+    /// Returns `true` if all pairs of Pauli terms in this Hamiltonian mutually commute.
+    ///
+    /// When `true`, the time evolution $e^{-iHt}$ is **exact** via term-by-term
+    /// decomposition: $e^{-iHt} = \prod_k e^{-i c_k t P_k}$, with no Trotter
+    /// approximation error regardless of term ordering.
+    ///
+    /// When `false`, at least one pair of terms does not commute, meaning that
+    /// product-formula decompositions (Trotter, Suzuki) are only approximations.
+    ///
+    /// # Complexity
+    ///
+    /// $O(m^2 \cdot n / 64)$ where $m$ is the number of terms and $n$ is the number
+    /// of qubits. For typical sparse Hamiltonians ($m \ll 2^n$) this is efficient.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use cqlib_core::qis::hamiltonian::Hamiltonian;
+    ///
+    /// // ZZ and IZ commute
+    /// let mut h = Hamiltonian::new(2);
+    /// h.add_term("ZZ".parse().unwrap(), 1.0.into()).unwrap();
+    /// h.add_term("IZ".parse().unwrap(), 0.5.into()).unwrap();
+    /// assert!(h.all_terms_commute());
+    ///
+    /// // X and Z do not commute (single qubit)
+    /// let mut h2 = Hamiltonian::new(1);
+    /// h2.add_term("X".parse().unwrap(), 1.0.into()).unwrap();
+    /// h2.add_term("Z".parse().unwrap(), 1.0.into()).unwrap();
+    /// assert!(!h2.all_terms_commute());
+    /// ```
+    pub fn all_terms_commute(&self) -> bool {
+        for i in 0..self.terms.len() {
+            for j in (i + 1)..self.terms.len() {
+                if !self.terms[i].0.commutes_with(&self.terms[j].0) {
+                    return false;
+                }
+            }
+        }
+        true
+    }
 }
 
 impl Add for Hamiltonian {
