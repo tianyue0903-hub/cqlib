@@ -10,11 +10,28 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
-use super::{VirtualDistillation, VirtualDistillationError};
+use super::VirtualDistillation;
+use crate::circuit::Qubit;
 use crate::circuit::circuit_impl::Circuit;
 use crate::circuit::gate::Instruction;
 use crate::circuit::gate::standard_gate::StandardGate;
-use crate::circuit::Qubit;
+use crate::error_mitigation::ErrorMitigationError;
+use crate::qis::{Hamiltonian, Pauli, PauliString};
+use num_complex::Complex64;
+
+fn single_qubit_z_hamiltonian() -> Hamiltonian {
+    let mut pauli_string = PauliString::new(1);
+    pauli_string.set_pauli(0, Pauli::Z);
+    Hamiltonian::from_list(vec![(pauli_string, Complex64::new(1.0, 0.0))])
+        .expect("single-qubit Z Hamiltonian should be valid")
+}
+
+fn single_qubit_x_hamiltonian() -> Hamiltonian {
+    let mut pauli_string = PauliString::new(1);
+    pauli_string.set_pauli(0, Pauli::X);
+    Hamiltonian::from_list(vec![(pauli_string, Complex64::new(1.0, 0.0))])
+        .expect("single-qubit X Hamiltonian should be valid")
+}
 
 #[test]
 fn test_vd_new_accepts_valid_input() {
@@ -27,7 +44,7 @@ fn test_vd_new_accepts_valid_input() {
 fn test_vd_new_rejects_invalid_copies() {
     let circuit = Circuit::new(1);
     let err = VirtualDistillation::new(circuit, 1).unwrap_err();
-    assert_eq!(err, VirtualDistillationError::InvalidCopies(1));
+    assert!(matches!(err, ErrorMitigationError::InvalidCopies(1)));
 }
 
 #[test]
@@ -41,7 +58,7 @@ fn test_vd_copies_getter_and_setter() {
     assert_eq!(vd.copies(), 3);
 
     let err = vd.set_copies(1).unwrap_err();
-    assert_eq!(err, VirtualDistillationError::InvalidCopies(1));
+    assert!(matches!(err, ErrorMitigationError::InvalidCopies(1)));
     assert_eq!(vd.copies(), 3);
 }
 
@@ -52,7 +69,7 @@ fn test_build_copy_swap_circuit_for_two_single_qubit_copies() {
     circuit.x(q0).unwrap();
 
     let vd = VirtualDistillation::new(circuit, 2).unwrap();
-    let copy_swap = vd.build_copy_swap_circuit(None).unwrap();
+    let copy_swap = vd.build_copy_swap_circuit().unwrap();
     let ops = copy_swap.operations();
 
     assert_eq!(copy_swap.width(), 2);
@@ -80,7 +97,7 @@ fn test_build_copy_swap_circuit_for_two_single_qubit_copies() {
 #[test]
 fn test_build_copy_swap_circuit_adds_pairwise_swaps_for_multiple_copies() {
     let vd = VirtualDistillation::new(Circuit::new(1), 3).unwrap();
-    let copy_swap = vd.build_copy_swap_circuit(None).unwrap();
+    let copy_swap = vd.build_copy_swap_circuit().unwrap();
     let ops = copy_swap.operations();
 
     assert_eq!(copy_swap.width(), 3);
@@ -94,40 +111,21 @@ fn test_build_copy_swap_circuit_adds_pairwise_swaps_for_multiple_copies() {
 }
 
 #[test]
-fn test_build_copy_swap_circuit_applies_optional_observable_to_first_copy() {
-    let q0 = Qubit::new(0);
-    let mut circuit = Circuit::new(1);
-    circuit.x(q0).unwrap();
+fn test_expand_hamiltonian_appends_z_on_higher_indices() {
+    let hamiltonian = single_qubit_x_hamiltonian();
+    let expanded = VirtualDistillation::expand_hamiltonian(&hamiltonian, 2).unwrap();
 
-    let mut observable = Circuit::new(1);
-    observable.z(q0).unwrap();
+    assert_eq!(expanded.num_qubits, 3);
+    assert_eq!(expanded.terms.len(), 1);
 
-    let vd = VirtualDistillation::new(circuit, 2).unwrap();
-    let copy_swap = vd.build_copy_swap_circuit(Some(observable)).unwrap();
-    let ops = copy_swap.operations();
+    let (term, coeff) = &expanded.terms[0];
+    assert_eq!(*coeff, Complex64::new(1.0, 0.0));
+    assert_eq!(term.num_qubits, 3);
+    assert_eq!(term.phase, crate::qis::Phase::Plus);
 
-    assert_eq!(ops.len(), 4);
-    assert!(matches!(
-        ops[3].instruction,
-        Instruction::Standard(StandardGate::Z)
-    ));
-    assert_eq!(ops[3].qubits.as_slice(), &[Qubit::new(0)]);
-}
-
-#[test]
-fn test_build_copy_swap_circuit_rejects_optional_observable_qubit_mismatch() {
-    let vd = VirtualDistillation::new(Circuit::new(1), 2).unwrap();
-    let observable = Circuit::new(2);
-
-    let err = vd.build_copy_swap_circuit(Some(observable)).unwrap_err();
-
-    assert!(matches!(
-        err,
-        crate::circuit::CircuitError::QubitCountMismatch {
-            expected: 1,
-            actual: 2
-        }
-    ));
+    assert_eq!((term.x[0], term.z[0]), (true, false));
+    assert_eq!((term.x[1], term.z[1]), (false, true));
+    assert_eq!((term.x[2], term.z[2]), (false, true));
 }
 
 #[test]
@@ -135,7 +133,7 @@ fn test_run_denominator_circuit_runs_copy_swap_circuit() {
     let vd = VirtualDistillation::new(Circuit::new(1), 2).unwrap();
 
     let observed_values = vd
-        .run_denominator_circuit(128, |denominator, _shots| {
+        .run_denominator_circuit(128, &|denominator, hamiltonian, shots| {
             let denominator_ops = denominator.operations();
 
             assert_eq!(denominator.width(), 2);
@@ -144,146 +142,141 @@ fn test_run_denominator_circuit_runs_copy_swap_circuit() {
                 denominator_ops[0].instruction,
                 Instruction::Standard(StandardGate::SWAP)
             ));
+            assert!(hamiltonian.is_none());
+            assert_eq!(shots, Some(128));
 
-            vec![1.0]
+            (1.0, 0.5)
         })
         .unwrap();
 
-    assert_eq!(observed_values, vec![1.0]);
+    assert_eq!(observed_values, (1.0, 0.5));
 }
 
 #[test]
-fn test_run_numerator_circuit_applies_observable_to_first_copy() {
+fn test_run_numerator_circuit_passes_hamiltonian_to_estimator() {
     let q0 = Qubit::new(0);
     let mut circuit = Circuit::new(1);
     circuit.x(q0).unwrap();
 
-    let mut observable = Circuit::new(1);
-    observable.z(q0).unwrap();
-
     let vd = VirtualDistillation::new(circuit, 2).unwrap();
+    let hamiltonian = single_qubit_x_hamiltonian();
     let observed_values = vd
-        .run_numerator_circuit(observable, 128, |numerator, _shots| {
+        .run_numerator_circuit(&hamiltonian, 128, &|numerator, hamiltonian_arg, shots| {
             let numerator_ops = numerator.operations();
 
-            assert_eq!(numerator_ops.len(), 4);
+            assert_eq!(numerator.width(), 2);
+            assert_eq!(numerator_ops.len(), 3);
+            assert!(hamiltonian_arg.is_some());
+            assert_eq!(shots, Some(128));
 
-            assert!(matches!(
-                numerator_ops[3].instruction,
-                Instruction::Standard(StandardGate::Z)
-            ));
-            assert_eq!(numerator_ops[3].qubits.as_slice(), &[Qubit::new(0)]);
+            let expanded_hamiltonian = hamiltonian_arg.unwrap();
+            assert_eq!(expanded_hamiltonian.num_qubits, 2);
+            assert_eq!(expanded_hamiltonian.terms.len(), 1);
 
-            vec![1.0]
+            let (term, coeff) = &expanded_hamiltonian.terms[0];
+            assert_eq!(*coeff, Complex64::new(1.0, 0.0));
+            assert_eq!((term.x[0], term.z[0]), (true, false));
+            assert_eq!((term.x[1], term.z[1]), (false, true));
+
+            (1.0, 0.25)
         })
         .unwrap();
 
-    assert_eq!(observed_values, vec![1.0]);
+    assert_eq!(observed_values, (1.0, 0.25));
 }
 
 #[test]
 fn test_run_vd_returns_mu_and_var() {
-    let q0 = Qubit::new(0);
     let base_circuit = Circuit::new(1);
-
-    let mut observable_z = Circuit::new(1);
-    observable_z.z(q0).unwrap();
-
-    let mut observable_x = Circuit::new(1);
-    observable_x.x(q0).unwrap();
-
     let vd = VirtualDistillation::new(base_circuit, 2).unwrap();
+    let hamiltonian = single_qubit_z_hamiltonian();
     let (mu_vd, var_vd) = vd
-        .run_vd(
-            vec![observable_z, observable_x],
-            vec![2.0, -0.5],
-            3,
-            2,
-            |circuit, shots| {
-                let ops = circuit.operations();
+        .run_vd(&hamiltonian, 3, 2, &|circuit, hamiltonian_arg, shots| {
+            let ops = circuit.operations();
 
-                assert!(!ops.is_empty());
-                if matches!(ops.last().unwrap().instruction, Instruction::Standard(StandardGate::Z))
-                {
-                    assert_eq!(shots, 3);
-                    vec![1.0, 2.0, 3.0]
-                } else if matches!(
-                    ops.last().unwrap().instruction,
-                    Instruction::Standard(StandardGate::X)
-                ) {
-                    assert_eq!(shots, 3);
-                    vec![4.0, 5.0, 6.0]
-                } else {
-                    assert_eq!(shots, 2);
-                    assert_eq!(ops.len(), 1);
-                    assert!(matches!(
-                        ops[0].instruction,
-                        Instruction::Standard(StandardGate::SWAP)
-                    ));
-                    vec![2.0, 2.0]
-                }
-            },
-        )
+            assert_eq!(ops.len(), 1);
+            assert!(matches!(
+                ops[0].instruction,
+                Instruction::Standard(StandardGate::SWAP)
+            ));
+
+            if hamiltonian_arg.is_some() {
+                let expanded_hamiltonian = hamiltonian_arg.unwrap();
+                assert_eq!(expanded_hamiltonian.num_qubits, 2);
+                assert_eq!(expanded_hamiltonian.terms.len(), 1);
+                let (term, _coeff) = &expanded_hamiltonian.terms[0];
+                assert_eq!((term.x[0], term.z[0]), (false, true));
+                assert_eq!((term.x[1], term.z[1]), (false, true));
+                assert_eq!(shots, Some(3));
+                (1.5, 0.25)
+            } else {
+                assert_eq!(shots, Some(2));
+                (2.0, 1.0)
+            }
+        })
         .unwrap();
 
     assert!((mu_vd - 0.75).abs() < 1e-12);
-    assert!((var_vd - 0.375).abs() < 1e-12);
+    assert!((var_vd - 0.203125).abs() < 1e-12);
 }
 
 #[test]
-fn test_run_vd_rejects_mismatched_observables_and_coefficients() {
+fn test_run_vd_forwards_zero_samples_to_estimator() {
+    let vd = VirtualDistillation::new(Circuit::new(1), 2).unwrap();
+    let hamiltonian = single_qubit_z_hamiltonian();
+    let (mu_vd, var_vd) = vd
+        .run_vd(&hamiltonian, 0, 0, &|_circuit, hamiltonian_arg, shots| {
+            if hamiltonian_arg.is_some() {
+                assert_eq!(shots, Some(0));
+                (1.0, 0.5)
+            } else {
+                assert_eq!(shots, Some(0));
+                (2.0, 1.0)
+            }
+        })
+        .unwrap();
+
+    assert!((mu_vd - 0.5).abs() < 1e-12);
+    assert!((var_vd - 0.1875).abs() < 1e-12);
+}
+
+#[test]
+fn test_run_vd_rejects_hamiltonian_qubit_mismatch() {
     let vd = VirtualDistillation::new(Circuit::new(1), 2).unwrap();
 
+    let mut pauli_string = PauliString::new(2);
+    pauli_string.set_pauli(0, Pauli::Z);
+    let hamiltonian = Hamiltonian::from_list(vec![(pauli_string, Complex64::new(1.0, 0.0))])
+        .expect("two-qubit mismatch Hamiltonian should be valid");
+
     let err = vd
-        .run_vd(vec![Circuit::new(1)], vec![], 3, 2, |_circuit, _shots| {
-            vec![1.0]
+        .run_vd(&hamiltonian, 2, 2, &|_circuit, _hamiltonian, _shots| {
+            (0.0, 0.0)
         })
         .unwrap_err();
 
     assert!(matches!(
         err,
-        crate::circuit::CircuitError::InvalidOperation(message)
-            if message.contains("number of observables and coefficients")
-    ));
-}
-
-#[test]
-fn test_run_vd_rejects_zero_samples() {
-    let vd = VirtualDistillation::new(Circuit::new(1), 2).unwrap();
-
-    let err = vd
-        .run_vd(vec![], vec![], 0, 2, |_circuit, _shots| vec![])
-        .unwrap_err();
-
-    assert!(matches!(
-        err,
-        crate::circuit::CircuitError::InvalidOperation(message)
-            if message.contains("must be greater than 0")
+        ErrorMitigationError::HamiltonianQubitCountMismatch {
+            expected: 1,
+            actual: 2
+        }
     ));
 }
 
 #[test]
 fn test_run_vd_rejects_zero_denominator_mean() {
-    let q0 = Qubit::new(0);
-    let mut observable = Circuit::new(1);
-    observable.z(q0).unwrap();
-
     let vd = VirtualDistillation::new(Circuit::new(1), 2).unwrap();
+    let hamiltonian = single_qubit_z_hamiltonian();
     let err = vd
-        .run_vd(vec![observable], vec![1.0], 2, 2, |circuit, shots| {
-            let ops = circuit.operations();
-
-            if matches!(ops.last().unwrap().instruction, Instruction::Standard(StandardGate::Z)) {
-                vec![1.0; shots]
+        .run_vd(&hamiltonian, 2, 2, &|_circuit, hamiltonian_arg, _shots| {
+            if hamiltonian_arg.is_some() {
+                (1.0, 0.0)
             } else {
-                vec![0.0; shots]
+                (0.0, 0.0)
             }
         })
         .unwrap_err();
 
-    assert!(matches!(
-        err,
-        crate::circuit::CircuitError::InvalidOperation(message)
-            if message.contains("denominator mean is zero")
-    ));
+    assert!(matches!(err, ErrorMitigationError::ZeroDenominatorMean));
 }

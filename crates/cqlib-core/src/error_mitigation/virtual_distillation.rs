@@ -12,16 +12,10 @@
 
 use std::collections::HashMap;
 
-use thiserror::Error;
-
 use crate::circuit::{Circuit, CircuitError, CircuitParam, ParameterValue, Qubit};
-
-/// Errors raised by [`VirtualDistillation`].
-#[derive(Debug, Error, PartialEq)]
-pub enum VirtualDistillationError {
-    #[error("virtual distillation requires at least 2 copies, got {0}")]
-    InvalidCopies(usize),
-}
+use crate::error_mitigation::ErrorMitigationError;
+use crate::error_mitigation::Estimator;
+use crate::qis::{Hamiltonian, Pauli, PauliString};
 
 /// Virtual distillation mitigation based on the moment ratio
 /// `Tr(O rho^M) / Tr(rho^M)`.
@@ -48,9 +42,9 @@ pub struct VirtualDistillation {
 
 impl VirtualDistillation {
     /// Creates a new virtual distillation helper.
-    pub fn new(circuit: Circuit, copies: usize) -> Result<Self, VirtualDistillationError> {
+    pub fn new(circuit: Circuit, copies: usize) -> Result<Self, ErrorMitigationError> {
         if copies < 2 {
-            return Err(VirtualDistillationError::InvalidCopies(copies));
+            return Err(ErrorMitigationError::InvalidCopies(copies));
         }
 
         Ok(Self { circuit, copies })
@@ -62,9 +56,9 @@ impl VirtualDistillation {
     }
 
     /// Updates the configured number of copies.
-    pub fn set_copies(&mut self, copies: usize) -> Result<(), VirtualDistillationError> {
+    pub fn set_copies(&mut self, copies: usize) -> Result<(), ErrorMitigationError> {
         if copies < 2 {
-            return Err(VirtualDistillationError::InvalidCopies(copies));
+            return Err(ErrorMitigationError::InvalidCopies(copies));
         }
 
         self.copies = copies;
@@ -76,10 +70,7 @@ impl VirtualDistillation {
     /// The returned circuit contains:
     /// - `copies` disjoint copies of the base circuit preparation,
     /// - pairwise SWAP operations between the first copy and every additional copy.
-    pub fn build_copy_swap_circuit(
-        &self,
-        observable_circ: Option<Circuit>,
-    ) -> Result<Circuit, CircuitError> {
+    pub fn build_copy_swap_circuit(&self) -> Result<Circuit, CircuitError> {
         let base_circuit = self.circuit.decompose()?;
         let base_width = base_circuit.width();
         let mut copy_swap_circuit = Circuit::new(self.copies * base_width);
@@ -99,126 +90,134 @@ impl VirtualDistillation {
             }
         }
 
-        if let Some(observable_circ) = observable_circ {
-            if observable_circ.width() != base_width {
-                return Err(CircuitError::QubitCountMismatch {
-                    expected: base_width,
-                    actual: observable_circ.width(),
-                });
-            }
-
-            let observable_circ = observable_circ.decompose()?;
-            Self::append_circuit_with_offset(&mut copy_swap_circuit, &observable_circ, 0)?;
-        }
-
         Ok(copy_swap_circuit)
     }
 
-    /// Runs the denominator circuit and returns the eigenvalues.
+    /// Expands a Hamiltonian to the full copy-swap circuit width.
     ///
-    /// - `shots`: the number of shots to run the circuit.
-    /// - `eigen_calc`: a backend that can run the circuit and return the eigenvalues.
-    ///
-    /// # Returns
-    ///
-    /// - `eigen_values`: a vector of eigenvalues.
-    pub fn run_denominator_circuit<F>(
-        &self,
-        shots: usize,
-        eigen_calc: F,
-    ) -> Result<Vec<f64>, CircuitError>
-    where
-        F: Fn(&Circuit, usize) -> Vec<f64>,
-    {
-        let denominator_circuit = self.build_copy_swap_circuit(None)?;
+    /// Virtual distillation evaluates the numerator on a wider copy-swap circuit,
+    /// so the estimator needs a Hamiltonian of matching width. This helper keeps
+    /// the original Pauli operators on their current qubit indices and appends
+    /// `n` `Z`s on higher-index qubits.
+    pub(crate) fn expand_hamiltonian(
+        hamiltonian: &Hamiltonian,
+        n: usize,
+    ) -> Result<Hamiltonian, ErrorMitigationError> {
+        if hamiltonian.terms.is_empty() {
+            return Ok(Hamiltonian::new(hamiltonian.num_qubits + n));
+        }
 
-        Ok(eigen_calc(&denominator_circuit, shots))
+        let expanded_terms = hamiltonian
+            .terms
+            .iter()
+            .map(|(term, coeff)| {
+                let mut expanded_term = PauliString::new(hamiltonian.num_qubits + n);
+                expanded_term.phase = term.phase;
+
+                for qubit in 0..hamiltonian.num_qubits {
+                    let pauli = match (term.x[qubit], term.z[qubit]) {
+                        (false, false) => Pauli::I,
+                        (true, false) => Pauli::X,
+                        (false, true) => Pauli::Z,
+                        (true, true) => Pauli::Y,
+                    };
+                    expanded_term.set_pauli(qubit, pauli);
+                }
+
+                for qubit in hamiltonian.num_qubits..(hamiltonian.num_qubits + n) {
+                    expanded_term.set_pauli(qubit, Pauli::Z);
+                }
+
+                (expanded_term, *coeff)
+            })
+            .collect();
+
+        Ok(Hamiltonian::from_list(expanded_terms)?)
     }
 
-    /// Runs the numerator circuit and returns the eigenvalues.
+    /// Runs the denominator circuit and returns the estimated mean and variance.
     ///
-    /// - `observable_circ`: a pauli observable represented as a basis transformation quantum circuit.
     /// - `shots`: the number of shots to run the circuit.
-    /// - `eigen_calc`: a backend that can run the circuit and return the eigenvalues.
+    /// - `estimator`: an estimator that evaluates the copy-swap circuit, with no
+    ///   Hamiltonian (`None`) and the provided shot count.
     ///
     /// # Returns
     ///
-    /// - `eigen_values`: a vector of eigenvalues.
-    pub fn run_numerator_circuit<F>(
+    /// - `(mu, var)`: the estimated mean and variance of the denominator circuit.
+    pub fn run_denominator_circuit(
         &self,
-        observable_circ: Circuit,
         shots: usize,
-        eigen_calc: F,
-    ) -> Result<Vec<f64>, CircuitError>
-    where
-        F: Fn(&Circuit, usize) -> Vec<f64>,
-    {
-        let numerator_circuit = self.build_copy_swap_circuit(Some(observable_circ))?;
+        estimator: &Estimator<'_>,
+    ) -> Result<(f64, f64), CircuitError> {
+        let denominator_circuit = self.build_copy_swap_circuit()?;
 
-        Ok(eigen_calc(&numerator_circuit, shots))
+        Ok(estimator(&denominator_circuit, None, Some(shots)))
+    }
+
+    /// Runs the numerator circuit and returns the estimated mean and variance.
+    ///
+    /// - `hamiltonian`: the Hamiltonian to estimate on the copy-swap circuit.
+    /// - `shots`: the number of shots to run the circuit.
+    /// - `estimator`: an estimator that evaluates the copy-swap circuit, the given
+    ///   expanded Hamiltonian, and the provided shot count.
+    ///
+    /// # Returns
+    ///
+    /// - `(mu, var)`: the estimated mean and variance of the numerator circuit.
+    pub fn run_numerator_circuit(
+        &self,
+        hamiltonian: &Hamiltonian,
+        shots: usize,
+        estimator: &Estimator<'_>,
+    ) -> Result<(f64, f64), ErrorMitigationError> {
+        let numerator_circuit = self.build_copy_swap_circuit()?;
+        let extra_qubits = (self.copies - 1) * hamiltonian.num_qubits;
+        let expanded_hamiltonian = Self::expand_hamiltonian(hamiltonian, extra_qubits)?;
+        if expanded_hamiltonian.num_qubits != numerator_circuit.width() {
+            return Err(CircuitError::QubitCountMismatch {
+                expected: numerator_circuit.width(),
+                actual: expanded_hamiltonian.num_qubits,
+            }
+            .into());
+        }
+
+        Ok(estimator(
+            &numerator_circuit,
+            Some(&expanded_hamiltonian),
+            Some(shots),
+        ))
     }
 
     /// Runs the virtual distillation circuit and returns the mean and variance.
     ///
-    /// - `observables`: a vector of pauli observables expressed as basis transformation quantum circuits.
-    /// - `coefficients`: a vector of coefficients for the observables.
+    /// - `hamiltonian`: a `qis::Hamiltonian` describing the observable to estimate for the original circuit.
     /// - `shots_numerator`: the number of shots to run the numerator circuit.
     /// - `shots_denominator`: the number of shots to run the denominator circuit.
-    /// - `eigen_calc`: a backend that can run the circuit and return the eigenvalues.
+    /// - `estimator`: an estimator that evaluates circuits and returns `(mu, var)`.
     ///
     /// # Returns
     ///
     /// - `mu_vd`: the mitigated result of the observable on the original circuit.
     /// - `var_vd`: the variance of the mitigated result.
-    pub fn run_vd<F>(
+    pub fn run_vd(
         &self,
-        observables: Vec<Circuit>,
-        coefficients: Vec<f64>,
+        hamiltonian: &Hamiltonian,
         shots_numerator: usize,
         shots_denominator: usize,
-        eigen_calc: F,
-    ) -> Result<(f64, f64), CircuitError>
-    where
-        F: Fn(&Circuit, usize) -> Vec<f64>,
-    {
-        Self::validate_sample_count("shots_numerator", shots_numerator)?;
-        Self::validate_sample_count("shots_denominator", shots_denominator)?;
-
-        if observables.len() != coefficients.len() {
-            return Err(CircuitError::InvalidOperation(
-                "The number of observables and coefficients must be the same".to_string(),
-            ));
+        estimator: &Estimator<'_>,
+    ) -> Result<(f64, f64), ErrorMitigationError> {
+        if hamiltonian.num_qubits != self.circuit.width() {
+            return Err(ErrorMitigationError::HamiltonianQubitCountMismatch {
+                expected: self.circuit.width(),
+                actual: hamiltonian.num_qubits,
+            });
         }
 
-        let mut weighted_numerator = vec![0.0; shots_numerator];
-
-        for (observable, coefficient) in observables.into_iter().zip(coefficients.into_iter()) {
-            let eigen_values =
-                self.run_numerator_circuit(observable, shots_numerator, &eigen_calc)?;
-
-            Self::validate_eigen_vector_length(
-                "Numerator",
-                &eigen_values,
-                shots_numerator,
-            )?;
-
-            for (weighted_value, eigen_value) in
-                weighted_numerator.iter_mut().zip(eigen_values.into_iter())
-            {
-                *weighted_value += coefficient * eigen_value;
-            }
-        }
-
-        let denominator_data = self.run_denominator_circuit(shots_denominator, &eigen_calc)?;
-        Self::validate_eigen_vector_length(
-            "Denominator",
-            &denominator_data,
-            shots_denominator,
-        )?;
-
-        let (mu_numerator, var_numerator) = self.get_mu_var(&weighted_numerator);
-        let (mu_denominator, var_denominator) = self.get_mu_var(&denominator_data);
-        let (mu_vd, var_vd) = self.ratio_mu_var(
+        let (mu_numerator, var_numerator) =
+            self.run_numerator_circuit(hamiltonian, shots_numerator, estimator)?;
+        let (mu_denominator, var_denominator) =
+            self.run_denominator_circuit(shots_denominator, estimator)?;
+        let (mu_vd, var_vd) = Self::mitigate_from_statistics(
             mu_numerator,
             var_numerator,
             mu_denominator,
@@ -228,48 +227,14 @@ impl VirtualDistillation {
         Ok((mu_vd, var_vd))
     }
 
-    fn validate_sample_count(name: &str, sample_count: usize) -> Result<(), CircuitError> {
-        if sample_count == 0 {
-            return Err(CircuitError::InvalidOperation(format!(
-                "{name} must be greater than 0"
-            )));
-        }
-
-        Ok(())
-    }
-
-    fn validate_eigen_vector_length(
-        kind: &str,
-        data: &[f64],
-        expected_len: usize,
-    ) -> Result<(), CircuitError> {
-        if data.len() != expected_len {
-            return Err(CircuitError::InvalidOperation(format!(
-                "{kind} eigenvalue vector length mismatch: expected {expected_len}, got {}",
-                data.len()
-            )));
-        }
-
-        Ok(())
-    }
-
-    fn get_mu_var(&self, data: &[f64]) -> (f64, f64) {
-        let mu = data.iter().sum::<f64>() / data.len() as f64;
-        let var = data.iter().map(|x| (x - mu).powi(2)).sum::<f64>() / data.len() as f64;
-        (mu, var)
-    }
-
-    fn ratio_mu_var(
-        &self,
+    pub(crate) fn mitigate_from_statistics(
         mu_numerator: f64,
         var_numerator: f64,
         mu_denominator: f64,
         var_denominator: f64,
-    ) -> Result<(f64, f64), CircuitError> {
+    ) -> Result<(f64, f64), ErrorMitigationError> {
         if mu_denominator == 0.0 {
-            return Err(CircuitError::InvalidOperation(
-                "Virtual distillation denominator mean is zero".to_string(),
-            ));
+            return Err(ErrorMitigationError::ZeroDenominatorMean);
         }
 
         let mu_vd = mu_numerator / mu_denominator;

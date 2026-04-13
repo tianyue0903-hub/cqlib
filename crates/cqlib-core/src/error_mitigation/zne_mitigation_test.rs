@@ -15,8 +15,116 @@ use crate::circuit::CircuitError;
 use crate::circuit::Qubit;
 use crate::circuit::circuit_impl::Circuit;
 use crate::circuit::gate::{Instruction, StandardGate};
+use crate::error_mitigation::ErrorMitigationError;
+use crate::qis::{Hamiltonian, Pauli, PauliString};
 use ndarray::Array2;
 use num_complex::Complex64;
+
+fn single_qubit_z_hamiltonian() -> Hamiltonian {
+    let mut pauli_string = PauliString::new(1);
+    pauli_string.set_pauli(0, Pauli::Z);
+    Hamiltonian::from_list(vec![(pauli_string, Complex64::new(1.0, 0.0))])
+        .expect("single-qubit Z Hamiltonian should be valid")
+}
+
+fn estimator_hmat(
+    circuit: &Circuit,
+    hamiltonian_arg: Option<&Hamiltonian>,
+    shot_number: Option<usize>,
+) -> (f64, f64) {
+    assert_eq!(shot_number, None);
+    let hamiltonian = hamiltonian_arg.expect("ZNE estimator should receive a Hamiltonian");
+    let c_mat = circuit.to_matrix(None);
+    let h_mat = hamiltonian_to_matrix(hamiltonian);
+    let dim = c_mat.nrows();
+
+    assert_eq!(
+        c_mat.ncols(),
+        dim,
+        "circuit matrix must be square, got {}x{}",
+        dim,
+        c_mat.ncols()
+    );
+    assert_eq!(
+        h_mat.nrows(),
+        dim,
+        "hamiltonian row dimension mismatch: expected {}, got {}",
+        dim,
+        h_mat.nrows()
+    );
+    assert_eq!(
+        h_mat.ncols(),
+        dim,
+        "hamiltonian column dimension mismatch: expected {}, got {}",
+        dim,
+        h_mat.ncols()
+    );
+
+    let psi = c_mat.column(0).to_owned();
+    let mut expectation = Complex64::new(0.0, 0.0);
+    for i in 0..dim {
+        for j in 0..dim {
+            expectation += psi[i].conj() * h_mat[(i, j)] * psi[j];
+        }
+    }
+
+    (expectation.re, 0.0)
+}
+
+fn hamiltonian_to_matrix(hamiltonian: &Hamiltonian) -> Array2<Complex64> {
+    let dim = 1usize << hamiltonian.num_qubits;
+    let mut matrix = Array2::from_elem((dim, dim), Complex64::new(0.0, 0.0));
+
+    for (pauli_string, coeff) in &hamiltonian.terms {
+        assert_eq!(
+            pauli_string.num_qubits, hamiltonian.num_qubits,
+            "hamiltonian term qubit mismatch: expected {}, got {}",
+            hamiltonian.num_qubits, pauli_string.num_qubits
+        );
+
+        let mut term_matrix = Array2::from_elem((1, 1), Complex64::new(1.0, 0.0));
+        for qubit in (0..hamiltonian.num_qubits).rev() {
+            let pauli = pauli_at(pauli_string, qubit);
+            term_matrix = kron(&term_matrix, &pauli.to_matrix());
+        }
+
+        let scaled_term =
+            term_matrix.mapv(|value| value * *coeff * pauli_string.phase.to_complex());
+        matrix += &scaled_term;
+    }
+
+    matrix
+}
+
+fn pauli_at(pauli_string: &PauliString, qubit: usize) -> Pauli {
+    match (pauli_string.x[qubit], pauli_string.z[qubit]) {
+        (false, false) => Pauli::I,
+        (true, false) => Pauli::X,
+        (false, true) => Pauli::Z,
+        (true, true) => Pauli::Y,
+    }
+}
+
+fn kron(left: &Array2<Complex64>, right: &Array2<Complex64>) -> Array2<Complex64> {
+    let (left_rows, left_cols) = left.dim();
+    let (right_rows, right_cols) = right.dim();
+    let mut result = Array2::from_elem(
+        (left_rows * right_rows, left_cols * right_cols),
+        Complex64::new(0.0, 0.0),
+    );
+
+    for i in 0..left_rows {
+        for j in 0..left_cols {
+            for k in 0..right_rows {
+                for l in 0..right_cols {
+                    result[(i * right_rows + k, j * right_cols + l)] = left[(i, j)] * right[(k, l)];
+                }
+            }
+        }
+    }
+
+    result
+}
 
 #[test]
 fn test_zne_new_sets_noise_factors() {
@@ -98,32 +206,29 @@ fn test_fold_circuits_negative_level_returns_error() {
 }
 
 #[test]
-fn test_run_em_sequence_uses_default_hexp_calc() {
+fn test_run_em_sequence_with_matrix_estimator() {
     let q0 = Qubit::new(0);
     let mut circuit = Circuit::new(1);
     circuit.x(q0).unwrap();
 
     let zne = ZNEMitigation::new(circuit, vec![0]);
-    let h = Array2::from_shape_vec(
-        (2, 2),
-        vec![
-            Complex64::new(1.0, 0.0),
-            Complex64::new(0.0, 0.0),
-            Complex64::new(0.0, 0.0),
-            Complex64::new(-1.0, 0.0),
-        ],
-    )
-    .unwrap();
+    let h = single_qubit_z_hamiltonian();
 
-    let values = zne.run_em_sequence(None, &h, None);
+    let values = zne.run_em_sequence(None, &h, &estimator_hmat).unwrap();
     assert_eq!(values.len(), 1);
     assert!((values[0] + 1.0).abs() < 1e-10);
 }
 
 #[test]
 fn test_run_em_sequence_with_custom_hexp_calc() {
-    fn custom_hexp(_circuit: &Circuit, _hamiltonian: &Array2<Complex64>) -> f64 {
-        42.0
+    fn custom_hexp(
+        _circuit: &Circuit,
+        hamiltonian_arg: Option<&Hamiltonian>,
+        shot_number: Option<usize>,
+    ) -> (f64, f64) {
+        assert!(hamiltonian_arg.is_some());
+        assert_eq!(shot_number, None);
+        (42.0, 0.25)
     }
 
     let q0 = Qubit::new(0);
@@ -131,19 +236,33 @@ fn test_run_em_sequence_with_custom_hexp_calc() {
     circuit.h(q0).unwrap();
 
     let zne = ZNEMitigation::new(circuit, vec![0, 1]);
-    let h = Array2::from_shape_vec(
-        (2, 2),
-        vec![
-            Complex64::new(1.0, 0.0),
-            Complex64::new(0.0, 0.0),
-            Complex64::new(0.0, 0.0),
-            Complex64::new(-1.0, 0.0),
-        ],
-    )
-    .unwrap();
+    let h = single_qubit_z_hamiltonian();
 
-    let values = zne.run_em_sequence(None, &h, Some(custom_hexp));
+    let values = zne.run_em_sequence(None, &h, &custom_hexp).unwrap();
     assert_eq!(values, vec![42.0, 42.0]);
+}
+
+#[test]
+fn test_run_em_sequence_rejects_hamiltonian_qubit_mismatch() {
+    let circuit = Circuit::new(1);
+    let zne = ZNEMitigation::new(circuit, vec![0]);
+
+    let mut pauli_string = PauliString::new(2);
+    pauli_string.set_pauli(0, Pauli::Z);
+    let hamiltonian = Hamiltonian::from_list(vec![(pauli_string, Complex64::new(1.0, 0.0))])
+        .expect("two-qubit mismatch Hamiltonian should be valid");
+
+    let err = zne
+        .run_em_sequence(None, &hamiltonian, &estimator_hmat)
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        ErrorMitigationError::HamiltonianQubitCountMismatch {
+            expected: 1,
+            actual: 2
+        }
+    ));
 }
 
 #[test]
@@ -153,7 +272,7 @@ fn test_poly_extrapolate_linear_intercept() {
 
     // y = 0.75 + 2x
     let noisy_results = vec![2.75, 6.75, 10.75];
-    let extrapolated = zne.poly_extrapolate(&noisy_results, 1);
+    let extrapolated = zne.poly_extrapolate(&noisy_results, 1).unwrap();
 
     assert!((extrapolated - 0.75).abs() < 1e-10);
 }
@@ -165,29 +284,43 @@ fn test_poly_extrapolate_quadratic_intercept() {
 
     // y = 1.25 - 0.5x + 0.2x^2
     let noisy_results = vec![0.95, 1.55, 3.75];
-    let extrapolated = zne.poly_extrapolate(&noisy_results, 2);
+    let extrapolated = zne.poly_extrapolate(&noisy_results, 2).unwrap();
 
     assert!((extrapolated - 1.25).abs() < 1e-10);
 }
 
 #[test]
-#[should_panic(expected = "same length as noise factors")]
-fn test_poly_extrapolate_panics_on_length_mismatch() {
+fn test_poly_extrapolate_returns_error_on_length_mismatch() {
     let circuit = Circuit::new(1);
     let zne = ZNEMitigation::new(circuit, vec![0, 1, 2]);
 
     let noisy_results = vec![1.0, 2.0];
-    let _ = zne.poly_extrapolate(&noisy_results, 1);
+    let err = zne.poly_extrapolate(&noisy_results, 1).unwrap_err();
+
+    assert!(matches!(
+        err,
+        ErrorMitigationError::NoisyResultsLengthMismatch {
+            expected: 3,
+            actual: 2
+        }
+    ));
 }
 
 #[test]
-#[should_panic(expected = "degree must be smaller than number of data points")]
-fn test_poly_extrapolate_panics_on_invalid_degree() {
+fn test_poly_extrapolate_returns_error_on_invalid_degree() {
     let circuit = Circuit::new(1);
     let zne = ZNEMitigation::new(circuit, vec![0, 1]);
 
     let noisy_results = vec![1.0, 2.0];
-    let _ = zne.poly_extrapolate(&noisy_results, 2);
+    let err = zne.poly_extrapolate(&noisy_results, 2).unwrap_err();
+
+    assert!(matches!(
+        err,
+        ErrorMitigationError::InvalidPolynomialDegree {
+            degree: 2,
+            num_points: 2
+        }
+    ));
 }
 
 #[test]
@@ -203,28 +336,36 @@ fn test_exp_extrapolate_recover_zero_noise_value() {
         .map(|&x| a * (-(x as f64) / tau).exp())
         .collect();
 
-    let extrapolated = zne.exp_extrapolate(&noisy_results);
+    let extrapolated = zne.exp_extrapolate(&noisy_results).unwrap();
     assert!((extrapolated - a).abs() < 1e-10);
 }
 
 #[test]
-#[should_panic(expected = "same length as noise factors")]
-fn test_exp_extrapolate_panics_on_length_mismatch() {
+fn test_exp_extrapolate_returns_error_on_length_mismatch() {
     let circuit = Circuit::new(1);
     let zne = ZNEMitigation::new(circuit, vec![0, 1, 2]);
 
     let noisy_results = vec![1.0, 2.0];
-    let _ = zne.exp_extrapolate(&noisy_results);
+    let err = zne.exp_extrapolate(&noisy_results).unwrap_err();
+
+    assert!(matches!(
+        err,
+        ErrorMitigationError::NoisyResultsLengthMismatch {
+            expected: 3,
+            actual: 2
+        }
+    ));
 }
 
 #[test]
-#[should_panic(expected = "must be positive")]
-fn test_exp_extrapolate_panics_on_non_positive_values() {
+fn test_exp_extrapolate_returns_error_on_non_positive_values() {
     let circuit = Circuit::new(1);
     let zne = ZNEMitigation::new(circuit, vec![0, 1, 2]);
 
     let noisy_results = vec![1.0, 0.0, 0.5];
-    let _ = zne.exp_extrapolate(&noisy_results);
+    let err = zne.exp_extrapolate(&noisy_results).unwrap_err();
+
+    assert!(matches!(err, ErrorMitigationError::NonPositiveNoisyResults));
 }
 
 #[test]
@@ -234,7 +375,9 @@ fn test_extrapolate_api_polynomial() {
 
     // y = 0.5 + x
     let noisy_results = vec![1.5, 3.5, 5.5];
-    let extrapolated = zne.extrapolate(&noisy_results, ExtrapolateMethod::Polynomial, 1);
+    let extrapolated = zne
+        .extrapolate(&noisy_results, ExtrapolateMethod::Polynomial, 1)
+        .unwrap();
 
     assert!((extrapolated - 0.5).abs() < 1e-10);
 }
@@ -253,6 +396,8 @@ fn test_extrapolate_api_exponential() {
         .collect();
 
     // Degree is ignored for exponential mode.
-    let extrapolated = zne.extrapolate(&noisy_results, ExtrapolateMethod::Exponential, 99);
+    let extrapolated = zne
+        .extrapolate(&noisy_results, ExtrapolateMethod::Exponential, 99)
+        .unwrap();
     assert!((extrapolated - a).abs() < 1e-10);
 }
