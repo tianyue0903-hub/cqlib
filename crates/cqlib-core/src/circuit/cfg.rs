@@ -136,7 +136,7 @@
 //! # Example
 //!
 //! ```rust
-//! use cqlib_core::circuit::{Circuit, CircuitDag, Qubit};
+//! use cqlib_core::circuit::{Circuit, CircuitCFG, Qubit};
 //!
 //! // Create a simple circuit
 //! let mut circuit = Circuit::new(2);
@@ -144,7 +144,7 @@
 //! circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
 //!
 //! // Convert to CFG representation
-//! let dag = CircuitDag::from_circuit(&circuit).unwrap();
+//! let dag = CircuitCFG::from_circuit(&circuit).unwrap();
 //! assert_eq!(dag.num_blocks(), 1); // Linear circuit has one basic block
 //! ```
 
@@ -267,7 +267,7 @@ pub enum Terminator {
 /// # Example
 ///
 /// ```rust
-/// use cqlib_core::circuit::dag::BasicBlock;
+/// use cqlib_core::circuit::cfg::BasicBlock;
 ///
 /// // Create a new empty basic block
 /// let mut block = BasicBlock::new();
@@ -298,7 +298,7 @@ impl BasicBlock {
     /// # Examples
     ///
     /// ```rust
-    /// use cqlib_core::circuit::dag::BasicBlock;
+    /// use cqlib_core::circuit::cfg::BasicBlock;
     ///
     /// let block = BasicBlock::new();
     /// assert!(block.is_empty());
@@ -323,7 +323,7 @@ impl BasicBlock {
     /// # Examples
     ///
     /// ```rust
-    /// use cqlib_core::circuit::dag::BasicBlock;
+    /// use cqlib_core::circuit::cfg::BasicBlock;
     ///
     /// let block = BasicBlock::new().with_label("if_true_branch");
     /// assert_eq!(block.label(), Some("if_true_branch"));
@@ -342,7 +342,7 @@ impl BasicBlock {
     /// # Examples
     ///
     /// ```rust
-    /// use cqlib_core::circuit::dag::BasicBlock;
+    /// use cqlib_core::circuit::cfg::BasicBlock;
     /// use cqlib_core::circuit::{Operation, Qubit};
     ///
     /// let mut block = BasicBlock::new();
@@ -507,17 +507,17 @@ impl Default for BasicBlock {
 /// # Example
 ///
 /// ```rust
-/// use cqlib_core::circuit::{Circuit, CircuitDag, Qubit};
+/// use cqlib_core::circuit::{Circuit, CircuitCFG, Qubit};
 ///
 /// let mut circuit = Circuit::new(2);
 /// circuit.h(Qubit::new(0)).unwrap();
 /// circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
 ///
-/// let dag = CircuitDag::from_circuit(&circuit).unwrap();
+/// let dag = CircuitCFG::from_circuit(&circuit).unwrap();
 /// assert_eq!(dag.num_qubits(), 2);
 /// assert_eq!(dag.num_blocks(), 1); // Linear circuit
 /// ```
-pub struct CircuitDag {
+pub struct CircuitCFG {
     /// The set of qubits used in the circuit, maintaining deterministic insertion order.
     pub(crate) qubits: IndexSet<Qubit>,
 
@@ -542,7 +542,7 @@ pub struct CircuitDag {
     pub(crate) entry_block: Option<NodeIndex>,
 }
 
-impl CircuitDag {
+impl CircuitCFG {
     /// Creates a new empty `CircuitDag` with the specified number of qubits.
     ///
     /// # Arguments
@@ -552,9 +552,9 @@ impl CircuitDag {
     /// # Examples
     ///
     /// ```rust
-    /// use cqlib_core::circuit::CircuitDag;
+    /// use cqlib_core::circuit::CircuitCFG;
     ///
-    /// let dag = CircuitDag::new(3);
+    /// let dag = CircuitCFG::new(3);
     /// assert_eq!(dag.num_qubits(), 3);
     /// assert_eq!(dag.num_blocks(), 0);
     /// ```
@@ -684,12 +684,12 @@ impl CircuitDag {
     /// # Examples
     ///
     /// ```rust
-    /// use cqlib_core::circuit::{Circuit, CircuitDag, Qubit};
+    /// use cqlib_core::circuit::{Circuit, CircuitCFG, Qubit};
     ///
     /// let mut circuit = Circuit::new(2);
     /// circuit.h(Qubit::new(0)).unwrap();
     ///
-    /// let dag = CircuitDag::from_circuit(&circuit).unwrap();
+    /// let dag = CircuitCFG::from_circuit(&circuit).unwrap();
     /// assert_eq!(dag.num_blocks(), 1);
     /// ```
     pub fn from_circuit(circuit: &Circuit) -> Result<Self, CircuitError> {
@@ -1007,7 +1007,7 @@ impl CircuitDag {
 /// ```
 fn process_operations(
     operations: &[Operation],
-    dag: &mut CircuitDag,
+    dag: &mut CircuitCFG,
     mut current_block: NodeIndex,
 ) -> Result<NodeIndex, CircuitError> {
     for (idx, op) in operations.iter().enumerate() {
@@ -1090,5 +1090,5 @@ fn process_operations(
 }
 
 #[cfg(test)]
-#[path = "./dag_test.rs"]
-mod dag_test;
+#[path = "./cfg_test.rs"]
+mod cfg_test;

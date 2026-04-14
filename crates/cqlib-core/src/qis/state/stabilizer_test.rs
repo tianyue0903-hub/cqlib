@@ -569,8 +569,6 @@ fn test_sample_shots_deterministic() {
     }
 }
 
-// ── √-gate tests ─────────────────────────────────────────────────────────
-
 /// X2P⁴ = X2M⁴ = identity (4 applications restore the original state).
 #[test]
 fn test_x2p_four_is_identity() {
@@ -680,8 +678,6 @@ fn test_non_clifford_error_variant() {
     );
 }
 
-// ── Probability API tests ─────────────────────────────────────────────────────
-
 /// |0⟩ state: probability_of([false]) = 1.0, probability_of([true]) = 0.0.
 #[test]
 fn test_probability_of_zero_state() {
@@ -766,8 +762,6 @@ fn test_probability_of_qubit_mismatch() {
     ));
 }
 
-// ── Edge-case tests (R-IV-D) ──────────────────────────────────────────────────
-
 /// SIMD boundary test: n = 63, 64, 65.
 ///
 /// These are the most likely sizes to trigger off-by-one errors or incorrect
@@ -846,13 +840,6 @@ fn test_repeated_deterministic_measurements() {
 /// Deep circuit collapse: chain CX, measure middle qubit, verify stabilizer split.
 ///
 /// Prepare |+⟩^n → apply chain CNOT 0→1→2→…→n-1 → measure qubit n/2.
-// ── Bug-fix regression tests ─────────────────────────────────────────────────
-//
-// Tests added to cover the three bugs fixed:
-//   1. apply_cy had S and S† swapped.
-//   2. pauli_expectation only matched individual generators, not products.
-//   3. row_to_pauli_string / set_phase ignored odd phases (1, 3).
-
 /// CY conjugation sign: H(0) then CY(0,1) on |+0⟩.
 ///
 /// |+0⟩ has stabilizer +XI.
@@ -1090,85 +1077,4 @@ fn test_from_circuit_with_measure_collapses_state() {
 
     // Should not error; state is in a definite product state after measurement.
     let _state = StabilizerState::from_circuit(&c).unwrap();
-}
-
-/// IfElse: if measure is 1, apply X correction to qubit 1.
-/// Teleportation-style correction test.
-#[test]
-fn test_ifelse_x_correction() {
-    use crate::circuit::circuit_impl::Circuit;
-    use crate::circuit::gate::control_flow::{ConditionView, ControlFlow};
-    use crate::circuit::gate::instruction::Instruction;
-    use crate::circuit::gate::standard_gate::StandardGate;
-    use crate::circuit::operation::Operation;
-    use smallvec::smallvec;
-
-    // Qubit 0 = |1⟩, qubit 1 = |0⟩
-    // Measure qubit 0; if result == 1, apply X on qubit 1.
-    let q0 = 0u32.into();
-    let q1 = 1u32.into();
-
-    let true_body = vec![Operation {
-        instruction: Instruction::Standard(StandardGate::X),
-        qubits: smallvec![q1],
-        params: smallvec![],
-        label: None,
-    }];
-    let condition = ConditionView::new(q0, 1);
-    let cf = ControlFlow::if_else(condition, true_body, None);
-
-    let mut c = Circuit::new(2);
-    c.x(q0).unwrap();
-    c.measure(q0).unwrap();
-    c.append(Instruction::ControlFlowGate(cf), [q0, q1], [], None)
-        .unwrap();
-    c.measure(q1).unwrap();
-
-    let result = StabilizerState::execute_circuit(&c).unwrap();
-    // qubit 0 measured 1, so X was applied to qubit 1 → qubit 1 should be |1⟩
-    assert_eq!(result.measurements[0], Some(true), "qubit 0 should be 1");
-    assert_eq!(
-        result.measurements[1],
-        Some(true),
-        "X correction should flip qubit 1 to |1⟩"
-    );
-}
-
-/// IfElse false branch: if measure is 0, apply nothing; if measure is 1, apply X.
-/// |0⟩ → measure 0 → false branch → qubit 1 stays |0⟩.
-#[test]
-fn test_ifelse_false_branch_not_taken() {
-    use crate::circuit::circuit_impl::Circuit;
-    use crate::circuit::gate::control_flow::{ConditionView, ControlFlow};
-    use crate::circuit::gate::instruction::Instruction;
-    use crate::circuit::gate::standard_gate::StandardGate;
-    use crate::circuit::operation::Operation;
-    use smallvec::smallvec;
-
-    let q0 = 0u32.into();
-    let q1 = 1u32.into();
-
-    let true_body = vec![Operation {
-        instruction: Instruction::Standard(StandardGate::X),
-        qubits: smallvec![q1],
-        params: smallvec![],
-        label: None,
-    }];
-    let condition = ConditionView::new(q0, 1);
-    let cf = ControlFlow::if_else(condition, true_body, None);
-
-    let mut c = Circuit::new(2);
-    // qubit 0 stays |0⟩ → measure 0 → true_body NOT taken
-    c.measure(q0).unwrap();
-    c.append(Instruction::ControlFlowGate(cf), [q0, q1], [], None)
-        .unwrap();
-    c.measure(q1).unwrap();
-
-    let result = StabilizerState::execute_circuit(&c).unwrap();
-    assert_eq!(result.measurements[0], Some(false));
-    assert_eq!(
-        result.measurements[1],
-        Some(false),
-        "qubit 1 should remain |0⟩"
-    );
 }

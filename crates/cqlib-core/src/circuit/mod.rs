@@ -27,20 +27,20 @@
 
 pub mod ansatz;
 pub mod bit;
+pub mod cfg;
 pub mod circuit_impl;
 pub mod circuit_param;
 mod circuit_to_matrix;
-pub mod dag;
 pub mod error;
 pub mod gate;
 pub mod operation;
 pub mod parameter;
 
 pub use bit::Qubit;
+pub use cfg::CircuitCFG;
 pub use circuit_impl::Circuit;
 pub use circuit_param::{CircuitParam, ParameterValue};
 pub use circuit_to_matrix::circuit_to_matrix;
-pub use dag::CircuitDag;
 pub use error::CircuitError;
 pub use gate::circuit_gate::CircuitGate;
 pub use gate::control_flow::{ConditionView, ControlFlow, IfElseGate, WhileLoopGate};

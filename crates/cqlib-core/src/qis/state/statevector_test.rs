@@ -1711,8 +1711,6 @@ fn test_expectation_qubit_mismatch() {
     assert!(result.is_err(), "Should error on qubit mismatch");
 }
 
-// ── AVX2 SIMD correctness tests ───────────────────────────────────────────────
-
 /// Applies a complex unitary via `apply_single_qubit_gate` and checks result
 /// matches the analytically expected amplitudes. This exercises the AVX2 path
 /// on x86_64 (or scalar fallback elsewhere) for complex×complex multiplication.

@@ -34,11 +34,11 @@ pub use vf2::{
     Vf2CandidateOptions, Vf2CandidateScore, Vf2LayoutCandidate, Vf2Mapping, Vf2ScoreWeights,
 };
 
+use crate::circuit::cfg::Terminator;
 use crate::circuit::circuit_param::CircuitParam;
 use crate::circuit::circuit_param::ParameterValue;
-use crate::circuit::dag::Terminator;
 use crate::circuit::gate::{Instruction, StandardGate};
-use crate::circuit::{Circuit, CircuitDag, Operation, Parameter, Qubit};
+use crate::circuit::{Circuit, CircuitCFG, Operation, Parameter, Qubit};
 use crate::compile::error::CompileError;
 use crate::device::Topology;
 use rustworkx_core::petgraph::visit::{EdgeRef, IntoEdgeReferences};
@@ -285,7 +285,7 @@ pub(crate) fn build_output_circuit(
 /// The pass currently accepts only single-block, return-terminated DAGs and
 /// only 1q/2q operations with no control-flow nodes.
 pub(crate) fn preprocess_circuit(circuit: &Circuit) -> Result<PreparedCircuit, CompileError> {
-    let dag = CircuitDag::from_circuit(circuit)
+    let dag = CircuitCFG::from_circuit(circuit)
         .map_err(|err| CompileError::DagBuildFailed(err.to_string()))?;
 
     if dag.num_blocks() != 1 {

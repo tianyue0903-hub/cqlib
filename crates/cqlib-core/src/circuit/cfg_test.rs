@@ -10,7 +10,7 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
-use crate::circuit::dag::{BasicBlock, CircuitDag, FlowEdge, Terminator};
+use crate::circuit::cfg::{BasicBlock, CircuitCFG, FlowEdge, Terminator};
 use crate::circuit::gate::control_flow::{ConditionView, ControlFlow, IfElseGate, WhileLoopGate};
 use crate::circuit::gate::{Instruction, StandardGate};
 use crate::circuit::operation::Operation;
@@ -65,7 +65,7 @@ fn test_basic_block_terminator() {
 
 #[test]
 fn test_circuit_dag_empty() {
-    let dag = CircuitDag::new(2);
+    let dag = CircuitCFG::new(2);
     assert_eq!(dag.num_qubits(), 2);
     assert_eq!(dag.num_blocks(), 0);
     assert!(dag.entry_block().is_none());
@@ -74,7 +74,7 @@ fn test_circuit_dag_empty() {
 
 #[test]
 fn test_circuit_dag_add_block() {
-    let mut dag = CircuitDag::new(1);
+    let mut dag = CircuitCFG::new(1);
     let block = BasicBlock::new().with_label("test");
     let idx = dag.add_block(block);
 
@@ -86,7 +86,7 @@ fn test_circuit_dag_add_block() {
 fn test_empty_circuit_conversion() {
     // Empty circuit should have single entry block with Return
     let circuit = Circuit::new(2);
-    let dag = CircuitDag::from_circuit(&circuit).unwrap();
+    let dag = CircuitCFG::from_circuit(&circuit).unwrap();
 
     assert_eq!(dag.num_blocks(), 1);
     assert!(dag.entry_block().is_some());
@@ -107,7 +107,7 @@ fn test_circuit_to_dag_simple() {
     circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
     circuit.measure(Qubit::new(0)).unwrap();
 
-    let dag = CircuitDag::from_circuit(&circuit).unwrap();
+    let dag = CircuitCFG::from_circuit(&circuit).unwrap();
 
     // No control flow = single entry block
     assert_eq!(
@@ -156,7 +156,7 @@ fn test_circuit_to_dag_if_else() {
         .if_else(condition, true_body, Some(false_body))
         .unwrap();
 
-    let dag = CircuitDag::from_circuit(&circuit).unwrap();
+    let dag = CircuitCFG::from_circuit(&circuit).unwrap();
 
     // entry, true, false, merge = 4 blocks
     assert!(dag.num_blocks() >= 4, "Expected at least 4 blocks");
@@ -196,7 +196,7 @@ fn test_if_without_else() {
 
     circuit.if_else(condition, true_body, None).unwrap();
 
-    let dag = CircuitDag::from_circuit(&circuit).unwrap();
+    let dag = CircuitCFG::from_circuit(&circuit).unwrap();
 
     // entry, true, false_empty, merge = 4 blocks
     assert_eq!(dag.num_blocks(), 4, "If without else should have 4 blocks");
@@ -271,7 +271,7 @@ fn test_circuit_to_dag_while_loop() {
 
     circuit.while_loop(condition, body).unwrap();
 
-    let dag = CircuitDag::from_circuit(&circuit).unwrap();
+    let dag = CircuitCFG::from_circuit(&circuit).unwrap();
 
     // entry, cond, body, exit = 4 blocks
     assert_eq!(dag.num_blocks(), 4, "Expected 4 blocks");
@@ -387,7 +387,7 @@ fn test_circuit_to_dag_nested_control_flow() {
         .if_else(outer_condition, true_body, Some(false_body))
         .unwrap();
 
-    let dag = CircuitDag::from_circuit(&circuit).unwrap();
+    let dag = CircuitCFG::from_circuit(&circuit).unwrap();
 
     // Nested control flow should have multiple blocks
     assert!(dag.num_blocks() >= 5, "Expected at least 5 blocks");
@@ -401,7 +401,7 @@ fn test_to_circuit_simple_linear() {
     original.cx(Qubit::new(0), Qubit::new(1)).unwrap();
     original.measure(Qubit::new(0)).unwrap();
 
-    let dag = CircuitDag::from_circuit(&original).unwrap();
+    let dag = CircuitCFG::from_circuit(&original).unwrap();
     let recovered = dag.to_circuit().unwrap();
 
     // Verify properties
@@ -451,7 +451,7 @@ fn test_to_circuit_if_else() {
         .if_else(condition, true_body, Some(false_body))
         .unwrap();
 
-    let dag = CircuitDag::from_circuit(&original).unwrap();
+    let dag = CircuitCFG::from_circuit(&original).unwrap();
     let recovered = dag.to_circuit().unwrap();
 
     // Verify structure: Measure + IfElse
@@ -498,7 +498,7 @@ fn test_to_circuit_while_loop() {
     }];
     original.while_loop(condition, body).unwrap();
 
-    let dag = CircuitDag::from_circuit(&original).unwrap();
+    let dag = CircuitCFG::from_circuit(&original).unwrap();
     let recovered = dag.to_circuit().unwrap();
 
     // Verify structure: Measure + WhileLoop
@@ -564,7 +564,7 @@ fn test_to_circuit_nested_if_in_while() {
     let while_body = vec![if_op];
     original.while_loop(while_condition, while_body).unwrap();
 
-    let dag = CircuitDag::from_circuit(&original).unwrap();
+    let dag = CircuitCFG::from_circuit(&original).unwrap();
     let recovered = dag.to_circuit().unwrap();
 
     // Verify: Measure, Measure, While(IfElse)
@@ -593,7 +593,7 @@ use crate::circuit::CircuitError;
 #[test]
 fn test_invalid_dag_missing_true_branch() {
     // Manually construct an invalid DAG with a Branch terminator but no TrueBranch edge
-    let mut dag = CircuitDag::new(1);
+    let mut dag = CircuitCFG::new(1);
     let q0 = Qubit::new(0);
     let condition = ConditionView::new(q0, 1);
 
@@ -627,7 +627,7 @@ fn test_invalid_dag_missing_true_branch() {
 #[test]
 fn test_invalid_dag_missing_false_branch() {
     // Manually construct an invalid DAG with a Branch terminator but no FalseBranch edge
-    let mut dag = CircuitDag::new(1);
+    let mut dag = CircuitCFG::new(1);
     let q0 = Qubit::new(0);
     let condition = ConditionView::new(q0, 1);
 
@@ -661,7 +661,7 @@ fn test_invalid_dag_missing_false_branch() {
 #[test]
 fn test_invalid_dag_error_includes_block_info() {
     // Verify that error messages include the block label and index
-    let mut dag = CircuitDag::new(1);
+    let mut dag = CircuitCFG::new(1);
     let q0 = Qubit::new(0);
     let condition = ConditionView::new(q0, 1);
 
@@ -694,7 +694,7 @@ fn test_invalid_dag_error_includes_block_info() {
 #[test]
 fn test_invalid_dag_unlabeled_block() {
     // Verify error handling for unlabeled blocks
-    let mut dag = CircuitDag::new(1);
+    let mut dag = CircuitCFG::new(1);
     let q0 = Qubit::new(0);
     let condition = ConditionView::new(q0, 1);
 
