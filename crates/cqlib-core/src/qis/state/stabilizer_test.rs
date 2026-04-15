@@ -147,10 +147,110 @@ fn test_cz_creates_entanglement() {
     let stabs = s.get_stabilizers();
     let stab_strs: Vec<String> = stabs.iter().map(|p| p.to_string()).collect();
     assert!(
-        stab_strs.contains(&"+XZ".to_string()) || stab_strs.contains(&"+ZX".to_string()),
-        "Got: {:?}",
+        stab_strs.contains(&"+XZ".to_string()) && stab_strs.contains(&"+ZX".to_string()),
+        "Expected both +XZ and +ZX, got: {:?}",
         stab_strs
     );
+}
+
+#[test]
+fn test_ghz_state_stabilizers() {
+    // GHZ = H(q0), CX(0,1), CX(0,2) → stabilizers +XXX, +ZZI, +IZZ
+    let mut s = StabilizerState::new(3);
+    s.apply_h(0).unwrap();
+    s.apply_cx(0, 1).unwrap();
+    s.apply_cx(1, 2).unwrap();
+    let stab_strs: Vec<String> = s.get_stabilizers().iter().map(|p| p.to_string()).collect();
+    // Expected display order is highest qubit first.
+    assert!(
+        stab_strs.contains(&"+XXX".to_string()),
+        "+XXX not found, got {:?}",
+        stab_strs
+    );
+    assert!(
+        stab_strs.contains(&"+ZZI".to_string()),
+        "+ZZI not found, got {:?}",
+        stab_strs
+    );
+    assert!(
+        stab_strs.contains(&"+IZZ".to_string()),
+        "+IZZ not found, got {:?}",
+        stab_strs
+    );
+}
+
+#[test]
+fn test_from_circuit_rejects_non_clifford_gate_set() {
+    use crate::circuit::circuit_impl::Circuit;
+    use crate::circuit::gate::UnitaryGate;
+    use ndarray::array;
+    use num_complex::Complex64;
+    use std::f64::consts::PI;
+
+    let builders: Vec<(&str, Box<dyn Fn(&mut Circuit)>)> = vec![
+        (
+            "T",
+            Box::new(|c| {
+                c.t(0.into()).unwrap();
+            }),
+        ),
+        (
+            "TDG",
+            Box::new(|c| {
+                c.tdg(0.into()).unwrap();
+            }),
+        ),
+        (
+            "RX",
+            Box::new(|c| {
+                c.rx(0.into(), PI / 4.0).unwrap();
+            }),
+        ),
+        (
+            "RY",
+            Box::new(|c| {
+                c.ry(0.into(), PI / 4.0).unwrap();
+            }),
+        ),
+        (
+            "RZ",
+            Box::new(|c| {
+                c.rz(0.into(), PI / 4.0).unwrap();
+            }),
+        ),
+        (
+            "Phase",
+            Box::new(|c| {
+                c.phase(0.into(), PI / 4.0).unwrap();
+            }),
+        ),
+        (
+            "U",
+            Box::new(|c| {
+                c.u(0.into(), PI / 4.0, 0.0, 0.0).unwrap();
+            }),
+        ),
+        (
+            "UnitaryGate",
+            Box::new(|c| {
+                let mat = array![
+                    [Complex64::new(1.0, 0.0), Complex64::new(0.0, 0.0)],
+                    [Complex64::new(0.0, 0.0), Complex64::new(0.0, 1.0)]
+                ];
+                let gate = UnitaryGate::new("S_like_custom", 1)
+                    .with_matrix(mat)
+                    .unwrap();
+                c.unitary(gate, vec![0.into()]).unwrap();
+            }),
+        ),
+    ];
+
+    for (name, build) in builders {
+        let mut c = Circuit::new(1);
+        build(&mut c);
+        let result = StabilizerState::from_circuit(&c);
+        assert!(result.is_err(), "{name} should be rejected, got {result:?}");
+    }
 }
 
 #[test]
@@ -255,25 +355,6 @@ fn test_apply_sdg_on_plus_state() {
     s.apply_sdg(0).unwrap();
     let stabs = s.get_stabilizers();
     assert_eq!(stabs[0].to_string(), "-Y");
-}
-
-#[test]
-fn test_ghz_state_stabilizers() {
-    // GHZ = H(q0), CX(0,1), CX(0,2) → stabilizers +XXX, +ZZI, +IZZ
-    let mut s = StabilizerState::new(3);
-    s.apply_h(0).unwrap();
-    s.apply_cx(0, 1).unwrap();
-    s.apply_cx(0, 2).unwrap();
-    let stab_strs: Vec<String> = s.get_stabilizers().iter().map(|p| p.to_string()).collect();
-    // Expected (display: highest qubit index first): +XXX, +ZZI, +IZZ
-    assert!(
-        stab_strs.contains(&"+XXX".to_string()),
-        "+XXX not found, got {:?}",
-        stab_strs
-    );
-    // The other two stabilizers are +ZZI and +IZZ (or equivalent)
-    let has_zz = stab_strs.iter().any(|s| s.contains("ZZ"));
-    assert!(has_zz, "No ZZ stabilizer found, got {:?}", stab_strs);
 }
 
 #[test]
@@ -444,7 +525,7 @@ fn test_measure_all() {
 fn test_clone() {
     let s = StabilizerState::new(3);
     let c = s.clone();
-    assert_eq!(s.n, c.n);
+    assert_eq!(s.num_qubits, c.num_qubits);
     assert_eq!(s.row_len, c.row_len);
     assert_eq!(s.tableau.len(), c.tableau.len());
     assert_eq!(&*s.tableau, &*c.tableau);
@@ -1030,7 +1111,7 @@ fn test_reset_from_superposition() {
 
 /// Mid-circuit Measure directive is executed (not a no-op) and result recorded.
 #[test]
-fn test_execute_circuit_measure_directive() {
+fn test_apply_circuit_measure_directive() {
     use crate::circuit::circuit_impl::Circuit;
 
     // |1⟩: X then Measure should always record true.
@@ -1038,7 +1119,7 @@ fn test_execute_circuit_measure_directive() {
     c.x(0.into()).unwrap();
     c.measure(0.into()).unwrap();
 
-    let result = StabilizerState::execute_circuit(&c).unwrap();
+    let result = StabilizerState::apply_circuit(&c).unwrap();
     assert_eq!(
         result.measurements[0],
         Some(true),
@@ -1048,7 +1129,7 @@ fn test_execute_circuit_measure_directive() {
 
 /// Reset directive in circuit actually resets the qubit.
 #[test]
-fn test_execute_circuit_reset_directive() {
+fn test_apply_circuit_reset_directive() {
     use crate::circuit::circuit_impl::Circuit;
 
     // X then Reset: final state should be |0⟩.
@@ -1057,7 +1138,7 @@ fn test_execute_circuit_reset_directive() {
     c.reset(0.into()).unwrap();
     c.measure(0.into()).unwrap();
 
-    let result = StabilizerState::execute_circuit(&c).unwrap();
+    let result = StabilizerState::apply_circuit(&c).unwrap();
     assert_eq!(
         result.measurements[0],
         Some(false),

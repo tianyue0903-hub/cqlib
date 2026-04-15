@@ -209,7 +209,7 @@ class TestDensityMatrixNoiseSingleQubitGates:
     def test_apply_p(self):
         """Test phase gate."""
         sim = DensityMatrixNoise(1)
-        sim.apply_p(0, np.pi / 4)
+        sim.apply_phase(0, np.pi / 4)
         probs = sim.probabilities()
         assert math.isclose(probs[0], 1.0, abs_tol=1e-10)
 

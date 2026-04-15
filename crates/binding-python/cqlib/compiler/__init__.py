@@ -11,19 +11,31 @@
 # that they have been altered from the originals.
 
 from .._native import (
+    CliffordRzOptimization,
+    CommutativeOptimization,
     SabreConfig,
+    TemplateMatching,
+    TemplateOptimization,
     vf2_is_subgraph_isomorphic,
     vf2_find_initial_layout,
     vf2_find_initial_layout_candidates,
     vf2_map,
     map_with_vf2_sabre,
+    GaConfig,
+    map_with_ga,
 )
 
 __all__ = [
+    "CliffordRzOptimization",
+    "CommutativeOptimization",
     "SabreConfig",
+    "TemplateMatching",
+    "TemplateOptimization",
     "vf2_is_subgraph_isomorphic",
     "vf2_find_initial_layout",
     "vf2_find_initial_layout_candidates",
     "vf2_map",
     "map_with_vf2_sabre",
+    "GaConfig",
+    "map_with_ga",
 ]

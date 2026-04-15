@@ -11,10 +11,10 @@
 // that they have been altered from the originals.
 
 use super::*;
-use crate::circuit::{Circuit, Instruction, Qubit, StandardGate};
+use crate::circuit::{Circuit, Instruction, ParameterValue, Qubit, StandardGate};
 use crate::device::NoiseModel;
 use crate::device::noise::{ReadoutError, SingleQubitNoise, TwoQubitNoise};
-use crate::qis::pauli::Pauli;
+use crate::qis::pauli::{Pauli, PauliString};
 use ndarray::array;
 use num_complex::Complex64;
 use std::f64::consts::PI;
@@ -109,6 +109,28 @@ fn test_from_circuit_with_noise() {
     circuit.x(Qubit::new(0)).unwrap();
 
     let sim = DensityMatrixNoise::from_circuit(&circuit, Some(noise_model)).unwrap();
+    let probs = sim.probabilities_with_readout(&[0]);
+
+    assert!((probs[1] - 0.9).abs() < 1e-6);
+    assert!((probs[0] - 0.1).abs() < 1e-6);
+}
+
+#[test]
+fn test_apply_circuit_with_noise() {
+    let mut noise_model = NoiseModel::new();
+    noise_model
+        .add_single_qubit_error(
+            StandardGate::X,
+            Qubit::new(0),
+            SingleQubitNoise::BitFlip(0.1),
+        )
+        .unwrap();
+
+    let mut circuit = Circuit::new(1);
+    circuit.x(Qubit::new(0)).unwrap();
+
+    let mut sim = DensityMatrixNoise::new(1, Some(noise_model));
+    sim.apply_circuit(&circuit).unwrap();
     let probs = sim.probabilities_with_readout(&[0]);
 
     assert!((probs[1] - 0.9).abs() < 1e-6);
@@ -1152,4 +1174,164 @@ fn test_native_gates_amplitude_damping() {
     assert!((probs[0] + probs[1] - 1.0).abs() < 1e-6);
     // Amplitude damping increases P(|0>)
     assert!(probs[0] > 0.0);
+}
+
+#[test]
+fn test_apply_readout_noise_out_of_bounds() {
+    let mut sim = DensityMatrixNoise::new(2, Some(NoiseModel::new()));
+    sim.apply_h(0).unwrap();
+    sim.apply_cx(0, 1).unwrap();
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = sim.probabilities_with_readout(&[99]);
+    }));
+    assert!(
+        result.is_err(),
+        "readout noise on out-of-bounds qubit should panic"
+    );
+}
+
+#[test]
+fn test_mcgate_fallback_applies_noise() {
+    use crate::circuit::gate::MCGate;
+    use crate::device::noise::TwoQubitNoise;
+
+    let mut noise_model = NoiseModel::new();
+    noise_model
+        .add_two_qubit_error(
+            StandardGate::H,
+            Qubit::new(0),
+            Qubit::new(1),
+            TwoQubitNoise::Depolarizing(0.5),
+        )
+        .unwrap();
+
+    let mut sim = DensityMatrixNoise::new(2, Some(noise_model));
+
+    // Start with control qubit in |1⟩ so the controlled-H is active
+    sim.apply_x(0).unwrap();
+
+    // Build a circuit with a controlled-H (MCGate with base H, 1 control)
+    let mut circuit = Circuit::new(2);
+    circuit
+        .append(
+            Instruction::McGate(Box::new(MCGate::new(1, StandardGate::H))),
+            vec![Qubit::new(0), Qubit::new(1)],
+            std::iter::empty::<ParameterValue>(),
+            None,
+        )
+        .unwrap();
+
+    sim.apply_circuit(&circuit).unwrap();
+
+    // With 50% depolarizing noise on the CH gate, the state should be mixed.
+    // Without noise, starting from |10⟩ and applying CH gives a pure state.
+    // With 50% depolarizing noise, P(|10⟩) should drop significantly.
+    let probs = sim.probabilities();
+    assert!(
+        probs[2] < 0.99,
+        "Noise should have mixed the state, but P(|10⟩) = {}",
+        probs[2]
+    );
+}
+
+#[test]
+fn test_expectation_accepts_pauli_string() {
+    let mut sim = DensityMatrixNoise::new(1, None);
+    sim.apply_x(0).unwrap();
+
+    let mut z = PauliString::new(1);
+    z.set_pauli(0, Pauli::Z);
+
+    let exp = sim.expectation(&z).unwrap();
+    assert!((exp + 1.0).abs() < 1e-10, "Z expectation on |1> was {exp}");
+}
+
+#[test]
+fn test_sample_shots_with_readout_noise_model() {
+    let mut noise_model = NoiseModel::new();
+    noise_model
+        .add_readout_error(
+            Qubit::new(0),
+            ReadoutError {
+                p_0_given_1: 1.0,
+                p_1_given_0: 0.0,
+            },
+        )
+        .unwrap();
+
+    let mut sim = DensityMatrixNoise::new(1, Some(noise_model));
+    sim.apply_x(0).unwrap();
+
+    let shots = sim.sample_shots(128);
+    assert_eq!(shots.len(), 128);
+    assert!(
+        shots.iter().all(|outcome| outcome.is_one(0)),
+        "sample_shots samples the quantum state; readout noise is applied by probabilities_with_readout"
+    );
+
+    let readout_probs = sim.probabilities_with_readout(&[0]);
+    assert!((readout_probs[0] - 1.0).abs() < 1e-10);
+}
+
+#[test]
+fn test_unitary_gate_fallback_applies_noise() {
+    use crate::circuit::gate::UnitaryGate;
+
+    let mut noise_model = NoiseModel::new();
+    noise_model
+        .add_single_qubit_error(
+            StandardGate::U,
+            Qubit::new(0),
+            SingleQubitNoise::BitFlip(1.0),
+        )
+        .unwrap();
+
+    let mut circuit = Circuit::new(1);
+    let x_matrix = array![
+        [Complex64::new(0.0, 0.0), Complex64::new(1.0, 0.0)],
+        [Complex64::new(1.0, 0.0), Complex64::new(0.0, 0.0)]
+    ];
+    let custom_x = UnitaryGate::new("CustomX", 1)
+        .with_matrix(x_matrix)
+        .unwrap();
+    circuit
+        .append(
+            Instruction::UnitaryGate(Box::new(custom_x)),
+            vec![Qubit::new(0)],
+            std::iter::empty::<ParameterValue>(),
+            None,
+        )
+        .unwrap();
+
+    let sim = DensityMatrixNoise::from_circuit(&circuit, Some(noise_model)).unwrap();
+    let probs = sim.probabilities();
+    assert!(
+        (probs[0] - 1.0).abs() < 1e-10,
+        "Custom X followed by configured U bit-flip noise should return to |0>, got {probs:?}"
+    );
+}
+
+#[test]
+fn test_ccx_with_noise_model_does_not_panic() {
+    let mut noise_model = NoiseModel::new();
+    noise_model
+        .add_single_qubit_error(
+            StandardGate::X,
+            Qubit::new(0),
+            SingleQubitNoise::BitFlip(0.1),
+        )
+        .unwrap();
+
+    let mut sim = DensityMatrixNoise::new(3, Some(noise_model));
+    sim.apply_x(0).unwrap();
+    sim.apply_x(1).unwrap();
+    sim.apply_ccx(0, 1, 2).unwrap();
+
+    let probs = sim.probabilities();
+    assert!((probs.iter().sum::<f64>() - 1.0).abs() < 1e-10);
+    assert!(
+        probs[7] > 0.0,
+        "CCX should produce support on |111>, got {probs:?}"
+    );
 }

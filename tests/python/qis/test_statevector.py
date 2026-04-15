@@ -225,7 +225,7 @@ class TestStatevectorSingleQubitGates:
     def test_apply_p(self):
         """Test phase gate (no effect on |0>)."""
         sv = Statevector(1)
-        sv.apply_p(0, np.pi / 4)
+        sv.apply_phase(0, np.pi / 4)
         probs = sv.probabilities()
         assert math.isclose(probs[0], 1.0)
 

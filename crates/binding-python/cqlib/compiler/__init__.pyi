@@ -11,7 +11,59 @@
 # that they have been altered from the originals.
 
 from typing import Dict, List, Optional, Tuple, TypedDict
-from cqlib.circuit import Circuit
+from cqlib.circuit import Circuit, Operation
+
+class CommutativeOptimization:
+    """Optimize the given Circuit by merging the adjacent gates with
+    the commutative relation between gates in consideration.
+
+    During the process, several parameterization and deparameterization process could be included, as listed
+        `'x'`: Rx <--> X, SX, SX_dagger
+        `'y'`: Ry <--> Y, SY, SY_dagger
+        `'z'`: Rz <--> Z, S, T, S_dagger, T_dagger
+    Whether to parameterize or deparameterize certain kinds of gates could be specified
+    by listing them in `para` and `depara`.
+    """
+    def __init__(
+        self,
+        para: Optional[List[str]],
+        depara: Optional[List[str]],
+        keep_phase: bool,
+        keep_order: bool,
+    ) -> None:
+        """Initializes the CommutativeOptimization instance.
+
+        Args:
+            para: A list of parameters to be parameterized.
+            depara: A list of parameters to be deparameterized.
+            keep_phase: Whether to keep the global phase of the circuit.
+            keep_order: Force to ignore parameterization and deparameterization.
+        """
+        ...
+
+    @staticmethod
+    def is_commutative(a: Operation, b: Operation) -> bool:
+        """Checks whether two operations are commutative.
+
+        Args:
+            a: The first operation.
+            b: The second operation.
+
+        Returns:
+            bool: `True` if the operations commute, `False` otherwise.
+        """
+        ...
+
+    def execute(self, circuit: Circuit) -> Circuit:
+        """Executes the commutative optimization on the given circuit.
+
+        Args:
+            circuit: The input circuit to be optimized.
+
+        Returns:
+            Circuit: The optimized circuit.
+        """
+        ...
 
 class Vf2CandidateScoreDict(TypedDict):
     """Scoring breakdown for one VF2 initial-layout candidate.
@@ -178,6 +230,151 @@ class SabreConfig:
         """
         ...
 
+class TemplateMatching:
+    """Template-matching engine for compile-ready circuits."""
+
+    def __init__(self) -> None:
+        """Creates a new matcher instance."""
+        ...
+
+    def run(
+        self,
+        circuit: Circuit,
+        template: Circuit,
+        qubit_fixing_cnt: Optional[int] = None,
+        prune_depth: Optional[int] = None,
+        prune_width: Optional[int] = None,
+    ) -> List[Tuple[List[Tuple[int, int]], List[int]]]:
+        """Runs template matching.
+
+        Args:
+            circuit: Circuit to match.
+            template: Template circuit.
+            qubit_fixing_cnt: Optional matching heuristic parameter.
+            prune_depth: Optional prune depth.
+            prune_width: Optional prune width.
+
+        Returns:
+            List[Tuple[List[Tuple[int, int]], List[int]]]: Match pairs and qubit mapping.
+
+        Raises:
+            ValueError: If preprocessing or matching fails.
+        """
+        ...
+
+
+class TemplateOptimization:
+    """Template-based optimizer for compile-ready circuits."""
+
+    def __init__(
+        self,
+        template_list: Optional[List[Circuit]] = None,
+        qubit_fixing_cnt: Optional[int] = None,
+        prune_depth: Optional[int] = None,
+        prune_width: Optional[int] = None,
+        template_file: Optional[str] = None,
+    ) -> None:
+        """Creates an optimizer.
+
+        Args:
+            template_list: Optional explicit template list.
+            qubit_fixing_cnt: Optional matching heuristic parameter.
+            prune_depth: Optional prune depth.
+            prune_width: Optional prune width.
+            template_file: Optional `.json` or `.qcis` template file path.
+
+        Raises:
+            ValueError: If template inputs are invalid or loading fails.
+        """
+        ...
+
+    def execute(self, circuit: Circuit) -> Circuit:
+        """Runs one optimization pass.
+
+        Args:
+            circuit: Input circuit.
+
+        Returns:
+            Circuit: Optimized circuit.
+
+        Raises:
+            ValueError: If optimization fails.
+        """
+        ...
+
+    def execute_iterative(
+        self,
+        circuit: Circuit,
+        max_iterations: Optional[int] = None,
+    ) -> Circuit:
+        """Runs optimization iteratively.
+
+        Args:
+            circuit: Input circuit.
+            max_iterations: Optional max iteration count.
+
+        Returns:
+            Circuit: Optimized circuit.
+
+        Raises:
+            ValueError: If optimization fails.
+        """
+        ...
+
+    def template_count(self) -> int:
+        """Returns loaded template count."""
+        ...
+
+
+class CliffordRzOptimization:
+    """Numeric Clifford+Rz optimizer for linear segments and control-flow bodies."""
+
+    def __init__(
+        self,
+        level: str = "light",
+        numeric_tol: float = 1e-10,
+        strategies: Optional[List[str]] = None,
+    ) -> None:
+        """Creates a Clifford+Rz optimizer.
+
+        Args:
+            level: Optimization level, one of `light`, `heavy`, or `custom`.
+            numeric_tol: Numeric tolerance for floating-point comparisons.
+            strategies: Ordered custom strategy list when `level='custom'`.
+
+        Raises:
+            ValueError: If inputs are invalid.
+        """
+        ...
+
+    @property
+    def level(self) -> str:
+        """Returns the configured optimization level."""
+        ...
+
+    @property
+    def numeric_tol(self) -> float:
+        """Returns the configured numeric tolerance."""
+        ...
+
+    @property
+    def strategies(self) -> List[str]:
+        """Returns the effective ordered strategy list."""
+        ...
+
+    def execute(self, circuit: Circuit) -> Circuit:
+        """Runs one Clifford+Rz optimization pass.
+
+        Args:
+            circuit: Input circuit.
+
+        Returns:
+            Circuit: Optimized circuit.
+
+        Raises:
+            ValueError: If optimization fails.
+        """
+        ...
 def vf2_is_subgraph_isomorphic(
     circuit: Circuit,
     topology: Topology,

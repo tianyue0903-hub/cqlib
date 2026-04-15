@@ -31,6 +31,9 @@ from .evolution import TrotterMode as TrotterMode
 
 # State simulation module
 from .state import DensityMatrix as DensityMatrix
+from .state import DensityMatrixNoise as DensityMatrixNoise
+from .state import StabilizerCircuitResult as StabilizerCircuitResult
+from .state import StabilizerState as StabilizerState
 from .state import Statevector as Statevector
 
 # Entropy and metrics modules
@@ -55,6 +58,9 @@ __all__ = [
     "TrotterMode",
     "Statevector",
     "DensityMatrix",
+    "DensityMatrixNoise",
+    "StabilizerState",
+    "StabilizerCircuitResult",
     "Observable",
     "entropy",
     "metrics",

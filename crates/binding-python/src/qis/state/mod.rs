@@ -16,6 +16,7 @@ use pyo3::prelude::*;
 
 pub mod density_matrix;
 pub mod density_matrix_noise;
+pub mod stabilizer;
 pub mod statevector;
 
 /// Register the state submodule.
@@ -25,6 +26,8 @@ pub fn register_state_module(parent: &Bound<'_, PyModule>) -> PyResult<()> {
     state_module.add_class::<statevector::PyStatevector>()?;
     state_module.add_class::<density_matrix::PyDensityMatrix>()?;
     state_module.add_class::<density_matrix_noise::PyDensityMatrixNoise>()?;
+    state_module.add_class::<stabilizer::PyStabilizerState>()?;
+    state_module.add_class::<stabilizer::PyStabilizerCircuitResult>()?;
 
     parent.add_submodule(&state_module)?;
     Ok(())

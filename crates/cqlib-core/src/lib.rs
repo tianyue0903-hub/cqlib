@@ -21,7 +21,17 @@ pub mod ir;
 pub mod qis;
 pub(crate) mod util;
 
+pub use error_mitigation::ErrorMitigation;
+pub use error_mitigation::ErrorMitigationError;
+pub use error_mitigation::ExtrapolateMethod;
+pub use error_mitigation::MitigatedResult;
+pub use error_mitigation::MitigationMethod;
+pub use error_mitigation::ProcessArgs;
+pub use error_mitigation::RunArgs;
+pub use error_mitigation::VirtualDistillation;
+pub use error_mitigation::VirtualDistillationConfig;
 pub use error_mitigation::ZNEMitigation;
+pub use error_mitigation::ZneConfig;
 
 pub mod visualization;
 

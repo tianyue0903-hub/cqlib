@@ -21,16 +21,78 @@
 //! The implementation intentionally keeps data conversion explicit so errors can
 //! be mapped to Python `ValueError` with actionable messages.
 
-use crate::circuit::PyCircuit;
+use crate::circuit::{PyCircuit, PyOperation};
 use crate::device::topology::PyTopology;
+use cqlib_core::compile::optimization::commutative::CommutativeOptimization;
 use cqlib_core::compile::{
-    FidelityMap, SabreConfig, Vf2CandidateOptions, Vf2Mapping, Vf2Policy, Vf2ScoreWeights,
-    map_with_vf2_sabre,
+    CliffordRzConfig as CoreCliffordRzConfig, CliffordRzLevel as CoreCliffordRzLevel,
+    CliffordRzOptimization as CoreCliffordRzOptimization,
+    CliffordRzStrategy as CoreCliffordRzStrategy, FidelityMap, GaConfig, SabreConfig,
+    TemplateMatching as CoreTemplateMatching, TemplateOptimization as CoreTemplateOptimization,
+    Vf2CandidateOptions, Vf2Mapping, Vf2Policy, Vf2ScoreWeights, map_with_ga, map_with_vf2_sabre,
 };
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
-use std::collections::HashMap;
+use pyo3::types::{PyDict, PyList};
+use std::collections::{HashMap, HashSet};
+
+/// Python wrapper for CommutativeOptimization
+#[pyclass(name = "CommutativeOptimization", module = "cqlib.compiler")]
+pub struct PyCommutativeOptimization {
+    /// Internal CommutativeOptimization object.
+    pub(crate) inner: CommutativeOptimization,
+}
+
+#[pymethods]
+impl PyCommutativeOptimization {
+    #[new]
+    #[pyo3(signature = (para, depara, keep_phase, keep_order))]
+    fn new(
+        para: Option<Vec<char>>,
+        depara: Option<Vec<char>>,
+        keep_phase: bool,
+        keep_order: bool,
+    ) -> PyResult<Self> {
+        // Validate para
+        if let Some(ref p) = para {
+            for &c in p {
+                if !['x', 'y', 'z'].contains(&c) {
+                    return Err(PyValueError::new_err(format!(
+                        "Invalid para '{}', should be a subset of ['x', 'y', 'z']",
+                        c
+                    )));
+                }
+            }
+        }
+        // Validate depara
+        if let Some(ref d) = depara {
+            for &c in d {
+                if !['x', 'y', 'z'].contains(&c) {
+                    return Err(PyValueError::new_err(format!(
+                        "Invalid depara '{}', should be a subset of ['x', 'y', 'z']",
+                        c
+                    )));
+                }
+            }
+        }
+        Ok(Self {
+            inner: CommutativeOptimization::new(para, depara, keep_phase, keep_order),
+        })
+    }
+
+    #[staticmethod]
+    pub fn is_commutative(a: PyOperation, b: PyOperation) -> PyResult<bool> {
+        Ok(CommutativeOptimization::is_commutative(
+            &a.operation,
+            &b.operation,
+        ))
+    }
+
+    fn execute(&mut self, circuit: &PyCircuit) -> PyResult<PyCircuit> {
+        let optimized = self.inner.execute(&circuit.inner);
+        Ok(PyCircuit::from(optimized))
+    }
+}
 
 /// Python wrapper for SABRE configuration.
 #[pyclass(name = "SabreConfig", module = "cqlib.compiler")]
@@ -162,6 +224,503 @@ impl PySabreConfig {
             self.inner.gate_cost_weight,
             self.inner.predicted_fidelity_weight,
             self.inner.seed,
+        )
+    }
+}
+
+/// Python wrapper for GA (Genetic Algorithm) configuration.
+#[pyclass(name = "GaConfig", module = "cqlib.compiler")]
+#[derive(Clone, Debug)]
+pub struct PyGaConfig {
+    /// Internal core configuration object.
+    pub(crate) inner: GaConfig,
+}
+
+#[pymethods]
+impl PyGaConfig {
+    /// Creates a GA configuration object.
+    ///
+    /// Args:
+    ///     population (int): Number of individuals in the population.
+    ///     select_prob (float): Probability for an individual to be selected.
+    ///     crossover_prob (float): Probability for crossover operation.
+    ///     mutation_prob (float): Probability for mutation operation.
+    ///     forced_mutation_prob (float): Probability for forced mutation when no valid mutation found.
+    ///     crossover_qubit_number (int): Number of qubits involved in a crossover segment.
+    ///     update_iters (int): Number of generations/iterations to evolve.
+    ///     sabre_config (Optional[SabreConfig]): SABRE config for underlying evaluations.
+    ///     seed (int): RNG seed; `-1` means random seed.
+    #[new]
+    #[pyo3(signature = (
+        population = 10,
+        select_prob = 0.4,
+        crossover_prob = 0.4,
+        mutation_prob = 0.25,
+        forced_mutation_prob = 0.05,
+        crossover_qubit_number = 3,
+        update_iters = 5,
+        sabre_config = None,
+        seed = -1,
+    ))]
+    fn new(
+        population: usize,
+        select_prob: f64,
+        crossover_prob: f64,
+        mutation_prob: f64,
+        forced_mutation_prob: f64,
+        crossover_qubit_number: usize,
+        update_iters: usize,
+        sabre_config: Option<PySabreConfig>,
+        seed: i64,
+    ) -> PyResult<Self> {
+        Ok(Self {
+            inner: GaConfig {
+                population,
+                select_prob,
+                crossover_prob,
+                mutation_prob,
+                forced_mutation_prob,
+                crossover_qubit_number,
+                update_iters,
+                sabre_config: sabre_config.map(|c| c.inner).unwrap_or_default(),
+                seed,
+            },
+        })
+    }
+
+    // ========== Getters ==========
+
+    /// Number of individuals in the population.
+    #[getter]
+    fn population(&self) -> usize {
+        self.inner.population
+    }
+
+    /// Probability for an individual to be selected.
+    #[getter]
+    fn select_prob(&self) -> f64 {
+        self.inner.select_prob
+    }
+
+    /// Probability for crossover operation.
+    #[getter]
+    fn crossover_prob(&self) -> f64 {
+        self.inner.crossover_prob
+    }
+
+    /// Probability for mutation operation.
+    #[getter]
+    fn mutation_prob(&self) -> f64 {
+        self.inner.mutation_prob
+    }
+
+    /// Probability for forced mutation when no valid mutation found.
+    #[getter]
+    fn forced_mutation_prob(&self) -> f64 {
+        self.inner.forced_mutation_prob
+    }
+
+    /// Number of qubits involved in a crossover segment.
+    #[getter]
+    fn crossover_qubit_number(&self) -> usize {
+        self.inner.crossover_qubit_number
+    }
+
+    /// Number of generations/iterations to evolve.
+    #[getter]
+    fn update_iters(&self) -> usize {
+        self.inner.update_iters
+    }
+
+    /// SABRE configuration for underlying evaluations.
+    #[getter]
+    fn sabre_config(&self) -> PySabreConfig {
+        PySabreConfig {
+            inner: self.inner.sabre_config.clone(),
+        }
+    }
+
+    /// Random seed (`-1` means auto-seeded).
+    #[getter]
+    fn seed(&self) -> i64 {
+        self.inner.seed
+    }
+
+    // ========== Setters ==========
+
+    /// Sets the population size.
+    #[setter]
+    fn set_population(&mut self, value: usize) {
+        self.inner.population = value;
+    }
+
+    /// Sets the selection probability.
+    #[setter]
+    fn set_select_prob(&mut self, value: f64) {
+        self.inner.select_prob = value;
+    }
+
+    /// Sets the crossover probability.
+    #[setter]
+    fn set_crossover_prob(&mut self, value: f64) {
+        self.inner.crossover_prob = value;
+    }
+
+    /// Sets the mutation probability.
+    #[setter]
+    fn set_mutation_prob(&mut self, value: f64) {
+        self.inner.mutation_prob = value;
+    }
+
+    /// Sets the forced mutation probability.
+    #[setter]
+    fn set_forced_mutation_prob(&mut self, value: f64) {
+        self.inner.forced_mutation_prob = value;
+    }
+
+    /// Sets the crossover qubit number.
+    #[setter]
+    fn set_crossover_qubit_number(&mut self, value: usize) {
+        self.inner.crossover_qubit_number = value;
+    }
+
+    /// Sets the update iterations.
+    #[setter]
+    fn set_update_iters(&mut self, value: usize) {
+        self.inner.update_iters = value;
+    }
+
+    /// Sets the SABRE configuration.
+    #[setter]
+    fn set_sabre_config(&mut self, value: PySabreConfig) {
+        self.inner.sabre_config = value.inner;
+    }
+
+    /// Sets the random seed.
+    #[setter]
+    fn set_seed(&mut self, value: i64) {
+        self.inner.seed = value;
+    }
+
+    /// Returns a compact debug representation.
+    fn __repr__(&self) -> String {
+        format!(
+            "GaConfig(population={}, select_prob={}, crossover_prob={}, mutation_prob={}, forced_mutation_prob={}, crossover_qubit_number={}, update_iters={}, seed={})",
+            self.inner.population,
+            self.inner.select_prob,
+            self.inner.crossover_prob,
+            self.inner.mutation_prob,
+            self.inner.forced_mutation_prob,
+            self.inner.crossover_qubit_number,
+            self.inner.update_iters,
+            self.inner.seed,
+        )
+    }
+}
+
+/// Python wrapper for Clifford+Rz optimization.
+#[pyclass(name = "CliffordRzOptimization", module = "cqlib.compiler")]
+#[derive(Clone, Debug)]
+pub struct PyCliffordRzOptimization {
+    /// Internal optimizer object.
+    pub(crate) inner: CoreCliffordRzOptimization,
+    level_name: String,
+    numeric_tol: f64,
+    strategies: Vec<String>,
+}
+
+#[pymethods]
+impl PyCliffordRzOptimization {
+    /// Creates a Clifford+Rz optimizer.
+    ///
+    /// Args:
+    ///     level (str): `light`, `heavy`, or `custom`.
+    ///     numeric_tol (float): Numeric tolerance for angle normalization and exact rewrites.
+    ///     strategies (Optional[List[str]]): Ordered custom strategy list when `level='custom'`.
+    ///
+    /// Raises:
+    ///     ValueError: If arguments are invalid.
+    #[new]
+    #[pyo3(signature = (level = "light".to_string(), numeric_tol = 1e-10, strategies = None))]
+    fn new(level: String, numeric_tol: f64, strategies: Option<Vec<String>>) -> PyResult<Self> {
+        if !numeric_tol.is_finite() || numeric_tol < 0.0 {
+            return Err(PyValueError::new_err(
+                "numeric_tol must be a finite non-negative float",
+            ));
+        }
+
+        let provided_strategies = strategies.unwrap_or_default();
+        let (inner, level_name, effective_strategies) = match level.as_str() {
+            "light" | "heavy" => {
+                if !provided_strategies.is_empty() {
+                    return Err(PyValueError::new_err(
+                        "strategies can only be provided when level='custom'",
+                    ));
+                }
+                let parsed_level = parse_clifford_rz_level(&level)?;
+                (
+                    CoreCliffordRzOptimization::new(CoreCliffordRzConfig {
+                        level: parsed_level,
+                        numeric_tol,
+                    }),
+                    level,
+                    built_in_clifford_rz_strategy_names(parsed_level)
+                        .into_iter()
+                        .map(str::to_string)
+                        .collect::<Vec<_>>(),
+                )
+            }
+            "custom" => {
+                if provided_strategies.is_empty() {
+                    return Err(PyValueError::new_err(
+                        "level='custom' requires a non-empty strategies list",
+                    ));
+                }
+                let parsed = provided_strategies
+                    .iter()
+                    .map(|strategy| parse_clifford_rz_strategy(strategy))
+                    .collect::<PyResult<Vec<_>>>()?;
+                (
+                    CoreCliffordRzOptimization::with_custom_flow(parsed, numeric_tol),
+                    level,
+                    provided_strategies,
+                )
+            }
+            _ => {
+                return Err(PyValueError::new_err(format!(
+                    "unknown CliffordRz level '{}'; expected one of: light, heavy, custom",
+                    level
+                )));
+            }
+        };
+        Ok(Self {
+            inner,
+            level_name,
+            numeric_tol,
+            strategies: effective_strategies,
+        })
+    }
+
+    /// Optimization level.
+    #[getter]
+    fn level(&self) -> String {
+        self.level_name.clone()
+    }
+
+    /// Numeric tolerance for floating-point comparisons.
+    #[getter]
+    fn numeric_tol(&self) -> f64 {
+        self.numeric_tol
+    }
+
+    /// Ordered effective strategy list.
+    #[getter]
+    fn strategies(&self) -> Vec<String> {
+        self.strategies.clone()
+    }
+
+    /// Executes one Clifford+Rz optimization pass.
+    ///
+    /// Args:
+    ///     circuit (Circuit): Circuit to optimize.
+    ///
+    /// Returns:
+    ///     Circuit: Optimized circuit.
+    ///
+    /// Raises:
+    ///     ValueError: If optimization fails.
+    fn execute(&self, circuit: &PyCircuit) -> PyResult<PyCircuit> {
+        self.inner
+            .execute(&circuit.inner)
+            .map(PyCircuit::from)
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    /// Returns a compact debug representation.
+    fn __repr__(&self) -> String {
+        if self.level_name == "custom" {
+            format!(
+                "CliffordRzOptimization(level='{}', numeric_tol={}, strategies={:?})",
+                self.level_name, self.numeric_tol, self.strategies
+            )
+        } else {
+            format!(
+                "CliffordRzOptimization(level='{}', numeric_tol={})",
+                self.level_name, self.numeric_tol,
+            )
+        }
+    }
+}
+
+/// Python wrapper for template-matching API.
+#[pyclass(name = "TemplateMatching", module = "cqlib.compiler")]
+#[derive(Clone, Debug, Default)]
+pub struct PyTemplateMatching;
+
+#[pymethods]
+impl PyTemplateMatching {
+    /// Creates a new template matcher.
+    #[new]
+    fn new() -> Self {
+        Self
+    }
+
+    /// Executes template matching and returns match pairs and qubit mapping.
+    ///
+    /// Args:
+    ///     circuit (Circuit): Circuit to match.
+    ///     template (Circuit): Template pattern circuit.
+    ///     qubit_fixing_cnt (Optional[int]): Optional matching heuristic knob.
+    ///     prune_depth (Optional[int]): Optional prune depth.
+    ///     prune_width (Optional[int]): Optional prune width.
+    ///
+    /// Returns:
+    ///     List[Tuple[List[Tuple[int, int]], List[int]]]: Match list.
+    ///
+    /// Raises:
+    ///     ValueError: If compile constraints or matching fails.
+    #[pyo3(signature = (circuit, template, qubit_fixing_cnt = None, prune_depth = None, prune_width = None))]
+    fn run(
+        &self,
+        circuit: &PyCircuit,
+        template: &PyCircuit,
+        qubit_fixing_cnt: Option<usize>,
+        prune_depth: Option<usize>,
+        prune_width: Option<usize>,
+    ) -> PyResult<Vec<(Vec<(usize, usize)>, Vec<usize>)>> {
+        let prune_param = parse_prune_params(prune_depth, prune_width);
+        let matches = CoreTemplateMatching::run(
+            &circuit.inner,
+            &template.inner,
+            qubit_fixing_cnt,
+            prune_param,
+        )
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+
+        Ok(matches
+            .into_iter()
+            .map(|m| (m.match_pairs, m.qubit_mapping))
+            .collect())
+    }
+
+    /// Returns a compact debug representation.
+    fn __repr__(&self) -> String {
+        "TemplateMatching()".to_string()
+    }
+}
+
+/// Python wrapper for template optimization API.
+#[pyclass(name = "TemplateOptimization", module = "cqlib.compiler")]
+#[derive(Clone, Debug)]
+pub struct PyTemplateOptimization {
+    /// Internal optimizer object.
+    pub(crate) inner: CoreTemplateOptimization,
+}
+
+#[pymethods]
+impl PyTemplateOptimization {
+    /// Creates a template optimizer.
+    ///
+    /// Args:
+    ///     template_list (Optional[List[Circuit]]): Explicit template circuits.
+    ///     qubit_fixing_cnt (Optional[int]): Optional matching heuristic knob.
+    ///     prune_depth (Optional[int]): Optional prune depth.
+    ///     prune_width (Optional[int]): Optional prune width.
+    ///     template_file (Optional[str]): Optional template file path (.json or .qcis).
+    ///
+    /// Raises:
+    ///     ValueError: If both template_list and template_file are set, or template loading fails.
+    #[new]
+    #[pyo3(signature = (template_list = None, qubit_fixing_cnt = None, prune_depth = None, prune_width = None, template_file = None))]
+    fn new(
+        py: Python<'_>,
+        template_list: Option<&Bound<'_, PyList>>,
+        qubit_fixing_cnt: Option<usize>,
+        prune_depth: Option<usize>,
+        prune_width: Option<usize>,
+        template_file: Option<String>,
+    ) -> PyResult<Self> {
+        if template_list.is_some() && template_file.is_some() {
+            return Err(PyValueError::new_err(
+                "provide either template_list or template_file, not both",
+            ));
+        }
+
+        let prune_param = parse_prune_params(prune_depth, prune_width);
+        let inner = match (template_list, template_file) {
+            (Some(list), None) => {
+                let mut templates = Vec::with_capacity(list.len());
+                for item in list.iter() {
+                    let circuit_obj: Py<PyCircuit> = item.extract()?;
+                    let circuit = circuit_obj.bind(py).borrow().inner.clone();
+                    templates.push(circuit);
+                }
+                CoreTemplateOptimization::new(templates, qubit_fixing_cnt, prune_param)
+            }
+            (None, Some(path)) => {
+                CoreTemplateOptimization::from_template_file(&path, qubit_fixing_cnt, prune_param)
+                    .map_err(|e| PyValueError::new_err(e.to_string()))?
+            }
+            (None, None) => {
+                CoreTemplateOptimization::with_default_templates(qubit_fixing_cnt, prune_param)
+                    .map_err(|e| PyValueError::new_err(e.to_string()))?
+            }
+            (Some(_), Some(_)) => unreachable!(),
+        };
+
+        Ok(Self { inner })
+    }
+
+    /// Executes one optimization pass.
+    ///
+    /// Args:
+    ///     circuit (Circuit): Circuit to optimize.
+    ///
+    /// Returns:
+    ///     Circuit: Optimized circuit.
+    ///
+    /// Raises:
+    ///     ValueError: If optimization fails.
+    fn execute(&self, circuit: &PyCircuit) -> PyResult<PyCircuit> {
+        self.inner
+            .execute(&circuit.inner)
+            .map(PyCircuit::from)
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    /// Executes optimization iteratively.
+    ///
+    /// Args:
+    ///     circuit (Circuit): Circuit to optimize.
+    ///     max_iterations (Optional[int]): Max iteration count.
+    ///
+    /// Returns:
+    ///     Circuit: Optimized circuit.
+    ///
+    /// Raises:
+    ///     ValueError: If optimization fails.
+    #[pyo3(signature = (circuit, max_iterations = None))]
+    fn execute_iterative(
+        &self,
+        circuit: &PyCircuit,
+        max_iterations: Option<usize>,
+    ) -> PyResult<PyCircuit> {
+        self.inner
+            .execute_iterative(&circuit.inner, max_iterations)
+            .map(PyCircuit::from)
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    /// Returns the number of templates in this optimizer.
+    fn template_count(&self) -> usize {
+        self.inner.template_count()
+    }
+
+    /// Returns a compact debug representation.
+    fn __repr__(&self) -> String {
+        format!(
+            "TemplateOptimization(templates={})",
+            self.inner.template_count()
         )
     }
 }
@@ -343,6 +902,43 @@ pub fn py_map_with_vf2_sabre(
         .map_err(|e| PyValueError::new_err(e.to_string()))
 }
 
+/// Runs the Genetic Algorithm mapping flow.
+///
+/// Args:
+///     circuit (Circuit): Logical circuit to map.
+///     topology (Topology): Target hardware topology.
+///     fidelity_map (Optional[Dict[Tuple[int, int], float]]): Optional edge fidelity map.
+///     config (Optional[GaConfig]): GA configuration. Uses defaults if not provided.
+///     invalid_qubits (Optional[List[int]]): Optional list of invalid/broken qubits to exclude.
+///
+/// Returns:
+///     Circuit: Mapped circuit with SWAP gates inserted for routing.
+///
+/// Raises:
+///     ValueError: If mapping fails or topology is too small.
+#[pyfunction(name = "map_with_ga")]
+#[pyo3(signature = (circuit, topology, fidelity_map = None, config = None, invalid_qubits = None))]
+pub fn py_map_with_ga(
+    circuit: &PyCircuit,
+    topology: &PyTopology,
+    fidelity_map: Option<HashMap<(usize, usize), f64>>,
+    config: Option<PyGaConfig>,
+    invalid_qubits: Option<HashSet<usize>>,
+) -> PyResult<PyCircuit> {
+    let fidelity = py_fidelity_to_core(fidelity_map)?;
+    let cfg = config.map(|c| c.inner).unwrap_or_default();
+
+    map_with_ga(
+        &circuit.inner,
+        &topology.inner,
+        &cfg,
+        fidelity.as_ref(),
+        invalid_qubits,
+    )
+    .map(PyCircuit::from)
+    .map_err(|e| PyValueError::new_err(e.to_string()))
+}
+
 /// Converts Python fidelity map keys to core `Qubit` keys.
 ///
 /// The conversion performs index-range validation through `py_id_to_qubit`.
@@ -370,5 +966,54 @@ fn parse_vf2_policy(policy: &str) -> PyResult<Vf2Policy> {
             "unknown vf2_policy '{}'; expected one of: direct_then_sabre, initial_only, disabled",
             policy
         ))),
+    }
+}
+
+/// Parses user-provided Clifford+Rz optimization level strings into enum values.
+fn parse_clifford_rz_level(level: &str) -> PyResult<CoreCliffordRzLevel> {
+    match level.to_ascii_lowercase().as_str() {
+        "light" => Ok(CoreCliffordRzLevel::Light),
+        "heavy" => Ok(CoreCliffordRzLevel::Heavy),
+        _ => Err(PyValueError::new_err(format!(
+            "unknown CliffordRz level '{}'; expected one of: light, heavy",
+            level
+        ))),
+    }
+}
+
+fn parse_clifford_rz_strategy(strategy: &str) -> PyResult<CoreCliffordRzStrategy> {
+    match strategy {
+        "hadamard" => Ok(CoreCliffordRzStrategy::Hadamard),
+        "single_qubit" => Ok(CoreCliffordRzStrategy::SingleQubit),
+        "two_qubit" => Ok(CoreCliffordRzStrategy::TwoQubit),
+        "phase_polynomial" => Ok(CoreCliffordRzStrategy::PhasePolynomial),
+        "global_rz" => Ok(CoreCliffordRzStrategy::GlobalRz),
+        _ => Err(PyValueError::new_err(format!(
+            "unknown CliffordRz strategy '{}'; expected one of: hadamard, single_qubit, two_qubit, phase_polynomial, global_rz",
+            strategy
+        ))),
+    }
+}
+
+fn built_in_clifford_rz_strategy_names(level: CoreCliffordRzLevel) -> Vec<&'static str> {
+    match level {
+        CoreCliffordRzLevel::Light => vec!["hadamard", "single_qubit", "two_qubit"],
+        CoreCliffordRzLevel::Heavy => vec![
+            "hadamard",
+            "single_qubit",
+            "two_qubit",
+            "phase_polynomial",
+            "global_rz",
+            "single_qubit",
+            "two_qubit",
+        ],
+    }
+}
+
+/// Converts optional prune depth/width into compile prune parameters.
+fn parse_prune_params(depth: Option<usize>, width: Option<usize>) -> Option<(usize, usize)> {
+    match (depth, width) {
+        (Some(d), Some(w)) => Some((d, w)),
+        _ => None,
     }
 }

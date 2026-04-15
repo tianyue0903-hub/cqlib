@@ -50,6 +50,7 @@ use crate::qis::error::QisError;
 use crate::qis::observable::Observable;
 use crate::util::aligned::AlignedBuffer;
 use num_complex::Complex64;
+use rand::Rng;
 use rayon::prelude::*;
 use smallvec::SmallVec;
 use std::f64::consts::FRAC_1_SQRT_2;
@@ -290,7 +291,7 @@ macro_rules! with_maybe_par {
 pub struct Statevector {
     /// Complex amplitudes for each basis state. Length is 2^N where N = num_qubits.
     /// 64-byte aligned for SIMD compatibility (see [`AlignedBuffer`]).
-    pub(crate) data: AlignedBuffer<Complex64>,
+    data: AlignedBuffer<Complex64>,
     /// Number of qubits in the system.
     pub num_qubits: usize,
 }
@@ -314,6 +315,9 @@ impl Statevector {
     }
 
     /// Returns the complex amplitudes as a mutable slice.
+    ///
+    /// Mutating the slice can break normalization; callers are responsible for
+    /// preserving a valid statevector.
     pub fn data_mut(&mut self) -> &mut [Complex64] {
         &mut self.data
     }
@@ -352,10 +356,10 @@ impl Statevector {
     /// * `num_qubits` - Number of qubits in the system
     /// * `initial_state` - Vector of 2^N complex amplitudes
     ///
-    /// # Panics
-    /// Panics if:
+    /// # Errors
+    /// Returns an error if:
     /// - `initial_state` length doesn't match 2^num_qubits
-    /// - State is not normalized (sum of probabilities ≠ 1.0 within tolerance 1e-10)
+    /// - State is not normalized (sum of probabilities ≠ 1.0 within a dimension-scaled tolerance)
     ///
     /// # Example
     /// ```rust
@@ -376,9 +380,11 @@ impl Statevector {
         if initial_state.len() != size {
             return Err(QisError::InvalidStateDimension(initial_state.len()));
         }
-        // Verify normalization (probabilities should sum to ~1)
+        // Verify normalization. The tolerance scales with vector length because
+        // summing many amplitudes accumulates floating-point roundoff.
         let norm: f64 = initial_state.iter().map(|c| c.norm_sqr()).sum();
-        if (norm - 1.0).abs() >= 1e-10 {
+        let tolerance = 1e-10 * (size.max(1) as f64);
+        if (norm - 1.0).abs() >= tolerance {
             return Err(QisError::NotNormalized);
         }
 
@@ -398,7 +404,7 @@ impl Statevector {
     ///
     /// # Returns
     /// * `Ok(Statevector)` - The resulting state after circuit execution
-    /// * `Err(CircuitError)` - If the circuit contains unsupported operations
+    /// * `Err(QisError)` - If the circuit contains unsupported operations
     ///   (control flow gates, symbolic parameters) or decomposition fails
     ///
     /// # Supported Instructions
@@ -421,9 +427,43 @@ impl Statevector {
     /// let sv = Statevector::from_circuit(&circuit).unwrap();
     /// ```
     pub fn from_circuit(circuit: &Circuit) -> Result<Self, QisError> {
+        let mut sv = Statevector::new(circuit.num_qubits());
+        sv.apply_circuit(circuit)?;
+        Ok(sv)
+    }
+
+    /// Applies a quantum circuit to this statevector in-place.
+    ///
+    /// The circuit is first decomposed into basic gates via [`Circuit::decompose`],
+    /// then each operation is applied sequentially to the current state.
+    ///
+    /// # Arguments
+    /// * `circuit` - The circuit to apply. Must have the same number of qubits
+    ///   as this statevector.
+    ///
+    /// # Returns
+    /// * `Ok(())` - If all operations were applied successfully
+    /// * `Err(QisError)` - If the circuit cannot be simulated
+    ///
+    /// # Errors
+    /// - [`QisError::InvalidStateDimension`] if `circuit.num_qubits() != self.num_qubits`
+    /// - [`QisError::UnsupportedOperation`] if the circuit contains control-flow gates
+    /// - [`QisError::CircuitError`] if a gate lacks a matrix representation, contains
+    ///   unresolved symbolic parameters, or a referenced qubit is not found
+    ///
+    /// # Supported Instructions
+    /// - Standard single and multi-qubit gates
+    /// - Controlled gates (CX, CY, CZ, CRX, CRY, CRZ)
+    /// - Multi-controlled gates (CCX / Toffoli)
+    /// - Unitary gates with an explicit matrix representation
+    /// - Barriers and delays (ignored)
+    pub fn apply_circuit(&mut self, circuit: &Circuit) -> Result<(), QisError> {
+        if circuit.num_qubits() != self.num_qubits {
+            return Err(QisError::InvalidStateDimension(circuit.num_qubits()));
+        }
         // Decompose circuit to basic gates
         let circuit = circuit.decompose()?;
-        let mut sv = Statevector::new(circuit.num_qubits());
+        let sv = self;
 
         // Build qubit index mapping: Qubit -> physical index
         let qubits = circuit.qubits();
@@ -543,7 +583,7 @@ impl Statevector {
             }
         }
 
-        Ok(sv)
+        Ok(())
     }
 
     /// Applies a standard gate to the statevector.
@@ -561,6 +601,22 @@ impl Statevector {
         qubits: &[usize],
         params: &[f64],
     ) -> Result<(), QisError> {
+        if qubits.len() != gate.num_qubits() {
+            return Err(QisError::InvalidParameterValue(format!(
+                "Gate {:?} requires {} qubits, got {}",
+                gate,
+                gate.num_qubits(),
+                qubits.len()
+            )));
+        }
+        if params.len() != gate.num_params() {
+            return Err(QisError::InvalidParameterValue(format!(
+                "Gate {:?} requires {} parameters, got {}",
+                gate,
+                gate.num_params(),
+                params.len()
+            )));
+        }
         match gate {
             // Single-qubit gates
             StandardGate::I => { /* no-op */ }
@@ -575,7 +631,7 @@ impl Statevector {
             StandardGate::RX => self.apply_rx(qubits[0], params[0])?,
             StandardGate::RY => self.apply_ry(qubits[0], params[0])?,
             StandardGate::RZ => self.apply_rz(qubits[0], params[0])?,
-            StandardGate::Phase => self.apply_p(qubits[0], params[0])?,
+            StandardGate::Phase => self.apply_phase(qubits[0], params[0])?,
             StandardGate::X2P => self.apply_x2p(qubits[0])?,
             StandardGate::X2M => self.apply_x2m(qubits[0])?,
             StandardGate::Y2P => self.apply_y2p(qubits[0])?,
@@ -633,7 +689,11 @@ impl Statevector {
     /// assert!((probs[1] - 0.5).abs() < 1e-10);
     /// ```
     pub fn probabilities(&self) -> Vec<f64> {
-        self.data.par_iter().map(|c| c.norm_sqr()).collect()
+        if self.num_qubits < PARALLEL_THRESHOLD {
+            self.data.iter().map(|c| c.norm_sqr()).collect()
+        } else {
+            self.data.par_iter().map(|c| c.norm_sqr()).collect()
+        }
     }
 
     /// Validates that a qubit index is within bounds.
@@ -685,8 +745,8 @@ impl Statevector {
     /// * `qubit` - Target qubit index
     /// * `matrix` - 2x2 unitary matrix [[u00, u01], [u10, u11]]
     ///
-    /// # Panics
-    /// Panics if qubit index is out of bounds.
+    /// # Errors
+    /// Returns [`QisError::IndexOutOfBounds`] if `qubit` is out of bounds.
     ///
     /// # Example
     /// ```rust,ignore
@@ -749,7 +809,7 @@ impl Statevector {
     ///  [0, 0, 0, 1],
     ///  [0, 0, 1, 0]]
     /// ```
-    pub fn apply_double_qubits_gate(
+    pub fn apply_two_qubit_gate(
         &mut self,
         q0: usize,
         q1: usize,
@@ -880,8 +940,8 @@ impl Statevector {
     /// * `qubits` - Slice of qubit indices the gate acts on (logical order)
     /// * `matrix` - The unitary matrix as a 2^n × 2^n ndarray
     ///
-    /// # Panics
-    /// Panics if:
+    /// # Errors
+    /// Returns an error if:
     /// - Qubit indices are out of bounds
     /// - Qubit indices contain duplicates
     /// - Matrix dimensions don't match 2^n × 2^n
@@ -1120,7 +1180,7 @@ impl Statevector {
         if theta.abs() < 1e-15 {
             // U(0, φ, λ) = e^(i(φ+λ)/2) * [[1, 0], [0, e^(i(λ+φ))]]
             // This is essentially a phase gate plus global phase
-            return self.apply_p(qubit, lambda + phi);
+            return self.apply_phase(qubit, lambda + phi);
         }
 
         let dist = 1 << qubit;
@@ -1224,7 +1284,7 @@ impl Statevector {
 
     /// Apply P (Phase) gate
     /// Matrix: [[1, 0], [0, e^(i*theta)]]
-    pub fn apply_p(&mut self, qubit: usize, theta: f64) -> Result<(), QisError> {
+    pub fn apply_phase(&mut self, qubit: usize, theta: f64) -> Result<(), QisError> {
         self.validate_qubit(qubit)?;
         if theta.abs() < 1e-15 {
             return Ok(());
@@ -1615,16 +1675,14 @@ impl Statevector {
     /// * `q0` - First qubit index
     /// * `q1` - Second qubit index
     ///
-    /// # Panics
-    /// Panics if either qubit index is out of bounds.
+    /// # Errors
+    /// Returns [`QisError::IndexOutOfBounds`] if either qubit is out of bounds,
+    /// or [`QisError::QubitMismatch`] if `q0 == q1`.
     ///
     /// # Optimization
     /// Uses memory swap without floating-point operations.
     pub fn apply_swap(&mut self, q0: usize, q1: usize) -> Result<(), QisError> {
         self.validate_two_qubits(q0, q1)?;
-        if q0 == q1 {
-            return Ok(());
-        }
 
         // 1. Determine physical memory strides
         let (q_min, q_max) = if q0 < q1 { (q0, q1) } else { (q1, q0) };
@@ -1667,8 +1725,9 @@ impl Statevector {
     /// * `control` - Control qubit index
     /// * `target` - Target qubit index
     ///
-    /// # Panics
-    /// Panics if control and target are the same qubit.
+    /// # Errors
+    /// Returns [`QisError::IndexOutOfBounds`] if either qubit is out of bounds,
+    /// or [`QisError::QubitMismatch`] if `control == target`.
     pub fn apply_cx(&mut self, control: usize, target: usize) -> Result<(), QisError> {
         self.validate_two_qubits(control, target)?;
 
@@ -1725,8 +1784,9 @@ impl Statevector {
     /// * `control` - Control qubit index
     /// * `target` - Target qubit index
     ///
-    /// # Panics
-    /// Panics if control and target are the same qubit.
+    /// # Errors
+    /// Returns [`QisError::IndexOutOfBounds`] if either qubit is out of bounds,
+    /// or [`QisError::QubitMismatch`] if `control == target`.
     pub fn apply_cy(&mut self, control: usize, target: usize) -> Result<(), QisError> {
         self.validate_two_qubits(control, target)?;
 
@@ -1801,8 +1861,9 @@ impl Statevector {
     /// * `q0` - First qubit index (acts as control)
     /// * `q1` - Second qubit index (acts as control)
     ///
-    /// # Panics
-    /// Panics if q0 and q1 are the same qubit.
+    /// # Errors
+    /// Returns [`QisError::IndexOutOfBounds`] if either qubit is out of bounds,
+    /// or [`QisError::QubitMismatch`] if `q0 == q1`.
     pub fn apply_cz(&mut self, q0: usize, q1: usize) -> Result<(), QisError> {
         self.validate_two_qubits(q0, q1)?;
 
@@ -2457,7 +2518,11 @@ impl Statevector {
             return Ok(());
         }
         let phase = Complex64::from_polar(1.0, phi);
-        self.data.par_iter_mut().for_each(|a| *a *= phase);
+        if self.num_qubits < PARALLEL_THRESHOLD {
+            self.data.iter_mut().for_each(|a| *a *= phase);
+        } else {
+            self.data.par_iter_mut().for_each(|a| *a *= phase);
+        }
         Ok(())
     }
 
@@ -2470,11 +2535,11 @@ impl Statevector {
     /// * `h` - The Hamiltonian observable.
     ///
     /// # Returns
-    /// The expectation value as a real number (f64), or a `CircuitError` if the
+    /// The expectation value as a real number (f64), or a [`QisError`] if the
     /// qubit counts do not match.
     ///
     /// # Errors
-    /// Returns `CircuitError::InvalidOperation` if the Hamiltonian acts on a different
+    /// Returns [`QisError::CircuitError`] if the observable acts on a different
     /// number of qubits than the statevector.
     ///
     /// # Example
@@ -2505,7 +2570,17 @@ impl Statevector {
     ///
     /// This is a destructive operation — clone the statevector first if you need
     /// to preserve the pre-measurement state.
-    pub fn measure(&mut self, qubit: usize) -> bool {
+    pub fn measure(&mut self, qubit: usize) -> Result<bool, QisError> {
+        let mut rng = rand::rng();
+        self.measure_with_rng(qubit, &mut rng)
+    }
+
+    /// Measures qubit `qubit` using a caller-provided random number generator.
+    ///
+    /// This is useful for reproducible simulations. For one-off non-deterministic
+    /// measurements, use [`measure`](Self::measure).
+    pub fn measure_with_rng(&mut self, qubit: usize, rng: &mut impl Rng) -> Result<bool, QisError> {
+        self.validate_qubit(qubit)?;
         let n = self.num_qubits;
         let size = 1 << n;
         let mask = 1 << qubit;
@@ -2516,11 +2591,7 @@ impl Statevector {
             .map(|i| self.data[i].norm_sqr())
             .sum();
 
-        let outcome = {
-            use rand::Rng;
-            let mut rng = rand::rng();
-            rng.random::<f64>() < p1
-        };
+        let outcome = rng.random::<f64>() < p1;
 
         // Collapse and renormalise.
         let norm = if outcome {
@@ -2540,7 +2611,7 @@ impl Statevector {
                 self.data[i] = Complex64::new(0.0, 0.0);
             }
         }
-        outcome
+        Ok(outcome)
     }
 
     /// Copies amplitude data from `source` into `self` without allocating.
@@ -2563,7 +2634,7 @@ impl Statevector {
         let num_chunks = self.num_qubits.div_ceil(64);
         let mut chunks = SmallVec::from_elem(0u64, num_chunks);
         for q in 0..self.num_qubits {
-            if self.measure(q) {
+            if self.measure(q).unwrap() {
                 chunks[q / 64] |= 1u64 << (q % 64);
             }
         }

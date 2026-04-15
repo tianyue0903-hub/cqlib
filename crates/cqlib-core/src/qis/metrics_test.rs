@@ -39,8 +39,8 @@ fn test_purity_mixed() {
 fn test_state_fidelity_pure() {
     let sv1 = Statevector::new(1); // |0>
     let mut sv2 = Statevector::new(1);
-    sv2.data[0] = Complex64::new(0.0, 0.0);
-    sv2.data[1] = Complex64::new(1.0, 0.0); // |1>
+    sv2.data_mut()[0] = Complex64::new(0.0, 0.0);
+    sv2.data_mut()[1] = Complex64::new(1.0, 0.0); // |1>
 
     let fid_same = state_fidelity_pure(&sv1, &sv1).unwrap();
     assert!((fid_same - 1.0).abs() < 1e-10);
@@ -53,8 +53,8 @@ fn test_state_fidelity_pure() {
 fn test_trace_distance_pure() {
     let sv1 = Statevector::new(1); // |0>
     let mut sv2 = Statevector::new(1);
-    sv2.data[0] = Complex64::new(0.0, 0.0);
-    sv2.data[1] = Complex64::new(1.0, 0.0); // |1>
+    sv2.data_mut()[0] = Complex64::new(0.0, 0.0);
+    sv2.data_mut()[1] = Complex64::new(1.0, 0.0); // |1>
 
     let dist_same = trace_distance_pure(&sv1, &sv1).unwrap();
     assert!((dist_same - 0.0).abs() < 1e-10);
@@ -278,13 +278,13 @@ fn test_purity_mixed_multiqubit() {
 fn test_fidelity_superposition_state() {
     // |+> = (|0> + |1>)/sqrt(2)
     let mut sv_plus = Statevector::new(1);
-    sv_plus.data[0] = Complex64::new(1.0 / 2.0_f64.sqrt(), 0.0);
-    sv_plus.data[1] = Complex64::new(1.0 / 2.0_f64.sqrt(), 0.0);
+    sv_plus.data_mut()[0] = Complex64::new(1.0 / 2.0_f64.sqrt(), 0.0);
+    sv_plus.data_mut()[1] = Complex64::new(1.0 / 2.0_f64.sqrt(), 0.0);
 
     // |-> = (|0> - |1>)/sqrt(2)
     let mut sv_minus = Statevector::new(1);
-    sv_minus.data[0] = Complex64::new(1.0 / 2.0_f64.sqrt(), 0.0);
-    sv_minus.data[1] = Complex64::new(-1.0 / 2.0_f64.sqrt(), 0.0);
+    sv_minus.data_mut()[0] = Complex64::new(1.0 / 2.0_f64.sqrt(), 0.0);
+    sv_minus.data_mut()[1] = Complex64::new(-1.0 / 2.0_f64.sqrt(), 0.0);
 
     // |+> and |-> are orthogonal
     let fid = state_fidelity_pure(&sv_plus, &sv_minus).unwrap();
@@ -350,10 +350,10 @@ fn test_fidelity_trace_distance_inequality() {
 
     let sv1 = Statevector::new(2);
     let mut sv2 = Statevector::new(2);
-    sv2.data[0] = Complex64::new(0.5, 0.0);
-    sv2.data[1] = Complex64::new(0.5, 0.0);
-    sv2.data[2] = Complex64::new(0.5, 0.0);
-    sv2.data[3] = Complex64::new(0.5, 0.0);
+    sv2.data_mut()[0] = Complex64::new(0.5, 0.0);
+    sv2.data_mut()[1] = Complex64::new(0.5, 0.0);
+    sv2.data_mut()[2] = Complex64::new(0.5, 0.0);
+    sv2.data_mut()[3] = Complex64::new(0.5, 0.0);
     // Normalize: current norm is 1.0 (already normalized as 4 * 0.25 = 1)
 
     let fid = state_fidelity_pure(&sv1, &sv2).unwrap();
@@ -450,7 +450,7 @@ fn test_fidelity_with_phase() {
 
     let mut sv2 = Statevector::new(1);
     use std::f64::consts::PI;
-    sv2.data[0] = Complex64::new(PI.cos(), PI.sin()); // e^{iπ}|0> = -|0>
+    sv2.data_mut()[0] = Complex64::new(PI.cos(), PI.sin()); // e^{iπ}|0> = -|0>
 
     let fid = state_fidelity_pure(&sv1, &sv2).unwrap();
     assert!(
@@ -463,8 +463,8 @@ fn test_fidelity_with_phase() {
 fn test_state_fidelity_pure_mixed_with_superposition() {
     // Test with |+> state and its density matrix
     let mut sv = Statevector::new(1);
-    sv.data[0] = Complex64::new(1.0 / 2.0_f64.sqrt(), 0.0);
-    sv.data[1] = Complex64::new(1.0 / 2.0_f64.sqrt(), 0.0);
+    sv.data_mut()[0] = Complex64::new(1.0 / 2.0_f64.sqrt(), 0.0);
+    sv.data_mut()[1] = Complex64::new(1.0 / 2.0_f64.sqrt(), 0.0);
 
     // Construct density matrix |+><+|
     let mut dm = DensityMatrix::new(1);

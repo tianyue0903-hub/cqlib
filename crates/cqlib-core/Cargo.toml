@@ -30,6 +30,7 @@ approx.workspace = true
 bitvec.workspace = true
 faer.workspace = true
 lalrpop-util = { workspace = true, features = ["lexer"] }
+lazy_static.workspace = true
 indexmap.workspace = true
 ndarray.workspace = true
 num.workspace = true
@@ -40,8 +41,8 @@ regex.workspace = true
 rustworkx-core.workspace = true
 smallvec.workspace = true
 symb_anafis.workspace = true
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+serde.workspace = true
+serde_json.workspace = true
 resvg = "0.45"
 thiserror.workspace = true
 time.workspace = true

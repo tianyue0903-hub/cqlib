@@ -222,7 +222,7 @@ pub fn entanglement_entropy_pure(sv: &Statevector, subsys_a: &[usize]) -> Result
     }
 
     // Build density matrix from pure state: ρ = |ψ⟩⟨ψ|
-    let dm = DensityMatrix::from_state(sv.num_qubits, sv.data.to_vec())?;
+    let dm = DensityMatrix::from_state(sv.num_qubits, sv.data().to_vec())?;
 
     // Compute reduced density matrix by tracing out subsystem B
     let rho_a = dm.partial_trace(subsys_a);

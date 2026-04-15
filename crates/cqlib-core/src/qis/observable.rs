@@ -148,7 +148,7 @@ impl Observable for Hamiltonian {
             let base_factor = global_phase * y_phase;
 
             // Compute term expectation value in parallel
-            let sv_data = &sv.data;
+            let sv_data = sv.data();
             let term_expectation: Complex64 = sv_data
                 .par_iter()
                 .enumerate()
@@ -319,7 +319,7 @@ impl Observable for PauliString {
         let global_phase = self.phase.to_complex();
         let base_factor = global_phase * y_phase;
 
-        let sv_data = &sv.data;
+        let sv_data = sv.data();
         let term_expectation: Complex64 = sv_data
             .par_iter()
             .enumerate()
