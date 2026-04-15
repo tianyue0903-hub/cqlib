@@ -15,6 +15,7 @@ import numpy as np
 
 from cqlib.circuit import Circuit
 from cqlib.circuit.gates.standard import StandardGate
+from cqlib.device import Outcome
 from cqlib.qis import Hamiltonian, PauliString
 
 @final
@@ -137,6 +138,10 @@ class DensityMatrix:
         """
         ...
 
+    def apply_circuit(self, circuit: Circuit) -> None:
+        """Applies a circuit to this density matrix in place."""
+        ...
+
     @property
     def num_qubits(self) -> int:
         """Returns the number of qubits in the density matrix."""
@@ -253,6 +258,10 @@ class DensityMatrix:
             qubit: Target qubit index
             theta: Phase angle in radians
         """
+        ...
+
+    def apply_phase(self, qubit: int, theta: float) -> None:
+        """Applies a parameterized phase gate."""
         ...
 
     def apply_x2p(self, qubit: int) -> None:
@@ -628,4 +637,16 @@ class DensityMatrix:
             >>> dm.apply_h(0)
             >>> dm.validate_physical()  # Should pass for valid states
         """
+        ...
+
+    def measure(self, qubit: int) -> bool:
+        """Measures one qubit and collapses the state."""
+        ...
+
+    def measure_all(self) -> Outcome:
+        """Measures all qubits and collapses the state."""
+        ...
+
+    def sample_shots(self, shots: int) -> List[Outcome]:
+        """Samples measurement outcomes without mutating this state."""
         ...

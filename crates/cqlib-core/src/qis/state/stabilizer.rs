@@ -152,7 +152,7 @@ use rand::{Rng, SeedableRng};
 use rayon::prelude::*;
 use smallvec::SmallVec;
 
-/// Result returned by [`StabilizerState::execute_circuit`].
+/// Result returned by [`StabilizerState::apply_circuit`].
 ///
 /// Contains both the final quantum state and the classical bit register
 /// populated by mid-circuit [`Directive::Measure`] operations.
@@ -172,7 +172,7 @@ pub struct CircuitExecutionResult {
 #[derive(Debug)]
 pub struct StabilizerState {
     /// Number of qubits.
-    pub n: usize,
+    pub num_qubits: usize,
     /// Number of `u64` words per block (X-block or Z-block) per row.
     /// Padded to a multiple of 8 for 512-bit SIMD alignment.
     row_len: usize,
@@ -340,7 +340,7 @@ impl StabilizerState {
         }
 
         StabilizerState {
-            n,
+            num_qubits: n,
             row_len,
             tableau,
             phases,
@@ -357,7 +357,7 @@ impl StabilizerState {
     /// This is used by [`sample_shots`](Self::sample_shots) to reuse a single
     /// pre-allocated working buffer per Rayon worker thread.
     fn reset_from(&mut self, source: &StabilizerState) {
-        debug_assert_eq!(self.n, source.n);
+        debug_assert_eq!(self.num_qubits, source.num_qubits);
         debug_assert_eq!(self.row_len, source.row_len);
         self.tableau
             .as_mut_slice()
@@ -368,7 +368,7 @@ impl StabilizerState {
     /// Index of the persistent scratch row in the tableau (= `2n`).
     #[inline(always)]
     fn scratch_row(&self) -> usize {
-        2 * self.n
+        2 * self.num_qubits
     }
 
     /// Zeroes the scratch row's bit-columns and phase, ready for a new accumulation.
@@ -446,24 +446,23 @@ impl StabilizerState {
         }
     }
 
-    /// Returns the phase of row `row` as 0 (+1) or 2 (-1).
+    /// Returns the encoded phase of row `row`.
     #[inline(always)]
     pub(crate) fn phase(&self, row: usize) -> u8 {
         self.phases[row]
     }
 
-    /// Sets the phase of row `row` to `val` (0 or 2).
-    #[inline(always)]
     /// Sets the phase for `row` to `val` (0–3 for +1, +i, −1, −i respectively).
+    #[inline(always)]
     pub(crate) fn set_phase(&mut self, row: usize, val: u8) {
         self.phases[row] = val & 3;
     }
 
     pub(crate) fn validate_qubit(&self, q: usize) -> Result<(), QisError> {
-        if q >= self.n {
+        if q >= self.num_qubits {
             return Err(QisError::IndexOutOfBounds {
                 index: q,
-                max: self.n.saturating_sub(1),
+                max: self.num_qubits.saturating_sub(1),
             });
         }
         Ok(())
@@ -493,7 +492,7 @@ impl StabilizerState {
         let t_word = target / 64;
         let t_mask = 1u64 << (target % 64);
         let rl = self.row_len;
-        for row in 0..(2 * self.n) {
+        for row in 0..(2 * self.num_qubits) {
             let base = row * 2 * rl;
             let xc = (self.tableau[base + c_word] & c_mask) != 0;
             let xt = (self.tableau[base + t_word] & t_mask) != 0;
@@ -523,7 +522,7 @@ impl StabilizerState {
         let w1 = q1 / 64;
         let m1 = 1u64 << (q1 % 64);
         let rl = self.row_len;
-        for row in 0..(2 * self.n) {
+        for row in 0..(2 * self.num_qubits) {
             let base = row * 2 * rl;
             // Read bits
             let x0 = (self.tableau[base + w0] & m0) != 0;
@@ -565,7 +564,7 @@ impl StabilizerState {
         let w1 = q1 / 64;
         let m1 = 1u64 << (q1 % 64);
         let rl = self.row_len;
-        for row in 0..(2 * self.n) {
+        for row in 0..(2 * self.num_qubits) {
             let base = row * 2 * rl;
             // H on q1: swap x1 ↔ z1, phase if both set
             let x1 = (self.tableau[base + w1] & m1) != 0;
@@ -632,7 +631,7 @@ impl StabilizerState {
         let tw = target / 64;
         let tm = 1u64 << (target % 64);
         let rl = self.row_len;
-        for row in 0..(2 * self.n) {
+        for row in 0..(2 * self.num_qubits) {
             let base = row * 2 * rl;
             // S† on target: phase flip when x=1 and z=0 (i.e. X → -Y), then z ^= x
             let x = (self.tableau[base + tw] & tm) != 0;
@@ -674,7 +673,7 @@ impl StabilizerState {
 
     /// Returns the number of qubits.
     pub fn num_qubits(&self) -> usize {
-        self.n
+        self.num_qubits
     }
 
     /// Applies the Hadamard gate to qubit `qubit`.
@@ -687,7 +686,7 @@ impl StabilizerState {
         let word = qubit / 64;
         let mask = 1u64 << (qubit % 64);
         let rl = self.row_len;
-        for row in 0..(2 * self.n) {
+        for row in 0..(2 * self.num_qubits) {
             let base = row * 2 * rl;
             let x = (self.tableau[base + word] & mask) != 0;
             let z = (self.tableau[base + rl + word] & mask) != 0;
@@ -721,7 +720,7 @@ impl StabilizerState {
         let word = qubit / 64;
         let mask = 1u64 << (qubit % 64);
         let rl = self.row_len;
-        for row in 0..(2 * self.n) {
+        for row in 0..(2 * self.num_qubits) {
             let base = row * 2 * rl;
             let x = (self.tableau[base + word] & mask) != 0;
             let z = (self.tableau[base + rl + word] & mask) != 0;
@@ -746,7 +745,7 @@ impl StabilizerState {
         let word = qubit / 64;
         let mask = 1u64 << (qubit % 64);
         let rl = self.row_len;
-        for row in 0..(2 * self.n) {
+        for row in 0..(2 * self.num_qubits) {
             let base = row * 2 * rl;
             let x = (self.tableau[base + word] & mask) != 0;
             let z = (self.tableau[base + rl + word] & mask) != 0;
@@ -769,7 +768,7 @@ impl StabilizerState {
         let word = qubit / 64;
         let mask = 1u64 << (qubit % 64);
         let rl = self.row_len;
-        for row in 0..(2 * self.n) {
+        for row in 0..(2 * self.num_qubits) {
             let base = row * 2 * rl;
             if (self.tableau[base + rl + word] & mask) != 0 {
                 self.phases[row] ^= 2;
@@ -787,7 +786,7 @@ impl StabilizerState {
         let word = qubit / 64;
         let mask = 1u64 << (qubit % 64);
         let rl = self.row_len;
-        for row in 0..(2 * self.n) {
+        for row in 0..(2 * self.num_qubits) {
             let base = row * 2 * rl;
             if (self.tableau[base + word] & mask) != 0 {
                 self.phases[row] ^= 2;
@@ -805,7 +804,7 @@ impl StabilizerState {
         let word = qubit / 64;
         let mask = 1u64 << (qubit % 64);
         let rl = self.row_len;
-        for row in 0..(2 * self.n) {
+        for row in 0..(2 * self.num_qubits) {
             let base = row * 2 * rl;
             let x = (self.tableau[base + word] & mask) != 0;
             let z = (self.tableau[base + rl + word] & mask) != 0;
@@ -827,7 +826,7 @@ impl StabilizerState {
         let word = qubit / 64;
         let mask = 1u64 << (qubit % 64);
         let rl = self.row_len;
-        for row in 0..(2 * self.n) {
+        for row in 0..(2 * self.num_qubits) {
             let base = row * 2 * rl;
             let x = (self.tableau[base + word] & mask) != 0;
             let z = (self.tableau[base + rl + word] & mask) != 0;
@@ -853,7 +852,7 @@ impl StabilizerState {
         let word = qubit / 64;
         let mask = 1u64 << (qubit % 64);
         let rl = self.row_len;
-        for row in 0..(2 * self.n) {
+        for row in 0..(2 * self.num_qubits) {
             let base = row * 2 * rl;
             let x = (self.tableau[base + word] & mask) != 0;
             let z = (self.tableau[base + rl + word] & mask) != 0;
@@ -878,7 +877,7 @@ impl StabilizerState {
         let word = qubit / 64;
         let mask = 1u64 << (qubit % 64);
         let rl = self.row_len;
-        for row in 0..(2 * self.n) {
+        for row in 0..(2 * self.num_qubits) {
             let base = row * 2 * rl;
             let x = (self.tableau[base + word] & mask) != 0;
             let z = (self.tableau[base + rl + word] & mask) != 0;
@@ -911,7 +910,7 @@ impl StabilizerState {
         let word = qubit / 64;
         let mask = 1u64 << (qubit % 64);
         let rl = self.row_len;
-        for row in 0..(2 * self.n) {
+        for row in 0..(2 * self.num_qubits) {
             let base = row * 2 * rl;
             let x = (self.tableau[base + word] & mask) != 0;
             let z = (self.tableau[base + rl + word] & mask) != 0;
@@ -984,7 +983,7 @@ impl StabilizerState {
         let mut sum = self.phases[h] as i32 + self.phases[i] as i32;
         // Only the active words (0..n_words) contain qubit data; the padding words
         // in the range n_words..row_len are always zero and contribute 0 to the sum.
-        let n_words = self.n.div_ceil(64);
+        let n_words = self.num_qubits.div_ceil(64);
         for w in 0..n_words {
             let xh = self.tableau[h_base + w];
             let zh = self.tableau[h_base + rl + w];
@@ -1022,19 +1021,19 @@ impl StabilizerState {
         self.validate_qubit(qubit)?;
 
         // Find first stabilizer row with x[.][qubit] = 1.
-        let maybe_p = (self.n..2 * self.n).find(|&row| self.x_bit(row, qubit));
+        let maybe_p = (self.num_qubits..2 * self.num_qubits).find(|&row| self.x_bit(row, qubit));
 
         match maybe_p {
             Some(p) => {
                 // Make p the unique row with x[.][qubit] = 1 by XOR-ing p into all others.
-                for i in 0..2 * self.n {
+                for i in 0..2 * self.num_qubits {
                     if i != p && self.x_bit(i, qubit) {
                         self.rowsum(i, p);
                     }
                 }
 
                 // Copy stabilizer p → destabilizer p-n.
-                let dest = p - self.n;
+                let dest = p - self.num_qubits;
                 let p_base = Self::row_base(p, self.row_len);
                 let d_base = Self::row_base(dest, self.row_len);
                 // SAFETY: dest ≠ p (since dest < n ≤ p < 2n).
@@ -1063,11 +1062,11 @@ impl StabilizerState {
                 let scratch = self.scratch_row();
                 self.clear_scratch();
 
-                for i in 0..self.n {
+                for i in 0..self.num_qubits {
                     // Include destabilizer i only if it has an X-component at qubit `qubit`.
                     // Then rowsum the paired stabilizer n+i into scratch.
                     if self.x_bit(i, qubit) {
-                        self.rowsum(scratch, self.n + i);
+                        self.rowsum(scratch, self.num_qubits + i);
                     }
                 }
 
@@ -1082,9 +1081,9 @@ impl StabilizerState {
     /// Qubit `q`'s result is stored at bit `q` inside the `Outcome`.
     /// Use [`Outcome::is_one(q)`](crate::device::Outcome::is_one) to read it.
     pub fn measure_all(&mut self) -> Outcome {
-        let num_chunks = self.n.div_ceil(64);
+        let num_chunks = self.num_qubits.div_ceil(64);
         let mut chunks = SmallVec::from_elem(0u64, num_chunks);
-        for qubit in 0..self.n {
+        for qubit in 0..self.num_qubits {
             if self.measure(qubit).unwrap() {
                 chunks[qubit / 64] |= 1u64 << (qubit % 64);
             }
@@ -1124,17 +1123,17 @@ impl StabilizerState {
     /// Used internally by `probability_of`.
     fn force_measure(&mut self, qubit: usize, outcome: bool) -> bool {
         // Find first stabilizer row with x[.][qubit] = 1.
-        let maybe_p = (self.n..2 * self.n).find(|&row| self.x_bit(row, qubit));
+        let maybe_p = (self.num_qubits..2 * self.num_qubits).find(|&row| self.x_bit(row, qubit));
 
         match maybe_p {
             Some(p) => {
                 // Random measurement: force to `outcome`.
-                for i in 0..2 * self.n {
+                for i in 0..2 * self.num_qubits {
                     if i != p && self.x_bit(i, qubit) {
                         self.rowsum(i, p);
                     }
                 }
-                let dest = p - self.n;
+                let dest = p - self.num_qubits;
                 let p_base = Self::row_base(p, self.row_len);
                 let d_base = Self::row_base(dest, self.row_len);
                 // SAFETY: dest < n ≤ p.
@@ -1157,9 +1156,9 @@ impl StabilizerState {
                 // Deterministic case: check whether outcome matches.
                 let scratch = self.scratch_row();
                 self.clear_scratch();
-                for i in 0..self.n {
+                for i in 0..self.num_qubits {
                     if self.x_bit(i, qubit) {
-                        self.rowsum(scratch, self.n + i);
+                        self.rowsum(scratch, self.num_qubits + i);
                     }
                 }
                 let actual = self.phases[scratch] == 2;
@@ -1193,9 +1192,9 @@ impl StabilizerState {
     /// assert_eq!(s.probability_of(&[true,  false]).unwrap(), 0.0);
     /// ```
     pub fn probability_of(&self, bits: &[bool]) -> Result<f64, QisError> {
-        if bits.len() != self.n {
+        if bits.len() != self.num_qubits {
             return Err(QisError::QubitMismatch {
-                expected: self.n,
+                expected: self.num_qubits,
                 actual: bits.len(),
             });
         }
@@ -1203,7 +1202,7 @@ impl StabilizerState {
         let mut prob = 1.0_f64;
         for (qubit, &desired) in bits.iter().enumerate() {
             // Check if measurement is random (some stabilizer has X on this qubit).
-            let is_random = (s.n..2 * s.n).any(|row| s.x_bit(row, qubit));
+            let is_random = (s.num_qubits..2 * s.num_qubits).any(|row| s.x_bit(row, qubit));
             if is_random {
                 prob *= 0.5;
                 s.force_measure(qubit, desired);
@@ -1243,17 +1242,17 @@ impl StabilizerState {
     /// ```
     pub fn probabilities(&self) -> Result<Vec<f64>, QisError> {
         const MAX_QUBITS: usize = 20;
-        if self.n > MAX_QUBITS {
+        if self.num_qubits > MAX_QUBITS {
             return Err(QisError::InvalidParameterValue(format!(
                 "probabilities() is only supported for n ≤ {MAX_QUBITS} qubits \
                  (requested n = {}); use sample_shots() for large systems",
-                self.n
+                self.num_qubits
             )));
         }
-        let size = 1usize << self.n;
+        let size = 1usize << self.num_qubits;
         let mut probs = vec![0.0_f64; size];
         for (i, prob) in probs.iter_mut().enumerate() {
-            let bits: Vec<bool> = (0..self.n).map(|q| (i >> q) & 1 == 1).collect();
+            let bits: Vec<bool> = (0..self.num_qubits).map(|q| (i >> q) & 1 == 1).collect();
             *prob = self.probability_of(&bits)?;
         }
         Ok(probs)
@@ -1300,16 +1299,17 @@ impl StabilizerState {
     /// Constructs a `StabilizerState` by simulating a Clifford circuit.
     ///
     /// Executes all gates in the circuit sequentially, including
-    /// [`Directive::Measure`], [`Directive::Reset`], and [`ControlFlow`] operations.
+    /// [`Directive::Measure`] and [`Directive::Reset`] operations.
+    /// Control-flow gates are not supported.
     /// Non-Clifford gates return `Err(QisError::NonCliffordGate)`.
     ///
-    /// For mid-circuit measurement results, use [`execute_circuit`] instead.
+    /// For mid-circuit measurement results, use [`apply_circuit`] instead.
     ///
     /// # Supported instructions
     /// - Gates: `I, H, X, Y, Z, S, SDG, X2P, X2M, Y2P, Y2M, CX, CY, CZ, SWAP`
     /// - Directives: `Measure` (collapses state), `Reset` (returns qubit to |0⟩), `Barrier`/`Delay` (no-op)
     ///
-    /// [`execute_circuit`]: StabilizerState::execute_circuit
+    /// [`apply_circuit`]: StabilizerState::apply_circuit
     ///
     /// # Example
     /// ```rust
@@ -1322,7 +1322,7 @@ impl StabilizerState {
     /// let stab = StabilizerState::from_circuit(&c).unwrap();
     /// ```
     pub fn from_circuit(circuit: &Circuit) -> Result<Self, QisError> {
-        Ok(StabilizerState::execute_circuit(circuit)?.state)
+        Ok(StabilizerState::apply_circuit(circuit)?.state)
     }
 
     /// Executes a Clifford circuit and returns both the final state and mid-circuit
@@ -1333,8 +1333,7 @@ impl StabilizerState {
     /// - `measurements`: per-qubit last measurement results (indexed by physical qubit index)
     ///
     /// # Supported instructions
-    /// Same as [`from_circuit`]. Control flow ([`IfElseGate`], [`WhileLoopGate`]) is
-    /// evaluated using the accumulated classical bit register.
+    /// Same as [`from_circuit`]. Control-flow gates are not supported.
     ///
     /// [`from_circuit`]: StabilizerState::from_circuit
     ///
@@ -1347,11 +1346,11 @@ impl StabilizerState {
     /// c.h(0.into());
     /// c.measure(0.into()).unwrap(); // mid-circuit measurement
     ///
-    /// let result = StabilizerState::execute_circuit(&c).unwrap();
+    /// let result = StabilizerState::apply_circuit(&c).unwrap();
     /// // result.measurements[0] is Some(true) or Some(false)
     /// assert!(result.measurements[0].is_some());
     /// ```
-    pub fn execute_circuit(circuit: &Circuit) -> Result<CircuitExecutionResult, QisError> {
+    pub fn apply_circuit(circuit: &Circuit) -> Result<CircuitExecutionResult, QisError> {
         let circuit = circuit.decompose()?;
         let mut state = StabilizerState::new(circuit.num_qubits());
 
@@ -1384,12 +1383,12 @@ impl StabilizerState {
         })
     }
 
-    /// Recursive operation executor used by [`execute_circuit`].
+    /// Recursive operation executor used by [`apply_circuit`].
     ///
     /// Processes a slice of operations, updating the state and the classical bit
-    /// register in place. Called recursively for control-flow bodies.
+    /// register in place.
     ///
-    /// [`execute_circuit`]: StabilizerState::execute_circuit
+    /// [`apply_circuit`]: StabilizerState::apply_circuit
     fn execute_operations(
         state: &mut StabilizerState,
         ops: &[Operation],
@@ -1513,21 +1512,23 @@ impl StabilizerState {
 
     /// There are `n` stabilizer generators (rows `n..2n`).
     pub fn get_stabilizers(&self) -> Vec<PauliString> {
-        (0..self.n)
-            .map(|i| self.row_to_pauli_string(self.n + i))
+        (0..self.num_qubits)
+            .map(|i| self.row_to_pauli_string(self.num_qubits + i))
             .collect()
     }
 
     /// Returns the destabilizer generators as [`PauliString`]s.
     pub fn get_destabilizers(&self) -> Vec<PauliString> {
-        (0..self.n).map(|i| self.row_to_pauli_string(i)).collect()
+        (0..self.num_qubits)
+            .map(|i| self.row_to_pauli_string(i))
+            .collect()
     }
 
     /// Converts tableau row `row` to a [`PauliString`].
     fn row_to_pauli_string(&self, row: usize) -> PauliString {
-        let mut ps = PauliString::new(self.n);
+        let mut ps = PauliString::new(self.num_qubits);
         ps.phase = Phase::from(self.phase(row));
-        for q in 0..self.n {
+        for q in 0..self.num_qubits {
             let x = self.x_bit(row, q);
             let z = self.z_bit(row, q);
             let pauli = match (x, z) {
@@ -1550,14 +1551,14 @@ impl StabilizerState {
     ///
     /// This correctly handles products of generators, not just individual generators.
     pub fn pauli_expectation(&self, pauli: &PauliString) -> Result<i32, QisError> {
-        if pauli.num_qubits != self.n {
+        if pauli.num_qubits != self.num_qubits {
             return Err(QisError::QubitMismatch {
-                expected: self.n,
+                expected: self.num_qubits,
                 actual: pauli.num_qubits,
             });
         }
 
-        let n = self.n;
+        let n = self.num_qubits;
         let n_words = n.div_ceil(64);
         let rl = self.row_len;
 
@@ -1709,8 +1710,8 @@ impl StabilizerState {
     /// Exports the stabilizer tableau in Stim-compatible text format.
     pub fn to_stim_format(&self) -> String {
         let mut out = String::new();
-        for i in 0..self.n {
-            let stab = self.row_to_pauli_string(self.n + i);
+        for i in 0..self.num_qubits {
+            let stab = self.row_to_pauli_string(self.num_qubits + i);
             out.push_str(&stab.to_string());
             out.push('\n');
         }
@@ -1726,7 +1727,7 @@ impl Clone for StabilizerState {
     /// required for reproducible multi-shot sampling with Rayon.
     fn clone(&self) -> Self {
         StabilizerState {
-            n: self.n,
+            num_qubits: self.num_qubits,
             row_len: self.row_len,
             tableau: self.tableau.clone(),
             phases: self.phases.clone(),

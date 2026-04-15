@@ -10,10 +10,11 @@
 # copyright notice, and modified files need to carry a notice indicating
 # that they have been altered from the originals.
 
-"""Tests for Trotter evolution modes."""
+"""Tests for Trotter evolution modes and Hamiltonian evolution ansatz metadata."""
 
 import pytest
-from cqlib.qis import TrotterMode
+from cqlib.circuit.ansatz import EvolutionStrategy, PauliEvolutionAnsatz
+from cqlib.qis import Hamiltonian, PauliString, TrotterMode
 
 
 class TestTrotterMode:
@@ -196,3 +197,42 @@ class TestTrotterModeAdvancedFeatures:
         assert mode1 == mode2
         assert str(mode1) == str(mode2)
         assert repr(mode1) == repr(mode2)
+
+
+class TestEvolutionStrategy:
+    """Test Python bindings for Hamiltonian evolution strategies."""
+
+    def test_randomized_trotter_strategy_inequality_when_steps_differ(self):
+        """Regression: randomized strategies must compare steps as well as seed."""
+        strategy1 = EvolutionStrategy.trotter(TrotterMode.randomized(42), steps=1)
+        strategy2 = EvolutionStrategy.trotter(TrotterMode.randomized(42), steps=2)
+
+        assert strategy1 != strategy2
+
+    def test_randomized_trotter_strategy_inequality_when_seed_differs(self):
+        """Randomized strategies with different seeds are not equal."""
+        strategy1 = EvolutionStrategy.trotter(TrotterMode.randomized(1), steps=3)
+        strategy2 = EvolutionStrategy.trotter(TrotterMode.randomized(2), steps=3)
+
+        assert strategy1 != strategy2
+
+
+class TestPauliEvolutionAnsatzInfo:
+    """Test exposed evolution metadata semantics."""
+
+    def test_explicit_trotter_reports_exact_for_commuting_hamiltonian(self):
+        """Explicit Trotter remains mathematically exact for commuting terms."""
+        h = Hamiltonian(2)
+        h.add_term(PauliString.from_str("ZZ"), 0.5)
+        h.add_term(PauliString.from_str("ZI"), 0.3)
+
+        ansatz = PauliEvolutionAnsatz(h).with_strategy(
+            EvolutionStrategy.trotter(TrotterMode.second_order(), steps=7)
+        )
+        info = ansatz.evolution_info()
+
+        assert info.is_exact is True
+        assert info.steps == 7
+        assert info.trotter_mode == TrotterMode.second_order()
+        assert info.all_terms_commute is True
+        assert info.num_terms == 2

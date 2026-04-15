@@ -109,7 +109,7 @@ impl DensityMatrixNoise {
     ///
     /// # Errors
     ///
-    /// Returns [`CircuitError`] if the circuit contains unsupported operations
+    /// Returns [`QisError::CircuitError`] if the circuit contains unsupported operations
     /// (e.g., control flow gates) or invalid parameters.
     ///
     /// # Examples
@@ -136,9 +136,36 @@ impl DensityMatrixNoise {
         circuit: &crate::circuit::Circuit,
         noise_model: Option<NoiseModel>,
     ) -> Result<Self, QisError> {
+        let mut dms = Self {
+            state: DensityMatrix::new(circuit.num_qubits()),
+            noise_model,
+        };
+        dms.apply_circuit(circuit)?;
+        Ok(dms)
+    }
+
+    /// Applies a quantum circuit to this noisy density matrix in-place.
+    ///
+    /// The circuit is first decomposed into basis gates via [`Circuit::decompose`],
+    /// then each operation is applied sequentially. Noise is applied according to
+    /// the noise model immediately following each gate.
+    ///
+    /// # Arguments
+    /// * `circuit` - The circuit to apply. Must have the same number of qubits
+    ///   as this density matrix.
+    ///
+    /// # Returns
+    /// * `Ok(())` - If all operations were applied successfully
+    /// * `Err(QisError)` - If the circuit cannot be simulated
+    ///
+    /// # Errors
+    /// - [`QisError::UnsupportedOperation`] if the circuit contains control-flow gates
+    /// - [`QisError::CircuitError`] if a gate lacks a matrix representation, contains
+    ///   unresolved symbolic parameters, or a referenced qubit is not found
+    pub fn apply_circuit(&mut self, circuit: &crate::circuit::Circuit) -> Result<(), QisError> {
         use crate::circuit::{CircuitParam, Instruction};
         let circuit = circuit.decompose()?;
-        let mut sim = Self::new(circuit.num_qubits(), noise_model);
+        let sim = self;
 
         let qubits = circuit.qubits();
         let qubit_map: std::collections::HashMap<_, _> = qubits
@@ -205,6 +232,7 @@ impl DensityMatrixNoise {
                                     )
                                 })?;
                                 sim.apply_unitary_gate(&qs, &matrix)?;
+                                sim.apply_noise(*base_gate, &qs)?;
                             }
                         }
                     } else if num_controls == 2 && *base_gate == StandardGate::X {
@@ -216,11 +244,13 @@ impl DensityMatrixNoise {
                             )
                         })?;
                         sim.apply_unitary_gate(&qs, &matrix)?;
+                        sim.apply_noise(*base_gate, &qs)?;
                     }
                 }
                 Instruction::UnitaryGate(u_gate) => {
                     if let Some(matrix) = u_gate.matrix() {
                         sim.apply_unitary_gate(&qs, matrix)?;
+                        sim.apply_noise(StandardGate::U, &qs)?;
                     } else {
                         return Err(QisError::CircuitError(
                             crate::circuit::CircuitError::NoMatrixRepresentation,
@@ -242,9 +272,19 @@ impl DensityMatrixNoise {
                 }
             }
         }
-        Ok(sim)
+        Ok(())
     }
 
+    /// Applies a standard gate and then applies any matching gate noise.
+    ///
+    /// This is the noisy simulator's standard-gate entry point. It validates and
+    /// applies the ideal gate through the underlying density matrix, then queries
+    /// the configured [`NoiseModel`] for noise on the same gate and qubits. If no
+    /// noise model or matching noise entry exists, only the ideal gate is applied.
+    ///
+    /// # Errors
+    /// Returns [`QisError`] if the ideal gate application fails, the gate arity or
+    /// parameter count is invalid, or the configured noise operation fails.
     pub fn apply_standard_gate_noise(
         &mut self,
         gate: StandardGate,
@@ -264,7 +304,7 @@ impl DensityMatrixNoise {
             StandardGate::RX => self.apply_rx(qs[0], params[0])?,
             StandardGate::RY => self.apply_ry(qs[0], params[0])?,
             StandardGate::RZ => self.apply_rz(qs[0], params[0])?,
-            StandardGate::Phase => self.apply_p(qs[0], params[0])?,
+            StandardGate::Phase => self.apply_phase(qs[0], params[0])?,
             StandardGate::X2P => self.apply_x2p(qs[0])?,
             StandardGate::X2M => self.apply_x2m(qs[0])?,
             StandardGate::Y2P => self.apply_y2p(qs[0])?,
@@ -405,8 +445,8 @@ impl DensityMatrixNoise {
     ///
     /// * `q` - Target qubit index.
     /// * `theta` - Phase angle in radians.
-    pub fn apply_p(&mut self, q: usize, theta: f64) -> Result<(), QisError> {
-        self.state.apply_p(q, theta)?;
+    pub fn apply_phase(&mut self, q: usize, theta: f64) -> Result<(), QisError> {
+        self.state.apply_phase(q, theta)?;
         self.apply_noise(StandardGate::Phase, &[q])?;
         Ok(())
     }
@@ -863,6 +903,12 @@ impl DensityMatrixNoise {
 
         let mut next_probs = vec![0.0; probs.len()];
         for &q in qubits {
+            if q >= self.state.num_qubits {
+                panic!(
+                    "Readout noise qubit {} out of bounds (num_qubits = {})",
+                    q, self.state.num_qubits
+                );
+            }
             let q_obj = Qubit::new(q as u32);
             let Some(err) = noise_model.get_readout_error(&q_obj) else {
                 continue;
@@ -922,10 +968,10 @@ impl DensityMatrixNoise {
         probs
     }
 
-    /// Computes the expectation value of a Hamiltonian observable.
+    /// Computes the expectation value of an observable.
     ///
-    /// Calculates Tr(ρ * H) for the current noisy density matrix ρ and a given
-    /// Hamiltonian H. This delegates to the underlying [`DensityMatrix::expectation`]
+    /// Calculates Tr(ρ * O) for the current noisy density matrix ρ and a given
+    /// observable O. This delegates to the underlying [`DensityMatrix::expectation`]
     /// method.
     ///
     /// Note: This computes the expectation value of the noisy state, which includes
@@ -933,10 +979,10 @@ impl DensityMatrixNoise {
     /// affects measurement probabilities, not the quantum state itself).
     ///
     /// # Arguments
-    /// * `h` - The Hamiltonian observable.
+    /// * `h` - The observable.
     ///
     /// # Returns
-    /// The expectation value as a real number (f64), or a `CircuitError` if the
+    /// The expectation value as a real number (f64), or a [`QisError`] if the
     /// qubit counts do not match.
     ///
     /// # Example
@@ -956,7 +1002,7 @@ impl DensityMatrixNoise {
     /// let exp = sim.expectation(&h).unwrap();
     /// // For |1⟩ state, ⟨Z⟩ = -1
     /// ```
-    pub fn expectation(&self, h: &crate::qis::hamiltonian::Hamiltonian) -> Result<f64, QisError> {
+    pub fn expectation(&self, h: &dyn crate::qis::observable::Observable) -> Result<f64, QisError> {
         self.state.expectation(h)
     }
 
@@ -964,7 +1010,7 @@ impl DensityMatrixNoise {
     ///
     /// Returns `true` for outcome |1⟩ and `false` for outcome |0⟩.
     /// Noise is not applied to measurement operations.
-    pub fn measure(&mut self, qubit: usize) -> bool {
+    pub fn measure(&mut self, qubit: usize) -> Result<bool, QisError> {
         self.state.measure(qubit)
     }
 

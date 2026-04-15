@@ -17,10 +17,12 @@
 
 pub mod facades;
 pub mod feature_map;
+pub mod hamiltonian_evolution;
 pub mod qaoa;
 pub mod two_local;
 
 pub use feature_map::{PyAngleEncoding, PyPauliFeatureMap, PyZZFeatureMap};
+pub use hamiltonian_evolution::{PyEvolutionInfo, PyEvolutionStrategy, PyPauliEvolutionAnsatz};
 pub use qaoa::PyQAOAAnsatz;
 pub use two_local::{PyEntanglementTopology, PyTwoLocal};
 
@@ -39,6 +41,9 @@ pub(crate) fn register_ansatz_module(parent: &Bound<'_, PyModule>) -> PyResult<(
     m.add_class::<PyZZFeatureMap>()?;
     m.add_class::<PyPauliFeatureMap>()?;
     m.add_class::<PyQAOAAnsatz>()?;
+    m.add_class::<PyEvolutionStrategy>()?;
+    m.add_class::<PyEvolutionInfo>()?;
+    m.add_class::<PyPauliEvolutionAnsatz>()?;
 
     // Facade functions
     m.add_function(wrap_pyfunction!(facades::real_amplitudes, &m)?)?;

@@ -14,6 +14,7 @@
 
 use crate::circuit::{PyCircuit, PyStandardGate};
 use crate::device::noise::PyNoiseModel;
+use crate::device::result::PyOutcome;
 use crate::qis::qis_error_to_py_err;
 use cqlib_core::qis::state::density_matrix_noise::DensityMatrixNoise;
 use numpy::{PyArray2, PyArrayMethods, PyUntypedArrayMethods};
@@ -111,6 +112,13 @@ impl PyDensityMatrixNoise {
         let inner = DensityMatrixNoise::from_circuit(&circuit.inner, model)
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
         Ok(Self { inner })
+    }
+
+    /// Applies a circuit to this simulator in place.
+    fn apply_circuit(&mut self, circuit: &PyCircuit) -> PyResult<()> {
+        self.inner
+            .apply_circuit(&circuit.inner)
+            .map_err(qis_error_to_py_err)
     }
 
     /// Returns the number of qubits in the simulator.
@@ -232,8 +240,10 @@ impl PyDensityMatrixNoise {
     }
 
     /// Applies the phase gate with optional noise.
-    fn apply_p(&mut self, q: usize, theta: f64) -> PyResult<()> {
-        self.inner.apply_p(q, theta).map_err(qis_error_to_py_err)
+    fn apply_phase(&mut self, q: usize, theta: f64) -> PyResult<()> {
+        self.inner
+            .apply_phase(q, theta)
+            .map_err(qis_error_to_py_err)
     }
 
     /// Applies the global phase gate with optional noise.
@@ -441,5 +451,24 @@ impl PyDensityMatrixNoise {
         Self {
             inner: self.inner.clone(),
         }
+    }
+
+    /// Measures one qubit and collapses the state.
+    fn measure(&mut self, qubit: usize) -> PyResult<bool> {
+        self.inner.measure(qubit).map_err(qis_error_to_py_err)
+    }
+
+    /// Measures all qubits and collapses the state.
+    fn measure_all(&mut self) -> PyOutcome {
+        PyOutcome::from(self.inner.measure_all())
+    }
+
+    /// Samples measurement outcomes with readout noise, without mutating this state.
+    fn sample_shots(&self, shots: usize) -> Vec<PyOutcome> {
+        self.inner
+            .sample_shots(shots)
+            .into_iter()
+            .map(PyOutcome::from)
+            .collect()
     }
 }

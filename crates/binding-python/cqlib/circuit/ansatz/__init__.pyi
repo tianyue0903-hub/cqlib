@@ -14,6 +14,11 @@
 
 from .facades import efficient_su2, pauli_feature_map, real_amplitudes, zz_feature_map
 from .feature_map import AngleEncoding, PauliFeatureMap, ZZFeatureMap
+from .hamiltonian_evolution import (
+    EvolutionInfo,
+    EvolutionStrategy,
+    PauliEvolutionAnsatz,
+)
 from .qaoa import QAOAAnsatz
 from .two_local import EntanglementTopology, TwoLocal
 
@@ -24,6 +29,9 @@ __all__ = [
     "ZZFeatureMap",
     "PauliFeatureMap",
     "QAOAAnsatz",
+    "EvolutionStrategy",
+    "EvolutionInfo",
+    "PauliEvolutionAnsatz",
     "real_amplitudes",
     "efficient_su2",
     "zz_feature_map",

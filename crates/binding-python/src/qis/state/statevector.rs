@@ -13,6 +13,7 @@
 //! Python bindings for cqlib-core Statevector module.
 
 use crate::circuit::{PyStandardGate, circuit_impl::PyCircuit};
+use crate::device::result::PyOutcome;
 use crate::qis::qis_error_to_py_err;
 use cqlib_core::qis::state::statevector::Statevector;
 use num_complex::Complex64;
@@ -166,6 +167,20 @@ impl PyStatevector {
         Ok(Self { inner })
     }
 
+    /// Applies a circuit to this statevector in place.
+    ///
+    /// Args:
+    ///     circuit: The quantum circuit to apply
+    ///
+    /// Raises:
+    ///     ValueError: If the circuit qubit count does not match this state
+    ///         or contains unsupported operations
+    fn apply_circuit(&mut self, circuit: &PyCircuit) -> PyResult<()> {
+        self.inner
+            .apply_circuit(&circuit.inner)
+            .map_err(qis_error_to_py_err)
+    }
+
     /// Computes the expectation value of an observable.
     ///
     /// Calculates ⟨ψ|O|ψ⟩ for the current state |ψ⟩ and a given observable O.
@@ -316,9 +331,9 @@ impl PyStatevector {
     /// Args:
     ///     qubit: Target qubit index
     ///     theta: Phase angle in radians
-    fn apply_p(&mut self, qubit: usize, theta: f64) -> PyResult<()> {
+    fn apply_phase(&mut self, qubit: usize, theta: f64) -> PyResult<()> {
         self.inner
-            .apply_p(qubit, theta)
+            .apply_phase(qubit, theta)
             .map_err(qis_error_to_py_err)
     }
 
@@ -567,9 +582,67 @@ impl PyStatevector {
         };
 
         self.inner
-            .apply_double_qubits_gate(q0, q1, mat)
+            .apply_two_qubit_gate(q0, q1, mat)
             .map_err(qis_error_to_py_err)?;
         Ok(())
+    }
+
+    /// Applies an arbitrary n-qubit unitary gate.
+    ///
+    /// Args:
+    ///     qubits: List of qubit indices the gate acts on
+    ///     matrix: The unitary matrix as a 2^n x 2^n NumPy array
+    ///
+    /// Raises:
+    ///     ValueError: If the matrix dimensions don't match qubit count
+    fn apply_unitary_gate<'py>(
+        &mut self,
+        qubits: Vec<usize>,
+        matrix: &Bound<'py, PyAny>,
+    ) -> PyResult<()> {
+        let array = matrix
+            .cast::<PyArray2<Complex64>>()
+            .map_err(|_| PyValueError::new_err("matrix must be a numpy array"))?;
+
+        let readonly = array
+            .try_readonly()
+            .map_err(|e| PyValueError::new_err(format!("Failed to get readonly view: {}", e)))?;
+
+        let expected_dim = 1 << qubits.len();
+        let shape = readonly.shape();
+        if shape != [expected_dim, expected_dim] {
+            return Err(PyValueError::new_err(format!(
+                "Matrix shape {:?} doesn't match qubit count {} (expected {}x{})",
+                shape,
+                qubits.len(),
+                expected_dim,
+                expected_dim
+            )));
+        }
+
+        let flat: numpy::ndarray::Array2<Complex64> = readonly.as_array().to_owned();
+        self.inner
+            .apply_unitary_gate(&qubits, &flat)
+            .map_err(qis_error_to_py_err)
+    }
+
+    /// Measures one qubit and collapses the state.
+    fn measure(&mut self, qubit: usize) -> PyResult<bool> {
+        self.inner.measure(qubit).map_err(qis_error_to_py_err)
+    }
+
+    /// Measures all qubits and collapses the state.
+    fn measure_all(&mut self) -> PyOutcome {
+        PyOutcome::from(self.inner.measure_all())
+    }
+
+    /// Samples measurement outcomes without mutating this state.
+    fn sample_shots(&self, shots: usize) -> Vec<PyOutcome> {
+        self.inner
+            .sample_shots(shots)
+            .into_iter()
+            .map(PyOutcome::from)
+            .collect()
     }
 
     /// Returns a string representation of the statevector.

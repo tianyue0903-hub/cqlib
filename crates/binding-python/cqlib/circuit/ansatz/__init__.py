@@ -37,6 +37,9 @@ AngleEncoding = _ansatz.AngleEncoding
 ZZFeatureMap = _ansatz.ZZFeatureMap
 PauliFeatureMap = _ansatz.PauliFeatureMap
 QAOAAnsatz = _ansatz.QAOAAnsatz
+EvolutionStrategy = _ansatz.EvolutionStrategy
+EvolutionInfo = _ansatz.EvolutionInfo
+PauliEvolutionAnsatz = _ansatz.PauliEvolutionAnsatz
 
 real_amplitudes = _ansatz.real_amplitudes
 efficient_su2 = _ansatz.efficient_su2
@@ -50,6 +53,9 @@ __all__ = [
     "ZZFeatureMap",
     "PauliFeatureMap",
     "QAOAAnsatz",
+    "EvolutionStrategy",
+    "EvolutionInfo",
+    "PauliEvolutionAnsatz",
     "real_amplitudes",
     "efficient_su2",
     "zz_feature_map",

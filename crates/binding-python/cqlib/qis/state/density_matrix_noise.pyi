@@ -15,7 +15,7 @@ import numpy as np
 
 from cqlib.circuit import Circuit
 from cqlib.circuit.gates.standard import StandardGate
-from cqlib.device import NoiseModel
+from cqlib.device import NoiseModel, Outcome
 from cqlib.qis import Hamiltonian, PauliString
 
 @final
@@ -89,6 +89,10 @@ class DensityMatrixNoise:
         Raises:
             ValueError: If the circuit contains unsupported operations
         """
+        ...
+
+    def apply_circuit(self, circuit: Circuit) -> None:
+        """Applies a circuit to this simulator in place."""
         ...
 
     @property
@@ -180,6 +184,10 @@ class DensityMatrixNoise:
         ...
 
     def apply_p(self, q: int, theta: float) -> None:
+        """Applies the phase gate with optional noise."""
+        ...
+
+    def apply_phase(self, q: int, theta: float) -> None:
         """Applies the phase gate with optional noise."""
         ...
 
@@ -309,4 +317,16 @@ class DensityMatrixNoise:
 
     def copy(self) -> "DensityMatrixNoise":
         """Returns a copy of this simulator."""
+        ...
+
+    def measure(self, qubit: int) -> bool:
+        """Measures one qubit and collapses the state."""
+        ...
+
+    def measure_all(self) -> Outcome:
+        """Measures all qubits and collapses the state."""
+        ...
+
+    def sample_shots(self, shots: int) -> List[Outcome]:
+        """Samples measurement outcomes with readout noise, without mutating this state."""
         ...
