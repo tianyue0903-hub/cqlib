@@ -15,7 +15,7 @@ use crate::compiler::artifact::{
     ArtifactMetadata, CompileArtifact, CompileDiagnostic, CompileStatus, CompileSummary,
     CompileTrace, DiagnosticSeverity,
 };
-use crate::compiler::context::{CompilerContext, ContextMetadata};
+use crate::compiler::context::{CompilerContext, ContextMetadata, VerificationConfig};
 use crate::compiler::error::CompilerError;
 use crate::compiler::workflow::{WorkflowReport, build_workflow};
 use crate::device::Device;
@@ -49,6 +49,8 @@ pub struct CompileOptions {
     allow_symbolic_parameters: bool,
     /// Allow workflows to include optional resynthesis stages.
     enable_resynthesis: bool,
+    /// Optional IR verification policy.
+    verification: VerificationConfig,
 }
 
 impl Default for CompileOptions {
@@ -59,6 +61,7 @@ impl Default for CompileOptions {
             allow_control_flow: true,
             allow_symbolic_parameters: true,
             enable_resynthesis: false,
+            verification: VerificationConfig::default(),
         }
     }
 }
@@ -101,6 +104,12 @@ impl CompileOptions {
         self
     }
 
+    /// Replaces the verification policy used by compiler workflows.
+    pub fn with_verification(mut self, verification: VerificationConfig) -> Self {
+        self.verification = verification;
+        self
+    }
+
     /// Returns whether the final artifact should include a workflow report.
     pub fn emit_report(&self) -> bool {
         self.emit_report
@@ -125,6 +134,11 @@ impl CompileOptions {
     pub fn resynthesis_enabled(&self) -> bool {
         self.enable_resynthesis
     }
+
+    /// Returns the verification policy used by compiler workflows.
+    pub fn verification(&self) -> &VerificationConfig {
+        &self.verification
+    }
 }
 
 /// Compiles a circuit using the selected preset, optional target device, and
@@ -147,8 +161,15 @@ pub fn compile(
         Some(device) => CompilerContext::with_device(circuit, device.clone()),
         None => CompilerContext::new(circuit),
     };
+    ctx.set_verification_config(options.verification().clone());
+    if options.verification().verify_before_workflow {
+        ctx.verify()?;
+    }
     let workflow = build_workflow(preset, &options);
     let report = workflow.run(&mut ctx)?;
+    if options.verification().verify_after_workflow {
+        ctx.verify()?;
+    }
     let diagnostics = build_diagnostics(preset, &report);
     let summary = build_summary(preset, input_ops, &ctx, &report);
     let status = derive_status(preset, &diagnostics);
@@ -200,7 +221,7 @@ fn build_artifact_metadata(metadata: &ContextMetadata) -> ArtifactMetadata {
 }
 
 fn build_diagnostics(preset: CompilePreset, report: &WorkflowReport) -> Vec<CompileDiagnostic> {
-    let mut diagnostics = Vec::new();
+    let mut diagnostics = report.diagnostics.clone();
 
     if matches!(preset, CompilePreset::TargetLowering) {
         diagnostics.push(CompileDiagnostic {
@@ -262,14 +283,31 @@ fn validate_request(
         return Err(CompilerError::UnsupportedControlFlow);
     }
 
+    if !options.allows_symbolic_parameters() {
+        let has_symbolic_parameters = circuit
+            .operations()
+            .iter()
+            .flat_map(|op| op.params.iter())
+            .any(|param| matches!(param, crate::circuit::CircuitParam::Index(_)));
+
+        if has_symbolic_parameters {
+            return Err(CompilerError::UnsupportedInstruction {
+                instruction: "symbolic parameters".to_string(),
+            });
+        }
+    }
+
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{CompileOptions, CompilePreset, compile};
-    use crate::circuit::{Circuit, ConditionView, Operation, Qubit, StandardGate};
-    use crate::compiler::{CompileStatus, CompilerError};
+    use super::{CompileOptions, CompilePreset, build_diagnostics, compile};
+    use crate::circuit::{Circuit, ConditionView, Operation, Parameter, Qubit, StandardGate};
+    use crate::compiler::analysis::{InstructionStats, LogicalCost};
+    use crate::compiler::artifact::{CompileDiagnostic, DiagnosticSeverity};
+    use crate::compiler::transform::transformer::TransformStatsChange;
+    use crate::compiler::{CompileStatus, CompilerError, WorkflowReport, WorkflowStepReport};
     use crate::device::{Device, Topology};
     use smallvec::smallvec;
     use std::collections::HashSet;
@@ -443,5 +481,83 @@ mod tests {
         .unwrap_err();
 
         assert!(matches!(err, CompilerError::UnsupportedControlFlow));
+    }
+
+    #[test]
+    fn compile_rejects_symbolic_parameters_when_option_disables_them() {
+        let mut circuit = Circuit::new(1);
+        circuit
+            .rx(Qubit::new(0), Parameter::symbol("theta"))
+            .unwrap();
+
+        let err = compile(
+            circuit,
+            CompilePreset::LogicalOptimize,
+            None,
+            Some(CompileOptions::new().allow_symbolic_parameters(false)),
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            CompilerError::UnsupportedInstruction { instruction }
+            if instruction == "symbolic parameters"
+        ));
+    }
+
+    #[test]
+    fn build_diagnostics_includes_workflow_diagnostics() {
+        let report = WorkflowReport {
+            name: "logical.optimize".to_string(),
+            changed: true,
+            executed_steps: 1,
+            steps: vec![WorkflowStepReport {
+                name: "test.step".to_string(),
+                transform_name: "test.transform".to_string(),
+                changed: true,
+                notes: vec![],
+                diagnostics: vec![CompileDiagnostic {
+                    severity: DiagnosticSeverity::Warning,
+                    code: "test.workflow.warning",
+                    message: "workflow warning".to_string(),
+                }],
+                stats_change: Some(TransformStatsChange::from_parts(
+                    InstructionStats {
+                        total_ops: 1,
+                        ..InstructionStats::default()
+                    },
+                    InstructionStats::default(),
+                    LogicalCost {
+                        total_ops: 1,
+                        ..LogicalCost::default()
+                    },
+                    LogicalCost::default(),
+                )),
+                iteration: None,
+                branch: None,
+            }],
+            notes: vec![],
+            diagnostics: vec![CompileDiagnostic {
+                severity: DiagnosticSeverity::Warning,
+                code: "test.workflow.warning",
+                message: "workflow warning".to_string(),
+            }],
+            stats_change: Some(TransformStatsChange::from_parts(
+                InstructionStats {
+                    total_ops: 1,
+                    ..InstructionStats::default()
+                },
+                InstructionStats::default(),
+                LogicalCost {
+                    total_ops: 1,
+                    ..LogicalCost::default()
+                },
+                LogicalCost::default(),
+            )),
+        };
+
+        let diagnostics = build_diagnostics(CompilePreset::LogicalOptimize, &report);
+
+        assert_eq!(diagnostics, report.diagnostics);
     }
 }

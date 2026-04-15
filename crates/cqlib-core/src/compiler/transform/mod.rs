@@ -21,5 +21,9 @@ pub mod routing;
 pub mod schedule;
 pub mod transformer;
 
+// pub use canonicalize::{CanonicalRuleId, CanonicalizeConfig, Canonicalizer};
 pub use descriptor::TransformDescriptor;
-pub use transformer::{CompositeTransformer, TransformOutcome, Transformer};
+pub use transformer::{
+    CompositeTransformer, TransformOutcome, TransformStatsChange, TransformStatsSnapshot,
+    Transformer,
+};

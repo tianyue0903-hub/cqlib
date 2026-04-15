@@ -10,14 +10,18 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
+use crate::compiler::artifact::CompileDiagnostic;
+use crate::compiler::transform::transformer::TransformStatsChange;
 use crate::compiler::workflow::WorkflowReport;
 
 /// Minimal user-facing compile trace derived from workflow execution.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct CompileTrace {
     pub workflow_name: String,
     pub executed_steps: usize,
     pub notes: Vec<String>,
+    pub diagnostics: Vec<CompileDiagnostic>,
+    pub stats_change: Option<TransformStatsChange>,
 }
 
 impl CompileTrace {
@@ -26,6 +30,8 @@ impl CompileTrace {
             workflow_name: report.name.clone(),
             executed_steps: report.executed_steps,
             notes: report.notes.clone(),
+            diagnostics: report.diagnostics.clone(),
+            stats_change: report.stats_change.clone(),
         }
     }
 }
@@ -33,6 +39,9 @@ impl CompileTrace {
 #[cfg(test)]
 mod tests {
     use super::CompileTrace;
+    use crate::compiler::analysis::{InstructionStats, LogicalCost};
+    use crate::compiler::artifact::{CompileDiagnostic, DiagnosticSeverity};
+    use crate::compiler::transform::transformer::TransformStatsChange;
     use crate::compiler::workflow::WorkflowReport;
 
     #[test]
@@ -43,6 +52,23 @@ mod tests {
             executed_steps: 2,
             steps: vec![],
             notes: vec!["canonicalized".to_string()],
+            diagnostics: vec![CompileDiagnostic {
+                severity: DiagnosticSeverity::Info,
+                code: "test.trace.note",
+                message: "traceable".to_string(),
+            }],
+            stats_change: Some(TransformStatsChange::from_parts(
+                InstructionStats {
+                    total_ops: 1,
+                    ..InstructionStats::default()
+                },
+                InstructionStats::default(),
+                LogicalCost::default(),
+                LogicalCost {
+                    depth_estimate: 1,
+                    ..LogicalCost::default()
+                },
+            )),
         };
 
         let trace = CompileTrace::from_report(&report);
@@ -50,5 +76,7 @@ mod tests {
         assert_eq!(trace.workflow_name, "logical.optimize");
         assert_eq!(trace.executed_steps, 2);
         assert_eq!(trace.notes, vec!["canonicalized"]);
+        assert_eq!(trace.diagnostics, report.diagnostics);
+        assert_eq!(trace.stats_change, report.stats_change);
     }
 }

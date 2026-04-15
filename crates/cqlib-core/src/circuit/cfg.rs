@@ -401,6 +401,14 @@ impl BasicBlock {
     pub fn label(&self) -> Option<&str> {
         self.label.as_deref()
     }
+
+    pub fn terminator(&self) -> Option<&Terminator> {
+        self.terminator.as_ref()
+    }
+
+    pub fn operations(&self) -> &[Operation] {
+        &self.operations
+    }
 }
 
 impl Default for BasicBlock {
@@ -644,6 +652,19 @@ impl CircuitCFG {
     /// An iterator yielding `(NodeIndex, &BasicBlock)` tuples.
     pub fn blocks(&self) -> impl Iterator<Item = (NodeIndex, &BasicBlock)> {
         self.data.node_indices().map(|i| (i, &self.data[i]))
+    }
+
+    pub fn block_mut(&mut self, index: NodeIndex) -> Option<&mut BasicBlock> {
+        self.data.node_weight_mut(index)
+    }
+
+    pub fn outgoing_edges(
+        &self,
+        source: NodeIndex,
+    ) -> impl Iterator<Item = (NodeIndex, FlowEdge)> + '_ {
+        self.data
+            .edges(source)
+            .map(|edge| (edge.target(), edge.weight().clone()))
     }
 
     /// Returns the number of basic blocks in the CFG.

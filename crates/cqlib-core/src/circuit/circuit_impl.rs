@@ -236,6 +236,10 @@ impl Circuit {
         }
     }
 
+    pub fn global_phase_param(&self) -> &CircuitParam {
+        &self.global_phase
+    }
+
     /// Sets the global phase of the circuit.
     pub fn set_global_phase(&mut self, phase: Parameter) {
         // Try to simplify/evaluate to keep it clean

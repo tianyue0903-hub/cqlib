@@ -107,6 +107,12 @@ impl TransformDescriptor {
             return Err(CompilerError::UnsupportedControlFlow);
         }
 
+        if !self.supports_symbolic_parameters && ctx.has_symbolic_parameters() {
+            return Err(CompilerError::UnsupportedInstruction {
+                instruction: "symbolic parameters".to_string(),
+            });
+        }
+
         for &analysis in self.required_analyses {
             ctx.ensure_analysis(analysis)?;
         }
@@ -118,7 +124,7 @@ impl TransformDescriptor {
 #[cfg(test)]
 mod tests {
     use super::TransformDescriptor;
-    use crate::circuit::{Circuit, ConditionView, Operation, Qubit, StandardGate};
+    use crate::circuit::{Circuit, ConditionView, Operation, Parameter, Qubit, StandardGate};
     use crate::compiler::analysis::AnalysisKey;
     use crate::compiler::context::CompilerContext;
     use crate::compiler::error::CompilerError;
@@ -209,6 +215,22 @@ mod tests {
 
         descriptor.validate(&mut ctx).unwrap();
         assert!(ctx.dag().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_symbolic_parameters_when_unsupported() {
+        let descriptor = TransformDescriptor::new("rewrite.numeric", "Numeric-only rewrite")
+            .supports_symbolic_parameters(false);
+        let mut ctx = CompilerContext::new(Circuit::new(1));
+        ctx.circuit_mut()
+            .rx(Qubit::new(0), Parameter::symbol("theta"))
+            .unwrap();
+
+        assert!(matches!(
+            descriptor.validate(&mut ctx),
+            Err(CompilerError::UnsupportedInstruction { instruction })
+            if instruction == "symbolic parameters"
+        ));
     }
 
     #[test]

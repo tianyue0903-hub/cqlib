@@ -16,6 +16,7 @@ pub mod artifact;
 pub mod context;
 pub mod error;
 pub mod transform;
+pub mod verify;
 pub mod workflow;
 
 pub use analysis::AnalysisStore;
@@ -24,8 +25,9 @@ pub use artifact::{
     ArtifactMetadata, CompileArtifact, CompileDiagnostic, CompileStatus, CompileSummary,
     CompileTrace, DiagnosticSeverity,
 };
-pub use context::{CompilerContext, ContextMetadata};
+pub use context::{CompilerContext, ContextChangeSet, ContextMetadata, VerificationConfig};
 pub use error::CompilerError;
+pub use transform::canonicalize::{CanonicalRuleId, CanonicalizeConfig, Canonicalizer};
 pub use transform::resynthesis::{
     ResynthesisBudget, ResynthesisObjective, ResynthesisProfile, ResynthesisScope, Resynthesizer,
 };

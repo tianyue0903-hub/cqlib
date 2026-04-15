@@ -67,6 +67,71 @@ pub enum Instruction {
 }
 
 impl Instruction {
+    /// Breaks a standard gate into its canonical base gate plus explicit
+    /// control count.
+    ///
+    /// This helper centralizes the standard-gate promotion table so
+    /// instruction-form canonicalization and `control()` share exactly the
+    /// same notion of which multi-controlled instructions deserve a dedicated
+    /// `StandardGate` representation.
+    fn decompose_standard_control(g: StandardGate) -> (StandardGate, usize) {
+        match g {
+            StandardGate::CX => (StandardGate::X, 1),
+            StandardGate::CCX => (StandardGate::X, 2),
+            StandardGate::CY => (StandardGate::Y, 1),
+            StandardGate::CZ => (StandardGate::Z, 1),
+            StandardGate::CRX => (StandardGate::RX, 1),
+            StandardGate::CRY => (StandardGate::RY, 1),
+            StandardGate::CRZ => (StandardGate::RZ, 1),
+            _ => (g, 0),
+        }
+    }
+
+    /// Attempts to recompose a base gate and explicit control count into the
+    /// most specific `StandardGate` form supported by the current IR.
+    fn compose_standard_control(base: StandardGate, total_controls: usize) -> Option<StandardGate> {
+        match (base, total_controls) {
+            (StandardGate::X, 1) => Some(StandardGate::CX),
+            (StandardGate::X, 2) => Some(StandardGate::CCX),
+            (StandardGate::Y, 1) => Some(StandardGate::CY),
+            (StandardGate::Z, 1) => Some(StandardGate::CZ),
+            (StandardGate::RX, 1) => Some(StandardGate::CRX),
+            (StandardGate::RY, 1) => Some(StandardGate::CRY),
+            (StandardGate::RZ, 1) => Some(StandardGate::CRZ),
+            (gate, 0) => Some(gate),
+            _ => None,
+        }
+    }
+
+    /// Returns the canonical instruction-form representation for this
+    /// instruction without changing its semantics.
+    ///
+    /// This only collapses `McGate` values back to dedicated `StandardGate`
+    /// variants when such a representation already exists in the IR. It uses
+    /// the same control-promotion table as [`Instruction::control`], preserving
+    /// the total control count, target convention, and parameter arity of the
+    /// base gate. Operation qubit order is not changed here; callers that
+    /// rewrite an operation keep the original qubit list attached to the new
+    /// instruction.
+    ///
+    /// It intentionally does not perform decomposition, target-aware lowering,
+    /// or matrix-based equivalence detection.
+    pub(crate) fn canonicalize_form(&self) -> Instruction {
+        match self {
+            Instruction::McGate(mc) => {
+                let total_ctrls = mc.num_ctrl_qubits();
+                let (base, _) = Self::decompose_standard_control(mc.base_gate().to_owned());
+
+                if let Some(std) = Self::compose_standard_control(base, total_ctrls) {
+                    Instruction::Standard(std)
+                } else {
+                    self.clone()
+                }
+            }
+            _ => self.clone(),
+        }
+    }
+
     /// Computes the unitary matrix representation of the instruction.
     ///
     /// # Arguments
@@ -175,42 +240,12 @@ impl Instruction {
             return Some(self.clone());
         }
 
-        // Internal Helper: Decompose a StandardGate into its base gate and current control count.
-        // e.g., CX -> (X, 1), CRX -> (RX, 1)
-        let decompose_std = |g: StandardGate| -> (StandardGate, usize) {
-            match g {
-                StandardGate::CX => (StandardGate::X, 1),
-                StandardGate::CCX => (StandardGate::X, 2),
-                StandardGate::CY => (StandardGate::Y, 1),
-                StandardGate::CZ => (StandardGate::Z, 1),
-                StandardGate::CRX => (StandardGate::RX, 1),
-                StandardGate::CRY => (StandardGate::RY, 1),
-                StandardGate::CRZ => (StandardGate::RZ, 1),
-                _ => (g, 0),
-            }
-        };
-
-        // Internal Helper: Try to recompose a base gate and total control count into a StandardGate.
-        let try_compose_std = |base: StandardGate, total: usize| -> Option<StandardGate> {
-            match (base, total) {
-                (StandardGate::X, 1) => Some(StandardGate::CX),
-                (StandardGate::X, 2) => Some(StandardGate::CCX),
-                (StandardGate::Y, 1) => Some(StandardGate::CY),
-                (StandardGate::Z, 1) => Some(StandardGate::CZ),
-                (StandardGate::RX, 1) => Some(StandardGate::CRX),
-                (StandardGate::RY, 1) => Some(StandardGate::CRY),
-                (StandardGate::RZ, 1) => Some(StandardGate::CRZ),
-                (g, 0) => Some(g),
-                _ => None,
-            }
-        };
-
         match self {
             Instruction::Standard(g) => {
-                let (base, curr_ctrls) = decompose_std(*g);
+                let (base, curr_ctrls) = Self::decompose_standard_control(*g);
                 let total_ctrls = curr_ctrls + num_new_ctrls;
 
-                if let Some(std) = try_compose_std(base, total_ctrls) {
+                if let Some(std) = Self::compose_standard_control(base, total_ctrls) {
                     Some(Instruction::Standard(std))
                 } else {
                     Some(Instruction::McGate(Box::from(MCGate::new(
@@ -221,9 +256,9 @@ impl Instruction {
             }
             Instruction::McGate(mc) => {
                 let total_ctrls = mc.num_ctrl_qubits() + num_new_ctrls;
-                let base = mc.base_gate().to_owned();
+                let (base, _) = Self::decompose_standard_control(mc.base_gate().to_owned());
 
-                if let Some(std) = try_compose_std(base, total_ctrls) {
+                if let Some(std) = Self::compose_standard_control(base, total_ctrls) {
                     Some(Instruction::Standard(std))
                 } else {
                     Some(Instruction::McGate(Box::from(MCGate::new(
@@ -289,5 +324,78 @@ impl From<Directive> for Instruction {
 impl From<ControlFlow> for Instruction {
     fn from(cf: ControlFlow) -> Self {
         Self::ControlFlowGate(cf)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Instruction;
+    use crate::circuit::gate::{MCGate, StandardGate};
+
+    #[test]
+    fn canonicalize_form_collapses_supported_mc_gate_forms() {
+        let cases = [
+            (MCGate::new(0, StandardGate::X), StandardGate::X),
+            (MCGate::new(1, StandardGate::X), StandardGate::CX),
+            (MCGate::new(2, StandardGate::X), StandardGate::CCX),
+            (MCGate::new(1, StandardGate::CX), StandardGate::CCX),
+            (MCGate::new(1, StandardGate::Y), StandardGate::CY),
+            (MCGate::new(1, StandardGate::Z), StandardGate::CZ),
+            (MCGate::new(1, StandardGate::RX), StandardGate::CRX),
+            (MCGate::new(1, StandardGate::RY), StandardGate::CRY),
+            (MCGate::new(1, StandardGate::RZ), StandardGate::CRZ),
+        ];
+
+        for (mc_gate, expected) in cases {
+            let expected_controls = expected.num_ctrl_qubits();
+            let expected_qubits = expected.num_qubits();
+            let expected_params = expected.num_params();
+            let canonical = Instruction::McGate(Box::new(mc_gate)).canonicalize_form();
+
+            let Instruction::Standard(actual) = canonical else {
+                panic!("expected standard gate {expected:?}");
+            };
+            assert_eq!(actual, expected);
+            assert_eq!(actual.num_ctrl_qubits(), expected_controls);
+            assert_eq!(actual.num_qubits(), expected_qubits);
+            assert_eq!(actual.num_params(), expected_params);
+        }
+    }
+
+    #[test]
+    fn canonicalize_form_keeps_non_promotable_mc_gate_forms() {
+        let cases = [
+            MCGate::new(3, StandardGate::X),
+            MCGate::new(1, StandardGate::H),
+            MCGate::new(1, StandardGate::RXX),
+        ];
+
+        for mc_gate in cases {
+            let expected_controls = mc_gate.num_ctrl_qubits();
+            let expected_qubits = mc_gate.num_qubits();
+            let expected_params = mc_gate.num_params();
+            let canonical = Instruction::McGate(Box::new(mc_gate)).canonicalize_form();
+
+            let Instruction::McGate(actual) = canonical else {
+                panic!("expected MCGate");
+            };
+            assert_eq!(actual.num_ctrl_qubits(), expected_controls);
+            assert_eq!(actual.num_qubits(), expected_qubits);
+            assert_eq!(actual.num_params(), expected_params);
+        }
+    }
+
+    #[test]
+    fn control_on_mc_gate_counts_inherent_base_controls_once() {
+        let instruction = Instruction::McGate(Box::new(MCGate::new(1, StandardGate::CX)));
+
+        let controlled = instruction.control(1).unwrap();
+
+        let Instruction::McGate(actual) = controlled else {
+            panic!("expected MCGate");
+        };
+        assert_eq!(actual.base_gate(), &StandardGate::X);
+        assert_eq!(actual.num_ctrl_qubits(), 3);
+        assert_eq!(actual.num_qubits(), 4);
     }
 }
