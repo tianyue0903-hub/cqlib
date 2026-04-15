@@ -188,8 +188,9 @@ impl DensityMatrix {
     /// * `num_qubits` - Number of qubits in the system.
     /// * `initial_state` - Vector of $2^N$ complex amplitudes representing a normalized pure state.
     ///
-    /// # Panics
-    /// Panics if the `initial_state` length is incorrect or if it is not normalized.
+    /// # Errors
+    /// Returns [`QisError::InvalidStateDimension`] if the `initial_state` length is
+    /// incorrect, or [`QisError::NotNormalized`] if it is not normalized.
     pub fn from_state(num_qubits: usize, initial_state: Vec<Complex64>) -> Result<Self, QisError> {
         let dim = 1 << num_qubits;
         if initial_state.len() != dim {
@@ -277,10 +278,44 @@ impl DensityMatrix {
     ///
     /// # Returns
     /// * `Ok(DensityMatrix)` - The resulting density matrix after execution.
-    /// * `Err(CircuitError)` - If the circuit contains unsupported operations.
+    /// * `Err(QisError)` - If the circuit contains unsupported operations.
     pub fn from_circuit(circuit: &Circuit) -> Result<Self, QisError> {
-        let circuit = circuit.decompose()?;
         let mut dm = DensityMatrix::new(circuit.num_qubits());
+        dm.apply_circuit(circuit)?;
+        Ok(dm)
+    }
+
+    /// Applies a quantum circuit to this density matrix in-place.
+    ///
+    /// The circuit is first decomposed into basic gates via [`Circuit::decompose`],
+    /// then each operation is applied sequentially to the current density matrix.
+    ///
+    /// # Arguments
+    /// * `circuit` - The circuit to apply. Must have the same number of qubits
+    ///   as this density matrix.
+    ///
+    /// # Returns
+    /// * `Ok(())` - If all operations were applied successfully
+    /// * `Err(QisError)` - If the circuit cannot be simulated
+    ///
+    /// # Errors
+    /// - [`QisError::InvalidStateDimension`] if `circuit.num_qubits() != self.num_qubits`
+    /// - [`QisError::UnsupportedOperation`] if the circuit contains control-flow gates
+    /// - [`QisError::CircuitError`] if a gate lacks a matrix representation, contains
+    ///   unresolved symbolic parameters, or a referenced qubit is not found
+    ///
+    /// # Supported Instructions
+    /// - Standard single and multi-qubit gates
+    /// - Controlled gates (CX, CY, CZ, CRX, CRY, CRZ)
+    /// - Multi-controlled gates (CCX / Toffoli)
+    /// - Unitary gates with an explicit matrix representation
+    /// - Barriers and delays (ignored)
+    pub fn apply_circuit(&mut self, circuit: &Circuit) -> Result<(), QisError> {
+        if self.num_qubits != circuit.num_qubits() {
+            return Err(QisError::InvalidStateDimension(circuit.num_qubits()));
+        }
+        let circuit = circuit.decompose()?;
+        let dm = self;
 
         let qubits = circuit.qubits();
         let qubit_map: std::collections::HashMap<_, _> = qubits
@@ -374,7 +409,7 @@ impl DensityMatrix {
                 }
             }
         }
-        Ok(dm)
+        Ok(())
     }
 
     pub fn apply_standard_gate(
@@ -383,6 +418,22 @@ impl DensityMatrix {
         qubits: &[usize],
         params: &[f64],
     ) -> Result<(), QisError> {
+        if qubits.len() != gate.num_qubits() {
+            return Err(QisError::InvalidParameterValue(format!(
+                "Gate {:?} requires {} qubits, got {}",
+                gate,
+                gate.num_qubits(),
+                qubits.len()
+            )));
+        }
+        if params.len() != gate.num_params() {
+            return Err(QisError::InvalidParameterValue(format!(
+                "Gate {:?} requires {} parameters, got {}",
+                gate,
+                gate.num_params(),
+                params.len()
+            )));
+        }
         match gate {
             StandardGate::I => {}
             StandardGate::X => self.apply_x(qubits[0])?,
@@ -396,7 +447,7 @@ impl DensityMatrix {
             StandardGate::RX => self.apply_rx(qubits[0], params[0])?,
             StandardGate::RY => self.apply_ry(qubits[0], params[0])?,
             StandardGate::RZ => self.apply_rz(qubits[0], params[0])?,
-            StandardGate::Phase => self.apply_p(qubits[0], params[0])?,
+            StandardGate::Phase => self.apply_phase(qubits[0], params[0])?,
             StandardGate::X2P => self.apply_x2p(qubits[0])?,
             StandardGate::X2M => self.apply_x2m(qubits[0])?,
             StandardGate::Y2P => self.apply_y2p(qubits[0])?,
@@ -765,11 +816,11 @@ impl DensityMatrix {
     }
     /// Applies the single-qubit rotation about the Z-axis by angle `theta`.
     pub fn apply_rz(&mut self, qubit: usize, theta: f64) -> Result<(), QisError> {
-        self.apply_p(qubit, theta)?; /* RZ is equivalent to Phase gate in density matrix */
+        self.apply_phase(qubit, theta)?; /* RZ is equivalent to Phase gate in density matrix */
         Ok(())
     }
     /// Applies a phase shift of `theta` to the specified qubit.
-    pub fn apply_p(&mut self, qubit: usize, theta: f64) -> Result<(), QisError> {
+    pub fn apply_phase(&mut self, qubit: usize, theta: f64) -> Result<(), QisError> {
         self.validate_qubit(qubit)?;
         self.apply_p_kernel(qubit, self.num_qubits, theta);
         self.apply_p_kernel(qubit, 0, -theta);
@@ -778,22 +829,22 @@ impl DensityMatrix {
 
     /// Applies the S (Phase) gate to the specified qubit.
     pub fn apply_s(&mut self, qubit: usize) -> Result<(), QisError> {
-        self.apply_p(qubit, FRAC_PI_2)?;
+        self.apply_phase(qubit, FRAC_PI_2)?;
         Ok(())
     }
     /// Applies the inverse S (SDG) gate to the specified qubit.
     pub fn apply_sdg(&mut self, qubit: usize) -> Result<(), QisError> {
-        self.apply_p(qubit, -FRAC_PI_2)?;
+        self.apply_phase(qubit, -FRAC_PI_2)?;
         Ok(())
     }
     /// Applies the T (Pi/8) gate to the specified qubit.
     pub fn apply_t(&mut self, qubit: usize) -> Result<(), QisError> {
-        self.apply_p(qubit, FRAC_PI_4)?;
+        self.apply_phase(qubit, FRAC_PI_4)?;
         Ok(())
     }
     /// Applies the inverse T (TDG) gate to the specified qubit.
     pub fn apply_tdg(&mut self, qubit: usize) -> Result<(), QisError> {
-        self.apply_p(qubit, -FRAC_PI_4)?;
+        self.apply_phase(qubit, -FRAC_PI_4)?;
         Ok(())
     }
     /// Applies a +Pi/2 rotation about the X-axis.
@@ -884,7 +935,7 @@ impl DensityMatrix {
     }
 
     /// Applies an arbitrary 4x4 unitary matrix to two qubits.
-    pub fn apply_double_qubits_gate(
+    pub fn apply_two_qubit_gate(
         &mut self,
         q0: usize,
         q1: usize,
@@ -1067,6 +1118,9 @@ impl DensityMatrix {
         mat: &[Complex64],
         conj: bool,
     ) {
+        if qs.is_empty() {
+            return;
+        }
         let n = qs.len();
         let dim = 1 << n;
         let mut offsets: SmallVec<[usize; 16]> = smallvec![0; dim];
@@ -1212,11 +1266,11 @@ impl DensityMatrix {
     /// * `h` - The Hamiltonian observable.
     ///
     /// # Returns
-    /// The expectation value as a real number (f64), or a `CircuitError` if the
+    /// The expectation value as a real number (f64), or a [`QisError`] if the
     /// qubit counts do not match.
     ///
     /// # Errors
-    /// Returns `CircuitError::InvalidOperation` if the Hamiltonian acts on a different
+    /// Returns [`QisError::CircuitError`] if the observable acts on a different
     /// number of qubits than the density matrix.
     pub fn expectation(&self, h: &dyn Observable) -> Result<f64, QisError> {
         h.expectation_density_matrix(self)
@@ -1236,7 +1290,8 @@ impl DensityMatrix {
     /// Returns `true` for outcome |1⟩ and `false` for outcome |0⟩.
     /// The density matrix is projected into the subspace consistent with the
     /// outcome and renormalized: `ρ' = Π_b ρ Π_b / Tr(Π_b ρ)`.
-    pub fn measure(&mut self, qubit: usize) -> bool {
+    pub fn measure(&mut self, qubit: usize) -> Result<bool, QisError> {
+        self.validate_qubit(qubit)?;
         let dim = 1 << self.num_qubits;
         let mask = 1usize << qubit;
 
@@ -1274,7 +1329,7 @@ impl DensityMatrix {
             }
         }
 
-        outcome
+        Ok(outcome)
     }
 
     /// Measures all qubits sequentially, returning a bit-packed [`Outcome`].
@@ -1286,7 +1341,7 @@ impl DensityMatrix {
         let num_chunks = self.num_qubits.div_ceil(64);
         let mut chunks = SmallVec::from_elem(0u64, num_chunks);
         for q in 0..self.num_qubits {
-            if self.measure(q) {
+            if self.measure(q).unwrap() {
                 chunks[q / 64] |= 1u64 << (q % 64);
             }
         }

@@ -16,6 +16,7 @@ This module provides quantum state representations including:
 - Statevector: Pure quantum state simulation
 - DensityMatrix: Mixed quantum state simulation
 - DensityMatrixNoise: Noisy density matrix simulation
+- StabilizerState: Clifford stabilizer simulation
 
 # Examples
 
@@ -48,5 +49,13 @@ from ..._native import qis as _qis_module
 Statevector = _qis_module.state.Statevector
 DensityMatrix = _qis_module.state.DensityMatrix
 DensityMatrixNoise = _qis_module.state.DensityMatrixNoise
+StabilizerState = _qis_module.state.StabilizerState
+StabilizerCircuitResult = _qis_module.state.StabilizerCircuitResult
 
-__all__ = ["Statevector", "DensityMatrix", "DensityMatrixNoise"]
+__all__ = [
+    "Statevector",
+    "DensityMatrix",
+    "DensityMatrixNoise",
+    "StabilizerState",
+    "StabilizerCircuitResult",
+]

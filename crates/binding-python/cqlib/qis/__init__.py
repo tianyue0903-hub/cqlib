@@ -73,6 +73,8 @@ TrotterMode = _qis_module.TrotterMode
 DensityMatrix = state.DensityMatrix
 Statevector = state.Statevector
 DensityMatrixNoise = state.DensityMatrixNoise
+StabilizerState = state.StabilizerState
+StabilizerCircuitResult = state.StabilizerCircuitResult
 
 
 class Observable(Protocol):
@@ -101,6 +103,8 @@ __all__ = [
     "Statevector",
     "DensityMatrix",
     "DensityMatrixNoise",
+    "StabilizerState",
+    "StabilizerCircuitResult",
     "Observable",
     "entropy",
     "metrics",

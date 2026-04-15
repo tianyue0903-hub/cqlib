@@ -14,6 +14,7 @@ from typing import List, Union, final, Optional
 import numpy as np
 from cqlib.circuit.circuit import Circuit
 from cqlib.circuit.gates.standard import StandardGate
+from cqlib.device import Outcome
 from cqlib.qis import PauliString, Hamiltonian
 
 @final
@@ -111,6 +112,10 @@ class Statevector:
             >>> circuit.cx(0, 1)
             >>> sv = Statevector.from_circuit(circuit)
         """
+        ...
+
+    def apply_circuit(self, circuit: Circuit) -> None:
+        """Applies a circuit to this statevector in place."""
         ...
 
     @property
@@ -262,6 +267,10 @@ class Statevector:
         Raises:
             IndexError: If qubit index is out of bounds.
         """
+        ...
+
+    def apply_phase(self, qubit: int, theta: float) -> None:
+        """Applies a parameterized phase gate."""
         ...
 
     def apply_x2p(self, qubit: int) -> None:
@@ -528,6 +537,10 @@ class Statevector:
         """
         ...
 
+    def apply_unitary_gate(self, qubits: List[int], matrix: np.ndarray) -> None:
+        """Applies an arbitrary n-qubit unitary gate."""
+        ...
+
     def expectation(self, observable: Union[Hamiltonian, PauliString]) -> float:
         """Computes the expectation value of an observable.
 
@@ -542,6 +555,18 @@ class Statevector:
         Raises:
             ValueError: If the qubit counts don't match or the observable type is invalid
         """
+        ...
+
+    def measure(self, qubit: int) -> bool:
+        """Measures one qubit and collapses the state."""
+        ...
+
+    def measure_all(self) -> Outcome:
+        """Measures all qubits and collapses the state."""
+        ...
+
+    def sample_shots(self, shots: int) -> List[Outcome]:
+        """Samples measurement outcomes without mutating this state."""
         ...
 
     def __repr__(self) -> str:

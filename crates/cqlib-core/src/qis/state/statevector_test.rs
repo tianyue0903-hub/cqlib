@@ -11,6 +11,7 @@
 // that they have been altered from the originals.
 
 use super::*;
+use crate::circuit::StandardGate;
 use crate::qis::hamiltonian::Hamiltonian;
 use crate::qis::pauli::{Pauli, PauliString};
 use num_complex::Complex64;
@@ -332,19 +333,19 @@ fn test_x2p_x2m() {
 fn test_apply_p_gate() {
     // P(0) = I
     let mut sv1 = Statevector::new(1);
-    sv1.apply_p(0, 0.0).unwrap();
+    sv1.apply_phase(0, 0.0).unwrap();
     assert_complex_eq(sv1.data[0], c(1.0, 0.0), "P(0)|0⟩ should be |0⟩");
 
     // P(π)|1⟩ = -|1⟩
     let mut sv2 = Statevector::new(1);
     sv2.apply_x(0).unwrap();
-    sv2.apply_p(0, PI).unwrap();
+    sv2.apply_phase(0, PI).unwrap();
     assert_complex_eq(sv2.data[1], c(-1.0, 0.0), "P(π)|1⟩ should be -|1⟩");
 
     // P(π/2)|1⟩ = i|1⟩
     let mut sv3 = Statevector::new(1);
     sv3.apply_x(0).unwrap();
-    sv3.apply_p(0, PI / 2.0).unwrap();
+    sv3.apply_phase(0, PI / 2.0).unwrap();
     assert_complex_eq(sv3.data[1], c(0.0, 1.0), "P(π/2)|1⟩ should be i|1⟩");
 }
 
@@ -547,7 +548,7 @@ fn test_cy_control_gt_target() {
 
 #[test]
 fn test_double_qubit_gate_cnot() {
-    // Test apply_double_qubits_gate with CNOT matrix
+    // Test apply_two_qubit_gate with CNOT matrix
     // CNOT matrix: [[1,0,0,0], [0,1,0,0], [0,0,0,1], [0,0,1,0]]
     let cnot_matrix = [
         [c(1.0, 0.0), c(0.0, 0.0), c(0.0, 0.0), c(0.0, 0.0)],
@@ -561,7 +562,7 @@ fn test_double_qubit_gate_cnot() {
     // This should be equivalent to CX(0,1)
     let mut sv1 = Statevector::new(2);
     sv1.apply_x(0).unwrap(); // |01⟩ (control=1, target=0)
-    sv1.apply_double_qubits_gate(0, 1, cnot_matrix).unwrap();
+    sv1.apply_two_qubit_gate(0, 1, cnot_matrix).unwrap();
     // CNOT|01⟩ should be |01⟩ if q0 is control, q1 is target (target was 0, flips to 1?)
     // Wait: |01⟩ = q0=1, q1=0. If q0 is control, q1 is target, target flips to 1
     // Result: |11⟩
@@ -575,7 +576,7 @@ fn test_double_qubit_gate_cnot() {
     // CNOT with q0=1 as control, q1=0 as target
     let mut sv2 = Statevector::new(2);
     sv2.apply_x(1).unwrap(); // |10⟩ (q0=0, q1=1)
-    sv2.apply_double_qubits_gate(1, 0, cnot_matrix).unwrap();
+    sv2.apply_two_qubit_gate(1, 0, cnot_matrix).unwrap();
     // |10⟩: q0=0, q1=1. If q0 is target, q1 is control, q1=1 so q0 flips to 1
     // Result: |11⟩
     assert_complex_eq(
@@ -885,7 +886,7 @@ fn test_zero_angle_rotations() {
     sv.apply_rx(0, 0.0).unwrap();
     sv.apply_ry(0, 0.0).unwrap();
     sv.apply_rz(0, 0.0).unwrap();
-    sv.apply_p(0, 0.0).unwrap();
+    sv.apply_phase(0, 0.0).unwrap();
     sv.apply_rxy(0, 0.0, 1.0).unwrap();
 
     assert_complex_eq(sv.data[1], c(1.0, 0.0), "Zero angle rotations should be I");
@@ -979,7 +980,7 @@ fn test_apply_u() {
 
     let mut sv4 = Statevector::new(1);
     sv4.apply_x(0).unwrap();
-    sv4.apply_p(0, PI / 2.0).unwrap();
+    sv4.apply_phase(0, PI / 2.0).unwrap();
 
     assert_complex_eq(sv3.data[1], sv4.data[1], "U(0,0,λ)|1⟩ should equal P(λ)|1⟩");
 
@@ -1711,8 +1712,6 @@ fn test_expectation_qubit_mismatch() {
     assert!(result.is_err(), "Should error on qubit mismatch");
 }
 
-// ── AVX2 SIMD correctness tests ───────────────────────────────────────────────
-
 /// Applies a complex unitary via `apply_single_qubit_gate` and checks result
 /// matches the analytically expected amplitudes. This exercises the AVX2 path
 /// on x86_64 (or scalar fallback elsewhere) for complex×complex multiplication.
@@ -1798,4 +1797,313 @@ fn test_statevector_data_alignment() {
         "Statevector::data must be 64-byte aligned for AVX2/AVX-512; got alignment {}",
         ptr % 64
     );
+}
+
+#[test]
+fn test_apply_circuit_bell_state() {
+    let mut circuit = Circuit::new(2);
+    circuit.h(0.into()).unwrap();
+    circuit.cx(0.into(), 1.into()).unwrap();
+
+    let mut sv = Statevector::new(2);
+    sv.apply_circuit(&circuit).unwrap();
+
+    assert_complex_eq(sv.data[0], c(FRAC_1_SQRT_2, 0.0), "Bell |00⟩ amp");
+    assert_complex_eq(sv.data[1], c(0.0, 0.0), "Bell |01⟩ amp should be 0");
+    assert_complex_eq(sv.data[2], c(0.0, 0.0), "Bell |10⟩ amp should be 0");
+    assert_complex_eq(sv.data[3], c(FRAC_1_SQRT_2, 0.0), "Bell |11⟩ amp");
+    assert_normalized(&sv);
+}
+
+#[test]
+fn test_apply_circuit_parameterized() {
+    let mut circuit = Circuit::new(1);
+    circuit.rx(0.into(), PI / 2.0).unwrap();
+
+    let mut sv = Statevector::new(1);
+    sv.apply_circuit(&circuit).unwrap();
+
+    // RX(π/2)|0⟩ = (|0⟩ - i|1⟩)/√2
+    let inv_sqrt2 = FRAC_1_SQRT_2;
+    assert_complex_eq(
+        sv.data[0],
+        c(inv_sqrt2, 0.0),
+        "RX(π/2)|0⟩[0] should be 1/√2",
+    );
+    assert_complex_eq(
+        sv.data[1],
+        c(0.0, -inv_sqrt2),
+        "RX(π/2)|0⟩[1] should be -i/√2",
+    );
+    assert_normalized(&sv);
+}
+
+#[test]
+fn test_apply_circuit_toffoli() {
+    // |110⟩ with CCX(0,1,2) -> |111⟩
+    let mut circuit = Circuit::new(3);
+    circuit.x(0.into()).unwrap();
+    circuit.x(1.into()).unwrap();
+    circuit.ccx(0.into(), 1.into(), 2.into()).unwrap();
+
+    let mut sv = Statevector::new(3);
+    sv.apply_circuit(&circuit).unwrap();
+
+    for i in 0..7 {
+        assert_complex_eq(
+            sv.data[i],
+            c(0.0, 0.0),
+            &format!(" amplitude |{:03b}⟩ should be 0", i),
+        );
+    }
+    assert_complex_eq(sv.data[7], c(1.0, 0.0), "CCX|110⟩ should be |111⟩");
+    assert_normalized(&sv);
+}
+
+#[test]
+fn test_apply_circuit_incremental() {
+    // Apply H first to get |+⟩, then apply Z to get |-
+    let mut h_circuit = Circuit::new(1);
+    h_circuit.h(0.into()).unwrap();
+
+    let mut z_circuit = Circuit::new(1);
+    z_circuit.z(0.into()).unwrap();
+
+    let mut sv = Statevector::new(1);
+    sv.apply_circuit(&h_circuit).unwrap();
+    sv.apply_circuit(&z_circuit).unwrap();
+
+    // ZH|0⟩ = Z|+⟩ = |-
+    assert_complex_eq(sv.data[0], c(FRAC_1_SQRT_2, 0.0), "ZH|0⟩[0] should be 1/√2");
+    assert_complex_eq(
+        sv.data[1],
+        c(-FRAC_1_SQRT_2, 0.0),
+        "ZH|0⟩[1] should be -1/√2",
+    );
+    assert_normalized(&sv);
+}
+
+#[test]
+fn test_apply_circuit_dimension_mismatch() {
+    let mut circuit = Circuit::new(2);
+    circuit.h(0.into()).unwrap();
+
+    let mut sv = Statevector::new(1);
+    let result = sv.apply_circuit(&circuit);
+
+    assert!(
+        matches!(result, Err(QisError::InvalidStateDimension(2))),
+        "Should error on dimension mismatch"
+    );
+}
+
+#[test]
+fn test_apply_circuit_control_flow_error() {
+    use crate::circuit::{ConditionView, Instruction, Operation, StandardGate};
+    use smallvec::smallvec;
+
+    let true_body = vec![Operation {
+        instruction: Instruction::Standard(StandardGate::X),
+        qubits: smallvec![0.into()],
+        params: smallvec![],
+        label: None,
+    }];
+
+    let mut circuit = Circuit::new(1);
+    circuit
+        .if_else(ConditionView::new(0.into(), 1), true_body, None)
+        .unwrap();
+
+    let mut sv = Statevector::new(1);
+    let result = sv.apply_circuit(&circuit);
+
+    assert!(
+        matches!(
+            result,
+            Err(QisError::UnsupportedOperation(ref msg)) if msg.contains("Control flow")
+        ),
+        "Should error on control-flow gates, got {:?}",
+        result
+    );
+}
+
+#[test]
+fn test_apply_standard_gate_arity_mismatch() {
+    let mut sv = Statevector::new(2);
+    let result = sv.apply_standard_gate(StandardGate::CX, &[0], &[]);
+    assert!(
+        result.is_err(),
+        "CX with 1 qubit should fail, got {:?}",
+        result
+    );
+}
+
+#[test]
+fn test_measure_out_of_bounds() {
+    let mut sv = Statevector::new(2);
+    let result = sv.measure(99);
+    assert!(
+        result.is_err(),
+        "measure on out-of-bounds qubit should fail, got {:?}",
+        result
+    );
+}
+
+#[test]
+fn test_measure_deterministic_zero_and_one() {
+    let mut zero = Statevector::new(1);
+    assert_eq!(zero.measure(0).unwrap(), false);
+    assert_complex_eq(zero.data[0], c(1.0, 0.0), "|0> remains |0>");
+    assert_complex_eq(zero.data[1], c(0.0, 0.0), "|1> amplitude remains zero");
+
+    let mut one = Statevector::new(1);
+    one.apply_x(0).unwrap();
+    assert_eq!(one.measure(0).unwrap(), true);
+    assert_complex_eq(one.data[0], c(0.0, 0.0), "|0> amplitude remains zero");
+    assert_complex_eq(one.data[1], c(1.0, 0.0), "|1> remains |1>");
+}
+
+#[test]
+fn test_measure_plus_statistics_and_collapse() {
+    let shots = 1000;
+    let mut ones = 0;
+    for _ in 0..shots {
+        let mut sv = Statevector::new(1);
+        sv.apply_h(0).unwrap();
+        let outcome = sv.measure(0).unwrap();
+        if outcome {
+            ones += 1;
+            assert_complex_eq(sv.data[0], c(0.0, 0.0), "collapsed |0> amp");
+            assert_complex_eq(sv.data[1], c(1.0, 0.0), "collapsed |1> amp");
+        } else {
+            assert_complex_eq(sv.data[0], c(1.0, 0.0), "collapsed |0> amp");
+            assert_complex_eq(sv.data[1], c(0.0, 0.0), "collapsed |1> amp");
+        }
+    }
+    assert!(
+        (350..=650).contains(&ones),
+        "|+> measurement should be near 50/50; ones={ones}/{shots}"
+    );
+}
+
+#[test]
+fn test_measure_with_rng_is_reproducible() {
+    use rand::SeedableRng;
+    use rand::rngs::SmallRng;
+
+    let shots = 64;
+    let mut rng_a = SmallRng::seed_from_u64(1234);
+    let mut rng_b = SmallRng::seed_from_u64(1234);
+
+    let outcomes_a: Vec<bool> = (0..shots)
+        .map(|_| {
+            let mut sv = Statevector::new(1);
+            sv.apply_h(0).unwrap();
+            sv.measure_with_rng(0, &mut rng_a).unwrap()
+        })
+        .collect();
+
+    let outcomes_b: Vec<bool> = (0..shots)
+        .map(|_| {
+            let mut sv = Statevector::new(1);
+            sv.apply_h(0).unwrap();
+            sv.measure_with_rng(0, &mut rng_b).unwrap()
+        })
+        .collect();
+
+    assert_eq!(outcomes_a, outcomes_b);
+    assert!(
+        outcomes_a.iter().any(|&b| b) && outcomes_a.iter().any(|&b| !b),
+        "seeded |+> samples should include both outcomes"
+    );
+}
+
+#[test]
+fn test_zero_qubit_measure_boundary() {
+    let mut sv = Statevector::new(0);
+    assert_eq!(sv.num_qubits, 0);
+    assert_eq!(sv.data.len(), 1);
+    assert_complex_eq(sv.data[0], c(1.0, 0.0), "0-qubit scalar state");
+    assert!(sv.measure(0).is_err());
+    assert_eq!(sv.probabilities(), vec![1.0]);
+}
+
+#[test]
+fn test_measure_all_bit_packing() {
+    let mut sv = Statevector::new(4);
+    sv.apply_x(0).unwrap();
+    sv.apply_x(2).unwrap();
+    let outcome = sv.measure_all();
+    assert!(outcome.is_one(0));
+    assert!(!outcome.is_one(1));
+    assert!(outcome.is_one(2));
+    assert!(!outcome.is_one(3));
+}
+
+#[test]
+fn test_sample_shots_zero_and_bell_distribution() {
+    let mut sv = Statevector::new(2);
+    sv.apply_h(0).unwrap();
+    sv.apply_cx(0, 1).unwrap();
+
+    assert!(sv.sample_shots(0).is_empty());
+
+    let shots = sv.sample_shots(1000);
+    assert_eq!(shots.len(), 1000);
+    let ones = shots
+        .iter()
+        .filter(|outcome| outcome.is_one(0) && outcome.is_one(1))
+        .count();
+    assert!(
+        shots
+            .iter()
+            .all(|outcome| outcome.is_one(0) == outcome.is_one(1))
+    );
+    assert!(
+        (350..=650).contains(&ones),
+        "Bell samples should be near 50/50 between 00 and 11; ones={ones}"
+    );
+}
+
+#[test]
+fn test_apply_unitary_gate_duplicate_qubits() {
+    let mut sv = Statevector::new(2);
+    let identity = ndarray::Array2::eye(4);
+    let result = sv.apply_unitary_gate(&[0, 0], &identity);
+    assert!(
+        result.is_err(),
+        "duplicate target qubits should be rejected, got {:?}",
+        result
+    );
+}
+
+#[test]
+fn test_probabilities_parallel_threshold_14_qubits() {
+    let n = 14;
+    let mut sv = Statevector::new(n);
+    for q in 0..n {
+        sv.apply_h(q).unwrap();
+    }
+    let probs = sv.probabilities();
+    assert_eq!(probs.len(), 1 << n);
+    let expected = 1.0 / (1 << n) as f64;
+    let sum: f64 = probs.iter().sum();
+    assert!((sum - 1.0).abs() < 1e-10);
+    assert!(probs.iter().all(|p| (p - expected).abs() < 1e-10));
+}
+
+#[test]
+fn test_probabilities_large_20_qubit_uniform_superposition() {
+    let n = 20;
+    let mut sv = Statevector::new(n);
+    for q in 0..n {
+        sv.apply_h(q).unwrap();
+    }
+    let probs = sv.probabilities();
+    assert_eq!(probs.len(), 1 << n);
+    let expected = 1.0 / (1 << n) as f64;
+    let sum: f64 = probs.iter().sum();
+    assert!((sum - 1.0).abs() < 1e-9);
+    assert!((probs[0] - expected).abs() < 1e-12);
+    assert!((probs[(1 << n) - 1] - expected).abs() < 1e-12);
 }

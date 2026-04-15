@@ -218,7 +218,7 @@ class TestDensityMatrixSingleQubitGates:
     def test_apply_p(self):
         """Test phase gate (no effect on |0>)."""
         dm = DensityMatrix(1)
-        dm.apply_p(0, np.pi / 4)
+        dm.apply_phase(0, np.pi / 4)
         probs = dm.probabilities()
         assert math.isclose(probs[0], 1.0)
 

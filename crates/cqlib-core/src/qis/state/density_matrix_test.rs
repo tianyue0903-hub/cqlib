@@ -10,7 +10,7 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
-use crate::circuit::Circuit;
+use crate::circuit::{Circuit, StandardGate};
 use crate::qis::hamiltonian::Hamiltonian;
 use crate::qis::pauli::{Pauli, PauliString};
 use crate::qis::state::density_matrix::DensityMatrix;
@@ -83,6 +83,35 @@ fn test_from_circuit_bell_state() {
         assert_relative_eq!(dm.data[i].re, dm_manual.data[i].re);
         assert_relative_eq!(dm.data[i].im, dm_manual.data[i].im);
     }
+}
+
+#[test]
+fn test_apply_circuit_bell_state() {
+    let mut circuit = Circuit::new(2);
+    circuit.h(0.into()).unwrap();
+    circuit.cx(0.into(), 1.into()).unwrap();
+
+    let mut dm = DensityMatrix::new(2);
+    dm.apply_circuit(&circuit).unwrap();
+
+    // Equivalent manual preparation
+    let mut dm_manual = DensityMatrix::new(2);
+    dm_manual.apply_h(0).unwrap();
+    dm_manual.apply_cx(0, 1).unwrap();
+
+    for i in 0..16 {
+        assert_relative_eq!(dm.data[i].re, dm_manual.data[i].re);
+        assert_relative_eq!(dm.data[i].im, dm_manual.data[i].im);
+    }
+}
+
+#[test]
+fn test_apply_circuit_dimension_mismatch() {
+    let mut dm = DensityMatrix::new(1);
+    let mut circuit = Circuit::new(2);
+    circuit.h(0.into()).unwrap();
+
+    assert!(dm.apply_circuit(&circuit).is_err());
 }
 
 #[test]
@@ -601,4 +630,122 @@ fn test_tolerance_handling() {
     assert!(dm.is_hermitian(1e-7));
     // Should fail with strict tolerance (difference 1e-8 > 1e-10)
     assert!(!dm.is_hermitian(1e-10));
+}
+
+#[test]
+fn test_apply_standard_gate_arity_mismatch() {
+    let mut dm = DensityMatrix::new(2);
+    let result = dm.apply_standard_gate(StandardGate::CX, &[0], &[]);
+    assert!(
+        result.is_err(),
+        "CX with 1 qubit should fail, got {:?}",
+        result
+    );
+}
+
+#[test]
+fn test_apply_standard_gate_params_mismatch() {
+    let mut dm = DensityMatrix::new(1);
+    let result = dm.apply_standard_gate(StandardGate::RX, &[0], &[]);
+    assert!(
+        result.is_err(),
+        "RX without parameters should fail, got {:?}",
+        result
+    );
+}
+
+#[test]
+fn test_measure_out_of_bounds() {
+    let mut dm = DensityMatrix::new(2);
+    let result = dm.measure(99);
+    assert!(
+        result.is_err(),
+        "measure on out-of-bounds qubit should fail, got {:?}",
+        result
+    );
+}
+
+#[test]
+fn test_measure_deterministic_zero_and_one() {
+    let mut zero = DensityMatrix::new(1);
+    assert_eq!(zero.measure(0).unwrap(), false);
+    assert_relative_eq!(zero.data[0].re, 1.0);
+    assert_relative_eq!(zero.data[3].re, 0.0);
+
+    let mut one = DensityMatrix::new(1);
+    one.apply_x(0).unwrap();
+    assert_eq!(one.measure(0).unwrap(), true);
+    assert_relative_eq!(one.data[0].re, 0.0);
+    assert_relative_eq!(one.data[3].re, 1.0);
+}
+
+#[test]
+fn test_measure_plus_statistics_and_collapse() {
+    let shots = 1000;
+    let mut ones = 0;
+    for _ in 0..shots {
+        let mut dm = DensityMatrix::new(1);
+        dm.apply_h(0).unwrap();
+        let outcome = dm.measure(0).unwrap();
+        if outcome {
+            ones += 1;
+            assert!(dm.data[0].norm() < 1e-10);
+            assert_relative_eq!(dm.data[3].re, 1.0);
+        } else {
+            assert!((dm.data[0].re - 1.0).abs() < 1e-10);
+            assert!(dm.data[3].norm() < 1e-10);
+        }
+    }
+    assert!(
+        (350..=650).contains(&ones),
+        "|+> measurement should be near 50/50; ones={ones}/{shots}"
+    );
+}
+
+#[test]
+fn test_measure_all_bit_packing() {
+    let mut dm = DensityMatrix::new(4);
+    dm.apply_x(0).unwrap();
+    dm.apply_x(2).unwrap();
+    let outcome = dm.measure_all();
+    assert!(outcome.is_one(0));
+    assert!(!outcome.is_one(1));
+    assert!(outcome.is_one(2));
+    assert!(!outcome.is_one(3));
+}
+
+#[test]
+fn test_sample_shots_zero_and_bell_distribution() {
+    let mut dm = DensityMatrix::new(2);
+    dm.apply_h(0).unwrap();
+    dm.apply_cx(0, 1).unwrap();
+
+    assert!(dm.sample_shots(0).is_empty());
+
+    let shots = dm.sample_shots(1000);
+    assert_eq!(shots.len(), 1000);
+    let ones = shots
+        .iter()
+        .filter(|outcome| outcome.is_one(0) && outcome.is_one(1))
+        .count();
+    assert!(
+        shots
+            .iter()
+            .all(|outcome| outcome.is_one(0) == outcome.is_one(1))
+    );
+    assert!(
+        (350..=650).contains(&ones),
+        "Bell samples should be near 50/50 between 00 and 11; ones={ones}"
+    );
+}
+
+#[test]
+fn test_zero_qubit_initialization_and_measure_boundary() {
+    let mut dm = DensityMatrix::new(0);
+    assert_eq!(dm.num_qubits, 0);
+    assert_eq!(dm.data.len(), 1);
+    assert_relative_eq!(dm.data[0].re, 1.0);
+    assert_eq!(dm.probabilities(), vec![1.0]);
+    assert!(dm.measure(0).is_err());
+    dm.apply_gphase(std::f64::consts::PI);
 }

@@ -13,6 +13,7 @@
 //! Python bindings for cqlib-core DensityMatrix module.
 
 use crate::circuit::{PyCircuit, PyStandardGate};
+use crate::device::result::PyOutcome;
 use crate::qis::qis_error_to_py_err;
 use cqlib_core::qis::state::density_matrix::DensityMatrix;
 use num_complex::Complex64;
@@ -214,6 +215,13 @@ impl PyDensityMatrix {
         Ok(Self { inner })
     }
 
+    /// Applies a circuit to this density matrix in place.
+    fn apply_circuit(&mut self, circuit: &PyCircuit) -> PyResult<()> {
+        self.inner
+            .apply_circuit(&circuit.inner)
+            .map_err(qis_error_to_py_err)
+    }
+
     /// Returns the number of qubits in the density matrix.
     #[getter]
     fn num_qubits(&self) -> usize {
@@ -358,9 +366,9 @@ impl PyDensityMatrix {
     /// Args:
     ///     qubit: Target qubit index
     ///     theta: Phase angle in radians
-    fn apply_p(&mut self, qubit: usize, theta: f64) -> PyResult<()> {
+    fn apply_phase(&mut self, qubit: usize, theta: f64) -> PyResult<()> {
         self.inner
-            .apply_p(qubit, theta)
+            .apply_phase(qubit, theta)
             .map_err(qis_error_to_py_err)
     }
 
@@ -672,7 +680,7 @@ impl PyDensityMatrix {
         };
 
         self.inner
-            .apply_double_qubits_gate(q0, q1, mat)
+            .apply_two_qubit_gate(q0, q1, mat)
             .map_err(qis_error_to_py_err)
     }
 
@@ -913,5 +921,24 @@ impl PyDensityMatrix {
         self.inner
             .validate_physical(tol.unwrap_or(1e-10))
             .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    /// Measures one qubit and collapses the state.
+    fn measure(&mut self, qubit: usize) -> PyResult<bool> {
+        self.inner.measure(qubit).map_err(qis_error_to_py_err)
+    }
+
+    /// Measures all qubits and collapses the state.
+    fn measure_all(&mut self) -> PyOutcome {
+        PyOutcome::from(self.inner.measure_all())
+    }
+
+    /// Samples measurement outcomes without mutating this state.
+    fn sample_shots(&self, shots: usize) -> Vec<PyOutcome> {
+        self.inner
+            .sample_shots(shots)
+            .into_iter()
+            .map(PyOutcome::from)
+            .collect()
     }
 }

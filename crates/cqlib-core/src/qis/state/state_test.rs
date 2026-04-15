@@ -13,7 +13,8 @@
 //! Simulation consistency tests between Statevector and DensityMatrix
 
 use crate::circuit::Circuit;
-use crate::qis::{DensityMatrix, Statevector};
+use crate::qis::pauli::{Pauli, PauliString};
+use crate::qis::{DensityMatrix, StabilizerState, Statevector};
 use std::f64::consts::PI;
 const EPSILON: f64 = 1e-10;
 
@@ -35,6 +36,19 @@ fn compare_probs(sv_probs: &[f64], dm_probs: &[f64], desc: &str) {
             dm_p
         );
     }
+}
+
+fn compare_three_probs(sv_probs: &[f64], dm_probs: &[f64], stab_probs: &[f64], desc: &str) {
+    compare_probs(sv_probs, dm_probs, desc);
+    compare_probs(sv_probs, stab_probs, desc);
+}
+
+fn pauli_string(num_qubits: usize, terms: &[(usize, Pauli)]) -> PauliString {
+    let mut ps = PauliString::new(num_qubits);
+    for &(q, p) in terms {
+        ps.set_pauli(q, p);
+    }
+    ps
 }
 
 #[test]
@@ -182,10 +196,10 @@ fn test_single_qubit_p_gate() {
     let mut dm = DensityMatrix::new(1);
 
     sv.apply_h(0).unwrap();
-    sv.apply_p(0, PI / 3.0).unwrap();
+    sv.apply_phase(0, PI / 3.0).unwrap();
 
     dm.apply_h(0).unwrap();
-    dm.apply_p(0, PI / 3.0).unwrap();
+    dm.apply_phase(0, PI / 3.0).unwrap();
 
     compare_probs(&sv.probabilities(), &dm.probabilities(), "P gate");
 }
@@ -648,4 +662,66 @@ fn test_multiple_entangling_gates() {
         &dm.probabilities(),
         "Multiple entangling gates",
     );
+}
+
+#[test]
+fn test_clifford_circuits_match_stabilizer_state() {
+    let mut bell = Circuit::new(2);
+    bell.h(0.into()).unwrap();
+    bell.cx(0.into(), 1.into()).unwrap();
+
+    let mut graph = Circuit::new(3);
+    graph.h(0.into()).unwrap();
+    graph.h(1.into()).unwrap();
+    graph.s(2.into()).unwrap();
+    graph.cz(0.into(), 1.into()).unwrap();
+    graph.cx(1.into(), 2.into()).unwrap();
+
+    let cases = vec![
+        (
+            "bell",
+            bell,
+            vec![
+                pauli_string(2, &[(0, Pauli::X), (1, Pauli::X)]),
+                pauli_string(2, &[(0, Pauli::Z), (1, Pauli::Z)]),
+                pauli_string(2, &[(0, Pauli::Z)]),
+            ],
+        ),
+        (
+            "graph",
+            graph,
+            vec![
+                pauli_string(3, &[(0, Pauli::X), (1, Pauli::Z)]),
+                pauli_string(3, &[(1, Pauli::X), (0, Pauli::Z), (2, Pauli::X)]),
+                pauli_string(3, &[(2, Pauli::Z)]),
+            ],
+        ),
+    ];
+
+    for (name, circuit, observables) in cases {
+        let sv = Statevector::from_circuit(&circuit).unwrap();
+        let dm = DensityMatrix::from_circuit(&circuit).unwrap();
+        let stab = StabilizerState::from_circuit(&circuit).unwrap();
+
+        compare_three_probs(
+            &sv.probabilities(),
+            &dm.probabilities(),
+            &stab.probabilities().unwrap(),
+            name,
+        );
+
+        for obs in observables {
+            let sv_exp = sv.expectation(&obs).unwrap();
+            let dm_exp = dm.expectation(&obs).unwrap();
+            let stab_exp = stab.pauli_expectation(&obs).unwrap() as f64;
+            assert!(
+                (sv_exp - dm_exp).abs() < EPSILON,
+                "{name}: statevector/density expectation mismatch for {obs}: {sv_exp} vs {dm_exp}"
+            );
+            assert!(
+                (sv_exp - stab_exp).abs() < EPSILON,
+                "{name}: statevector/stabilizer expectation mismatch for {obs}: {sv_exp} vs {stab_exp}"
+            );
+        }
+    }
 }

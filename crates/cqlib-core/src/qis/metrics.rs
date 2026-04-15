@@ -82,7 +82,7 @@ use rayon::prelude::*;
 ///
 /// Returns 1.0 within numerical precision for normalized states.
 pub fn purity_pure(sv: &Statevector) -> Result<f64, QisError> {
-    let norm_sqr: f64 = sv.data.par_iter().map(|c| c.norm_sqr()).sum();
+    let norm_sqr: f64 = sv.data().par_iter().map(|c| c.norm_sqr()).sum();
     Ok(norm_sqr)
 }
 
@@ -109,9 +109,9 @@ pub fn state_fidelity_pure(sv1: &Statevector, sv2: &Statevector) -> Result<f64, 
     }
 
     let inner_product: Complex64 = sv1
-        .data
+        .data()
         .par_iter()
-        .zip(sv2.data.par_iter())
+        .zip(sv2.data().par_iter())
         .map(|(a, b)| a.conj() * b)
         .sum();
 
@@ -149,14 +149,14 @@ pub fn state_fidelity_pure_mixed(sv: &Statevector, dm: &DensityMatrix) -> Result
     rho_psi.par_iter_mut().enumerate().for_each(|(i, res)| {
         let mut sum = Complex64::new(0.0, 0.0);
         for j in 0..dim {
-            sum += dm.data[i * dim + j] * sv.data[j];
+            sum += dm.data[i * dim + j] * sv.data()[j];
         }
         *res = sum;
     });
 
     // Calculate <psi|rho_psi>
     let exp_val: Complex64 = sv
-        .data
+        .data()
         .par_iter()
         .zip(rho_psi.par_iter())
         .map(|(a, b)| a.conj() * b)
