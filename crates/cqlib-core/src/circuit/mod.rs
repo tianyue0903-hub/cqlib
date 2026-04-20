@@ -35,6 +35,7 @@ pub mod error;
 pub mod gate;
 pub mod operation;
 pub mod parameter;
+pub mod symbolic_matrix;
 
 pub use bit::Qubit;
 pub use cfg::CircuitCFG;
@@ -51,3 +52,7 @@ pub use gate::standard_gate::StandardGate;
 pub use gate::unitary_gate::UnitaryGate;
 pub use operation::Operation;
 pub use parameter::Parameter;
+pub use symbolic_matrix::{
+    SymbolicComplex, SymbolicMatrix, circuit_to_symbolic_matrix, evaluate_symbolic_matrix,
+    standard_gate_symbolic_matrix,
+};
