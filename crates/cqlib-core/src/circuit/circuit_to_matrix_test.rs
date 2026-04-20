@@ -16,13 +16,16 @@
 //! unitary matrix representations.
 
 use super::*;
-use crate::circuit::Qubit;
 use crate::circuit::circuit_param::ParameterValue;
-use crate::circuit::gate::{StandardGate, UnitaryGate};
+use crate::circuit::error::CircuitError;
+use crate::circuit::gate::{ConditionView, FrozenCircuit, Instruction, StandardGate, UnitaryGate};
 use crate::circuit::parameter::Parameter;
+use crate::circuit::{Operation, Qubit};
 use ndarray::array;
 use num_complex::Complex64;
+use smallvec::smallvec;
 use std::f64::consts::{PI, SQRT_2};
+use std::sync::Arc;
 
 /// Assert that two complex matrices are approximately equal
 fn assert_matrix_approx_eq(actual: &Array2<Complex64>, expected: &Array2<Complex64>, eps: f64) {
@@ -654,4 +657,212 @@ fn test_fsim_gate() {
 
     let matrix = circuit_to_matrix(&circuit, None).unwrap();
     assert_is_unitary(&matrix, 1e-10);
+}
+
+#[test]
+fn test_measure_returns_error() {
+    let mut circuit = Circuit::new(1);
+    circuit.measure(Qubit::new(0)).unwrap();
+
+    assert!(matches!(
+        circuit_to_matrix(&circuit, None),
+        Err(CircuitError::NoMatrixRepresentation)
+    ));
+}
+
+#[test]
+fn test_reset_returns_error() {
+    let mut circuit = Circuit::new(1);
+    circuit.reset(Qubit::new(0)).unwrap();
+
+    assert!(matches!(
+        circuit_to_matrix(&circuit, None),
+        Err(CircuitError::NoMatrixRepresentation)
+    ));
+}
+
+#[test]
+fn test_control_flow_returns_error() {
+    let mut circuit = Circuit::new(2);
+    let condition = ConditionView::new(Qubit::new(0), 1);
+    let true_body = vec![Operation {
+        instruction: Instruction::Standard(StandardGate::X),
+        qubits: smallvec![Qubit::new(1)],
+        params: smallvec![],
+        label: None,
+    }];
+    circuit.if_else(condition, true_body, None).unwrap();
+
+    assert!(matches!(
+        circuit_to_matrix(&circuit, None),
+        Err(CircuitError::InvalidOperation(_))
+    ));
+}
+
+#[test]
+fn test_qubits_order_mismatch_returns_error() {
+    let circuit = Circuit::new(2);
+
+    assert!(matches!(
+        circuit_to_matrix(&circuit, Some(&[0])),
+        Err(CircuitError::InvalidOperation(_))
+    ));
+    assert!(matches!(
+        circuit_to_matrix(&circuit, Some(&[0, 1, 2])),
+        Err(CircuitError::InvalidOperation(_))
+    ));
+    assert!(matches!(
+        circuit_to_matrix(&circuit, Some(&[0, 0])),
+        Err(CircuitError::InvalidOperation(_))
+    ));
+}
+
+#[test]
+fn test_symbolic_parameter_returns_error() {
+    let theta = Parameter::symbol("theta");
+    let mut circuit = Circuit::new(1);
+    circuit.rx(Qubit::new(0), theta).unwrap();
+
+    assert!(matches!(
+        circuit_to_matrix(&circuit, None),
+        Err(CircuitError::SymbolicParameterError)
+    ));
+}
+
+#[test]
+fn test_unitary_gate_without_matrix_or_circuit_returns_error() {
+    let u_gate = UnitaryGate::new("Symbolic", 1);
+    let mut circuit = Circuit::new(1);
+    circuit.unitary(u_gate, vec![Qubit::new(0)]).unwrap();
+
+    assert!(matches!(
+        circuit_to_matrix(&circuit, None),
+        Err(CircuitError::NoMatrixRepresentation)
+    ));
+}
+
+#[test]
+fn test_unitary_gate_with_circuit_fallback() {
+    let mut inner = Circuit::new(1);
+    inner.x(Qubit::new(0)).unwrap();
+    let u_gate = UnitaryGate::new("CircuitX", 1).with_circuit(Arc::new(FrozenCircuit::new(inner)));
+
+    let mut circuit = Circuit::new(1);
+    circuit.unitary(u_gate, vec![Qubit::new(0)]).unwrap();
+
+    let matrix = circuit_to_matrix(&circuit, None).unwrap();
+    let expected = array![[c(0.0, 0.0), c(1.0, 0.0)], [c(1.0, 0.0), c(0.0, 0.0)],];
+
+    assert_matrix_approx_eq(&matrix, &expected, 1e-10);
+}
+
+#[test]
+fn test_circuit_gate_inner_error_is_propagated() {
+    let mut inner = Circuit::new(1);
+    inner.measure(Qubit::new(0)).unwrap();
+    let gate = inner.to_gate("Measured").unwrap();
+
+    let mut circuit = Circuit::new(1);
+    circuit
+        .append(gate, [Qubit::new(0)], std::iter::empty(), None)
+        .unwrap();
+
+    assert!(matches!(
+        circuit_to_matrix(&circuit, None),
+        Err(CircuitError::NoMatrixRepresentation)
+    ));
+}
+
+#[test]
+fn test_global_phase_is_included_for_empty_circuit() {
+    let mut circuit = Circuit::new(2);
+    circuit.set_global_phase(Parameter::from(PI / 2.0));
+
+    let matrix = circuit_to_matrix(&circuit, None).unwrap();
+    let mut expected = eye(4);
+    expected.mapv_inplace(|value| c(0.0, 1.0) * value);
+
+    assert_matrix_approx_eq(&matrix, &expected, 1e-10);
+}
+
+#[test]
+fn test_global_phase_is_included_with_gate() {
+    let mut circuit = Circuit::new(1);
+    circuit.x(Qubit::new(0)).unwrap();
+    circuit.set_global_phase(Parameter::from(PI));
+
+    let matrix = circuit_to_matrix(&circuit, None).unwrap();
+    let expected = array![[c(0.0, 0.0), c(-1.0, 0.0)], [c(-1.0, 0.0), c(0.0, 0.0)],];
+
+    assert_matrix_approx_eq(&matrix, &expected, 1e-10);
+}
+
+#[test]
+fn test_symbolic_global_phase_returns_error() {
+    let mut circuit = Circuit::new(1);
+    circuit.set_global_phase(Parameter::symbol("phi"));
+
+    assert!(matches!(
+        circuit_to_matrix(&circuit, None),
+        Err(CircuitError::SymbolicParameterError)
+    ));
+}
+
+#[test]
+fn test_bound_global_phase_is_included() {
+    let mut circuit = Circuit::new(1);
+    circuit.set_global_phase(Parameter::symbol("phi"));
+
+    let mut bindings = std::collections::HashMap::new();
+    bindings.insert("phi", PI / 2.0);
+    let bound = circuit.assign_parameters(&Some(bindings)).unwrap();
+
+    let matrix = circuit_to_matrix(&bound, None).unwrap();
+    let mut expected = eye(2);
+    expected.mapv_inplace(|value| c(0.0, 1.0) * value);
+
+    assert_matrix_approx_eq(&matrix, &expected, 1e-10);
+}
+
+#[test]
+fn test_circuit_gate_reversed_bits() {
+    // Inner circuit: CNOT(q0 -> q1)  (asymmetric, so bit-order matters)
+    let mut inner = Circuit::new(2);
+    inner.cx(Qubit::new(0), Qubit::new(1)).unwrap();
+    let gate = inner.to_gate("CnotGate").unwrap();
+
+    // Apply as CircuitGate to (q1, q0) in a 2-qubit circuit
+    let mut circuit = Circuit::new(2);
+    circuit
+        .append(gate, [Qubit::new(1), Qubit::new(0)], [], None)
+        .unwrap();
+    let matrix = circuit_to_matrix(&circuit, None).unwrap();
+
+    // Direct CNOT(q1 -> q0) should produce the same matrix
+    let mut expected_circuit = Circuit::new(2);
+    expected_circuit.cx(Qubit::new(1), Qubit::new(0)).unwrap();
+    let expected = circuit_to_matrix(&expected_circuit, None).unwrap();
+
+    assert_matrix_approx_eq(&matrix, &expected, 1e-10);
+}
+
+#[test]
+fn test_circuit_gate_param_count_mismatch() {
+    let theta = Parameter::symbol("theta");
+    let mut inner = Circuit::new(1);
+    inner.rx(Qubit::new(0), theta).unwrap();
+    let gate = inner.to_gate("RxGate").unwrap();
+
+    let mut circuit = Circuit::new(1);
+    circuit
+        .append(
+            gate,
+            [Qubit::new(0)],
+            [ParameterValue::Fixed(1.0), ParameterValue::Fixed(2.0)],
+            None,
+        )
+        .unwrap();
+
+    let err = circuit_to_matrix(&circuit, None).unwrap_err();
+    assert!(matches!(err, CircuitError::ParameterCountMismatch { .. }));
 }

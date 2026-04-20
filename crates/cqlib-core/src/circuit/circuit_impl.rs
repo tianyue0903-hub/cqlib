@@ -1681,7 +1681,7 @@ impl Circuit {
         param
     }
 
-    pub fn to_matrix(&self, qubits_order: Option<&Vec<usize>>) -> Array2<Complex64> {
+    pub fn to_matrix(&self, qubits_order: Option<&[usize]>) -> Array2<Complex64> {
         circuit_to_matrix(self, qubits_order).unwrap()
     }
 

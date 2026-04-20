@@ -21,6 +21,9 @@
 //!
 //! $$ U = U_n \cdot U_{n-1} \cdots U_1 \cdot I $$
 //!
+//! The returned matrix includes the circuit global phase, i.e. a circuit with
+//! global phase `θ` returns `e^{iθ} U`.
+//!
 //! ## Memory Layout & Convention
 //!
 //! - **State Vector Ordering**: Little-Endian (similar to Qiskit). Qubit 0 corresponds to the Least Significant Bit (LSB).
@@ -29,18 +32,18 @@
 
 use crate::circuit::Circuit;
 use crate::circuit::circuit_param::CircuitParam;
-use crate::circuit::error::CompileError;
+use crate::circuit::error::CircuitError;
 use crate::circuit::gate::Instruction;
 use ndarray::Array2;
 use ndarray::parallel::prelude::*;
 use num_complex::Complex64;
+use smallvec::SmallVec;
 use std::collections::{HashMap, HashSet};
 use std::marker::PhantomData;
 
-// Threshold for parallelizing the loop over row pairs.
-// If the number of pairs (loops) * row size is large enough.
-// For small circuits (e.g. 4 qubits), we want purely sequential.
-const PARALLEL_THRESHOLD_OPS: usize = 10000;
+// Matrix element scale threshold for parallelizing row-block updates.
+// This keeps small circuits sequential to avoid rayon scheduling overhead.
+const PARALLEL_THRESHOLD_OPS: usize = 1 << 20;
 
 /// Computes the unitary matrix representation of a quantum circuit.
 ///
@@ -56,13 +59,8 @@ const PARALLEL_THRESHOLD_OPS: usize = 10000;
 /// # Returns
 ///
 /// * `Ok(Array2<Complex64>)` - The resulting unitary matrix.
-/// * `Err(CompileError)` - If the circuit contains unresolved symbolic parameters or non-unitary operations (not yet fully enforced).
-///
-/// # Panics
-///
-/// Panics if:
-/// - `qubits_order` contains duplicates or does not match the circuit's qubits.
-/// - The circuit contains symbolic parameters (currently unsupported).
+/// * `Err(CircuitError)` - If the circuit contains unresolved symbolic parameters,
+///   non-unitary operations, invalid qubit ordering, or unsupported gate definitions.
 ///
 /// # Example
 ///
@@ -80,26 +78,32 @@ const PARALLEL_THRESHOLD_OPS: usize = 10000;
 /// ```
 pub fn circuit_to_matrix(
     circuit: &Circuit,
-    qubits_order: Option<&Vec<usize>>,
-) -> Result<Array2<Complex64>, CompileError> {
-    if !circuit.parameters().is_empty() {
-        return Err(CompileError::Error);
-    }
+    qubits_order: Option<&[usize]>,
+) -> Result<Array2<Complex64>, CircuitError> {
     let circuit_qubits: Vec<usize> = circuit.qubits().iter().map(|q| q.index()).collect();
     let num_qubits = circuit_qubits.len();
-    let dim = 1usize << num_qubits;
+    let dim = 1usize.checked_shl(num_qubits as u32).ok_or_else(|| {
+        CircuitError::InvalidOperation(format!(
+            "cannot build matrix for {num_qubits} qubits: dimension overflows usize"
+        ))
+    })?;
+    let _matrix_len = dim.checked_mul(dim).ok_or_else(|| {
+        CircuitError::InvalidOperation(format!(
+            "cannot build matrix for {num_qubits} qubits: matrix element count overflows usize"
+        ))
+    })?;
 
     let target_order: Vec<usize> = match qubits_order {
         Some(order) => {
             let circuit_set: HashSet<usize> = circuit_qubits.iter().cloned().collect();
             let order_set: HashSet<usize> = order.iter().cloned().collect();
             if circuit_set != order_set || circuit_set.len() != order.len() {
-                panic!(
+                return Err(CircuitError::InvalidOperation(format!(
                     "qubits_order mismatch! Circuit has {:?}, but order provided is {:?}",
                     circuit_qubits, order
-                );
+                )));
             }
-            order.clone()
+            order.to_vec()
         }
         None => {
             let mut sorted = circuit_qubits.clone();
@@ -124,53 +128,66 @@ pub fn circuit_to_matrix(
     // Iterate over operations and update the matrix in-place
     for op in circuit.operations().iter() {
         // Map operation qubits to physical bit positions
-        let bits: Vec<usize> = op
+        let bits: SmallVec<[usize; 3]> = op
             .qubits
             .iter()
-            .map(|q| qubit_bit_map[&q.index()])
-            .collect();
+            .map(|q| {
+                qubit_bit_map
+                    .get(&q.index())
+                    .copied()
+                    .ok_or(CircuitError::QubitNotFound(q.id()))
+            })
+            .collect::<Result<_, _>>()?;
 
-        let params: Vec<f64> = op
+        let params: SmallVec<[f64; 4]> = op
             .params
             .iter()
             .map(|p| match p {
-                CircuitParam::Fixed(value) => *value,
-                CircuitParam::Index(_) => {
-                    panic!("Symbolic parameters not supported in circuit_to_matrix")
-                }
+                CircuitParam::Fixed(value) => Ok(*value),
+                CircuitParam::Index(_) => Err(CircuitError::SymbolicParameterError),
             })
-            .collect();
+            .collect::<Result<_, _>>()?;
 
         match &op.instruction {
             Instruction::Standard(std_gate) => {
                 let gate_matrix = std_gate
                     .matrix(params.as_slice())
-                    .map_err(|_| CompileError::Error)?;
+                    .map_err(|_| CircuitError::NoMatrixRepresentation)?;
                 // StandardGate matrices are Big-Endian (Controls/First Args are MSB).
                 // System is Little-Endian. Reverse bits to align.
-                let reversed_bits: Vec<usize> = bits.iter().cloned().rev().collect();
+                let reversed_bits: SmallVec<[usize; 3]> = bits.iter().cloned().rev().collect();
                 apply_gate_to_matrix(&mut matrix, gate_matrix.as_ref(), &reversed_bits);
             }
             Instruction::McGate(mc_gate) => {
                 let gate_matrix = mc_gate
                     .matrix(params.as_slice())
-                    .map_err(|_| CompileError::Error)?;
+                    .map_err(|_| CircuitError::NoMatrixRepresentation)?;
                 // McGate matrices are Big-Endian (Controls MSB).
-                let reversed_bits: Vec<usize> = bits.iter().cloned().rev().collect();
+                let reversed_bits: SmallVec<[usize; 3]> = bits.iter().cloned().rev().collect();
                 apply_gate_to_matrix(&mut matrix, gate_matrix.as_ref(), &reversed_bits);
             }
             Instruction::UnitaryGate(u_gate) => {
                 if let Some(gate_matrix) = u_gate.matrix() {
                     // UnitaryGate matrices are assumed to follow standard Big-Endian convention.
                     // System is Little-Endian. Reverse bits to align.
-                    let reversed_bits: Vec<usize> = bits.iter().cloned().rev().collect();
+                    let reversed_bits: SmallVec<[usize; 3]> = bits.iter().cloned().rev().collect();
                     apply_gate_to_matrix(&mut matrix, gate_matrix, &reversed_bits);
+                } else if let Some(circuit) = u_gate.circuit().as_ref() {
+                    // Sub-circuit matrices are already built in the system's Little-Endian basis,
+                    // so we apply them directly without reversing bits.
+                    let sub_matrix = circuit_to_matrix(circuit.circuit(), None)?;
+                    apply_gate_to_matrix(&mut matrix, &sub_matrix, &bits);
                 } else {
-                    panic!("UnitaryGate matrix missing")
+                    return Err(CircuitError::NoMatrixRepresentation);
                 }
             }
             Instruction::CircuitGate(circuit_gate) => {
                 let symbols = circuit_gate.symbols();
+                let expected = symbols.len();
+                let actual = params.len();
+                if actual != expected {
+                    return Err(CircuitError::ParameterCountMismatch { expected, actual });
+                }
                 let mut bindings = HashMap::new();
                 for (sym, val) in symbols.iter().zip(params.iter()) {
                     bindings.insert(sym.as_str(), *val);
@@ -179,14 +196,33 @@ pub fn circuit_to_matrix(
                     .circuit
                     .circuit
                     .assign_parameters(&Some(bindings))
-                    .map_err(|_| CompileError::Error)?;
-                let sub_matrix = circuit_to_matrix(&sub_circuit, None).unwrap();
+                    .map_err(|_| CircuitError::SymbolicParameterError)?;
+                let sub_matrix = circuit_to_matrix(&sub_circuit, None)?;
                 apply_gate_to_matrix(&mut matrix, &sub_matrix, &bits);
             }
-            Instruction::ControlFlowGate(_) => continue,
-            Instruction::Directive(_) => continue,
+            Instruction::ControlFlowGate(_) => {
+                return Err(CircuitError::InvalidOperation(
+                    "control-flow operations do not have an unconditional matrix representation"
+                        .to_string(),
+                ));
+            }
+            Instruction::Directive(directive) => match directive {
+                crate::circuit::Directive::Barrier => continue,
+                crate::circuit::Directive::Measure | crate::circuit::Directive::Reset => {
+                    return Err(CircuitError::NoMatrixRepresentation);
+                }
+            },
             Instruction::Delay => continue,
         }
+    }
+
+    let global_phase = circuit
+        .global_phase()
+        .evaluate(&None)
+        .map_err(|_| CircuitError::SymbolicParameterError)?;
+    if global_phase != 0.0 {
+        let phase = Complex64::from_polar(1.0, global_phase);
+        matrix.mapv_inplace(|value| phase * value);
     }
 
     Ok(matrix)
@@ -283,6 +319,10 @@ fn apply_two_qubit_gate(
     let cols = matrix.ncols();
 
     let (low, high) = if b0 < b1 { (b0, b1) } else { (b1, b0) };
+    let mask_low = (1 << low) - 1;
+    let mask_high = (1 << high) - 1;
+    let off0 = 1 << b0;
+    let off1 = 1 << b1;
 
     let slice = matrix.as_slice_mut().expect("Matrix must be contiguous");
     let unsafe_slice = UnsafeSlice::new(slice);
@@ -292,12 +332,10 @@ fn apply_two_qubit_gate(
     let parallel = total_ops >= PARALLEL_THRESHOLD_OPS;
 
     let process_idx = |i: usize| {
-        let mask_low = (1 << low) - 1;
         let left_part = (i & !mask_low) << 1;
         let right_part = i & mask_low;
         let tmp = left_part | right_part;
 
-        let mask_high = (1 << high) - 1;
         let left_final = (tmp & !mask_high) << 1;
         let right_final = tmp & mask_high;
 
@@ -306,9 +344,6 @@ fn apply_two_qubit_gate(
         // Correct Little-Endian Mapping:
         // bits[0] (b0) corresponds to LSB (Gate Index Bit 0) -> off0
         // bits[1] (b1) corresponds to MSB (Gate Index Bit 1) -> off1
-        let off0 = 1 << b0;
-        let off1 = 1 << b1;
-
         // Gate Indices:
         // 00 -> base
         // 01 -> base | off0
@@ -367,7 +402,7 @@ fn apply_general_gate(matrix: &mut Array2<Complex64>, gate: &Array2<Complex64>, 
     let num_targets = bits.len();
     let gate_dim = 1 << num_targets;
 
-    let mut sorted_bits = bits.to_vec();
+    let mut sorted_bits: SmallVec<[usize; 8]> = bits.iter().copied().collect();
     sorted_bits.sort();
 
     let mut gate_offsets = vec![0usize; gate_dim];
@@ -390,43 +425,54 @@ fn apply_general_gate(matrix: &mut Array2<Complex64>, gate: &Array2<Complex64>, 
     let total_ops = dim * cols;
     let parallel = total_ops >= PARALLEL_THRESHOLD_OPS;
 
-    let process_idx = |i: usize| {
-        let mut base = i;
-        for &q in &sorted_bits {
-            let mask = (1 << q) - 1;
-            let left = (base & !mask) << 1;
-            let right = base & mask;
-            base = left | right;
-        }
-
-        unsafe {
-            let mut row_ptrs = Vec::with_capacity(gate_dim);
-            for item in gate_offsets.iter().take(gate_dim) {
-                row_ptrs.push(unsafe_slice.row_ptr(base | item, cols));
+    let process_idx =
+        |i: usize, row_ptrs: &mut Vec<*mut Complex64>, input_vec: &mut Vec<Complex64>| {
+            let mut base = i;
+            for &q in &sorted_bits {
+                let mask = (1 << q) - 1;
+                let left = (base & !mask) << 1;
+                let right = base & mask;
+                base = left | right;
             }
 
-            let mut input_vec = vec![Complex64::default(); gate_dim];
-
-            for k_col in 0..cols {
-                for g in 0..gate_dim {
-                    input_vec[g] = *row_ptrs[g].add(k_col);
+            unsafe {
+                row_ptrs.clear();
+                for item in gate_offsets.iter().take(gate_dim) {
+                    row_ptrs.push(unsafe_slice.row_ptr(base | item, cols));
                 }
 
-                for r in 0..gate_dim {
-                    let mut sum = Complex64::default();
-                    for c in 0..gate_dim {
-                        sum += gate[[r, c]] * input_vec[c];
+                for k_col in 0..cols {
+                    for g in 0..gate_dim {
+                        input_vec[g] = *row_ptrs[g].add(k_col);
                     }
-                    *row_ptrs[r].add(k_col) = sum;
+
+                    for r in 0..gate_dim {
+                        let mut sum = Complex64::default();
+                        for c in 0..gate_dim {
+                            sum += gate[[r, c]] * input_vec[c];
+                        }
+                        *row_ptrs[r].add(k_col) = sum;
+                    }
                 }
             }
-        }
-    };
+        };
 
     if parallel {
-        (0..loop_limit).into_par_iter().for_each(process_idx);
+        (0..loop_limit).into_par_iter().for_each_init(
+            || {
+                (
+                    Vec::<*mut Complex64>::with_capacity(gate_dim),
+                    vec![Complex64::default(); gate_dim],
+                )
+            },
+            |(row_ptrs, input_vec), i| process_idx(i, row_ptrs, input_vec),
+        );
     } else {
-        (0..loop_limit).for_each(process_idx);
+        let mut row_ptrs = Vec::<*mut Complex64>::with_capacity(gate_dim);
+        let mut input_vec = vec![Complex64::default(); gate_dim];
+        for i in 0..loop_limit {
+            process_idx(i, &mut row_ptrs, &mut input_vec);
+        }
     }
 }
 
