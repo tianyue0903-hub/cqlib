@@ -146,7 +146,7 @@ impl Instruction {
         match self {
             Instruction::Standard(g) => g.matrix(params).ok(),
             Instruction::McGate(g) => g.matrix(params).ok(),
-            Instruction::UnitaryGate(g) => g.matrix().map(Cow::Borrowed),
+            Instruction::UnitaryGate(g) => g.matrix_for_params(params).ok(),
             Instruction::CircuitGate(g) => circuit_to_matrix(&g.circuit.circuit, None)
                 .ok()
                 .map(Cow::Owned),
@@ -189,11 +189,15 @@ impl Instruction {
                     // Invert the internal circuit
                     if let Ok(c_inv) = c.circuit.inverse() {
                         // Create frozen circuit from inverted circuit
-                        let frozen_inv = FrozenCircuit { circuit: c_inv };
+                        let frozen_inv = FrozenCircuit::new(c_inv);
                         // Create new UnitaryGate with inverted circuit
-                        let u_inv =
-                            UnitaryGate::new(format!("{}_dg", g.label()).as_str(), g.num_qubits())
-                                .with_circuit(Arc::new(frozen_inv));
+                        let u_inv = UnitaryGate::new(
+                            format!("{}_dg", g.label()).as_str(),
+                            g.num_qubits(),
+                            g.num_params(),
+                        )
+                        .with_circuit(Arc::new(frozen_inv))
+                        .ok()?;
                         return Some((Self::UnitaryGate(Box::new(u_inv)), SmallVec::new()));
                     }
                 }
@@ -271,6 +275,7 @@ impl Instruction {
                 let mut g = UnitaryGate::new(
                     format!("ctl_{}_{}", num_new_ctrls, uni.label()).as_str(),
                     uni.num_qubits() + num_new_ctrls as u16,
+                    uni.num_params(),
                 );
                 if let Some(m) = uni.matrix() {
                     let controlled = gate_matrix::control_matrix(m, num_new_ctrls);
@@ -279,10 +284,24 @@ impl Instruction {
                         Ok(gate) => gate,
                         Err(_) => return None,
                     };
+                } else if uni.has_parameterized_matrix() {
+                    let base = (**uni).clone();
+                    g = match g.with_parameterized_matrix(move |params| {
+                        let matrix = base
+                            .matrix_for_params(params)
+                            .expect("controlled parameterized unitary params must be valid");
+                        gate_matrix::control_matrix(matrix.as_ref(), num_new_ctrls)
+                    }) {
+                        Ok(gate) => gate,
+                        Err(_) => return None,
+                    };
                 }
                 // Copy circuit field if present
                 if let Some(c) = uni.circuit() {
-                    g = g.with_circuit(c.clone());
+                    g = match g.with_circuit(c.clone()) {
+                        Ok(gate) => gate,
+                        Err(_) => return None,
+                    };
                 }
 
                 Some(Instruction::UnitaryGate(Box::from(g)))

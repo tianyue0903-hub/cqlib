@@ -18,8 +18,9 @@
 
 use crate::circuit::circuit_impl::Circuit;
 use crate::circuit::error::CircuitError;
+use crate::circuit::symbolic_matrix::{SymbolicMatrix, circuit_to_symbolic_matrix};
 use indexmap::IndexSet;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 /// An immutable, frozen circuit for use in gate definitions.
 ///
@@ -43,6 +44,7 @@ use std::sync::Arc;
 #[derive(Debug, Clone)]
 pub struct FrozenCircuit {
     pub(crate) circuit: Circuit,
+    symbolic_matrix_cache: Arc<OnceLock<Arc<SymbolicMatrix>>>,
 }
 
 impl FrozenCircuit {
@@ -59,7 +61,10 @@ impl FrozenCircuit {
     ///
     /// A new `FrozenCircuit` wrapping the provided circuit.
     pub fn new(circuit: Circuit) -> Self {
-        Self { circuit }
+        Self {
+            circuit,
+            symbolic_matrix_cache: Arc::new(OnceLock::new()),
+        }
     }
 
     /// Returns a reference to the inner circuit.
@@ -77,6 +82,21 @@ impl FrozenCircuit {
     /// ```
     pub fn circuit(&self) -> &Circuit {
         &self.circuit
+    }
+
+    /// Returns the cached symbolic matrix for this frozen circuit.
+    ///
+    /// The matrix is computed in the circuit's default qubit order on the
+    /// first successful call and reused afterwards by composite-gate matrix
+    /// construction.
+    pub fn symbolic_matrix(&self) -> Result<Arc<SymbolicMatrix>, CircuitError> {
+        if let Some(matrix) = self.symbolic_matrix_cache.get() {
+            return Ok(matrix.clone());
+        }
+
+        let matrix = Arc::new(circuit_to_symbolic_matrix(&self.circuit, None)?);
+        let _ = self.symbolic_matrix_cache.set(matrix.clone());
+        Ok(self.symbolic_matrix_cache.get().cloned().unwrap_or(matrix))
     }
 }
 
@@ -235,6 +255,11 @@ impl CircuitGate {
         self.circuit.clone()
     }
 
+    /// Returns the cached symbolic matrix for this gate's frozen circuit.
+    pub fn symbolic_matrix(&self) -> Result<Arc<SymbolicMatrix>, CircuitError> {
+        self.circuit.symbolic_matrix()
+    }
+
     /// Returns the name of this circuit gate.
     ///
     /// # Examples
@@ -278,9 +303,7 @@ impl CircuitGate {
     /// ```
     pub fn inverse(&self) -> Result<Self, CircuitError> {
         let inverted_circuit = self.circuit.circuit.inverse()?;
-        let frozen_inverted = FrozenCircuit {
-            circuit: inverted_circuit,
-        };
+        let frozen_inverted = FrozenCircuit::new(inverted_circuit);
         CircuitGate::new(format!("{}_dg", self.name), frozen_inverted)
     }
 }

@@ -17,13 +17,19 @@
 //! which represents predefined gates, `UnitaryGate` allows users to specify arbitrary
 //! unitary operations.
 
+use crate::circuit::circuit_to_matrix;
+use crate::circuit::error::CircuitError;
 use crate::circuit::gate::circuit_gate::FrozenCircuit;
+use alloc::borrow::Cow;
 use ndarray::Array2;
 use num_complex::Complex;
+use std::collections::HashMap;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use uuid::Uuid;
+
+type ParameterizedMatrixFn = dyn Fn(&[f64]) -> Array2<Complex<f64>> + Send + Sync;
 
 /// A user-defined unitary quantum gate.
 ///
@@ -39,7 +45,7 @@ use uuid::Uuid;
 /// use num_complex::Complex;
 ///
 /// // Create a custom 1-qubit gate
-/// let mut gate = UnitaryGate::new("MyGate", 1);
+/// let mut gate = UnitaryGate::new("MyGate", 1, 0);
 ///
 /// // Define the unitary matrix (Pauli-X as example)
 /// let matrix = array![
@@ -53,7 +59,7 @@ use uuid::Uuid;
 /// assert_eq!(gate.label(), "MyGate");
 /// assert_eq!(gate.num_qubits(), 1);
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct UnitaryGate
 where
     Self: Send + Sync,
@@ -69,8 +75,12 @@ where
     ///
     /// Can be `None` if the gate is purely symbolic (defined by circuit only).
     matrix: Option<Arc<Array2<Complex<f64>>>>,
+    /// Matrix factory for parameterized unitary gates.
+    parameterized_matrix: Option<Arc<ParameterizedMatrixFn>>,
     /// The number of qubits this gate acts on.
     num_qubits: u16,
+    /// The number of parameters each application of this gate requires.
+    num_params: u16,
     /// Optional internal circuit representation.
     circuit: Option<Arc<FrozenCircuit>>,
 }
@@ -96,17 +106,20 @@ impl UnitaryGate {
     /// ```
     /// use cqlib_core::circuit::gate::UnitaryGate;
     ///
-    /// let gate = UnitaryGate::new("QFT_3", 3);
+    /// let gate = UnitaryGate::new("QFT_3", 3, 0);
     /// assert_eq!(gate.label(), "QFT_3");
     /// assert_eq!(gate.num_qubits(), 3);
+    /// assert_eq!(gate.num_params(), 0);
     /// assert!(gate.matrix().is_none());
     /// ```
-    pub fn new(label: &str, num_qubits: u16) -> Self {
+    pub fn new(label: &str, num_qubits: u16, num_params: u16) -> Self {
         Self {
             id: Uuid::new_v4(),
             label: Arc::new(label.to_string()),
             matrix: None,
+            parameterized_matrix: None,
             num_qubits,
+            num_params,
             circuit: None,
         }
     }
@@ -118,7 +131,7 @@ impl UnitaryGate {
     /// ```
     /// use cqlib_core::circuit::gate::UnitaryGate;
     ///
-    /// let gate = UnitaryGate::new("Oracle", 2);
+    /// let gate = UnitaryGate::new("Oracle", 2, 0);
     /// assert_eq!(gate.label(), "Oracle");
     /// ```
     pub fn label(&self) -> &str {
@@ -132,11 +145,16 @@ impl UnitaryGate {
     /// ```
     /// use cqlib_core::circuit::gate::UnitaryGate;
     ///
-    /// let gate = UnitaryGate::new("TwoQubitGate", 2);
+    /// let gate = UnitaryGate::new("TwoQubitGate", 2, 0);
     /// assert_eq!(gate.num_qubits(), 2);
     /// ```
     pub fn num_qubits(&self) -> u16 {
         self.num_qubits
+    }
+
+    /// Returns the number of parameters this gate expects per application.
+    pub fn num_params(&self) -> u16 {
+        self.num_params
     }
 
     /// Returns the matrix representation if available.
@@ -151,11 +169,16 @@ impl UnitaryGate {
     /// ```
     /// use cqlib_core::circuit::gate::UnitaryGate;
     ///
-    /// let gate = UnitaryGate::new("SymbolicGate", 1);
+    /// let gate = UnitaryGate::new("SymbolicGate", 1, 0);
     /// assert!(gate.matrix().is_none());
     /// ```
     pub fn matrix(&self) -> Option<&Array2<Complex<f64>>> {
         self.matrix.as_deref()
+    }
+
+    /// Returns whether this gate has a numeric parameterized matrix factory.
+    pub fn has_parameterized_matrix(&self) -> bool {
+        self.parameterized_matrix.is_some()
     }
 
     /// Returns the internal circuit representation if available.
@@ -188,7 +211,7 @@ impl UnitaryGate {
     /// use ndarray::array;
     /// use num_complex::Complex;
     ///
-    /// let gate = UnitaryGate::new("Hadamard", 1);
+    /// let gate = UnitaryGate::new("Hadamard", 1, 0);
     ///
     /// // Correct 2x2 matrix for 1 qubit
     /// let h = Complex::new(1.0 / f64::sqrt(2.0), 0.0);
@@ -200,20 +223,94 @@ impl UnitaryGate {
     /// let gate = gate.with_matrix(matrix).unwrap();
     /// assert!(gate.matrix().is_some());
     /// ```
-    pub fn with_matrix(mut self, mat: Array2<Complex<f64>>) -> Result<Self, String> {
-        let expected_dim = 1 << self.num_qubits;
-        if mat.shape() != [expected_dim, expected_dim] {
-            return Err(format!(
-                "Matrix dimension mismatch. Expected {}x{}, got {}x{}",
-                expected_dim,
-                expected_dim,
-                mat.nrows(),
-                mat.ncols()
-            ));
+    pub fn with_matrix(mut self, mat: Array2<Complex<f64>>) -> Result<Self, CircuitError> {
+        if self.num_params != 0 {
+            return Err(CircuitError::ParameterCountMismatch {
+                expected: 0,
+                actual: self.num_params as usize,
+            });
         }
+        validate_matrix_shape(self.num_qubits, &mat)?;
 
         self.matrix = Some(Arc::new(mat));
         Ok(self)
+    }
+
+    /// Attaches a parameterized matrix factory to the unitary definition.
+    pub fn with_parameterized_matrix<F>(mut self, matrix_fn: F) -> Result<Self, CircuitError>
+    where
+        F: Fn(&[f64]) -> Array2<Complex<f64>> + Send + Sync + 'static,
+    {
+        self.parameterized_matrix = Some(Arc::new(matrix_fn));
+        Ok(self)
+    }
+
+    /// Resolves this gate into a concrete matrix for the supplied parameter values.
+    pub fn matrix_for_params(
+        &self,
+        params: &[f64],
+    ) -> Result<Cow<'_, Array2<Complex<f64>>>, CircuitError> {
+        self.validate_param_values(params)?;
+
+        if let Some(matrix) = self.matrix.as_deref() {
+            return Ok(Cow::Borrowed(matrix));
+        }
+
+        if let Some(matrix_fn) = self.parameterized_matrix.as_ref() {
+            let matrix = matrix_fn(params);
+            validate_matrix_shape(self.num_qubits, &matrix)?;
+            return Ok(Cow::Owned(matrix));
+        }
+
+        if let Some(circuit) = self.circuit.as_ref() {
+            let inner = circuit.circuit();
+            let symbols = inner.symbols();
+            let mut bindings = HashMap::new();
+            for (symbol, value) in symbols.iter().zip(params.iter()) {
+                bindings.insert(symbol.as_str(), *value);
+            }
+            let assigned = inner
+                .assign_parameters(&Some(bindings))
+                .map_err(|_| CircuitError::SymbolicParameterError)?;
+            return circuit_to_matrix(&assigned, None).map(Cow::Owned);
+        }
+
+        Err(CircuitError::NoMatrixRepresentation)
+    }
+
+    fn validate_param_values(&self, params: &[f64]) -> Result<(), CircuitError> {
+        if params.len() != self.num_params as usize {
+            return Err(CircuitError::ParameterCountMismatch {
+                expected: self.num_params as usize,
+                actual: params.len(),
+            });
+        }
+        for (idx, value) in params.iter().copied().enumerate() {
+            if !value.is_finite() {
+                return Err(CircuitError::InvalidParameterValue(idx, value));
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_circuit_signature(&self, circuit: &FrozenCircuit) -> Result<(), CircuitError> {
+        let actual_qubits = circuit.circuit().qubits().len();
+        if actual_qubits != self.num_qubits as usize {
+            return Err(CircuitError::QubitCountMismatch {
+                expected: self.num_qubits as usize,
+                actual: actual_qubits,
+            });
+        }
+
+        let actual_params = circuit.circuit().symbols().len();
+        if actual_params != self.num_params as usize {
+            return Err(CircuitError::ParameterCountMismatch {
+                expected: self.num_params as usize,
+                actual: actual_params,
+            });
+        }
+
+        Ok(())
     }
 
     /// Attaches a circuit representation to the unitary definition.
@@ -224,9 +321,78 @@ impl UnitaryGate {
     /// # Arguments
     ///
     /// * `circuit` - The frozen circuit representing this gate.
-    pub fn with_circuit(mut self, circuit: Arc<FrozenCircuit>) -> Self {
+    pub fn with_circuit(mut self, circuit: Arc<FrozenCircuit>) -> Result<Self, CircuitError> {
+        self.validate_circuit_signature(&circuit)?;
         self.circuit = Some(circuit);
-        self
+        Ok(self)
+    }
+}
+
+fn validate_matrix_shape(num_qubits: u16, mat: &Array2<Complex<f64>>) -> Result<(), CircuitError> {
+    let expected_dim = 1usize.checked_shl(num_qubits as u32).ok_or_else(|| {
+        CircuitError::InvalidOperation(format!(
+            "cannot build matrix for {num_qubits} qubits: dimension overflows usize"
+        ))
+    })?;
+    if mat.shape() != [expected_dim, expected_dim] {
+        return Err(CircuitError::InvalidOperation(format!(
+            "Matrix dimension mismatch. Expected {}x{}, got {}x{}",
+            expected_dim,
+            expected_dim,
+            mat.nrows(),
+            mat.ncols()
+        )));
+    }
+
+    // Reject matrices containing NaN or infinite elements.
+    for ((row, col), val) in mat.indexed_iter() {
+        if !val.re.is_finite() || !val.im.is_finite() {
+            return Err(CircuitError::InvalidOperation(format!(
+                "Matrix contains non-finite element at ({row}, {col}): {val}"
+            )));
+        }
+    }
+
+    // Reject non-unitary matrices: U†U must be approximately I.
+    const UNITARITY_EPS: f64 = 1e-10;
+    let conj_t = mat.t().mapv(|x| x.conj());
+    let product = conj_t.dot(mat);
+    for (i, val) in product.diag().iter().enumerate() {
+        let diff = (val - Complex::new(1.0, 0.0)).norm();
+        if diff > UNITARITY_EPS {
+            return Err(CircuitError::InvalidOperation(format!(
+                "Matrix is not unitary: (U†U)[{i},{i}] = {val}, expected 1.0"
+            )));
+        }
+    }
+    for ((i, j), val) in product.indexed_iter() {
+        if i != j {
+            let diff = val.norm();
+            if diff > UNITARITY_EPS {
+                return Err(CircuitError::InvalidOperation(format!(
+                    "Matrix is not unitary: (U†U)[{i},{j}] = {val}, expected 0.0"
+                )));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+impl fmt::Debug for UnitaryGate {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("UnitaryGate")
+            .field("id", &self.id)
+            .field("label", &self.label)
+            .field("matrix", &self.matrix)
+            .field(
+                "parameterized_matrix",
+                &self.parameterized_matrix.as_ref().map(|_| "<matrix_fn>"),
+            )
+            .field("num_qubits", &self.num_qubits)
+            .field("num_params", &self.num_params)
+            .field("circuit", &self.circuit)
+            .finish()
     }
 }
 
@@ -253,3 +419,7 @@ impl fmt::Display for UnitaryGate {
         self.label().fmt(f)
     }
 }
+
+#[cfg(test)]
+#[path = "./unitary_gate_test.rs"]
+mod unitary_gate_test;
