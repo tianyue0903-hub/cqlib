@@ -14,7 +14,7 @@ extern crate alloc;
 extern crate core;
 
 pub mod circuit;
-pub mod compile;
+// pub mod compile;
 pub mod device;
 pub mod error_mitigation;
 pub mod ir;

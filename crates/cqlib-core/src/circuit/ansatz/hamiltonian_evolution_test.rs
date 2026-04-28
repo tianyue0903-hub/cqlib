@@ -989,9 +989,8 @@ fn test_evolution_info_trotter_strategy_commuting_reports_exact() {
 /// `pauli_evolution` stores this as:
 ///   circuit.global_phase() = angle * (-0.5) = 2αt * (-0.5) = -αt
 ///
-/// Note: `circuit_to_matrix` intentionally ignores global phase (it is physically
-/// unobservable in isolation). This test verifies the global-phase arithmetic via
-/// direct inspection of `circuit.global_phase()` after parameter binding.
+/// This test verifies the global-phase arithmetic via direct inspection of
+/// `circuit.global_phase()` after parameter binding.
 #[test]
 fn test_identity_term_sets_correct_global_phase() {
     let alpha = 0.7_f64;
@@ -1040,11 +1039,10 @@ fn test_identity_term_sets_correct_global_phase() {
 /// Expected:
 ///   - Circuit gates implement e^{-i·0.5·t·ZZ}  (physically equivalent to the ZZ rotation)
 ///   - circuit.global_phase() = -0.3·t  (from the identity term)
-///   - circuit_to_matrix (which ignores global phase) equals e^{-i·0.5·t·ZZ}
+///   - circuit_to_matrix includes global phase and equals e^{-i·0.3·t} · e^{-i·0.5·t·ZZ}
 ///
-/// Note: The true unitary is e^{-i·0.3·t} · e^{-i·0.5·t·ZZ}. The global-phase
-/// factor e^{-i·0.3·t} is not reflected in circuit_to_matrix by design, since
-/// global phase is unobservable in closed-system simulation.
+/// The true unitary is e^{-i·0.3·t} · e^{-i·0.5·t·ZZ}; `circuit_to_matrix`
+/// returns this full matrix including the global phase.
 #[test]
 fn test_identity_term_mixed_with_physical() {
     let t_val = 0.4_f64;
@@ -1073,19 +1071,21 @@ fn test_identity_term_mixed_with_physical() {
         actual_phase
     );
 
-    // Step 2: verify the circuit matrix equals e^{-i·0.5·t·ZZ} (physical part only).
+    // Step 2: verify the circuit matrix equals e^{-i·0.3·t} · e^{-i·0.5·t·ZZ}.
     // Build reference Hamiltonian with only ZZ.
     let mut h_zz = Hamiltonian::new(2);
     h_zz.add_term("ZZ".parse().unwrap(), 0.5.into()).unwrap();
 
     let u_circuit = circuit_matrix_at_t(&ansatz, "mix", "mix_t", t_val);
     let h_zz_mat = hamiltonian_matrix(&h_zz);
-    let u_zz_only = matrix_exp_iht(&h_zz_mat, t_val);
+    let mut expected = matrix_exp_iht(&h_zz_mat, t_val);
+    let global_factor = Complex64::from_polar(1.0, expected_phase);
+    expected.mapv_inplace(|value| global_factor * value);
 
-    let dist = frob_dist(&u_circuit, &u_zz_only);
+    let dist = frob_dist(&u_circuit, &expected);
     assert!(
         dist < 1e-10,
-        "Circuit matrix (excluding global phase) should equal e^{{-i·0.5·t·ZZ}}; \
+        "Circuit matrix should equal e^{{-i·0.3·t}}·e^{{-i·0.5·t·ZZ}}; \
          Frobenius distance = {dist:.2e}"
     );
 }

@@ -156,7 +156,7 @@ pub fn circuit_to_matrix(
                 // StandardGate matrices are Big-Endian (Controls/First Args are MSB).
                 // System is Little-Endian. Reverse bits to align.
                 let reversed_bits: SmallVec<[usize; 3]> = bits.iter().cloned().rev().collect();
-                apply_gate_to_matrix(&mut matrix, gate_matrix.as_ref(), &reversed_bits);
+                apply_gate_to_matrix(&mut matrix, gate_matrix.as_ref(), &reversed_bits)?;
             }
             Instruction::McGate(mc_gate) => {
                 let gate_matrix = mc_gate
@@ -164,21 +164,23 @@ pub fn circuit_to_matrix(
                     .map_err(|_| CircuitError::NoMatrixRepresentation)?;
                 // McGate matrices are Big-Endian (Controls MSB).
                 let reversed_bits: SmallVec<[usize; 3]> = bits.iter().cloned().rev().collect();
-                apply_gate_to_matrix(&mut matrix, gate_matrix.as_ref(), &reversed_bits);
+                apply_gate_to_matrix(&mut matrix, gate_matrix.as_ref(), &reversed_bits)?;
             }
             Instruction::UnitaryGate(u_gate) => {
-                if let Some(gate_matrix) = u_gate.matrix() {
+                if u_gate.circuit().is_some()
+                    && u_gate.matrix().is_none()
+                    && !u_gate.has_parameterized_matrix()
+                {
+                    let gate_matrix = u_gate.matrix_for_params(params.as_slice())?;
+                    // Sub-circuit matrices are already built in the system's Little-Endian basis,
+                    // so we apply them directly without reversing bits.
+                    apply_gate_to_matrix(&mut matrix, gate_matrix.as_ref(), &bits)?;
+                } else {
+                    let gate_matrix = u_gate.matrix_for_params(params.as_slice())?;
                     // UnitaryGate matrices are assumed to follow standard Big-Endian convention.
                     // System is Little-Endian. Reverse bits to align.
                     let reversed_bits: SmallVec<[usize; 3]> = bits.iter().cloned().rev().collect();
-                    apply_gate_to_matrix(&mut matrix, gate_matrix, &reversed_bits);
-                } else if let Some(circuit) = u_gate.circuit().as_ref() {
-                    // Sub-circuit matrices are already built in the system's Little-Endian basis,
-                    // so we apply them directly without reversing bits.
-                    let sub_matrix = circuit_to_matrix(circuit.circuit(), None)?;
-                    apply_gate_to_matrix(&mut matrix, &sub_matrix, &bits);
-                } else {
-                    return Err(CircuitError::NoMatrixRepresentation);
+                    apply_gate_to_matrix(&mut matrix, gate_matrix.as_ref(), &reversed_bits)?;
                 }
             }
             Instruction::CircuitGate(circuit_gate) => {
@@ -198,7 +200,7 @@ pub fn circuit_to_matrix(
                     .assign_parameters(&Some(bindings))
                     .map_err(|_| CircuitError::SymbolicParameterError)?;
                 let sub_matrix = circuit_to_matrix(&sub_circuit, None)?;
-                apply_gate_to_matrix(&mut matrix, &sub_matrix, &bits);
+                apply_gate_to_matrix(&mut matrix, &sub_matrix, &bits)?;
             }
             Instruction::ControlFlowGate(_) => {
                 return Err(CircuitError::InvalidOperation(
@@ -233,12 +235,20 @@ fn apply_gate_to_matrix(
     matrix: &mut Array2<Complex64>,
     gate_matrix: &Array2<Complex64>,
     bits: &[usize],
-) {
+) -> Result<(), CircuitError> {
+    let expected_dim = 1usize << bits.len();
+    if gate_matrix.nrows() != expected_dim || gate_matrix.ncols() != expected_dim {
+        return Err(CircuitError::QubitCountMismatch {
+            expected: gate_matrix.nrows().trailing_zeros() as usize,
+            actual: bits.len(),
+        });
+    }
     match bits.len() {
         1 => apply_single_qubit_gate(matrix, gate_matrix, bits[0]),
         2 => apply_two_qubit_gate(matrix, gate_matrix, bits[0], bits[1]),
         _ => apply_general_gate(matrix, gate_matrix, bits),
     }
+    Ok(())
 }
 
 // Helper struct for raw pointer access to split mutable borrow

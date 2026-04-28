@@ -52,7 +52,3 @@ pub use gate::standard_gate::StandardGate;
 pub use gate::unitary_gate::UnitaryGate;
 pub use operation::Operation;
 pub use parameter::Parameter;
-pub use symbolic_matrix::{
-    SymbolicComplex, SymbolicMatrix, circuit_to_symbolic_matrix, evaluate_symbolic_matrix,
-    standard_gate_symbolic_matrix,
-};

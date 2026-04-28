@@ -1078,7 +1078,7 @@ impl Circuit {
     ///
     /// // Define a custom gate (e.g., Identity)
     /// let mat = Array2::eye(2).mapv(|x| Complex64::new(x, 0.0));
-    /// let u_gate = UnitaryGate::new("MyGate", 1)
+    /// let u_gate = UnitaryGate::new("MyGate", 1, 0)
     ///      .with_matrix(mat)
     ///      .unwrap();
     ///
@@ -1089,7 +1089,21 @@ impl Circuit {
     /// circuit.unitary(u_gate, vec![q0]).unwrap();
     /// ```
     pub fn unitary(&mut self, gate: UnitaryGate, qubits: Vec<Qubit>) -> Result<(), CircuitError> {
+        self.unitary_with_params(gate, qubits, std::iter::empty())
+    }
+
+    /// Appends a parameterized custom unitary gate to the circuit.
+    pub fn unitary_with_params<P>(
+        &mut self,
+        gate: UnitaryGate,
+        qubits: Vec<Qubit>,
+        params: P,
+    ) -> Result<(), CircuitError>
+    where
+        P: IntoIterator<Item = ParameterValue>,
+    {
         let qubits_sv: SmallVec<[Qubit; 3]> = qubits.into();
+        let params_vec: Vec<ParameterValue> = params.into_iter().collect();
 
         // Check if qubit count matches definition.num_qubits
         if qubits_sv.len() != gate.num_qubits() as usize {
@@ -1098,11 +1112,17 @@ impl Circuit {
                 actual: qubits_sv.len(),
             });
         }
+        if params_vec.len() != gate.num_params() as usize {
+            return Err(CircuitError::ParameterCountMismatch {
+                expected: gate.num_params() as usize,
+                actual: params_vec.len(),
+            });
+        }
 
         self.append(
             Instruction::UnitaryGate(Box::new(gate)),
             qubits_sv,
-            std::iter::empty(),
+            params_vec,
             None,
         )
     }
@@ -1239,7 +1259,7 @@ impl Circuit {
     ///
     /// * `name` - A name for the new gate.
     pub fn to_gate(self, name: impl Into<String>) -> Result<Instruction, CircuitError> {
-        let frozen = FrozenCircuit { circuit: self };
+        let frozen = FrozenCircuit::new(self);
         let gate = CircuitGate::new(name, frozen)?;
         Ok(Instruction::CircuitGate(Box::new(gate)))
     }

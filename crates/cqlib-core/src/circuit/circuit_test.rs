@@ -15,7 +15,7 @@ use crate::circuit::circuit_impl::Circuit;
 use crate::circuit::circuit_param::{CircuitParam, ParameterValue};
 use crate::circuit::error::CircuitError;
 use crate::circuit::gate::control_flow::ConditionView;
-use crate::circuit::gate::{Instruction, StandardGate};
+use crate::circuit::gate::{Instruction, StandardGate, UnitaryGate};
 use crate::circuit::operation::Operation;
 use crate::circuit::parameter::Parameter;
 use smallvec::smallvec;
@@ -319,6 +319,60 @@ fn test_assign_parameters() {
             assigned_circuit.data[1].params[0]
         );
     }
+}
+
+#[test]
+fn test_parameterized_unitary_appends_fixed_and_symbolic_params() {
+    let mut circuit = Circuit::new(1);
+    let theta = Parameter::symbol("theta");
+    let gate = UnitaryGate::new("CustomU", 1, 2);
+
+    circuit
+        .unitary_with_params(
+            gate,
+            vec![Qubit::new(0)],
+            vec![ParameterValue::Fixed(0.25), ParameterValue::Param(theta)],
+        )
+        .unwrap();
+
+    assert_eq!(circuit.data.len(), 1);
+    assert!(matches!(
+        circuit.data[0].instruction,
+        Instruction::UnitaryGate(_)
+    ));
+    assert!(matches!(
+        circuit.data[0].params[0],
+        CircuitParam::Fixed(0.25)
+    ));
+    assert!(matches!(circuit.data[0].params[1], CircuitParam::Index(_)));
+    assert_eq!(circuit.parameters().len(), 1);
+    assert!(circuit.symbols().contains("theta"));
+}
+
+#[test]
+fn test_parameterized_unitary_validates_param_count() {
+    let mut circuit = Circuit::new(1);
+    let gate = UnitaryGate::new("CustomU", 1, 2);
+
+    let err = circuit
+        .unitary_with_params(gate.clone(), vec![Qubit::new(0)], vec![0.1.into()])
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        CircuitError::ParameterCountMismatch {
+            expected: 2,
+            actual: 1
+        }
+    ));
+
+    let err = circuit.unitary(gate, vec![Qubit::new(0)]).unwrap_err();
+    assert!(matches!(
+        err,
+        CircuitError::ParameterCountMismatch {
+            expected: 2,
+            actual: 0
+        }
+    ));
 }
 
 #[test]

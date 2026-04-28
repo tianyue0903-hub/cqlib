@@ -423,7 +423,7 @@ fn test_mcgate_control_higher_than_target() {
 fn test_unitary_gate_single_qubit() {
     // Create a custom unitary (Pauli X for simplicity)
     let mat = array![[c(0.0, 0.0), c(1.0, 0.0)], [c(1.0, 0.0), c(0.0, 0.0)],];
-    let u_gate = UnitaryGate::new("CustomX", 1).with_matrix(mat).unwrap();
+    let u_gate = UnitaryGate::new("CustomX", 1, 0).with_matrix(mat).unwrap();
 
     let mut circuit = Circuit::new(1);
     circuit.unitary(u_gate, vec![Qubit::new(0)]).unwrap();
@@ -443,7 +443,9 @@ fn test_unitary_gate_two_qubit() {
         [c(0.0, 0.0), c(1.0, 0.0), c(0.0, 0.0), c(0.0, 0.0)],
         [c(0.0, 0.0), c(0.0, 0.0), c(0.0, 0.0), c(1.0, 0.0)],
     ];
-    let u_gate = UnitaryGate::new("CustomSwap", 2).with_matrix(mat).unwrap();
+    let u_gate = UnitaryGate::new("CustomSwap", 2, 0)
+        .with_matrix(mat)
+        .unwrap();
 
     let mut circuit = Circuit::new(2);
     circuit
@@ -731,7 +733,7 @@ fn test_symbolic_parameter_returns_error() {
 
 #[test]
 fn test_unitary_gate_without_matrix_or_circuit_returns_error() {
-    let u_gate = UnitaryGate::new("Symbolic", 1);
+    let u_gate = UnitaryGate::new("Symbolic", 1, 0);
     let mut circuit = Circuit::new(1);
     circuit.unitary(u_gate, vec![Qubit::new(0)]).unwrap();
 
@@ -745,13 +747,140 @@ fn test_unitary_gate_without_matrix_or_circuit_returns_error() {
 fn test_unitary_gate_with_circuit_fallback() {
     let mut inner = Circuit::new(1);
     inner.x(Qubit::new(0)).unwrap();
-    let u_gate = UnitaryGate::new("CircuitX", 1).with_circuit(Arc::new(FrozenCircuit::new(inner)));
+    let u_gate = UnitaryGate::new("CircuitX", 1, 0)
+        .with_circuit(Arc::new(FrozenCircuit::new(inner)))
+        .unwrap();
 
     let mut circuit = Circuit::new(1);
     circuit.unitary(u_gate, vec![Qubit::new(0)]).unwrap();
 
     let matrix = circuit_to_matrix(&circuit, None).unwrap();
     let expected = array![[c(0.0, 0.0), c(1.0, 0.0)], [c(1.0, 0.0), c(0.0, 0.0)],];
+
+    assert_matrix_approx_eq(&matrix, &expected, 1e-10);
+}
+
+#[test]
+fn test_parameterized_unitary_gate_matches_standard_rx() {
+    let u_gate = UnitaryGate::new("CustomRX", 1, 1)
+        .with_parameterized_matrix(|params| crate::circuit::gate::gate_matrix::rx_gate(params[0]))
+        .unwrap();
+
+    let mut circuit = Circuit::new(1);
+    circuit
+        .unitary_with_params(
+            u_gate,
+            vec![Qubit::new(0)],
+            vec![ParameterValue::Fixed(PI / 3.0)],
+        )
+        .unwrap();
+
+    let matrix = circuit_to_matrix(&circuit, None).unwrap();
+    let expected = StandardGate::RX.matrix(&[PI / 3.0]).unwrap();
+    assert_matrix_approx_eq(&matrix, expected.as_ref(), 1e-10);
+}
+
+#[test]
+fn test_parameterized_unitary_gate_reuses_definition_with_different_params() {
+    let gate = UnitaryGate::new("CustomPhase", 1, 1)
+        .with_parameterized_matrix(|params| {
+            crate::circuit::gate::gate_matrix::phase_gate(params[0])
+        })
+        .unwrap();
+
+    let mut circuit = Circuit::new(1);
+    circuit
+        .unitary_with_params(
+            gate.clone(),
+            vec![Qubit::new(0)],
+            vec![ParameterValue::Fixed(0.2)],
+        )
+        .unwrap();
+    circuit
+        .unitary_with_params(gate, vec![Qubit::new(0)], vec![ParameterValue::Fixed(0.3)])
+        .unwrap();
+
+    let matrix = circuit_to_matrix(&circuit, None).unwrap();
+    let expected = crate::circuit::gate::gate_matrix::phase_gate(0.5);
+    assert_matrix_approx_eq(&matrix, &expected, 1e-10);
+}
+
+#[test]
+fn test_parameterized_unitary_gate_symbolic_requires_binding() {
+    let gate = UnitaryGate::new("CustomPhase", 1, 1)
+        .with_parameterized_matrix(|params| {
+            crate::circuit::gate::gate_matrix::phase_gate(params[0])
+        })
+        .unwrap();
+    let mut circuit = Circuit::new(1);
+    circuit
+        .unitary_with_params(
+            gate,
+            vec![Qubit::new(0)],
+            vec![ParameterValue::from(Parameter::symbol("theta"))],
+        )
+        .unwrap();
+
+    assert!(matches!(
+        circuit_to_matrix(&circuit, None),
+        Err(CircuitError::SymbolicParameterError)
+    ));
+
+    let mut bindings = std::collections::HashMap::new();
+    bindings.insert("theta", PI / 4.0);
+    let bound = circuit.assign_parameters(&Some(bindings)).unwrap();
+    let matrix = circuit_to_matrix(&bound, None).unwrap();
+    let expected = crate::circuit::gate::gate_matrix::phase_gate(PI / 4.0);
+    assert_matrix_approx_eq(&matrix, &expected, 1e-10);
+}
+
+#[test]
+fn test_parameterized_unitary_gate_rejects_non_finite_param() {
+    let gate = UnitaryGate::new("CustomPhase", 1, 1)
+        .with_parameterized_matrix(|params| {
+            crate::circuit::gate::gate_matrix::phase_gate(params[0])
+        })
+        .unwrap();
+    let mut circuit = Circuit::new(1);
+    circuit
+        .unitary_with_params(
+            gate,
+            vec![Qubit::new(0)],
+            vec![ParameterValue::Fixed(f64::NAN)],
+        )
+        .unwrap();
+
+    assert!(matches!(
+        circuit_to_matrix(&circuit, None),
+        Err(CircuitError::InvalidParameterValue(0, value)) if value.is_nan()
+    ));
+}
+
+#[test]
+fn test_controlled_parameterized_unitary_gate_matrix() {
+    let gate = UnitaryGate::new("CustomPhase", 1, 1)
+        .with_parameterized_matrix(|params| {
+            crate::circuit::gate::gate_matrix::phase_gate(params[0])
+        })
+        .unwrap();
+    let mut circuit = Circuit::new(2);
+    circuit
+        .multi_control(
+            Instruction::UnitaryGate(Box::new(gate)),
+            [Qubit::new(0)],
+            [Qubit::new(1)],
+            [ParameterValue::Fixed(PI / 5.0)],
+        )
+        .unwrap();
+
+    let matrix = circuit_to_matrix(&circuit, None).unwrap();
+    let phase = Complex64::from_polar(1.0, PI / 5.0);
+    let expected = array![
+        [c(1.0, 0.0), c(0.0, 0.0), c(0.0, 0.0), c(0.0, 0.0)],
+        [c(0.0, 0.0), c(1.0, 0.0), c(0.0, 0.0), c(0.0, 0.0)],
+        [c(0.0, 0.0), c(0.0, 0.0), c(1.0, 0.0), c(0.0, 0.0)],
+        [c(0.0, 0.0), c(0.0, 0.0), c(0.0, 0.0), phase],
+    ];
 
     assert_matrix_approx_eq(&matrix, &expected, 1e-10);
 }
