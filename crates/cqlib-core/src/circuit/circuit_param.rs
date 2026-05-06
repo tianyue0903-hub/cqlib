@@ -100,3 +100,9 @@ impl From<ParameterValue> for Parameter {
         }
     }
 }
+
+impl From<&str> for ParameterValue {
+    fn from(para: &str) -> Self {
+        Parameter::symbol(para).into()
+    }
+}

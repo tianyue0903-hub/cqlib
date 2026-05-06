@@ -1,0 +1,300 @@
+// This code is part of Cqlib.
+//
+// (C) Copyright China Telecom Quantum Group 2026
+//
+// This code is licensed under the Apache License, Version 2.0. You may
+// obtain a copy of this license in the LICENSE.txt file in the root directory
+// of this source tree or at http://www.apache.org/licenses/LICENSE-2.0.
+//
+// Any modifications or derivative works of this code must retain this
+// copyright notice, and modified files need to carry a notice indicating
+// that they have been altered from the originals.
+
+use super::*;
+use crate::circuit::Directive;
+use ndarray::arr2;
+use smallvec::smallvec;
+use std::f64::consts::{FRAC_PI_2, PI};
+
+fn assert_verify_passed(result: VerifyResult) {
+    match result {
+        VerifyResult::SymbolicEqual | VerifyResult::NumericallyEqual { .. } => {}
+        other => panic!("expected verification to pass, got {other:?}"),
+    }
+}
+
+fn h_cancel_rule() -> Rule {
+    Rule::new(
+        "cancel_h",
+        vec![
+            RuleItem::standard(StandardGate::H, &[0], vec![]),
+            RuleItem::standard(StandardGate::H, &[0], vec![]),
+        ],
+        vec![],
+    )
+}
+
+fn rx_pi_to_x_rule() -> Rule {
+    Rule::new(
+        "rx_pi_to_x",
+        vec![RuleItem::standard(
+            StandardGate::RX,
+            &[0],
+            vec![ParameterValue::from(PI)],
+        )],
+        vec![RuleItem::standard(StandardGate::X, &[0], vec![])],
+    )
+}
+
+#[test]
+fn verify_accepts_cancel_h_up_to_global_phase() {
+    assert_verify_passed(h_cancel_rule().verify(10, 1e-8).unwrap());
+}
+
+#[test]
+fn verify_accepts_symbolic_merge_rz() {
+    let rule = Rule::new(
+        "merge_rz",
+        vec![
+            RuleItem::standard(StandardGate::RZ, &[0], vec![ParameterValue::from("a")]),
+            RuleItem::standard(StandardGate::RZ, &[0], vec![ParameterValue::from("b")]),
+        ],
+        vec![RuleItem::standard(
+            StandardGate::RZ,
+            &[0],
+            vec![ParameterValue::from(
+                Parameter::symbol("a") + Parameter::symbol("b"),
+            )],
+        )],
+    );
+
+    assert_verify_passed(rule.verify(10, 1e-8).unwrap());
+}
+
+#[test]
+fn verify_rejects_wrong_cancel_h_rewrite() {
+    let rule = Rule::new(
+        "bad_cancel_h",
+        vec![
+            RuleItem::standard(StandardGate::H, &[0], vec![]),
+            RuleItem::standard(StandardGate::H, &[0], vec![]),
+        ],
+        vec![RuleItem::standard(StandardGate::H, &[0], vec![])],
+    );
+
+    match rule.verify(10, 1e-8).unwrap() {
+        VerifyResult::Fail(failure) => {
+            assert!(failure.max_diff > 0.5);
+            assert!(failure.bindings.is_empty());
+        }
+        other => panic!("expected verification failure, got {other:?}"),
+    }
+}
+
+#[test]
+fn verify_reports_numeric_failure_for_constant_mismatch() {
+    let rule = Rule::new(
+        "bad_rz_constant",
+        vec![RuleItem::standard(
+            StandardGate::RZ,
+            &[0],
+            vec![ParameterValue::from(0.0)],
+        )],
+        vec![RuleItem::standard(
+            StandardGate::RZ,
+            &[0],
+            vec![ParameterValue::from(0.5)],
+        )],
+    );
+
+    match rule.verify(10, 1e-8).unwrap() {
+        VerifyResult::Fail(failure) => {
+            assert!(failure.max_diff > 0.1);
+            assert!(failure.bindings.is_empty());
+        }
+        other => panic!("expected verification failure, got {other:?}"),
+    }
+}
+
+#[test]
+fn verify_returns_unsupported_pattern_for_non_standard_instruction() {
+    let rule = Rule::new(
+        "bad_instruction",
+        vec![RuleItem {
+            instruction: Instruction::Directive(Directive::Barrier),
+            qubits: smallvec![0],
+            params: None,
+        }],
+        vec![],
+    );
+
+    assert!(matches!(
+        rule.verify(10, 1e-8),
+        Err(VerifyError::UnsupportedPattern(_))
+    ));
+}
+
+#[test]
+fn verify_accepts_rx_pi_to_x_up_to_global_phase() {
+    assert_verify_passed(rx_pi_to_x_rule().verify(10, 1e-8).unwrap());
+}
+
+#[test]
+fn verify_strict_matrix_rejects_rx_pi_to_x_without_gphase() {
+    match rx_pi_to_x_rule().verify_strict_matrix(10, 1e-8).unwrap() {
+        VerifyResult::Fail(failure) => {
+            assert!(failure.max_diff > 1.0);
+            assert!(failure.bindings.is_empty());
+        }
+        other => panic!("expected strict matrix failure, got {other:?}"),
+    }
+}
+
+#[test]
+fn verify_strict_matrix_accepts_rx_pi_to_x_with_explicit_gphase() {
+    let rule = Rule::new(
+        "rx_pi_to_x_with_gphase",
+        vec![RuleItem::standard(
+            StandardGate::RX,
+            &[0],
+            vec![ParameterValue::from(PI)],
+        )],
+        vec![
+            RuleItem::standard(StandardGate::X, &[0], vec![]),
+            RuleItem::standard(
+                StandardGate::GPhase,
+                &[],
+                vec![ParameterValue::from(-FRAC_PI_2)],
+            ),
+        ],
+    );
+
+    assert_verify_passed(rule.verify_strict_matrix(10, 1e-8).unwrap());
+}
+
+#[test]
+fn verify_accepts_conditioned_rx_inverse_eq_mod() {
+    let mut rule = Rule::new(
+        "cancel_rx_inverse",
+        vec![
+            RuleItem::standard(StandardGate::RX, &[0], vec![ParameterValue::from("a")]),
+            RuleItem::standard(StandardGate::RX, &[0], vec![ParameterValue::from("b")]),
+        ],
+        vec![],
+    );
+    rule.conditions = Some(smallvec![Condition::EqMod(
+        Parameter::symbol("a") + Parameter::symbol("b"),
+        Parameter::from(0.0),
+        Parameter::from(4.0 * PI),
+    )]);
+
+    assert_verify_passed(rule.verify(10, 1e-8).unwrap());
+}
+
+#[test]
+fn verify_accepts_conditioned_eq_rule() {
+    let mut rule = Rule::new(
+        "conditioned_equal_rz",
+        vec![RuleItem::standard(
+            StandardGate::RZ,
+            &[0],
+            vec![ParameterValue::from("a")],
+        )],
+        vec![RuleItem::standard(
+            StandardGate::RZ,
+            &[0],
+            vec![ParameterValue::from("b")],
+        )],
+    );
+    rule.conditions = Some(smallvec![Condition::Eq(
+        Parameter::symbol("a"),
+        Parameter::symbol("b"),
+    )]);
+
+    assert_verify_passed(rule.verify(10, 1e-8).unwrap());
+}
+
+#[test]
+fn verify_returns_inconclusive_when_no_satisfying_bindings_requested() {
+    let mut rule = Rule::new(
+        "no_bindings",
+        vec![RuleItem::standard(
+            StandardGate::RZ,
+            &[0],
+            vec![ParameterValue::from("a")],
+        )],
+        vec![RuleItem::standard(
+            StandardGate::RZ,
+            &[0],
+            vec![ParameterValue::from("b")],
+        )],
+    );
+    rule.conditions = Some(smallvec![Condition::Eq(
+        Parameter::symbol("a"),
+        Parameter::symbol("b"),
+    )]);
+
+    match rule.verify(0, 1e-8).unwrap() {
+        VerifyResult::Inconclusive { reason } => {
+            assert!(reason.contains("could not generate parameter bindings"));
+        }
+        other => panic!("expected inconclusive result, got {other:?}"),
+    }
+}
+
+#[test]
+fn max_diff_up_to_global_phase_falls_back_to_strict_for_invalid_phase_ratio() {
+    let lhs = arr2(&[
+        [Complex64::new(1.0, 0.0), Complex64::new(0.0, 0.0)],
+        [Complex64::new(0.0, 0.0), Complex64::new(1.0, 0.0)],
+    ]);
+    let rhs = arr2(&[
+        [Complex64::new(2.0, 0.0), Complex64::new(0.0, 0.0)],
+        [Complex64::new(0.0, 0.0), Complex64::new(2.0, 0.0)],
+    ]);
+
+    let strict = max_diff_strict(&lhs, &rhs);
+    let phase = max_diff_up_to_global_phase(&lhs, &rhs);
+
+    assert!((phase - strict).abs() < 1e-12, "expected strict fallback");
+}
+
+#[test]
+fn max_diff_up_to_global_phase_falls_back_to_strict_for_zero_structure_mismatch() {
+    let lhs = arr2(&[
+        [Complex64::new(1.0, 0.0), Complex64::new(0.0, 0.0)],
+        [Complex64::new(0.0, 0.0), Complex64::new(0.0, 0.0)],
+    ]);
+    let rhs = arr2(&[
+        [Complex64::new(0.0, 0.0), Complex64::new(1.0, 0.0)],
+        [Complex64::new(0.0, 0.0), Complex64::new(0.0, 0.0)],
+    ]);
+
+    let strict = max_diff_strict(&lhs, &rhs);
+    let phase = max_diff_up_to_global_phase(&lhs, &rhs);
+
+    assert!(phase.is_finite(), "expected a finite diff");
+    assert!((phase - strict).abs() < 1e-12, "expected strict fallback");
+}
+
+#[test]
+fn max_diff_up_to_global_phase_ignores_unit_phase() {
+    let lhs = arr2(&[
+        [Complex64::new(1.0, 0.0), Complex64::new(0.0, 0.0)],
+        [Complex64::new(0.0, 0.0), Complex64::new(-1.0, 0.0)],
+    ]);
+    let rhs = lhs.mapv(|value| Complex64::new(0.0, 1.0) * value);
+
+    assert!(max_diff_up_to_global_phase(&lhs, &rhs) < 1e-12);
+}
+
+#[test]
+fn max_diff_strict_detects_global_phase_difference() {
+    let lhs = arr2(&[
+        [Complex64::new(1.0, 0.0), Complex64::new(0.0, 0.0)],
+        [Complex64::new(0.0, 0.0), Complex64::new(1.0, 0.0)],
+    ]);
+    let rhs = lhs.mapv(|value| Complex64::new(0.0, 1.0) * value);
+
+    assert!(max_diff_strict(&lhs, &rhs) > 1.0);
+}
