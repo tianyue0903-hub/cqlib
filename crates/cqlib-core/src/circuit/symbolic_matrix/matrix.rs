@@ -398,6 +398,22 @@ pub fn substitute_symbolic_matrix(
         return Ok(matrix);
     }
 
+    for value in matrix.iter() {
+        for sym in value
+            .re
+            .get_symbols()
+            .into_iter()
+            .chain(value.im.get_symbols().into_iter())
+        {
+            if sym.contains(INTERNAL_SUB_PREFIX) {
+                return Err(CircuitError::InvalidOperation(format!(
+                    "symbol name '{}' in input matrix collides with internal substitution prefix '{}'",
+                    sym, INTERNAL_SUB_PREFIX
+                )));
+            }
+        }
+    }
+
     // Guard against symbol names that collide with our internal temp prefix.
     for key in replacements.keys() {
         if key.contains(INTERNAL_SUB_PREFIX) {

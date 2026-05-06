@@ -20,7 +20,9 @@ use crate::circuit::symbolic_matrix::gate::{
     apply_gate_to_matrix, apply_standard_gate_to_matrix, circuit_to_symbolic_matrix,
     standard_gate_symbolic_matrix,
 };
-use crate::circuit::symbolic_matrix::matrix::{evaluate_symbolic_matrix, symbolic_eye};
+use crate::circuit::symbolic_matrix::matrix::{
+    evaluate_symbolic_matrix, substitute_symbolic_matrix, symbolic_eye,
+};
 use crate::circuit::symbolic_matrix::test_utils::assert_matrix_approx_eq;
 use crate::circuit::{Circuit, Directive, Instruction, ParameterValue, Qubit};
 use indexmap::IndexSet;
@@ -38,8 +40,6 @@ fn assert_standard_gate_matches(gate: StandardGate, params: &[f64]) {
     let expected = gate.matrix(params).unwrap();
     assert_matrix_approx_eq(&evaluated, expected.as_ref(), 1e-10);
 }
-
-// --- Standard gate symbolic matrix tests ---
 
 #[test]
 fn test_fixed_standard_gate_matches_numeric_matrix() {
@@ -246,8 +246,6 @@ fn test_standard_gate_parameter_count_mismatch() {
         }
     ));
 }
-
-// --- circuit_to_symbolic_matrix tests ---
 
 #[test]
 fn test_symbolic_circuit_matches_bound_numeric_circuit() {
@@ -578,8 +576,6 @@ fn test_global_phase_with_bindings() {
     assert_matrix_approx_eq(&evaluated, &expected, 1e-10);
 }
 
-// --- CircuitGate tests ---
-
 #[test]
 fn test_symbolic_circuit_gate_replaces_inner_symbols() {
     let mut inner = Circuit::new(1);
@@ -790,6 +786,17 @@ fn test_substitution_collision_detection() {
 }
 
 #[test]
+fn test_substitution_rejects_internal_prefix_in_input_matrix() {
+    let theta = Parameter::symbol("__cqlib_internal_sub_theta");
+    let symbolic = standard_gate_symbolic_matrix(StandardGate::RX, &[theta]).unwrap();
+    let replacements = HashMap::from([("theta".to_string(), Parameter::from(1.0))]);
+
+    let result = substitute_symbolic_matrix(symbolic, &replacements);
+
+    assert!(matches!(result, Err(CircuitError::InvalidOperation(_))));
+}
+
+#[test]
 fn test_substitution_cross_dependency() {
     let mut inner = Circuit::new(1);
     inner
@@ -871,8 +878,6 @@ fn test_cached_circuit_gate_preserves_parameter_substitution() {
 
     assert_matrix_approx_eq(&evaluated, &expected, 1e-10);
 }
-
-// --- UnitaryGate tests ---
 
 #[test]
 fn test_symbolic_unitary_gate_numeric_matrix() {
@@ -994,6 +999,35 @@ fn test_symbolic_parameterized_unitary_circuit_definition_preserves_symbol() {
 }
 
 #[test]
+fn test_symbolic_unitary_prefers_circuit_for_symbolic_params_even_with_matrix() {
+    let mut inner = Circuit::new(1);
+    inner.rx(Qubit::new(0), Parameter::symbol("theta")).unwrap();
+    let identity = Array2::eye(2);
+    let gate = UnitaryGate::new("CircuitBackedRX", 1, 1)
+        .with_parameterized_matrix(move |_| identity.clone())
+        .unwrap()
+        .with_circuit(Arc::new(FrozenCircuit::new(inner)))
+        .unwrap();
+
+    let mut circuit = Circuit::new(1);
+    circuit
+        .unitary_with_params(
+            gate,
+            vec![Qubit::new(0)],
+            vec![ParameterValue::from(Parameter::symbol("phi"))],
+        )
+        .unwrap();
+
+    let symbolic = circuit_to_symbolic_matrix(&circuit, None).unwrap();
+    let mut bindings = HashMap::new();
+    bindings.insert("phi", PI / 5.0);
+    let evaluated = evaluate_symbolic_matrix(&symbolic, &Some(bindings)).unwrap();
+    let expected = crate::circuit::gate::gate_matrix::rx_gate(PI / 5.0);
+
+    assert_matrix_approx_eq(&evaluated, &expected, 1e-12);
+}
+
+#[test]
 fn test_unitary_gate_circuit_2qubit_no_rev_bug() {
     let mut inner = Circuit::new(2);
     inner.cx(Qubit::new(0), Qubit::new(1)).unwrap();
@@ -1091,8 +1125,6 @@ fn test_unitary_gate_parameter_substitution_order() {
     assert_matrix_approx_eq(&evaluated, &expected, 1e-10);
 }
 
-// --- McGate tests ---
-
 #[test]
 fn test_mcgate_symbolic_matrix_matches_numeric() {
     let mut circuit = Circuit::new(4);
@@ -1135,8 +1167,6 @@ fn test_mcgate_parametric_symbolic_matrix_matches_numeric() {
 
     assert_matrix_approx_eq(&evaluated, &expected, 1e-10);
 }
-
-// --- Numeric/symbolic path consistency tests ---
 
 #[test]
 fn test_numeric_path_matches_symbolic_path_for_no_param_gates() {
@@ -1250,14 +1280,64 @@ fn test_apply_gate_to_matrix_dimension_mismatch() {
 }
 
 #[test]
+fn test_apply_gate_to_matrix_rejects_duplicate_bits() {
+    let mut matrix = symbolic_eye(4);
+    let gate = symbolic_eye(4);
+    let err = apply_gate_to_matrix(&mut matrix, &gate, &[0, 0]).unwrap_err();
+
+    assert!(matches!(err, CircuitError::DuplicateQubits));
+}
+
+#[test]
+fn test_apply_gate_to_matrix_rejects_out_of_range_bits() {
+    let mut matrix = symbolic_eye(4);
+    let gate = symbolic_eye(2);
+    let err = apply_gate_to_matrix(&mut matrix, &gate, &[2]).unwrap_err();
+
+    assert!(matches!(err, CircuitError::InvalidOperation(_)));
+}
+
+#[test]
+fn test_symbolic_rejects_duplicate_qubits_in_operation() {
+    let mut circuit = Circuit::new(2);
+    circuit
+        .append(
+            Instruction::Standard(StandardGate::CX),
+            [Qubit::new(0), Qubit::new(0)],
+            [],
+            None,
+        )
+        .unwrap();
+
+    let err = circuit_to_symbolic_matrix(&circuit, None).unwrap_err();
+
+    assert!(matches!(err, CircuitError::DuplicateQubits));
+}
+
+#[test]
+fn test_symbolic_rejects_wrong_qubit_count_in_operation() {
+    let mut circuit = Circuit::new(2);
+    circuit
+        .append(
+            Instruction::Standard(StandardGate::CX),
+            [Qubit::new(0)],
+            [],
+            None,
+        )
+        .unwrap();
+
+    let err = circuit_to_symbolic_matrix(&circuit, None).unwrap_err();
+
+    assert!(matches!(err, CircuitError::QubitCountMismatch { .. }));
+}
+
+#[test]
 fn test_apply_standard_gate_to_matrix_dimension_mismatch() {
     // CX is a 2-qubit gate; applying it to 1 bit should fail
     let mut matrix = symbolic_eye(2);
     let err = apply_standard_gate_to_matrix(&mut matrix, StandardGate::CX, &[0], &[]).unwrap_err();
     assert!(matches!(err, CircuitError::QubitCountMismatch { .. }));
 }
-
-// --- Serial/parallel consistency tests ---
 
 #[test]
 fn test_serial_parallel_consistency_single_qubit() {
@@ -1267,7 +1347,7 @@ fn test_serial_parallel_consistency_single_qubit() {
         evaluate_symbolic_matrix(&circuit_to_symbolic_matrix(&small, None).unwrap(), &None)
             .unwrap();
 
-    let mut large = Circuit::new(11);
+    let mut large = Circuit::new(10);
     large.h(Qubit::new(5)).unwrap();
     let large_eval =
         evaluate_symbolic_matrix(&circuit_to_symbolic_matrix(&large, None).unwrap(), &None)
@@ -1288,7 +1368,7 @@ fn test_serial_parallel_consistency_two_qubit() {
         evaluate_symbolic_matrix(&circuit_to_symbolic_matrix(&small, None).unwrap(), &None)
             .unwrap();
 
-    let mut large = Circuit::new(11);
+    let mut large = Circuit::new(10);
     large.cx(Qubit::new(3), Qubit::new(7)).unwrap();
     let large_eval =
         evaluate_symbolic_matrix(&circuit_to_symbolic_matrix(&large, None).unwrap(), &None)
@@ -1311,7 +1391,7 @@ fn test_serial_parallel_consistency_general_gate() {
         evaluate_symbolic_matrix(&circuit_to_symbolic_matrix(&small, None).unwrap(), &None)
             .unwrap();
 
-    let mut large = Circuit::new(11);
+    let mut large = Circuit::new(10);
     large
         .ccx(Qubit::new(2), Qubit::new(5), Qubit::new(8))
         .unwrap();

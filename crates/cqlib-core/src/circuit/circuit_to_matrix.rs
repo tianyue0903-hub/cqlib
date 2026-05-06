@@ -231,7 +231,7 @@ pub fn circuit_to_matrix(
 }
 
 /// Applies a gate (given as a matrix) to the full state matrix.
-fn apply_gate_to_matrix(
+pub(crate) fn apply_gate_to_matrix(
     matrix: &mut Array2<Complex64>,
     gate_matrix: &Array2<Complex64>,
     bits: &[usize],
