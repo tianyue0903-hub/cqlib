@@ -18,71 +18,33 @@
 //! simplifier cannot prove directly.
 
 use crate::circuit::error::{CircuitError, ParameterError};
+use crate::circuit::symbolic_matrix::matrix::simplify_matrix;
 use crate::circuit::symbolic_matrix::{
-    SymbolicComplex, SymbolicMatrix, apply_gate_to_matrix_num, apply_standard_gate_to_matrix,
-    evaluate_symbolic_matrix, symbolic_eye, symbolic_matrices_equivalent,
+    SymbolicMatrix, circuit_to_symbolic_matrix, evaluate_symbolic_matrix,
+    symbolic_matrices_equivalent,
 };
-use crate::circuit::{Instruction, Parameter, ParameterValue, StandardGate};
+use crate::circuit::{Circuit, Instruction, Parameter, ParameterValue, Qubit, StandardGate};
 use crate::compiler::knowledge::rule::{Condition, Rule, RuleItem};
-use ndarray::Array2;
 use ndarray::parallel::prelude::*;
 use num_complex::Complex64;
 use rand::Rng;
 use smallvec::SmallVec;
 use std::collections::HashMap;
 
-#[derive(Debug, Clone, Copy)]
-pub enum RuleEquivalenceMode {
-    StrictMatrix,
-    UpToGlobalPhase,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct RuleEquivalenceOptions {
-    pub num_bindings: usize,
-    pub tolerance: f64,
-    pub mode: RuleEquivalenceMode,
-}
-
-impl RuleEquivalenceOptions {
-    pub fn up_to_global_phase(num_bindings: usize, tolerance: f64) -> Self {
-        Self {
-            num_bindings,
-            tolerance,
-            mode: RuleEquivalenceMode::UpToGlobalPhase,
-        }
-    }
-
-    pub fn strict_matrix(num_bindings: usize, tolerance: f64) -> Self {
-        Self {
-            num_bindings,
-            tolerance,
-            mode: RuleEquivalenceMode::StrictMatrix,
-        }
-    }
-}
+const DETERMINISTIC_NUMERIC_TOLERANCE: f64 = 1e-12;
 
 /// Result of verifying a rule via symbolic matrix comparison.
 #[derive(Debug)]
 pub enum VerifyResult {
-    /// Symbolic matrices are equal after simplification under the selected mode.
-    SymbolicEqual,
+    /// The symbolic verifier proved the rule equivalent up to global phase.
+    Equivalent,
     /// Symbolic matrices differ structurally but are numerically equal at all
-    /// checked parameter bindings under the selected comparison mode.
-    NumericallyEqual { num_bindings: usize },
-    /// The rule failed verification.
-    Fail(VerifyFailure),
+    /// sampled parameter bindings.
+    SampledEqual { num_bindings: usize },
+    /// The verifier did not prove equivalence.
+    NotEquivalent,
     /// Could not verify (e.g., cannot generate satisfying bindings).
     Inconclusive { reason: String },
-}
-
-/// Details of a verification failure.
-#[derive(Debug)]
-pub struct VerifyFailure {
-    /// Maximum element-wise difference found.
-    pub max_diff: f64,
-    /// Parameter bindings that caused the failure.
-    pub bindings: HashMap<String, f64>,
 }
 
 /// Errors during verification setup (not verification failure).
@@ -99,39 +61,48 @@ pub enum VerifyError {
 impl Rule {
     /// Verify this rule by comparing the symbolic unitary matrices of the LHS
     /// and RHS up to global phase.
-    pub fn verify(&self, num_bindings: usize, tolerance: f64) -> Result<VerifyResult, VerifyError> {
-        verify_rule_equivalence(
-            self,
-            RuleEquivalenceOptions::up_to_global_phase(num_bindings, tolerance),
-        )
+    pub fn verify(&self) -> Result<VerifyResult, VerifyError> {
+        let (lhs, rhs) = build_simplified_matrices(self)?;
+        if symbolically_equivalent(&lhs, &rhs)? {
+            return Ok(VerifyResult::Equivalent);
+        }
+
+        if self.collect_free_symbols().is_empty() {
+            let (lhs_num, rhs_num) = rayon::join(
+                || evaluate_symbolic_matrix(&lhs, &None),
+                || evaluate_symbolic_matrix(&rhs, &None),
+            );
+            let lhs_num = lhs_num?;
+            let rhs_num = rhs_num?;
+            if max_diff_up_to_global_phase(&lhs_num, &rhs_num) < DETERMINISTIC_NUMERIC_TOLERANCE {
+                return Ok(VerifyResult::Equivalent);
+            }
+        }
+
+        Ok(VerifyResult::NotEquivalent)
     }
 
-    /// Verify this rule with strict element-wise matrix equality.
-    ///
-    /// Unlike [`Rule::verify`], this method does not quotient out a global
-    /// phase. Use it when compiler rewrites must preserve the exact unitary
-    /// matrix, including global phase.
-    pub fn verify_strict_matrix(
+    /// Verify this rule symbolically first, then fall back to numerical sampling.
+    pub fn verify_by_sampling(
         &self,
         num_bindings: usize,
         tolerance: f64,
     ) -> Result<VerifyResult, VerifyError> {
-        verify_rule_equivalence(
-            self,
-            RuleEquivalenceOptions::strict_matrix(num_bindings, tolerance),
-        )
+        let (lhs, rhs) = build_simplified_matrices(self)?;
+        if symbolically_equivalent(&lhs, &rhs)? {
+            return Ok(VerifyResult::Equivalent);
+        }
+
+        verify_by_sampling(self, &lhs, &rhs, num_bindings, tolerance)
     }
 }
 
-pub fn verify_rule_equivalence(
-    rule: &Rule,
-    options: RuleEquivalenceOptions,
-) -> Result<VerifyResult, VerifyError> {
+fn build_simplified_matrices(rule: &Rule) -> Result<(SymbolicMatrix, SymbolicMatrix), VerifyError> {
     let num_qubits = rule.num_qubits();
 
     let (lhs, rhs) = rayon::join(
-        || build_rule_item_matrix(&rule.operations, num_qubits),
-        || build_rule_item_matrix(&rule.target, num_qubits),
+        || rule_items_to_matrix(&rule.operations, num_qubits),
+        || rule_items_to_matrix(&rule.target, num_qubits),
     );
     let lhs = lhs?;
     let rhs = rhs?;
@@ -140,29 +111,22 @@ pub fn verify_rule_equivalence(
     let lhs = lhs?;
     let rhs = rhs?;
 
-    if symbolic_stage_passes(&lhs, &rhs, options.mode)? {
-        return Ok(VerifyResult::SymbolicEqual);
-    }
-
-    verify_numerically(rule, &lhs, &rhs, options)
+    Ok((lhs, rhs))
 }
 
-fn symbolic_stage_passes(
+fn symbolically_equivalent(
     lhs: &SymbolicMatrix,
     rhs: &SymbolicMatrix,
-    mode: RuleEquivalenceMode,
 ) -> Result<bool, VerifyError> {
-    match mode {
-        RuleEquivalenceMode::StrictMatrix => Ok(lhs == rhs),
-        RuleEquivalenceMode::UpToGlobalPhase => Ok(symbolic_matrices_equivalent(lhs, rhs)?),
-    }
+    Ok(symbolic_matrices_equivalent(lhs, rhs)?)
 }
 
-fn verify_numerically(
+fn verify_by_sampling(
     rule: &Rule,
     lhs: &SymbolicMatrix,
     rhs: &SymbolicMatrix,
-    options: RuleEquivalenceOptions,
+    num_bindings: usize,
+    tolerance: f64,
 ) -> Result<VerifyResult, VerifyError> {
     let free_symbols = rule.collect_free_symbols();
     if free_symbols.is_empty() {
@@ -172,31 +136,22 @@ fn verify_numerically(
         );
         let lhs_num = lhs_num?;
         let rhs_num = rhs_num?;
-        let diff = matrix_diff(&lhs_num, &rhs_num, options.mode);
-        if diff < options.tolerance {
-            return Ok(VerifyResult::NumericallyEqual { num_bindings: 1 });
+        let diff = max_diff_up_to_global_phase(&lhs_num, &rhs_num);
+        if diff < tolerance {
+            return Ok(VerifyResult::SampledEqual { num_bindings: 1 });
         }
-        return Ok(VerifyResult::Fail(VerifyFailure {
-            max_diff: diff,
-            bindings: HashMap::new(),
-        }));
+        return Ok(VerifyResult::NotEquivalent);
     }
 
     let symbol_names: Vec<&str> = free_symbols.iter().map(|s| s.as_str()).collect();
-    let bindings = generate_satisfying_bindings(
-        &symbol_names,
-        rule.conditions.as_deref(),
-        options.num_bindings,
-    );
+    let bindings =
+        generate_satisfying_bindings(&symbol_names, rule.conditions.as_deref(), num_bindings);
 
     if bindings.is_empty() {
         return Ok(VerifyResult::Inconclusive {
             reason: "could not generate parameter bindings satisfying conditions".to_string(),
         });
     }
-
-    let mut overall_max_diff = 0.0_f64;
-    let mut failing_bindings = HashMap::new();
 
     for binding in &bindings {
         let bindings_ref: Option<HashMap<&str, f64>> =
@@ -207,247 +162,65 @@ fn verify_numerically(
         );
         let lhs_num = lhs_num?;
         let rhs_num = rhs_num?;
-        let diff = matrix_diff(&lhs_num, &rhs_num, options.mode);
-        if diff >= options.tolerance {
-            failing_bindings = binding.clone();
-            overall_max_diff = diff;
-            break;
+        let diff = max_diff_up_to_global_phase(&lhs_num, &rhs_num);
+        if diff >= tolerance {
+            return Ok(VerifyResult::NotEquivalent);
         }
-        overall_max_diff = overall_max_diff.max(diff);
     }
 
-    if failing_bindings.is_empty() {
-        Ok(VerifyResult::NumericallyEqual {
-            num_bindings: bindings.len(),
-        })
-    } else {
-        Ok(VerifyResult::Fail(VerifyFailure {
-            max_diff: overall_max_diff,
-            bindings: failing_bindings,
-        }))
-    }
+    Ok(VerifyResult::SampledEqual {
+        num_bindings: bindings.len(),
+    })
 }
 
-/// Build the symbolic unitary matrix for a sequence of PatternOps (LHS).
-fn build_rule_item_matrix(
+fn rule_items_to_matrix(
     ops: &[RuleItem],
     num_qubits: usize,
 ) -> Result<SymbolicMatrix, VerifyError> {
-    let dim = 1usize << num_qubits;
-    let mut matrix = symbolic_eye(dim);
-    let mut numeric_block = NumericOpBlock::new(num_qubits);
+    let circuit = rule_items_to_circuit(ops, num_qubits)?;
+    Ok(circuit_to_symbolic_matrix(&circuit, None)?)
+}
+
+fn rule_items_to_circuit(ops: &[RuleItem], num_qubits: usize) -> Result<Circuit, VerifyError> {
+    let mut circuit = Circuit::new(num_qubits);
 
     for op in ops {
-        let gate = match &op.instruction {
-            Instruction::Standard(g) => *g,
+        let instruction = match &op.instruction {
+            Instruction::Standard(gate) => Instruction::Standard(*gate),
             other => {
                 return Err(VerifyError::UnsupportedPattern(format!("{other:?}")));
             }
         };
 
-        let params: SmallVec<[Parameter; 3]> = op
-            .params
-            .as_deref()
-            .map(|ps| {
-                ps.iter()
-                    .map(|p| match p {
-                        ParameterValue::Param(p) => p.clone(),
-                        ParameterValue::Fixed(v) => Parameter::from(*v),
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-
-        apply_rule_gate(
-            &mut matrix,
-            &mut numeric_block,
-            gate,
-            &op.qubits,
-            &params,
-            num_qubits,
-        )?;
-    }
-
-    numeric_block.flush_into(&mut matrix)?;
-    Ok(matrix)
-}
-
-fn apply_rule_gate(
-    matrix: &mut SymbolicMatrix,
-    numeric_block: &mut NumericOpBlock,
-    gate: StandardGate,
-    qubits: &[u32],
-    params: &[Parameter],
-    num_qubits: usize,
-) -> Result<(), VerifyError> {
-    if num_qubits <= 2 && params.iter().all(Parameter::is_constant) {
-        numeric_block.apply_standard_gate(gate, qubits, params)?;
-    } else if gate.num_qubits() == 0 {
-        numeric_block.flush_into(matrix)?;
-        apply_global_phase(matrix, &params[0]);
-    } else {
-        numeric_block.flush_into(matrix)?;
-        let reversed_bits: SmallVec<[usize; 3]> =
-            qubits.iter().map(|&q| q as usize).rev().collect();
-        apply_standard_gate_to_matrix(matrix, gate, &reversed_bits, params)?;
-    }
-    Ok(())
-}
-
-/// Accumulates consecutive constant gates as one dense numeric full-system
-/// operator before it is applied to the symbolic matrix.
-struct NumericOpBlock {
-    num_qubits: usize,
-    matrix: Option<Array2<Complex64>>,
-}
-
-impl NumericOpBlock {
-    fn new(num_qubits: usize) -> Self {
-        Self {
-            num_qubits,
-            matrix: None,
-        }
-    }
-
-    fn apply_standard_gate(
-        &mut self,
-        gate: StandardGate,
-        qubits: &[u32],
-        params: &[Parameter],
-    ) -> Result<(), VerifyError> {
-        let numeric_params: SmallVec<[f64; 3]> = params
-            .iter()
-            .map(|p| {
-                p.evaluate(&None)
-                    .map_err(|_| CircuitError::SymbolicParameterError)
-            })
-            .collect::<Result<_, _>>()?;
-
-        let block = self
-            .matrix
-            .get_or_insert_with(|| Array2::eye(1usize << self.num_qubits));
-
-        if gate.num_qubits() == 0 {
-            let phase = Complex64::from_polar(1.0, numeric_params[0]);
-            block.par_mapv_inplace(|value| phase * value);
-            return Ok(());
-        }
-
-        let gate_matrix = gate
-            .matrix(numeric_params.as_slice())
-            .map_err(|_| CircuitError::NoMatrixRepresentation)?;
-        let reversed_bits: SmallVec<[usize; 3]> =
-            qubits.iter().map(|&q| q as usize).rev().collect();
-        apply_dense_numeric_gate_to_numeric_matrix(block, gate_matrix.as_ref(), &reversed_bits)?;
-        Ok(())
-    }
-
-    fn flush_into(&mut self, matrix: &mut SymbolicMatrix) -> Result<(), VerifyError> {
-        let Some(block) = self.matrix.take() else {
-            return Ok(());
-        };
-        let bits: SmallVec<[usize; 8]> = (0..self.num_qubits).collect();
-        apply_gate_to_matrix_num(matrix, &block, &bits)?;
-        Ok(())
-    }
-}
-
-fn apply_dense_numeric_gate_to_numeric_matrix(
-    matrix: &mut Array2<Complex64>,
-    gate: &Array2<Complex64>,
-    bits: &[usize],
-) -> Result<(), CircuitError> {
-    let expected_dim = 1usize << bits.len();
-    if gate.nrows() != expected_dim || gate.ncols() != expected_dim {
-        return Err(CircuitError::QubitCountMismatch {
-            expected: gate.nrows().trailing_zeros() as usize,
-            actual: bits.len(),
-        });
-    }
-
-    let expanded = expand_numeric_gate(gate, bits, matrix.nrows());
-    *matrix = expanded.dot(matrix);
-    Ok(())
-}
-
-fn expand_numeric_gate(gate: &Array2<Complex64>, bits: &[usize], dim: usize) -> Array2<Complex64> {
-    let mut expanded = Array2::from_elem((dim, dim), Complex64::new(0.0, 0.0));
-
-    for row in 0..dim {
-        for col in 0..dim {
-            let mut local_row = 0usize;
-            let mut local_col = 0usize;
-            let mut unaffected_equal = true;
-
-            for bit in 0..dim.trailing_zeros() as usize {
-                let row_bit = (row >> bit) & 1;
-                let col_bit = (col >> bit) & 1;
-                if let Some(local_bit) = bits.iter().position(|&target| target == bit) {
-                    local_row |= row_bit << local_bit;
-                    local_col |= col_bit << local_bit;
-                } else if row_bit != col_bit {
-                    unaffected_equal = false;
-                    break;
+        if matches!(&instruction, Instruction::Standard(StandardGate::GPhase)) {
+            let actual = op.params.as_ref().map_or(0, SmallVec::len);
+            if actual != 1 {
+                return Err(CircuitError::ParameterCountMismatch {
+                    expected: 1,
+                    actual,
                 }
+                .into());
             }
-
-            if unaffected_equal {
-                expanded[[row, col]] = gate[[local_row, local_col]];
-            }
+            let theta = op
+                .params
+                .as_ref()
+                .and_then(|params| params.first())
+                .expect("GPhase parameter count was checked");
+            let phase = match theta {
+                ParameterValue::Param(param) => param.clone(),
+                ParameterValue::Fixed(value) => Parameter::from(*value),
+            };
+            circuit.set_global_phase(circuit.global_phase() + phase);
+            continue;
         }
+
+        let qubits: SmallVec<[Qubit; 3]> =
+            op.qubits.iter().map(|&qubit| Qubit::new(qubit)).collect();
+        let params = op.params.clone().unwrap_or_default();
+        circuit.append(instruction, qubits, params, None)?;
     }
 
-    expanded
-}
-
-/// Apply a global phase `e^{i*theta}` to the entire matrix.
-fn apply_global_phase(matrix: &mut SymbolicMatrix, theta: &Parameter) {
-    if theta.is_constant() {
-        let val = theta.evaluate(&None).expect("constant parameter evaluates");
-        let phase = Complex64::new(val.cos(), val.sin());
-        matrix
-            .as_slice_mut()
-            .expect("symbolic matrix must be contiguous")
-            .par_iter_mut()
-            .for_each(|elem| {
-                let old = std::mem::take(elem);
-                *elem = phase * old;
-            });
-    } else {
-        let phase = SymbolicComplex::exp_i(theta.clone());
-        matrix
-            .as_slice_mut()
-            .expect("symbolic matrix must be contiguous")
-            .par_iter_mut()
-            .for_each(|elem| {
-                let old = std::mem::take(elem);
-                *elem = &phase * old;
-            });
-    }
-}
-
-/// Simplify all elements of a symbolic matrix.
-fn simplify_matrix(m: &SymbolicMatrix) -> Result<SymbolicMatrix, VerifyError> {
-    let mut out = m.clone();
-    out.as_slice_mut()
-        .expect("symbolic matrix must be contiguous")
-        .par_iter_mut()
-        .try_for_each(|elem| -> Result<(), VerifyError> {
-            *elem = elem.simplify()?;
-            Ok(())
-        })?;
-    Ok(out)
-}
-
-fn matrix_diff(
-    lhs: &ndarray::Array2<Complex64>,
-    rhs: &ndarray::Array2<Complex64>,
-    mode: RuleEquivalenceMode,
-) -> f64 {
-    match mode {
-        RuleEquivalenceMode::StrictMatrix => max_diff_strict(lhs, rhs),
-        RuleEquivalenceMode::UpToGlobalPhase => max_diff_up_to_global_phase(lhs, rhs),
-    }
+    Ok(circuit)
 }
 
 /// Compute the maximum element-wise difference between two numerical matrices.

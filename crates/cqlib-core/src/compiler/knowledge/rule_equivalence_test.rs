@@ -11,14 +11,14 @@
 // that they have been altered from the originals.
 
 use super::*;
-use crate::circuit::Directive;
+use crate::circuit::{Directive, StandardGate};
 use ndarray::arr2;
 use smallvec::smallvec;
-use std::f64::consts::{FRAC_PI_2, PI};
+use std::f64::consts::PI;
 
 fn assert_verify_passed(result: VerifyResult) {
     match result {
-        VerifyResult::SymbolicEqual | VerifyResult::NumericallyEqual { .. } => {}
+        VerifyResult::Equivalent | VerifyResult::SampledEqual { .. } => {}
         other => panic!("expected verification to pass, got {other:?}"),
     }
 }
@@ -48,7 +48,7 @@ fn rx_pi_to_x_rule() -> Rule {
 
 #[test]
 fn verify_accepts_cancel_h_up_to_global_phase() {
-    assert_verify_passed(h_cancel_rule().verify(10, 1e-8).unwrap());
+    assert_verify_passed(h_cancel_rule().verify().unwrap());
 }
 
 #[test]
@@ -68,7 +68,7 @@ fn verify_accepts_symbolic_merge_rz() {
         )],
     );
 
-    assert_verify_passed(rule.verify(10, 1e-8).unwrap());
+    assert_verify_passed(rule.verify_by_sampling(10, 1e-8).unwrap());
 }
 
 #[test]
@@ -82,13 +82,10 @@ fn verify_rejects_wrong_cancel_h_rewrite() {
         vec![RuleItem::standard(StandardGate::H, &[0], vec![])],
     );
 
-    match rule.verify(10, 1e-8).unwrap() {
-        VerifyResult::Fail(failure) => {
-            assert!(failure.max_diff > 0.5);
-            assert!(failure.bindings.is_empty());
-        }
-        other => panic!("expected verification failure, got {other:?}"),
-    }
+    assert!(matches!(
+        rule.verify().unwrap(),
+        VerifyResult::NotEquivalent
+    ));
 }
 
 #[test]
@@ -107,13 +104,10 @@ fn verify_reports_numeric_failure_for_constant_mismatch() {
         )],
     );
 
-    match rule.verify(10, 1e-8).unwrap() {
-        VerifyResult::Fail(failure) => {
-            assert!(failure.max_diff > 0.1);
-            assert!(failure.bindings.is_empty());
-        }
-        other => panic!("expected verification failure, got {other:?}"),
-    }
+    assert!(matches!(
+        rule.verify_by_sampling(10, 1e-8).unwrap(),
+        VerifyResult::NotEquivalent
+    ));
 }
 
 #[test]
@@ -129,47 +123,14 @@ fn verify_returns_unsupported_pattern_for_non_standard_instruction() {
     );
 
     assert!(matches!(
-        rule.verify(10, 1e-8),
+        rule.verify(),
         Err(VerifyError::UnsupportedPattern(_))
     ));
 }
 
 #[test]
 fn verify_accepts_rx_pi_to_x_up_to_global_phase() {
-    assert_verify_passed(rx_pi_to_x_rule().verify(10, 1e-8).unwrap());
-}
-
-#[test]
-fn verify_strict_matrix_rejects_rx_pi_to_x_without_gphase() {
-    match rx_pi_to_x_rule().verify_strict_matrix(10, 1e-8).unwrap() {
-        VerifyResult::Fail(failure) => {
-            assert!(failure.max_diff > 1.0);
-            assert!(failure.bindings.is_empty());
-        }
-        other => panic!("expected strict matrix failure, got {other:?}"),
-    }
-}
-
-#[test]
-fn verify_strict_matrix_accepts_rx_pi_to_x_with_explicit_gphase() {
-    let rule = Rule::new(
-        "rx_pi_to_x_with_gphase",
-        vec![RuleItem::standard(
-            StandardGate::RX,
-            &[0],
-            vec![ParameterValue::from(PI)],
-        )],
-        vec![
-            RuleItem::standard(StandardGate::X, &[0], vec![]),
-            RuleItem::standard(
-                StandardGate::GPhase,
-                &[],
-                vec![ParameterValue::from(-FRAC_PI_2)],
-            ),
-        ],
-    );
-
-    assert_verify_passed(rule.verify_strict_matrix(10, 1e-8).unwrap());
+    assert_verify_passed(rx_pi_to_x_rule().verify().unwrap());
 }
 
 #[test]
@@ -188,7 +149,7 @@ fn verify_accepts_conditioned_rx_inverse_eq_mod() {
         Parameter::from(4.0 * PI),
     )]);
 
-    assert_verify_passed(rule.verify(10, 1e-8).unwrap());
+    assert_verify_passed(rule.verify_by_sampling(10, 1e-8).unwrap());
 }
 
 #[test]
@@ -211,7 +172,7 @@ fn verify_accepts_conditioned_eq_rule() {
         Parameter::symbol("b"),
     )]);
 
-    assert_verify_passed(rule.verify(10, 1e-8).unwrap());
+    assert_verify_passed(rule.verify_by_sampling(10, 1e-8).unwrap());
 }
 
 #[test]
@@ -234,7 +195,7 @@ fn verify_returns_inconclusive_when_no_satisfying_bindings_requested() {
         Parameter::symbol("b"),
     )]);
 
-    match rule.verify(0, 1e-8).unwrap() {
+    match rule.verify_by_sampling(0, 1e-8).unwrap() {
         VerifyResult::Inconclusive { reason } => {
             assert!(reason.contains("could not generate parameter bindings"));
         }

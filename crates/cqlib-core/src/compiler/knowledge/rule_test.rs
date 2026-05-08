@@ -199,10 +199,7 @@ fn validate_rejects_non_standard_instruction() {
 
     assert!(matches!(
         rule.validate(),
-        Err(RuleValidationError::UnsupportedInstruction {
-            context: RuleItemContext::Match,
-            ..
-        })
+        Err(RuleValidationError::UnsupportedInstruction { .. })
     ));
 }
 
@@ -220,10 +217,7 @@ fn validate_rejects_non_standard_rewrite_instruction() {
 
     assert!(matches!(
         rule.validate(),
-        Err(RuleValidationError::UnsupportedInstruction {
-            context: RuleItemContext::Rewrite,
-            ..
-        })
+        Err(RuleValidationError::UnsupportedInstruction { .. })
     ));
 }
 
@@ -238,7 +232,6 @@ fn validate_rejects_wrong_qubit_count() {
     assert_eq!(
         rule.validate(),
         Err(RuleValidationError::WrongQubitCount {
-            context: RuleItemContext::Match,
             gate: StandardGate::CX,
             expected: 2,
             got: 1,
@@ -257,7 +250,6 @@ fn validate_rejects_wrong_rewrite_qubit_count() {
     assert_eq!(
         rule.validate(),
         Err(RuleValidationError::WrongQubitCount {
-            context: RuleItemContext::Rewrite,
             gate: StandardGate::CX,
             expected: 2,
             got: 1,
@@ -276,7 +268,6 @@ fn validate_rejects_wrong_param_count() {
     assert_eq!(
         rule.validate(),
         Err(RuleValidationError::WrongParamCount {
-            context: RuleItemContext::Match,
             gate: StandardGate::RZ,
             expected: 1,
             got: 0,
@@ -299,7 +290,6 @@ fn validate_rejects_wrong_rewrite_param_count() {
     assert_eq!(
         rule.validate(),
         Err(RuleValidationError::WrongParamCount {
-            context: RuleItemContext::Rewrite,
             gate: StandardGate::RZ,
             expected: 1,
             got: 0,
@@ -318,7 +308,6 @@ fn validate_rejects_duplicate_gate_qubits() {
     assert_eq!(
         rule.validate(),
         Err(RuleValidationError::DuplicateQubit {
-            context: RuleItemContext::Match,
             gate: StandardGate::CX,
             qubit: 0,
         })
@@ -336,7 +325,6 @@ fn validate_rejects_duplicate_rewrite_gate_qubits() {
     assert_eq!(
         rule.validate(),
         Err(RuleValidationError::DuplicateQubit {
-            context: RuleItemContext::Rewrite,
             gate: StandardGate::CX,
             qubit: 0,
         })

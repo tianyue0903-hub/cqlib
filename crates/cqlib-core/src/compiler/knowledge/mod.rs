@@ -13,6 +13,6 @@
 pub mod library;
 pub mod rule;
 pub mod rule_dsl;
-mod rule_equivalence;
+pub mod rule_equivalence;
 
 pub use library::{RuleId, RuleKind, RuleLibrary, RuleLibraryError, RuleMetadata};
