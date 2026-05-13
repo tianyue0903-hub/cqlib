@@ -87,4 +87,4 @@ pub use directive::Directive;
 pub use instruction::Instruction;
 pub use mc_gate::MCGate;
 pub use standard_gate::StandardGate;
-pub use unitary_gate::UnitaryGate;
+pub use unitary_gate::{UnitaryGate, UnitaryMatrix};

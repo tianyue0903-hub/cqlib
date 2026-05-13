@@ -20,16 +20,26 @@
 use crate::circuit::circuit_to_matrix;
 use crate::circuit::error::CircuitError;
 use crate::circuit::gate::circuit_gate::FrozenCircuit;
+use crate::circuit::symbolic_matrix::{SymbolicMatrix, evaluate_symbolic_matrix};
 use alloc::borrow::Cow;
 use ndarray::Array2;
 use num_complex::Complex;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use uuid::Uuid;
 
-type ParameterizedMatrixFn = dyn Fn(&[f64]) -> Array2<Complex<f64>> + Send + Sync;
+/// Matrix representation attached to a [`UnitaryGate`].
+#[derive(Clone, Debug, PartialEq)]
+pub enum UnitaryMatrix {
+    /// A concrete numeric matrix. This is only valid for non-parameterized
+    /// unitary gate definitions.
+    Numeric(Array2<Complex<f64>>),
+    /// A symbolic matrix whose free symbols are mapped positionally by the
+    /// gate's `matrix_params`.
+    Symbolic(SymbolicMatrix),
+}
 
 /// A user-defined unitary quantum gate.
 ///
@@ -74,9 +84,9 @@ where
     /// The matrix representation of the gate, wrapped in `Arc` for cheap cloning.
     ///
     /// Can be `None` if the gate is purely symbolic (defined by circuit only).
-    matrix: Option<Arc<Array2<Complex<f64>>>>,
-    /// Matrix factory for parameterized unitary gates.
-    parameterized_matrix: Option<Arc<ParameterizedMatrixFn>>,
+    matrix: Option<Arc<UnitaryMatrix>>,
+    /// Ordered formal parameter names for a symbolic matrix representation.
+    matrix_params: Option<Arc<[String]>>,
     /// The number of qubits this gate acts on.
     num_qubits: u16,
     /// The number of parameters each application of this gate requires.
@@ -117,7 +127,7 @@ impl UnitaryGate {
             id: Uuid::new_v4(),
             label: Arc::new(label.to_string()),
             matrix: None,
-            parameterized_matrix: None,
+            matrix_params: None,
             num_qubits,
             num_params,
             circuit: None,
@@ -173,12 +183,28 @@ impl UnitaryGate {
     /// assert!(gate.matrix().is_none());
     /// ```
     pub fn matrix(&self) -> Option<&Array2<Complex<f64>>> {
-        self.matrix.as_deref()
+        match self.matrix.as_deref() {
+            Some(UnitaryMatrix::Numeric(matrix)) => Some(matrix),
+            _ => None,
+        }
     }
 
-    /// Returns whether this gate has a numeric parameterized matrix factory.
-    pub fn has_parameterized_matrix(&self) -> bool {
-        self.parameterized_matrix.is_some()
+    /// Returns the symbolic matrix representation if available.
+    pub fn symbolic_matrix(&self) -> Option<&SymbolicMatrix> {
+        match self.matrix.as_deref() {
+            Some(UnitaryMatrix::Symbolic(matrix)) => Some(matrix),
+            _ => None,
+        }
+    }
+
+    /// Returns the ordered formal parameter names for the symbolic matrix.
+    pub fn matrix_params(&self) -> Option<&[String]> {
+        self.matrix_params.as_deref()
+    }
+
+    /// Returns the matrix representation if one has been attached.
+    pub fn matrix_repr(&self) -> Option<&UnitaryMatrix> {
+        self.matrix.as_deref()
     }
 
     /// Returns the internal circuit representation if available.
@@ -232,16 +258,30 @@ impl UnitaryGate {
         }
         validate_matrix_shape(self.num_qubits, &mat)?;
 
-        self.matrix = Some(Arc::new(mat));
+        self.matrix = Some(Arc::new(UnitaryMatrix::Numeric(mat)));
+        self.matrix_params = None;
         Ok(self)
     }
 
-    /// Attaches a parameterized matrix factory to the unitary definition.
-    pub fn with_parameterized_matrix<F>(mut self, matrix_fn: F) -> Result<Self, CircuitError>
+    /// Attaches a symbolic matrix to the unitary definition.
+    ///
+    /// `params` defines the positional mapping between each gate application's
+    /// arguments and the free symbols inside `matrix`.
+    pub fn with_symbolic_matrix<I, S>(
+        mut self,
+        params: I,
+        matrix: SymbolicMatrix,
+    ) -> Result<Self, CircuitError>
     where
-        F: Fn(&[f64]) -> Array2<Complex<f64>> + Send + Sync + 'static,
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
     {
-        self.parameterized_matrix = Some(Arc::new(matrix_fn));
+        validate_symbolic_matrix_shape(self.num_qubits, &matrix)?;
+        let params: Vec<String> = params.into_iter().map(Into::into).collect();
+        self.validate_symbolic_matrix_params(&params, &matrix)?;
+
+        self.matrix = Some(Arc::new(UnitaryMatrix::Symbolic(matrix)));
+        self.matrix_params = Some(Arc::from(params.into_boxed_slice()));
         Ok(self)
     }
 
@@ -253,13 +293,24 @@ impl UnitaryGate {
         self.validate_param_values(params)?;
 
         if let Some(matrix) = self.matrix.as_deref() {
-            return Ok(Cow::Borrowed(matrix));
-        }
-
-        if let Some(matrix_fn) = self.parameterized_matrix.as_ref() {
-            let matrix = matrix_fn(params);
-            validate_matrix_shape(self.num_qubits, &matrix)?;
-            return Ok(Cow::Owned(matrix));
+            match matrix {
+                UnitaryMatrix::Numeric(matrix) => return Ok(Cow::Borrowed(matrix)),
+                UnitaryMatrix::Symbolic(matrix) => {
+                    let matrix_params = self
+                        .matrix_params
+                        .as_deref()
+                        .ok_or(CircuitError::SymbolicParameterError)?;
+                    let bindings: HashMap<&str, f64> = matrix_params
+                        .iter()
+                        .map(String::as_str)
+                        .zip(params.iter().copied())
+                        .collect();
+                    let matrix = evaluate_symbolic_matrix(matrix, &Some(bindings))
+                        .map_err(|_| CircuitError::SymbolicParameterError)?;
+                    validate_matrix_shape(self.num_qubits, &matrix)?;
+                    return Ok(Cow::Owned(matrix));
+                }
+            }
         }
 
         if let Some(circuit) = self.circuit.as_ref() {
@@ -290,6 +341,45 @@ impl UnitaryGate {
                 return Err(CircuitError::InvalidParameterValue(idx, value));
             }
         }
+        Ok(())
+    }
+
+    fn validate_symbolic_matrix_params(
+        &self,
+        params: &[String],
+        matrix: &SymbolicMatrix,
+    ) -> Result<(), CircuitError> {
+        if params.len() != self.num_params as usize {
+            return Err(CircuitError::ParameterCountMismatch {
+                expected: self.num_params as usize,
+                actual: params.len(),
+            });
+        }
+
+        let mut seen = HashSet::new();
+        for param in params {
+            if !seen.insert(param.as_str()) {
+                return Err(CircuitError::InvalidOperation(format!(
+                    "duplicate symbolic matrix parameter '{param}'"
+                )));
+            }
+        }
+
+        for value in matrix.iter() {
+            for symbol in value
+                .re
+                .get_symbols()
+                .into_iter()
+                .chain(value.im.get_symbols().into_iter())
+            {
+                if !seen.contains(symbol.as_str()) {
+                    return Err(CircuitError::InvalidOperation(format!(
+                        "symbolic matrix contains undeclared parameter '{symbol}'"
+                    )));
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -329,20 +419,7 @@ impl UnitaryGate {
 }
 
 fn validate_matrix_shape(num_qubits: u16, mat: &Array2<Complex<f64>>) -> Result<(), CircuitError> {
-    let expected_dim = 1usize.checked_shl(num_qubits as u32).ok_or_else(|| {
-        CircuitError::InvalidOperation(format!(
-            "cannot build matrix for {num_qubits} qubits: dimension overflows usize"
-        ))
-    })?;
-    if mat.shape() != [expected_dim, expected_dim] {
-        return Err(CircuitError::InvalidOperation(format!(
-            "Matrix dimension mismatch. Expected {}x{}, got {}x{}",
-            expected_dim,
-            expected_dim,
-            mat.nrows(),
-            mat.ncols()
-        )));
-    }
+    validate_symbolic_matrix_shape(num_qubits, mat)?;
 
     // Reject matrices containing NaN or infinite elements.
     for ((row, col), val) in mat.indexed_iter() {
@@ -379,16 +456,32 @@ fn validate_matrix_shape(num_qubits: u16, mat: &Array2<Complex<f64>>) -> Result<
     Ok(())
 }
 
+fn validate_symbolic_matrix_shape<T>(num_qubits: u16, mat: &Array2<T>) -> Result<(), CircuitError> {
+    let expected_dim = 1usize.checked_shl(num_qubits as u32).ok_or_else(|| {
+        CircuitError::InvalidOperation(format!(
+            "cannot build matrix for {num_qubits} qubits: dimension overflows usize"
+        ))
+    })?;
+    if mat.shape() != [expected_dim, expected_dim] {
+        return Err(CircuitError::InvalidOperation(format!(
+            "Matrix dimension mismatch. Expected {}x{}, got {}x{}",
+            expected_dim,
+            expected_dim,
+            mat.nrows(),
+            mat.ncols()
+        )));
+    }
+
+    Ok(())
+}
+
 impl fmt::Debug for UnitaryGate {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("UnitaryGate")
             .field("id", &self.id)
             .field("label", &self.label)
             .field("matrix", &self.matrix)
-            .field(
-                "parameterized_matrix",
-                &self.parameterized_matrix.as_ref().map(|_| "<matrix_fn>"),
-            )
+            .field("matrix_params", &self.matrix_params)
             .field("num_qubits", &self.num_qubits)
             .field("num_params", &self.num_params)
             .field("circuit", &self.circuit)

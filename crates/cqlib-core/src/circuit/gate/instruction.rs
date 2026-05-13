@@ -284,14 +284,11 @@ impl Instruction {
                         Ok(gate) => gate,
                         Err(_) => return None,
                     };
-                } else if uni.has_parameterized_matrix() {
-                    let base = (**uni).clone();
-                    g = match g.with_parameterized_matrix(move |params| {
-                        let matrix = base
-                            .matrix_for_params(params)
-                            .expect("controlled parameterized unitary params must be valid");
-                        gate_matrix::control_matrix(matrix.as_ref(), num_new_ctrls)
-                    }) {
+                } else if let Some(m) = uni.symbolic_matrix() {
+                    let controlled =
+                        crate::circuit::symbolic_matrix::gate::control_matrix(m, num_new_ctrls);
+                    let params = uni.matrix_params().unwrap_or(&[]);
+                    g = match g.with_symbolic_matrix(params.iter().cloned(), controlled) {
                         Ok(gate) => gate,
                         Err(_) => return None,
                     };
