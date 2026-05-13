@@ -15,6 +15,7 @@ pub mod api;
 pub mod artifact;
 pub mod context;
 pub mod error;
+pub mod knowledge;
 pub mod transform;
 pub mod verify;
 pub mod workflow;

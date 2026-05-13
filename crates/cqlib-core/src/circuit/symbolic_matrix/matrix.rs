@@ -492,6 +492,19 @@ pub fn substitute_symbolic_matrix(
     Ok(Array2::from_shape_vec(dim, raw).expect("valid shape for owned matrix"))
 }
 
+/// Simplify all elements of a symbolic matrix.
+pub fn simplify_matrix(m: &SymbolicMatrix) -> Result<SymbolicMatrix, ParameterError> {
+    let mut out = m.clone();
+    out.as_slice_mut()
+        .expect("symbolic matrix must be contiguous")
+        .par_iter_mut()
+        .try_for_each(|elem| -> Result<(), ParameterError> {
+            *elem = elem.simplify()?;
+            Ok(())
+        })?;
+    Ok(out)
+}
+
 /// Returns a `dim × dim` symbolic identity matrix.
 pub fn symbolic_eye(dim: usize) -> SymbolicMatrix {
     let mut matrix = Array2::from_elem((dim, dim), SymbolicComplex::zero());

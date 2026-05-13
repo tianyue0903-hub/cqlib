@@ -17,7 +17,7 @@
 //! parsing remains in `rule_dsl`; this module only delegates to it.
 
 use crate::circuit::{Instruction, StandardGate};
-use crate::compiler::knowledge::rule::{Rule, RuleValidationError};
+use crate::compiler::knowledge::rule::{Rule, RuleItem, RuleValidationError};
 use crate::compiler::knowledge::rule_dsl::load::{
     LoadError, load_rules_from_file, load_rules_from_str,
 };
@@ -65,6 +65,48 @@ pub struct RuleMetadata {
     pub has_conditions: bool,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct GateMask(u64);
+
+impl GateMask {
+    fn from_gates(gates: &[StandardGate]) -> Self {
+        let mut mask = Self::default();
+        for &gate in gates {
+            mask.insert(gate);
+        }
+        mask
+    }
+
+    fn from_rule_items(items: &[RuleItem]) -> Self {
+        let mut mask = Self::default();
+        for item in items {
+            let gate = match &item.instruction {
+                Instruction::Standard(gate) => *gate,
+                other => unreachable!("validated rule contains unsupported instruction: {other:?}"),
+            };
+            mask.insert(gate);
+        }
+        mask
+    }
+
+    fn insert(&mut self, gate: StandardGate) {
+        let bit = 1u64
+            .checked_shl(gate as u32)
+            .expect("standard gate discriminant must fit in GateMask");
+        self.0 |= bit;
+    }
+
+    fn contains_all(self, required: Self) -> bool {
+        required.0 & !self.0 == 0
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct RuleGateMetadata {
+    match_gate_mask: GateMask,
+    rewrite_gate_mask: GateMask,
+}
+
 /// Errors produced while building or extending a rule library.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum RuleLibraryError {
@@ -84,6 +126,7 @@ pub enum RuleLibraryError {
 pub struct RuleLibrary {
     rules: Vec<Rule>,
     metadata: Vec<RuleMetadata>,
+    gate_metadata: Vec<RuleGateMetadata>,
     name_map: HashMap<String, RuleId>,
     first_gate_map: HashMap<StandardGate, SmallVec<[RuleId; 8]>>,
     kind_map: HashMap<RuleKind, SmallVec<[RuleId; 8]>>,
@@ -141,6 +184,7 @@ impl RuleLibrary {
 
         let id = RuleId(self.rules.len());
         let metadata = build_metadata(id, kind, &rule);
+        let gate_metadata = build_gate_metadata(&rule);
 
         self.name_map.insert(rule.name.clone(), id);
         self.first_gate_map
@@ -149,6 +193,7 @@ impl RuleLibrary {
             .push(id);
         self.kind_map.entry(kind).or_default().push(id);
         self.metadata.push(metadata);
+        self.gate_metadata.push(gate_metadata);
         self.rules.push(rule);
 
         Ok(id)
@@ -224,6 +269,26 @@ impl RuleLibrary {
             .map(SmallVec::as_slice)
             .unwrap_or(&[])
     }
+
+    pub fn filter_rule_ids_by_gates(
+        &self,
+        op_gates: &[StandardGate],
+        target_gates: &[StandardGate],
+    ) -> SmallVec<[RuleId; 16]> {
+        let op_mask = GateMask::from_gates(op_gates);
+        let target_mask = GateMask::from_gates(target_gates);
+        let mut ids = SmallVec::new();
+
+        for (index, metadata) in self.gate_metadata.iter().enumerate() {
+            if op_mask.contains_all(metadata.match_gate_mask)
+                && target_mask.contains_all(metadata.rewrite_gate_mask)
+            {
+                ids.push(RuleId(index));
+            }
+        }
+
+        ids
+    }
 }
 
 fn build_metadata(id: RuleId, kind: RuleKind, rule: &Rule) -> RuleMetadata {
@@ -246,6 +311,13 @@ fn build_metadata(id: RuleId, kind: RuleKind, rule: &Rule) -> RuleMetadata {
             .conditions
             .as_ref()
             .is_some_and(|conditions| !conditions.is_empty()),
+    }
+}
+
+fn build_gate_metadata(rule: &Rule) -> RuleGateMetadata {
+    RuleGateMetadata {
+        match_gate_mask: GateMask::from_rule_items(&rule.operations),
+        rewrite_gate_mask: GateMask::from_rule_items(&rule.target),
     }
 }
 

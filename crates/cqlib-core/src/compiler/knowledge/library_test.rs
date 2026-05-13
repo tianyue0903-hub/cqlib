@@ -37,6 +37,45 @@ fn cx_h_rule(name: &str) -> Rule {
     )
 }
 
+fn swap_to_cx_rule(name: &str) -> Rule {
+    Rule::new(
+        name,
+        vec![RuleItem::standard(StandardGate::SWAP, &[0, 1], vec![])],
+        vec![
+            RuleItem::standard(StandardGate::CX, &[0, 1], vec![]),
+            RuleItem::standard(StandardGate::CX, &[1, 0], vec![]),
+            RuleItem::standard(StandardGate::CX, &[0, 1], vec![]),
+        ],
+    )
+}
+
+fn swap_to_cz_h_rule(name: &str) -> Rule {
+    Rule::new(
+        name,
+        vec![RuleItem::standard(StandardGate::SWAP, &[0, 1], vec![])],
+        vec![
+            RuleItem::standard(StandardGate::H, &[1], vec![]),
+            RuleItem::standard(StandardGate::CZ, &[0, 1], vec![]),
+            RuleItem::standard(StandardGate::H, &[1], vec![]),
+        ],
+    )
+}
+
+fn phase_to_rz_gphase_rule(name: &str) -> Rule {
+    Rule::new(
+        name,
+        vec![RuleItem::standard(
+            StandardGate::Phase,
+            &[0],
+            vec![ParameterValue::Fixed(0.5)],
+        )],
+        vec![
+            RuleItem::standard(StandardGate::RZ, &[0], vec![ParameterValue::Fixed(0.5)]),
+            RuleItem::standard(StandardGate::GPhase, &[], vec![ParameterValue::Fixed(0.25)]),
+        ],
+    )
+}
+
 #[test]
 fn empty_library_can_be_created() {
     let library = RuleLibrary::new();
@@ -188,6 +227,96 @@ fn rules_by_kind_returns_matching_rules() {
     assert_eq!(library.rules_by_kind(RuleKind::Cancel), &[cancel]);
     assert_eq!(library.rules_by_kind(RuleKind::Simplify), &[simplify]);
     assert!(library.rules_by_kind(RuleKind::Decompose).is_empty());
+}
+
+#[test]
+fn filter_rule_ids_by_gates_returns_rules_matching_source_and_target_basis() {
+    let library = RuleLibrary::from_rules(
+        vec![
+            swap_to_cx_rule("decompose_swap_to_cx"),
+            swap_to_cz_h_rule("decompose_swap_to_cz_h"),
+        ],
+        RuleKind::Decompose,
+    )
+    .unwrap();
+
+    let ids = library.filter_rule_ids_by_gates(&[StandardGate::SWAP], &[StandardGate::CX]);
+
+    assert_eq!(ids.as_slice(), &[RuleId(0)]);
+}
+
+#[test]
+fn filter_rule_ids_by_gates_rejects_rules_with_unlisted_match_gates() {
+    let library = RuleLibrary::from_rules(vec![h_rule("cancel_h")], RuleKind::Cancel).unwrap();
+
+    let ids = library.filter_rule_ids_by_gates(&[StandardGate::X], &[]);
+
+    assert!(ids.is_empty());
+}
+
+#[test]
+fn filter_rule_ids_by_gates_allows_empty_rewrite() {
+    let library = RuleLibrary::from_rules(vec![h_rule("cancel_h")], RuleKind::Cancel).unwrap();
+
+    let ids = library.filter_rule_ids_by_gates(&[StandardGate::H], &[]);
+
+    assert_eq!(ids.as_slice(), &[RuleId(0)]);
+}
+
+#[test]
+fn filter_rule_ids_by_gates_requires_all_rewrite_gates() {
+    let library = RuleLibrary::from_rules(
+        vec![swap_to_cz_h_rule("decompose_swap_to_cz_h")],
+        RuleKind::Decompose,
+    )
+    .unwrap();
+
+    let missing_h = library.filter_rule_ids_by_gates(&[StandardGate::SWAP], &[StandardGate::CZ]);
+    let complete = library
+        .filter_rule_ids_by_gates(&[StandardGate::SWAP], &[StandardGate::H, StandardGate::CZ]);
+
+    assert!(missing_h.is_empty());
+    assert_eq!(complete.as_slice(), &[RuleId(0)]);
+}
+
+#[test]
+fn filter_rule_ids_by_gates_treats_gphase_as_required_target_gate() {
+    let library = RuleLibrary::from_rules(
+        vec![phase_to_rz_gphase_rule("decompose_phase_to_rz_gphase")],
+        RuleKind::Decompose,
+    )
+    .unwrap();
+
+    let missing_gphase =
+        library.filter_rule_ids_by_gates(&[StandardGate::Phase], &[StandardGate::RZ]);
+    let complete = library.filter_rule_ids_by_gates(
+        &[StandardGate::Phase],
+        &[StandardGate::RZ, StandardGate::GPhase],
+    );
+
+    assert!(missing_gphase.is_empty());
+    assert_eq!(complete.as_slice(), &[RuleId(0)]);
+}
+
+#[test]
+fn filter_rule_ids_by_gates_preserves_library_rule_ids() {
+    let library = RuleLibrary::from_rules(
+        vec![
+            h_rule("cancel_h"),
+            swap_to_cx_rule("decompose_swap_to_cx"),
+            cx_h_rule("cx_h"),
+        ],
+        RuleKind::Simplify,
+    )
+    .unwrap();
+
+    let ids = library.filter_rule_ids_by_gates(
+        &[StandardGate::SWAP, StandardGate::CX, StandardGate::H],
+        &[StandardGate::CX, StandardGate::H],
+    );
+
+    assert_eq!(ids.as_slice(), &[RuleId(0), RuleId(1), RuleId(2)]);
+    assert_eq!(ids[1].as_usize(), 1);
 }
 
 #[test]
