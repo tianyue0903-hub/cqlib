@@ -302,13 +302,13 @@ fn instructions_equal_for_parameter_phase(lhs: &Instruction, rhs: &Instruction) 
             lhs.name() == rhs.name()
                 && lhs.num_qubits() == rhs.num_qubits()
                 && lhs.num_params() == rhs.num_params()
-                && parameter_phase_changed(lhs.circuit().circuit(), rhs.circuit().circuit())
-                    == false
+                && !parameter_phase_changed(lhs.circuit().circuit(), rhs.circuit().circuit())
         }
         (Instruction::UnitaryGate(lhs), Instruction::UnitaryGate(rhs)) => {
             lhs.label() == rhs.label()
                 && lhs.num_qubits() == rhs.num_qubits()
-                && lhs.matrix() == rhs.matrix()
+                && lhs.matrix_repr() == rhs.matrix_repr()
+                && lhs.matrix_params() == rhs.matrix_params()
                 && match (lhs.circuit(), rhs.circuit()) {
                     (Some(lhs), Some(rhs)) => {
                         !parameter_phase_changed(lhs.circuit(), rhs.circuit())

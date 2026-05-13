@@ -46,10 +46,6 @@ fn param_to_string(circuit: &Circuit, param: CircuitParam) -> String {
     }
 }
 
-// ============================================================================
-// Config tests
-// ============================================================================
-
 #[test]
 fn production_config_enables_all_builtin_behaviors() {
     let config = CanonicalizeConfig::production();
@@ -79,10 +75,6 @@ fn config_builder_only_changes_requested_fields() {
     assert!(!config.merges_adjacent_barriers());
     assert!(!config.drops_trivial_noops());
 }
-
-// ============================================================================
-// Parameter phase tests
-// ============================================================================
 
 #[test]
 fn canonicalize_parameter_phase_simplifies_symbolic_expressions() {
@@ -254,10 +246,6 @@ fn canonicalize_parameter_phase_remaps_body_only_symbolic_parameter_in_while_loo
         "theta"
     );
 }
-
-// ============================================================================
-// Canonicalizer transformer tests
-// ============================================================================
 
 #[test]
 fn canonicalizer_uses_stable_descriptor_contract() {
@@ -888,9 +876,33 @@ fn instruction_equivalence_distinguishes_same_named_circuit_gates() {
 }
 
 #[test]
+fn canonicalizer_is_idempotent_for_stable_circuit_gate() {
+    let canonicalizer = Canonicalizer::production();
+    let mut inner = Circuit::new(1);
+    inner.h(Qubit::new(0)).unwrap();
+    let gate = CircuitGate::new("stable", FrozenCircuit::new(inner)).unwrap();
+
+    let mut circuit = Circuit::new(1);
+    circuit
+        .circuit_gate(
+            gate,
+            vec![Qubit::new(0)],
+            std::iter::empty::<ParameterValue>(),
+        )
+        .unwrap();
+    let mut ctx = CompilerContext::new(circuit);
+
+    let outcome = canonicalizer.run(&mut ctx).unwrap();
+
+    assert!(!outcome.changed);
+    assert!(outcome.diagnostics.is_empty());
+    assert_eq!(ctx.revision(), 0);
+}
+
+#[test]
 fn instruction_equivalence_distinguishes_same_labeled_unitary_gates() {
     let lhs = Instruction::UnitaryGate(Box::new(
-        UnitaryGate::new("oracle", 1)
+        UnitaryGate::new("oracle", 1, 0)
             .with_matrix(array![
                 [Complex64::new(1.0, 0.0), Complex64::new(0.0, 0.0)],
                 [Complex64::new(0.0, 0.0), Complex64::new(1.0, 0.0)],
@@ -898,7 +910,7 @@ fn instruction_equivalence_distinguishes_same_labeled_unitary_gates() {
             .unwrap(),
     ));
     let rhs = Instruction::UnitaryGate(Box::new(
-        UnitaryGate::new("oracle", 1)
+        UnitaryGate::new("oracle", 1, 0)
             .with_matrix(array![
                 [Complex64::new(0.0, 0.0), Complex64::new(1.0, 0.0)],
                 [Complex64::new(1.0, 0.0), Complex64::new(0.0, 0.0)],
@@ -912,6 +924,72 @@ fn instruction_equivalence_distinguishes_same_labeled_unitary_gates() {
         &Circuit::new(1),
         &Circuit::new(1)
     ));
+}
+
+#[test]
+fn canonicalizer_recomputes_control_flow_qubits_after_body_cleanup() {
+    let canonicalizer = Canonicalizer::new(CanonicalizeConfig::new().normalize_parameters(false));
+    let mut circuit = Circuit::new(3);
+    let true_body = vec![
+        Operation {
+            instruction: Instruction::Standard(StandardGate::H),
+            qubits: smallvec![Qubit::new(1)],
+            params: smallvec![],
+            label: None,
+        },
+        Operation {
+            instruction: Instruction::Standard(StandardGate::I),
+            qubits: smallvec![Qubit::new(2)],
+            params: smallvec![],
+            label: None,
+        },
+    ];
+    circuit
+        .if_else(ConditionView::new(Qubit::new(0), 1), true_body, None)
+        .unwrap();
+    let mut ctx = CompilerContext::new(circuit);
+
+    let outcome = canonicalizer.run(&mut ctx).unwrap();
+
+    assert!(outcome.changed);
+    let operation = &ctx.circuit().operations()[0];
+    assert_eq!(operation.qubits.as_slice(), &[Qubit::new(1), Qubit::new(0)]);
+    let Instruction::ControlFlowGate(ControlFlow::IfElse(gate)) = &operation.instruction else {
+        panic!("expected if-else gate");
+    };
+    assert_eq!(gate.true_body().len(), 1);
+    assert_eq!(gate.true_body()[0].qubits.as_slice(), &[Qubit::new(1)]);
+}
+
+#[test]
+fn canonicalizer_keeps_label_on_non_gphase_replacement() {
+    let canonicalizer = Canonicalizer::production();
+    let mut circuit = Circuit::new(1);
+    circuit
+        .append(
+            Instruction::Standard(StandardGate::RX),
+            [Qubit::new(0)],
+            [ParameterValue::Fixed(std::f64::consts::PI)],
+            Some("rx-pi"),
+        )
+        .unwrap();
+    let mut ctx = CompilerContext::new(circuit);
+
+    let outcome = canonicalizer.run(&mut ctx).unwrap();
+
+    assert!(outcome.changed);
+    let ops = ctx.circuit().operations();
+    assert_eq!(ops.len(), 2);
+    assert!(matches!(
+        ops[0].instruction,
+        Instruction::Standard(StandardGate::GPhase)
+    ));
+    assert_eq!(ops[0].label.as_deref(), None);
+    assert!(matches!(
+        ops[1].instruction,
+        Instruction::Standard(StandardGate::X)
+    ));
+    assert_eq!(ops[1].label.as_deref(), Some("rx-pi"));
 }
 
 #[test]
@@ -939,6 +1017,77 @@ fn canonicalizer_fixpoint_drops_noop_after_parameter_normalization_to_zero() {
 
     let second = canonicalizer.run(&mut ctx).unwrap();
     assert!(!second.changed);
+}
+
+#[test]
+fn canonicalizer_preserves_global_phase_for_two_pi_rotation() {
+    let canonicalizer = Canonicalizer::production();
+    let mut circuit = Circuit::new(1);
+    circuit.rx(Qubit::new(0), std::f64::consts::TAU).unwrap();
+    let mut ctx = CompilerContext::new(circuit);
+
+    let outcome = canonicalizer.run(&mut ctx).unwrap();
+
+    assert!(outcome.changed);
+    let ops = ctx.circuit().operations();
+    assert_eq!(ops.len(), 1);
+    assert!(matches!(
+        ops[0].instruction,
+        Instruction::Standard(StandardGate::GPhase)
+    ));
+    assert!(ops[0].qubits.is_empty());
+    assert!(matches!(
+        ops[0].params.as_slice(),
+        [CircuitParam::Fixed(value)] if (*value - std::f64::consts::PI).abs() < 1e-12
+    ));
+}
+
+#[test]
+fn canonicalizer_folds_special_angles_to_named_gates() {
+    let canonicalizer = Canonicalizer::production();
+    let mut circuit = Circuit::new(1);
+    circuit
+        .phase(Qubit::new(0), std::f64::consts::FRAC_PI_2)
+        .unwrap();
+    circuit
+        .rx(Qubit::new(0), std::f64::consts::FRAC_PI_2)
+        .unwrap();
+    circuit
+        .ry(Qubit::new(0), -std::f64::consts::FRAC_PI_2)
+        .unwrap();
+    circuit
+        .rxy(
+            Qubit::new(0),
+            std::f64::consts::PI,
+            std::f64::consts::TAU + 0.125,
+        )
+        .unwrap();
+    let mut ctx = CompilerContext::new(circuit);
+
+    canonicalizer.run(&mut ctx).unwrap();
+
+    let gates: Vec<_> = ctx
+        .circuit()
+        .operations()
+        .iter()
+        .map(|op| match op.instruction {
+            Instruction::Standard(gate) => gate,
+            _ => panic!("expected standard gate"),
+        })
+        .collect();
+    assert_eq!(
+        gates,
+        vec![
+            StandardGate::S,
+            StandardGate::X2P,
+            StandardGate::Y2M,
+            StandardGate::XY
+        ]
+    );
+    assert!(matches!(
+        ctx.circuit().operations()[3].params.as_slice(),
+        [CircuitParam::Fixed(value)] if (*value - 0.125).abs() < 1e-12
+    ));
 }
 
 #[test]

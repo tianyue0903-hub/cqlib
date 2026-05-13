@@ -24,7 +24,8 @@
 //! through the same code paths as hand-written circuits.
 
 use crate::circuit::{
-    Circuit, ControlFlow, IfElseGate, Instruction, Operation, ParameterValue, WhileLoopGate,
+    Circuit, CircuitParam, ControlFlow, IfElseGate, Instruction, Operation, ParameterValue,
+    StandardGate, WhileLoopGate,
 };
 use crate::compiler::error::CompilerError;
 use smallvec::SmallVec;
@@ -33,7 +34,10 @@ use super::config::CanonicalizeConfig;
 use super::equivalence::{operations_equivalent, pending_operations_equivalent};
 use super::ops::{
     canonicalize_barrier_qubits, is_barrier_instruction, merge_operation_labels,
-    resolve_parameter_value, should_drop_operation,
+    resolve_operation_param, resolve_parameter_value, should_drop_operation,
+};
+use super::standard_gate_normalize::{
+    GlobalPhasePolicy, NormalizedStandardOp, normalize_standard_gate,
 };
 
 /// Result of a structural canonicalization pass over a full circuit.
@@ -72,6 +76,303 @@ pub(crate) struct PendingOperation {
     pub(crate) label: Option<Box<str>>,
 }
 
+#[derive(Debug, Clone)]
+struct CanonicalInstruction {
+    instruction: Instruction,
+    qubits: Option<SmallVec<[crate::circuit::Qubit; 3]>>,
+}
+
+impl CanonicalInstruction {
+    fn new(instruction: Instruction) -> Self {
+        Self {
+            instruction,
+            qubits: None,
+        }
+    }
+
+    fn with_qubits(instruction: Instruction, qubits: SmallVec<[crate::circuit::Qubit; 3]>) -> Self {
+        Self {
+            instruction,
+            qubits: Some(qubits),
+        }
+    }
+}
+
+struct StructuralCanonicalizer<'a> {
+    circuit: &'a Circuit,
+    config: &'a CanonicalizeConfig,
+}
+
+impl<'a> StructuralCanonicalizer<'a> {
+    fn new(circuit: &'a Circuit, config: &'a CanonicalizeConfig) -> Self {
+        Self { circuit, config }
+    }
+
+    fn run(&self) -> Result<StructuralCanonicalizeResult, CompilerError> {
+        let sequence = self.canonicalize_operations(self.circuit.operations())?;
+
+        if !sequence.changed {
+            return Ok(StructuralCanonicalizeResult {
+                circuit: None,
+                changed: false,
+            });
+        }
+
+        let mut rebuilt = Circuit::from_qubits(self.circuit.qubits())?;
+        rebuilt.set_global_phase(self.circuit.global_phase());
+
+        for operation in sequence.operations {
+            rebuilt.append(
+                operation.instruction,
+                operation.qubits,
+                operation.params,
+                operation.label.as_deref(),
+            )?;
+        }
+
+        Ok(StructuralCanonicalizeResult {
+            circuit: Some(rebuilt),
+            changed: true,
+        })
+    }
+
+    fn canonicalize_operations(
+        &self,
+        operations: &[Operation],
+    ) -> Result<PendingSequenceResult, CompilerError> {
+        let mut out = Vec::with_capacity(operations.len());
+
+        for operation in operations {
+            for canonical in self.canonicalize_operation(operation)? {
+                push_canonical_operation(&mut out, canonical, self.config);
+            }
+        }
+
+        Ok(PendingSequenceResult {
+            changed: !pending_operations_equivalent(operations, &out, self.circuit),
+            operations: out,
+        })
+    }
+
+    fn canonicalize_operation(
+        &self,
+        operation: &Operation,
+    ) -> Result<Vec<PendingOperation>, CompilerError> {
+        let canonical_instruction = self.canonicalize_instruction(operation.instruction.clone())?;
+        let instruction = canonical_instruction.instruction;
+        let qubits = canonical_instruction
+            .qubits
+            .unwrap_or_else(|| canonicalize_barrier_qubits(&instruction, &operation.qubits));
+
+        if should_drop_operation(self.circuit, operation, &instruction, &qubits, self.config)? {
+            return Ok(vec![]);
+        }
+
+        if let Instruction::Standard(gate) = instruction {
+            return self.canonicalize_standard_operation(operation, gate, qubits);
+        }
+
+        let pending_params: SmallVec<[ParameterValue; 3]> = operation
+            .params
+            .iter()
+            .map(|param| resolve_parameter_value(self.circuit, param))
+            .collect::<Result<_, _>>()?;
+
+        Ok(vec![PendingOperation {
+            instruction,
+            qubits,
+            params: pending_params,
+            label: operation.label.clone(),
+        }])
+    }
+
+    fn canonicalize_standard_operation(
+        &self,
+        operation: &Operation,
+        gate: StandardGate,
+        qubits: SmallVec<[crate::circuit::Qubit; 3]>,
+    ) -> Result<Vec<PendingOperation>, CompilerError> {
+        let semantic_params: SmallVec<[crate::circuit::Parameter; 3]> = operation
+            .params
+            .iter()
+            .map(|param| resolve_operation_param(self.circuit, param))
+            .collect::<Result<_, _>>()?;
+
+        let normalized = if self.config.normalizes_parameters() {
+            normalize_standard_gate(gate, &semantic_params, GlobalPhasePolicy::Preserve)
+        } else {
+            vec![NormalizedStandardOp {
+                gate,
+                params: operation
+                    .params
+                    .iter()
+                    .map(|param| resolve_parameter_value(self.circuit, param))
+                    .collect::<Result<_, _>>()?,
+            }]
+        };
+
+        if normalized.is_empty() && operation.label.is_some() {
+            return Ok(vec![PendingOperation {
+                instruction: Instruction::Standard(gate),
+                qubits,
+                params: operation
+                    .params
+                    .iter()
+                    .map(|param| resolve_parameter_value(self.circuit, param))
+                    .collect::<Result<_, _>>()?,
+                label: operation.label.clone(),
+            }]);
+        }
+
+        Ok(build_pending_standard_ops(
+            normalized,
+            qubits,
+            operation.label.clone(),
+        ))
+    }
+
+    fn canonicalize_instruction(
+        &self,
+        instruction: Instruction,
+    ) -> Result<CanonicalInstruction, CompilerError> {
+        let instruction = if self.config.canonicalizes_instruction_form() {
+            instruction.canonicalize_form()
+        } else {
+            instruction
+        };
+
+        if !self.config.recurses_control_flow() {
+            return Ok(CanonicalInstruction::new(instruction));
+        }
+
+        match instruction {
+            Instruction::ControlFlowGate(ControlFlow::IfElse(gate)) => {
+                let true_body = self.canonicalize_control_flow_body(gate.true_body())?;
+                let false_body = gate
+                    .false_body()
+                    .map(|body| self.canonicalize_control_flow_body(body))
+                    .transpose()?;
+                if !true_body.changed && false_body.as_ref().is_none_or(|body| !body.changed) {
+                    return Ok(CanonicalInstruction::new(Instruction::ControlFlowGate(
+                        ControlFlow::IfElse(gate),
+                    )));
+                }
+
+                let instruction =
+                    Instruction::ControlFlowGate(ControlFlow::IfElse(IfElseGate::new(
+                        gate.condition(),
+                        true_body.operations,
+                        false_body.map(|body| body.operations),
+                    )));
+                let qubits = control_flow_operation_qubits(&instruction);
+                Ok(CanonicalInstruction::with_qubits(instruction, qubits))
+            }
+            Instruction::ControlFlowGate(ControlFlow::WhileLoop(gate)) => {
+                let body = self.canonicalize_control_flow_body(gate.body())?;
+                if !body.changed {
+                    return Ok(CanonicalInstruction::new(Instruction::ControlFlowGate(
+                        ControlFlow::WhileLoop(gate),
+                    )));
+                }
+
+                let instruction = Instruction::ControlFlowGate(ControlFlow::WhileLoop(
+                    WhileLoopGate::new(gate.condition(), body.operations),
+                ));
+                let qubits = control_flow_operation_qubits(&instruction);
+                Ok(CanonicalInstruction::with_qubits(instruction, qubits))
+            }
+            _ => Ok(CanonicalInstruction::new(instruction)),
+        }
+    }
+
+    fn canonicalize_control_flow_body(
+        &self,
+        body: &[Operation],
+    ) -> Result<BodySequenceResult, CompilerError> {
+        let mut out = Vec::with_capacity(body.len());
+
+        for operation in body {
+            for canonical in self.canonicalize_body_operation(operation)? {
+                push_canonical_body_operation(&mut out, canonical, self.config);
+            }
+        }
+
+        Ok(BodySequenceResult {
+            changed: !operations_equivalent(body, &out, self.circuit, self.circuit),
+            operations: out,
+        })
+    }
+
+    fn canonicalize_body_operation(
+        &self,
+        operation: &Operation,
+    ) -> Result<Vec<Operation>, CompilerError> {
+        let canonical_instruction = self.canonicalize_instruction(operation.instruction.clone())?;
+        let instruction = canonical_instruction.instruction;
+        let qubits = canonical_instruction
+            .qubits
+            .unwrap_or_else(|| canonicalize_barrier_qubits(&instruction, &operation.qubits));
+
+        if should_drop_operation(self.circuit, operation, &instruction, &qubits, self.config)? {
+            return Ok(vec![]);
+        }
+
+        if let Instruction::Standard(gate) = instruction {
+            return self.canonicalize_body_standard_operation(operation, gate, qubits);
+        }
+
+        Ok(vec![Operation {
+            instruction,
+            qubits,
+            params: operation.params.clone(),
+            label: operation.label.clone(),
+        }])
+    }
+
+    fn canonicalize_body_standard_operation(
+        &self,
+        operation: &Operation,
+        gate: StandardGate,
+        qubits: SmallVec<[crate::circuit::Qubit; 3]>,
+    ) -> Result<Vec<Operation>, CompilerError> {
+        let semantic_params: SmallVec<[crate::circuit::Parameter; 3]> = operation
+            .params
+            .iter()
+            .map(|param| resolve_operation_param(self.circuit, param))
+            .collect::<Result<_, _>>()?;
+
+        let all_params_fixed = semantic_params
+            .iter()
+            .all(|param| param.evaluate(&None).is_ok());
+        if !self.config.normalizes_parameters() || !all_params_fixed {
+            return Ok(vec![Operation {
+                instruction: Instruction::Standard(gate),
+                qubits,
+                params: operation.params.clone(),
+                label: operation.label.clone(),
+            }]);
+        }
+
+        let normalized =
+            normalize_standard_gate(gate, &semantic_params, GlobalPhasePolicy::Preserve);
+
+        if normalized.is_empty() && operation.label.is_some() {
+            return Ok(vec![Operation {
+                instruction: Instruction::Standard(gate),
+                qubits,
+                params: operation.params.clone(),
+                label: operation.label.clone(),
+            }]);
+        }
+
+        Ok(build_body_standard_ops(
+            normalized,
+            qubits,
+            operation.label.clone(),
+        ))
+    }
+}
+
 /// Rebuilds a circuit by canonicalizing its linear operation sequences.
 ///
 /// Instead of mutating the internal `data` vector directly, this function
@@ -82,200 +383,121 @@ pub(crate) fn canonicalize_linear_structure(
     circuit: &Circuit,
     config: &CanonicalizeConfig,
 ) -> Result<StructuralCanonicalizeResult, CompilerError> {
-    let sequence = canonicalize_operations(circuit, circuit.operations(), config)?;
-
-    if !sequence.changed {
-        return Ok(StructuralCanonicalizeResult {
-            circuit: None,
-            changed: false,
-        });
-    }
-
-    let mut rebuilt = Circuit::from_qubits(circuit.qubits())?;
-    rebuilt.set_global_phase(circuit.global_phase());
-
-    for operation in sequence.operations {
-        rebuilt.append(
-            operation.instruction,
-            operation.qubits,
-            operation.params,
-            operation.label.as_deref(),
-        )?;
-    }
-
-    Ok(StructuralCanonicalizeResult {
-        circuit: Some(rebuilt),
-        changed: true,
-    })
+    StructuralCanonicalizer::new(circuit, config).run()
 }
 
-/// Canonicalizes a linear operation sequence.
-///
-/// Used for both the top-level circuit and control-flow bodies so that the
-/// canonicalization contract is identical everywhere. Each operation is
-/// canonicalized individually, then pushed into the output vector via the
-/// barrier-merge logic.
-pub(crate) fn canonicalize_operations(
-    circuit: &Circuit,
-    operations: &[Operation],
-    config: &CanonicalizeConfig,
-) -> Result<PendingSequenceResult, CompilerError> {
-    let mut out = Vec::with_capacity(operations.len());
-
-    for operation in operations {
-        let canonical = canonicalize_operation(circuit, operation, config)?;
-        if let Some(canonical) = canonical {
-            push_canonical_operation(&mut out, canonical, config);
-        }
-    }
-
-    Ok(PendingSequenceResult {
-        changed: !pending_operations_equivalent(operations, &out, circuit),
-        operations: out,
-    })
+fn build_pending_standard_ops(
+    normalized: Vec<NormalizedStandardOp>,
+    qubits: SmallVec<[crate::circuit::Qubit; 3]>,
+    label: Option<Box<str>>,
+) -> Vec<PendingOperation> {
+    let label_index = standard_label_index(&normalized);
+    normalized
+        .into_iter()
+        .enumerate()
+        .map(|(index, op)| PendingOperation {
+            instruction: Instruction::Standard(op.gate),
+            qubits: normalized_qubits(op.gate, &qubits),
+            params: op.params,
+            label: if label_index == Some(index) {
+                label.clone()
+            } else {
+                None
+            },
+        })
+        .collect()
 }
 
-/// Canonicalizes a single top-level operation.
-///
-/// Steps: canonicalize instruction form, sort/deduplicate barrier qubits,
-/// drop if it's a trivial no-op, and resolve parameters into `ParameterValue`s.
-fn canonicalize_operation(
-    circuit: &Circuit,
-    operation: &Operation,
-    config: &CanonicalizeConfig,
-) -> Result<Option<PendingOperation>, CompilerError> {
-    let instruction = canonicalize_instruction(circuit, operation.instruction.clone(), config)?;
-    let qubits = canonicalize_barrier_qubits(&instruction, &operation.qubits);
+fn build_body_standard_ops(
+    normalized: Vec<NormalizedStandardOp>,
+    qubits: SmallVec<[crate::circuit::Qubit; 3]>,
+    label: Option<Box<str>>,
+) -> Vec<Operation> {
+    let label_index = standard_label_index(&normalized);
+    normalized
+        .into_iter()
+        .enumerate()
+        .map(|(index, op)| Operation {
+            instruction: Instruction::Standard(op.gate),
+            qubits: normalized_qubits(op.gate, &qubits),
+            params: op
+                .params
+                .into_iter()
+                .map(parameter_value_to_circuit_param)
+                .collect(),
+            label: if label_index == Some(index) {
+                label.clone()
+            } else {
+                None
+            },
+        })
+        .collect()
+}
 
-    if should_drop_operation(circuit, operation, &instruction, &qubits, config)? {
-        return Ok(None);
-    }
-
-    let pending_params: SmallVec<[ParameterValue; 3]> = operation
-        .params
+fn standard_label_index(normalized: &[NormalizedStandardOp]) -> Option<usize> {
+    normalized
         .iter()
-        .map(|param| resolve_parameter_value(circuit, param))
-        .collect::<Result<_, _>>()?;
-
-    Ok(Some(PendingOperation {
-        instruction,
-        qubits,
-        params: pending_params,
-        label: operation.label.clone(),
-    }))
+        .position(|op| op.gate != StandardGate::GPhase)
+        .or_else(|| (!normalized.is_empty()).then_some(0))
 }
 
-/// Canonicalizes an instruction and optionally recurses into control-flow bodies.
-///
-/// Steps:
-/// 1. Collapse multi-controlled gates into standard forms if enabled.
-/// 2. If `recurse_control_flow` is enabled, canonicalize the bodies of
-///    `IfElse` and `WhileLoop` gates and rebuild the gate only when something
-///    inside changed.
-fn canonicalize_instruction(
-    circuit: &Circuit,
-    instruction: Instruction,
-    config: &CanonicalizeConfig,
-) -> Result<Instruction, CompilerError> {
-    let instruction = if config.canonicalizes_instruction_form() {
-        instruction.canonicalize_form()
+fn normalized_qubits(
+    gate: StandardGate,
+    original: &SmallVec<[crate::circuit::Qubit; 3]>,
+) -> SmallVec<[crate::circuit::Qubit; 3]> {
+    if gate.num_qubits() == 0 {
+        SmallVec::new()
     } else {
-        instruction
-    };
-
-    if !config.recurses_control_flow() {
-        return Ok(instruction);
+        original.clone()
     }
+}
 
+fn control_flow_operation_qubits(
+    instruction: &Instruction,
+) -> SmallVec<[crate::circuit::Qubit; 3]> {
+    let mut qubits = SmallVec::new();
     match instruction {
         Instruction::ControlFlowGate(ControlFlow::IfElse(gate)) => {
-            let true_body = canonicalize_control_flow_body(gate.true_body(), circuit, config)?;
-            let false_body = gate
-                .false_body()
-                .map(|body| canonicalize_control_flow_body(body, circuit, config))
-                .transpose()?;
-            if !true_body.changed && false_body.as_ref().is_none_or(|body| !body.changed) {
-                return Ok(Instruction::ControlFlowGate(ControlFlow::IfElse(gate)));
+            collect_operation_qubits(gate.true_body(), &mut qubits);
+            if let Some(false_body) = gate.false_body() {
+                collect_operation_qubits(false_body, &mut qubits);
             }
-            Ok(Instruction::ControlFlowGate(ControlFlow::IfElse(
-                IfElseGate::new(
-                    gate.condition(),
-                    true_body.operations,
-                    false_body.map(|body| body.operations),
-                ),
-            )))
+            push_unique_qubit(&mut qubits, gate.condition().qubit);
         }
         Instruction::ControlFlowGate(ControlFlow::WhileLoop(gate)) => {
-            let body = canonicalize_control_flow_body(gate.body(), circuit, config)?;
-            if !body.changed {
-                return Ok(Instruction::ControlFlowGate(ControlFlow::WhileLoop(gate)));
-            }
-            Ok(Instruction::ControlFlowGate(ControlFlow::WhileLoop(
-                WhileLoopGate::new(gate.condition(), body.operations),
-            )))
+            collect_operation_qubits(gate.body(), &mut qubits);
+            push_unique_qubit(&mut qubits, gate.condition().qubit);
         }
-        _ => Ok(instruction),
+        _ => {}
+    }
+    qubits
+}
+
+fn collect_operation_qubits(
+    operations: &[Operation],
+    output: &mut SmallVec<[crate::circuit::Qubit; 3]>,
+) {
+    for operation in operations {
+        for &qubit in &operation.qubits {
+            push_unique_qubit(output, qubit);
+        }
     }
 }
 
-/// Canonicalizes a control-flow body directly as an operation sequence.
-///
-/// Control-flow bodies are stored as raw `Vec<Operation>`, not full
-/// `Circuit` objects. Rebuilding them through temporary circuits would
-/// re-index symbolic parameters against a body-local pool and add unnecessary
-/// allocation overhead. This function preserves the original `CircuitParam`
-/// references into `parent_circuit` while applying the same structural rules
-/// used at the top level.
-fn canonicalize_control_flow_body(
-    body: &[Operation],
-    parent_circuit: &Circuit,
-    config: &CanonicalizeConfig,
-) -> Result<BodySequenceResult, CompilerError> {
-    // Control-flow bodies are stored as naked `Vec<Operation>` values rather
-    // than full `Circuit` objects. Rebuilding them through temporary circuits
-    // adds avoidable allocation churn and also risks re-indexing symbolic
-    // parameters against a body-local parameter pool. We therefore canonicalize
-    // bodies directly as operation sequences and preserve their original
-    // `CircuitParam` references into the parent circuit.
-    let mut out = Vec::with_capacity(body.len());
-
-    for operation in body {
-        let canonical = canonicalize_body_operation(parent_circuit, operation, config)?;
-        if let Some(canonical) = canonical {
-            push_canonical_body_operation(&mut out, canonical, config);
-        }
+fn push_unique_qubit(
+    output: &mut SmallVec<[crate::circuit::Qubit; 3]>,
+    qubit: crate::circuit::Qubit,
+) {
+    if !output.contains(&qubit) {
+        output.push(qubit);
     }
-
-    Ok(BodySequenceResult {
-        changed: !operations_equivalent(body, &out, parent_circuit, parent_circuit),
-        operations: out,
-    })
 }
 
-/// Canonicalizes a single body operation, preserving `CircuitParam` references.
-///
-/// Unlike top-level operations, parameters are *not* resolved into
-/// `ParameterValue`s so that the body continues to index into the parent
-/// circuit's parameter pool.
-fn canonicalize_body_operation(
-    parent_circuit: &Circuit,
-    operation: &Operation,
-    config: &CanonicalizeConfig,
-) -> Result<Option<Operation>, CompilerError> {
-    let instruction =
-        canonicalize_instruction(parent_circuit, operation.instruction.clone(), config)?;
-    let qubits = canonicalize_barrier_qubits(&instruction, &operation.qubits);
-
-    if should_drop_operation(parent_circuit, operation, &instruction, &qubits, config)? {
-        return Ok(None);
+fn parameter_value_to_circuit_param(value: ParameterValue) -> CircuitParam {
+    match value {
+        ParameterValue::Fixed(value) => CircuitParam::Fixed(value),
+        ParameterValue::Param(_) => unreachable!("fixed-only normalization produced a symbol"),
     }
-
-    Ok(Some(Operation {
-        instruction,
-        qubits,
-        params: operation.params.clone(),
-        label: operation.label.clone(),
-    }))
 }
 
 /// Pushes a canonicalized body operation into the output vector.

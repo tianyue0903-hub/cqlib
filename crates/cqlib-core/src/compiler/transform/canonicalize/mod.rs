@@ -40,6 +40,7 @@
 //! | `parameter_phase` | Symbolic parameter remapping, parameter-table rebuilds, and global-phase normalization |
 //! | `linear` | Linear operation scanning and rebuilding for top-level operations and control-flow bodies |
 //! | `ops` | Per-operation helpers for parameter resolution, no-op detection, barrier qubit canonicalization, and barrier label merging |
+//! | `standard_gate_normalize` | Numeric standard-gate canonical forms, special-angle folding, and explicit global-phase compensation |
 //! | `equivalence` | Conservative representation-equivalence checks used to decide whether a round changed anything |
 //!
 //! # Example
@@ -139,6 +140,7 @@ mod equivalence;
 mod linear;
 mod ops;
 mod parameter_phase;
+mod standard_gate_normalize;
 
 pub use canonicalizer::{CanonicalRuleId, Canonicalizer};
 pub use config::CanonicalizeConfig;

@@ -22,6 +22,7 @@
 /// equivalent fixed values are recognized across rebuilds. Benign structural
 /// differences that do not affect operation semantics (such as parameter pool
 /// reordering) are still reported as changes when the tables differ.
+use crate::circuit::gate::UnitaryMatrix;
 use crate::circuit::{Circuit, ControlFlow, Instruction, Operation};
 use num_complex::Complex64;
 
@@ -116,7 +117,7 @@ pub(crate) fn instructions_equivalent(
         (Instruction::UnitaryGate(lhs), Instruction::UnitaryGate(rhs)) => {
             lhs.label() == rhs.label()
                 && lhs.num_qubits() == rhs.num_qubits()
-                && unitary_matrices_equivalent(lhs.matrix(), rhs.matrix())
+                && unitary_matrix_reprs_equivalent(lhs, rhs)
                 && match (lhs.circuit(), rhs.circuit()) {
                     (Some(lhs), Some(rhs)) => {
                         circuits_equivalent_for_canonicalize(lhs.circuit(), rhs.circuit())
@@ -143,6 +144,22 @@ pub(crate) fn unitary_matrices_equivalent(
                 && lhs.iter().zip(rhs.iter()).all(|(lhs, rhs)| {
                     (lhs.re - rhs.re).abs() <= 1e-14 && (lhs.im - rhs.im).abs() <= 1e-14
                 })
+        }
+        (None, None) => true,
+        _ => false,
+    }
+}
+
+fn unitary_matrix_reprs_equivalent(
+    lhs: &crate::circuit::UnitaryGate,
+    rhs: &crate::circuit::UnitaryGate,
+) -> bool {
+    match (lhs.matrix_repr(), rhs.matrix_repr()) {
+        (Some(UnitaryMatrix::Numeric(lhs)), Some(UnitaryMatrix::Numeric(rhs))) => {
+            unitary_matrices_equivalent(Some(lhs), Some(rhs))
+        }
+        (Some(UnitaryMatrix::Symbolic(lhs_matrix)), Some(UnitaryMatrix::Symbolic(rhs_matrix))) => {
+            lhs.matrix_params() == rhs.matrix_params() && lhs_matrix == rhs_matrix
         }
         (None, None) => true,
         _ => false,
