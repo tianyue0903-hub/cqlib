@@ -53,7 +53,19 @@ fn is_rewrite_safe_accepts_standard_gates() {
 }
 
 #[test]
-fn is_rewrite_safe_rejects_non_standard() {
+fn is_rewrite_safe_accepts_mc_gate() {
+    let mc_gate = Operation {
+        instruction: Instruction::McGate(Box::new(MCGate::new(2, StandardGate::X))),
+        qubits: smallvec![Qubit::new(0), Qubit::new(1), Qubit::new(2)],
+        params: smallvec![],
+        label: None,
+    };
+
+    assert!(is_rewrite_safe_operation(&mc_gate));
+}
+
+#[test]
+fn is_rewrite_safe_rejects_non_gate_like_operations() {
     let barrier = Operation {
         instruction: Instruction::Directive(Directive::Barrier),
         qubits: smallvec![Qubit::new(0)],
@@ -78,12 +90,6 @@ fn is_rewrite_safe_rejects_non_standard() {
         params: smallvec![CircuitParam::Fixed(10.0)],
         label: None,
     };
-    let mc_gate = Operation {
-        instruction: Instruction::McGate(Box::new(MCGate::new(2, StandardGate::X))),
-        qubits: smallvec![Qubit::new(0), Qubit::new(1), Qubit::new(2)],
-        params: smallvec![],
-        label: None,
-    };
     let if_else = Operation {
         instruction: Instruction::ControlFlowGate(ControlFlow::IfElse(IfElseGate::new(
             ConditionView::new(Qubit::new(0), 1),
@@ -99,7 +105,6 @@ fn is_rewrite_safe_rejects_non_standard() {
     assert!(!is_rewrite_safe_operation(&measure));
     assert!(!is_rewrite_safe_operation(&reset));
     assert!(!is_rewrite_safe_operation(&delay));
-    assert!(!is_rewrite_safe_operation(&mc_gate));
     assert!(!is_rewrite_safe_operation(&if_else));
 }
 
@@ -133,6 +138,20 @@ fn compiled_rule_set_produces_matches_for_known_gates() {
     let mut circuit = Circuit::new(2);
     circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
     circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
+    let selected = select_rewrites(&circuit, circuit.operations(), &rules, &config).unwrap();
+    assert_eq!(selected.patches.len(), 1);
+
+    // The builtin library also contains MCGate decomposition rules.
+    let mut circuit = Circuit::new(2);
+    circuit
+        .append(
+            Instruction::McGate(Box::new(MCGate::new(1, StandardGate::X))),
+            [Qubit::new(0), Qubit::new(1)],
+            std::iter::empty::<ParameterValue>(),
+            None,
+        )
+        .unwrap();
+    let config = RewriteConfig::lowering().with_enabled_kinds(vec![RuleKind::Decompose]);
     let selected = select_rewrites(&circuit, circuit.operations(), &rules, &config).unwrap();
     assert_eq!(selected.patches.len(), 1);
 }
@@ -176,6 +195,95 @@ fn select_rewrites_cancels_self_inverse_pair() {
     assert_eq!(patch.matched_positions, vec![0, 1]);
     // Cancel rule removes both H gates, resulting in zero replacements.
     assert!(patch.replacements.is_empty());
+}
+
+#[test]
+fn select_rewrites_lowers_mcx1_to_cx() {
+    let mut circuit = Circuit::new(2);
+    circuit
+        .append(
+            Instruction::McGate(Box::new(MCGate::new(1, StandardGate::X))),
+            [Qubit::new(0), Qubit::new(1)],
+            std::iter::empty::<ParameterValue>(),
+            None,
+        )
+        .unwrap();
+    let rules = builtin_rules();
+    let config = RewriteConfig::lowering()
+        .with_enabled_kinds(vec![RuleKind::Decompose])
+        .with_max_rounds(1);
+
+    let selected = select_rewrites(&circuit, circuit.operations(), &rules, &config).unwrap();
+
+    assert_eq!(selected.patches.len(), 1);
+    let patch = &selected.patches[0];
+    assert_eq!(patch.matched_positions, vec![0]);
+    assert_eq!(patch.replacements.len(), 1);
+    assert!(matches!(
+        patch.replacements[0].instruction,
+        Instruction::Standard(StandardGate::CX)
+    ));
+    assert_eq!(
+        patch.replacements[0].qubits.as_slice(),
+        &[Qubit::new(0), Qubit::new(1)]
+    );
+}
+
+#[test]
+fn select_rewrites_lowers_parameterized_mcrz1_to_crz() {
+    let theta = Parameter::symbol("theta");
+    let mut circuit = Circuit::new(2);
+    circuit
+        .append(
+            Instruction::McGate(Box::new(MCGate::new(1, StandardGate::RZ))),
+            [Qubit::new(0), Qubit::new(1)],
+            [ParameterValue::Param(theta.clone())],
+            None,
+        )
+        .unwrap();
+    let rules = builtin_rules();
+    let config = RewriteConfig::lowering()
+        .with_enabled_kinds(vec![RuleKind::Decompose])
+        .with_max_rounds(1);
+
+    let selected = select_rewrites(&circuit, circuit.operations(), &rules, &config).unwrap();
+
+    assert_eq!(selected.patches.len(), 1);
+    let replacement = &selected.patches[0].replacements[0];
+    assert!(matches!(
+        replacement.instruction,
+        Instruction::Standard(StandardGate::CRZ)
+    ));
+    assert!(matches!(&replacement.params[0], ParameterValue::Param(param) if param == &theta));
+}
+
+#[test]
+fn target_filter_allows_mc_gate_decomposition_only_when_rewrite_is_target_native() {
+    let mut circuit = Circuit::new(3);
+    circuit
+        .append(
+            Instruction::McGate(Box::new(MCGate::new(2, StandardGate::Z))),
+            [Qubit::new(0), Qubit::new(1), Qubit::new(2)],
+            std::iter::empty::<ParameterValue>(),
+            None,
+        )
+        .unwrap();
+    let rules = builtin_rules();
+
+    let rejected = RewriteConfig::lowering()
+        .with_enabled_kinds(vec![RuleKind::Decompose])
+        .with_target_gates(vec![StandardGate::H])
+        .with_max_rounds(1);
+    let selected = select_rewrites(&circuit, circuit.operations(), &rules, &rejected).unwrap();
+    assert!(selected.is_empty());
+
+    let accepted = RewriteConfig::lowering()
+        .with_enabled_kinds(vec![RuleKind::Decompose])
+        .with_target_gates(vec![StandardGate::H, StandardGate::CCX])
+        .with_max_rounds(1);
+    let selected = select_rewrites(&circuit, circuit.operations(), &rules, &accepted).unwrap();
+    assert_eq!(selected.patches.len(), 1);
+    assert_eq!(selected.patches[0].replacements.len(), 3);
 }
 
 #[test]

@@ -13,7 +13,7 @@
 //! Transformer entry point and circuit rebuild logic for knowledge rewrite.
 //!
 //! This module bridges the local matcher and the compiler workflow.  It owns the
-//! fixpoint loop, splits circuits into rewrite-safe standard-gate blocks, recurs
+//! fixpoint loop, splits circuits into rewrite-safe gate-like blocks, recurs
 //! into control-flow bodies when configured, and rebuilds a new circuit from the
 //! selected patches.  The matcher decides which local rewrites are legal; this
 //! module decides where those rewrites are applied in the circuit structure.
@@ -34,7 +34,7 @@ use std::collections::{HashMap, HashSet};
 use super::config::RewriteConfig;
 use super::matcher::{
     CompiledRuleSet, ReplacementItem, RewritePatch, is_rewrite_safe_operation,
-    resolve_parameter_value, select_rewrites,
+    resolve_operation_param, select_rewrites, validate_target_instructions,
 };
 
 /// Aggregate statistics produced by one knowledge rewrite run.
@@ -122,6 +122,7 @@ impl Transformer for KnowledgeRewriter {
                 "rewrite max_rounds must be greater than zero".to_string(),
             ));
         }
+        validate_target_instructions(&self.config)?;
 
         // Load and compile the knowledge library once per transform run.  The
         // compiled form owns the hot lookup structures used by all rounds.
@@ -240,9 +241,9 @@ enum SequenceTarget<'a> {
 
 /// Rewrites one operation sequence into the selected output target.
 ///
-/// A sequence is split into maximal contiguous blocks of standard-gate
-/// operations.  Non-standard operations are emitted unchanged, except that
-/// control-flow instructions may have their bodies recursively rewritten.
+/// A sequence is split into maximal contiguous blocks of rewrite-safe
+/// operations.  Opaque or non-unitary operations are emitted unchanged, except
+/// that control-flow instructions may have their bodies recursively rewritten.
 fn apply_sequence(
     source: &Circuit,
     operations: &[Operation],
@@ -269,7 +270,7 @@ fn apply_sequence(
             continue;
         }
 
-        // Gather one maximal standard-gate block and let the matcher choose
+        // Gather one maximal rewrite-safe block and let the matcher choose
         // non-overlapping rewrites inside that block.
         let block_start = cursor;
         while cursor < operations.len() && is_rewrite_safe_operation(&operations[cursor]) {
@@ -298,7 +299,7 @@ fn apply_sequence(
     Ok(())
 }
 
-/// Emits one rewritten standard-gate block.
+/// Emits one rewritten rewrite-safe block.
 ///
 /// Patches are keyed by their first matched source position.  When iteration
 /// reaches that position, replacements are emitted.  Every matched source
@@ -332,7 +333,15 @@ fn emit_rewritten_block(
             continue;
         }
 
-        emit_original_operation_without_recursion(source, operation, rebuilt, target)?;
+        emit_operation_parts(
+            source,
+            rebuilt,
+            target,
+            operation.instruction.clone(),
+            operation.qubits.clone(),
+            operation.params.as_slice(),
+            operation.label.clone(),
+        )?;
     }
 
     Ok(())
@@ -353,7 +362,15 @@ fn emit_original_operation(
     stats: &mut RoundStats,
 ) -> Result<(), CompilerError> {
     if !config.recurses_control_flow() {
-        return emit_original_operation_without_recursion(source, operation, rebuilt, target);
+        return emit_operation_parts(
+            source,
+            rebuilt,
+            target,
+            operation.instruction.clone(),
+            operation.qubits.clone(),
+            operation.params.as_slice(),
+            operation.label.clone(),
+        );
     }
 
     let rewritten_instruction = match &operation.instruction {
@@ -425,7 +442,15 @@ fn emit_original_operation(
             operation.label.clone(),
         )
     } else {
-        emit_original_operation_without_recursion(source, operation, rebuilt, target)
+        emit_operation_parts(
+            source,
+            rebuilt,
+            target,
+            operation.instruction.clone(),
+            operation.qubits.clone(),
+            operation.params.as_slice(),
+            operation.label.clone(),
+        )
     }
 }
 
@@ -436,55 +461,39 @@ fn emit_original_operation(
 /// condition qubit is always retained.
 fn control_flow_operation_qubits(instruction: &Instruction) -> SmallVec<[Qubit; 3]> {
     let mut qubits = SmallVec::new();
+    let mut push_unique = |qubit| {
+        if !qubits.contains(&qubit) {
+            qubits.push(qubit);
+        }
+    };
+
     match instruction {
         Instruction::ControlFlowGate(ControlFlow::IfElse(gate)) => {
-            collect_operation_qubits(gate.true_body(), &mut qubits);
-            if let Some(false_body) = gate.false_body() {
-                collect_operation_qubits(false_body, &mut qubits);
+            for operation in gate.true_body() {
+                for &qubit in &operation.qubits {
+                    push_unique(qubit);
+                }
             }
-            push_unique_qubit(&mut qubits, gate.condition().qubit);
+            if let Some(false_body) = gate.false_body() {
+                for operation in false_body {
+                    for &qubit in &operation.qubits {
+                        push_unique(qubit);
+                    }
+                }
+            }
+            push_unique(gate.condition().qubit);
         }
         Instruction::ControlFlowGate(ControlFlow::WhileLoop(gate)) => {
-            collect_operation_qubits(gate.body(), &mut qubits);
-            push_unique_qubit(&mut qubits, gate.condition().qubit);
+            for operation in gate.body() {
+                for &qubit in &operation.qubits {
+                    push_unique(qubit);
+                }
+            }
+            push_unique(gate.condition().qubit);
         }
         _ => {}
     }
     qubits
-}
-
-/// Collects all operation qubits into `output` without duplicates.
-fn collect_operation_qubits(operations: &[Operation], output: &mut SmallVec<[Qubit; 3]>) {
-    for operation in operations {
-        for &qubit in &operation.qubits {
-            push_unique_qubit(output, qubit);
-        }
-    }
-}
-
-/// Pushes a qubit only if it is not already present.
-fn push_unique_qubit(output: &mut SmallVec<[Qubit; 3]>, qubit: Qubit) {
-    if !output.contains(&qubit) {
-        output.push(qubit);
-    }
-}
-
-/// Emits an operation exactly as represented in the source sequence.
-fn emit_original_operation_without_recursion(
-    source: &Circuit,
-    operation: &Operation,
-    rebuilt: &mut Circuit,
-    target: &mut SequenceTarget<'_>,
-) -> Result<(), CompilerError> {
-    emit_operation_parts(
-        source,
-        rebuilt,
-        target,
-        operation.instruction.clone(),
-        operation.qubits.clone(),
-        operation.params.as_slice(),
-        operation.label.clone(),
-    )
 }
 
 /// Emits operation parts into either the top-level circuit or a body vector.
@@ -505,7 +514,7 @@ fn emit_operation_parts(
         SequenceTarget::TopLevel { .. } => {
             let param_values = params
                 .iter()
-                .map(|param| resolve_parameter_value(source, param))
+                .map(|param| resolve_operation_param(source, param).map(ParameterValue::from))
                 .collect::<Result<SmallVec<[_; 3]>, _>>()?;
             rebuilt.append(instruction, qubits, param_values, label.as_deref())?;
         }
@@ -541,7 +550,11 @@ fn emit_replacement(
         })?;
         match target {
             SequenceTarget::TopLevel { phase_delta } => {
-                **phase_delta = &**phase_delta + &parameter_value_to_parameter(phase);
+                let phase = match phase {
+                    ParameterValue::Fixed(value) => Parameter::from(*value),
+                    ParameterValue::Param(parameter) => parameter.clone(),
+                };
+                **phase_delta = &**phase_delta + &phase;
                 return Ok(());
             }
             SequenceTarget::ControlFlowBody { .. } => return Ok(()),
@@ -562,7 +575,13 @@ fn emit_replacement(
                 .params
                 .iter()
                 .cloned()
-                .map(|param| parameter_value_to_circuit_param(rebuilt, param))
+                .map(|param| match param {
+                    ParameterValue::Fixed(value) => CircuitParam::Fixed(value),
+                    ParameterValue::Param(parameter) => {
+                        let (index, _) = rebuilt.add_parameter(parameter);
+                        CircuitParam::Index(index as u32)
+                    }
+                })
                 .collect();
             output.push(Operation {
                 instruction: replacement.instruction.clone(),
@@ -574,23 +593,4 @@ fn emit_replacement(
     }
 
     Ok(())
-}
-
-/// Converts a rewrite parameter value into a parameter expression.
-fn parameter_value_to_parameter(value: &ParameterValue) -> Parameter {
-    match value {
-        ParameterValue::Fixed(value) => Parameter::from(*value),
-        ParameterValue::Param(parameter) => parameter.clone(),
-    }
-}
-
-/// Interns a replacement parameter in the rebuilt circuit when needed.
-fn parameter_value_to_circuit_param(circuit: &mut Circuit, value: ParameterValue) -> CircuitParam {
-    match value {
-        ParameterValue::Fixed(value) => CircuitParam::Fixed(value),
-        ParameterValue::Param(parameter) => {
-            let (index, _) = circuit.add_parameter(parameter);
-            CircuitParam::Index(index as u32)
-        }
-    }
 }

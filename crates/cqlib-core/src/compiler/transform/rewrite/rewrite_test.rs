@@ -13,8 +13,8 @@
 use super::{KnowledgeRewriter, RewriteConfig, RewriteMode};
 use crate::circuit::symbolic_matrix::{circuit_to_symbolic_matrix, evaluate_symbolic_matrix};
 use crate::circuit::{
-    Circuit, CircuitParam, ConditionView, Directive, Instruction, Operation, Parameter, Qubit,
-    StandardGate, circuit_to_matrix,
+    Circuit, CircuitParam, ConditionView, Directive, Instruction, MCGate, Operation, Parameter,
+    Qubit, StandardGate, circuit_to_matrix,
 };
 use crate::compiler::context::CompilerContext;
 use crate::compiler::knowledge::library::RuleKind;
@@ -1077,6 +1077,212 @@ fn lowering_mode_applies_decomposition_rules() {
         operation.instruction,
         Instruction::Standard(StandardGate::H)
     )));
+}
+
+#[test]
+fn lowering_mode_lowers_top_level_mc_gate() {
+    let mut circuit = Circuit::new(2);
+    circuit
+        .append(
+            Instruction::McGate(Box::new(MCGate::new(1, StandardGate::X))),
+            [Qubit::new(0), Qubit::new(1)],
+            std::iter::empty::<crate::circuit::ParameterValue>(),
+            None,
+        )
+        .unwrap();
+    let mut ctx = CompilerContext::new(circuit);
+
+    let rewriter = KnowledgeRewriter::new(
+        RewriteConfig::lowering()
+            .with_enabled_kinds(vec![RuleKind::Decompose])
+            .with_max_rounds(1),
+    );
+    let outcome = rewriter.run(&mut ctx).unwrap();
+
+    assert!(outcome.changed);
+    let operations = ctx.circuit().operations();
+    assert_eq!(operations.len(), 1);
+    assert!(matches!(
+        operations[0].instruction,
+        Instruction::Standard(StandardGate::CX)
+    ));
+    assert_eq!(
+        operations[0].qubits.as_slice(),
+        &[Qubit::new(0), Qubit::new(1)]
+    );
+}
+
+#[test]
+fn lowering_mode_lowers_mc_gate_inside_control_flow_body() {
+    let mut circuit = Circuit::new(3);
+    let body = vec![Operation {
+        instruction: Instruction::McGate(Box::new(MCGate::new(1, StandardGate::X))),
+        qubits: smallvec![Qubit::new(1), Qubit::new(2)],
+        params: smallvec![],
+        label: None,
+    }];
+    circuit
+        .if_else(ConditionView::new(Qubit::new(0), 1), body, None)
+        .unwrap();
+    let mut ctx = CompilerContext::new(circuit);
+
+    let rewriter = KnowledgeRewriter::new(
+        RewriteConfig::lowering()
+            .with_enabled_kinds(vec![RuleKind::Decompose])
+            .with_max_rounds(1),
+    );
+    let outcome = rewriter.run(&mut ctx).unwrap();
+
+    assert!(outcome.changed);
+    match &ctx.circuit().operations()[0].instruction {
+        Instruction::ControlFlowGate(crate::circuit::ControlFlow::IfElse(gate)) => {
+            assert_eq!(gate.true_body().len(), 1);
+            assert!(matches!(
+                gate.true_body()[0].instruction,
+                Instruction::Standard(StandardGate::CX)
+            ));
+            assert_eq!(
+                gate.true_body()[0].qubits.as_slice(),
+                &[Qubit::new(1), Qubit::new(2)]
+            );
+        }
+        other => panic!("expected if_else, got {other:?}"),
+    }
+}
+
+#[test]
+fn lowering_mode_skips_labeled_mc_gate_by_default() {
+    let mut circuit = Circuit::new(2);
+    circuit
+        .append(
+            Instruction::McGate(Box::new(MCGate::new(1, StandardGate::X))),
+            [Qubit::new(0), Qubit::new(1)],
+            std::iter::empty::<crate::circuit::ParameterValue>(),
+            Some("keep"),
+        )
+        .unwrap();
+    let mut ctx = CompilerContext::new(circuit);
+
+    let rewriter = KnowledgeRewriter::new(
+        RewriteConfig::lowering()
+            .with_enabled_kinds(vec![RuleKind::Decompose])
+            .with_max_rounds(1),
+    );
+    let outcome = rewriter.run(&mut ctx).unwrap();
+
+    assert!(!outcome.changed);
+    assert!(matches!(
+        ctx.circuit().operations()[0].instruction,
+        Instruction::McGate(_)
+    ));
+}
+
+#[test]
+fn target_instructions_keep_native_mc_gate_unchanged() {
+    let native_mcx = MCGate::new(1, StandardGate::X);
+    let mut circuit = Circuit::new(2);
+    circuit
+        .append(
+            Instruction::McGate(Box::new(native_mcx.clone())),
+            [Qubit::new(0), Qubit::new(1)],
+            std::iter::empty::<crate::circuit::ParameterValue>(),
+            None,
+        )
+        .unwrap();
+    let mut ctx = CompilerContext::new(circuit);
+
+    let rewriter = KnowledgeRewriter::new(
+        RewriteConfig::lowering()
+            .with_enabled_kinds(vec![RuleKind::Decompose])
+            .with_target_instructions(vec![Instruction::McGate(Box::new(native_mcx.clone()))])
+            .with_max_rounds(1),
+    );
+    let outcome = rewriter.run(&mut ctx).unwrap();
+
+    assert!(!outcome.changed);
+    match &ctx.circuit().operations()[0].instruction {
+        Instruction::McGate(gate) => assert_eq!(gate.as_ref(), &native_mcx),
+        other => panic!("expected native mc gate, got {other:?}"),
+    }
+}
+
+#[test]
+fn target_instructions_lower_mc_gate_when_standard_target_is_native() {
+    let mut circuit = Circuit::new(2);
+    circuit
+        .append(
+            Instruction::McGate(Box::new(MCGate::new(1, StandardGate::X))),
+            [Qubit::new(0), Qubit::new(1)],
+            std::iter::empty::<crate::circuit::ParameterValue>(),
+            None,
+        )
+        .unwrap();
+    let mut ctx = CompilerContext::new(circuit);
+
+    let rewriter = KnowledgeRewriter::new(
+        RewriteConfig::lowering()
+            .with_enabled_kinds(vec![RuleKind::Decompose])
+            .with_target_instructions(vec![Instruction::Standard(StandardGate::CX)])
+            .with_max_rounds(1),
+    );
+    let outcome = rewriter.run(&mut ctx).unwrap();
+
+    assert!(outcome.changed);
+    assert!(matches!(
+        ctx.circuit().operations()[0].instruction,
+        Instruction::Standard(StandardGate::CX)
+    ));
+}
+
+#[test]
+fn target_instructions_reject_cost_neutral_mc_lowering_when_both_forms_are_native() {
+    let native_mcx = MCGate::new(1, StandardGate::X);
+    let mut circuit = Circuit::new(2);
+    circuit
+        .append(
+            Instruction::McGate(Box::new(native_mcx.clone())),
+            [Qubit::new(0), Qubit::new(1)],
+            std::iter::empty::<crate::circuit::ParameterValue>(),
+            None,
+        )
+        .unwrap();
+    let mut ctx = CompilerContext::new(circuit);
+
+    let rewriter = KnowledgeRewriter::new(
+        RewriteConfig::lowering()
+            .with_enabled_kinds(vec![RuleKind::Decompose])
+            .with_target_instructions(vec![
+                Instruction::McGate(Box::new(native_mcx.clone())),
+                Instruction::Standard(StandardGate::CX),
+            ])
+            .with_max_rounds(1),
+    );
+    let outcome = rewriter.run(&mut ctx).unwrap();
+
+    assert!(!outcome.changed);
+    match &ctx.circuit().operations()[0].instruction {
+        Instruction::McGate(gate) => assert_eq!(gate.as_ref(), &native_mcx),
+        other => panic!("expected native mc gate, got {other:?}"),
+    }
+}
+
+#[test]
+fn target_instructions_reject_non_gate_like_instruction() {
+    let mut circuit = Circuit::new(1);
+    circuit.h(Qubit::new(0)).unwrap();
+    let mut ctx = CompilerContext::new(circuit);
+
+    let err = KnowledgeRewriter::new(
+        RewriteConfig::new()
+            .with_target_instructions(vec![Instruction::Directive(Directive::Barrier)]),
+    )
+    .run(&mut ctx)
+    .unwrap_err();
+
+    assert!(
+        err.to_string()
+            .contains("unsupported rewrite target instruction")
+    );
 }
 
 #[test]

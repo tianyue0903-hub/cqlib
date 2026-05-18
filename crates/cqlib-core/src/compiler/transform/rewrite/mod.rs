@@ -17,39 +17,41 @@
 //! describes an equivalence between a local gate pattern (the *match*) and a
 //! replacement (the *rewrite*), optionally guarded by parameter conditions such
 //! as `EqMod(theta, 0, 2π)`. The rewriter scans contiguous blocks of
-//! standard-gate operations, selects a non-overlapping set of beneficial
+//! rewrite-safe gate-like operations, selects a non-overlapping set of beneficial
 //! rewrites, and rebuilds the circuit.
 //!
 //! The default [`production`](KnowledgeRewriter::production) profile is a
 //! conservative logical optimizer: it only accepts rewrites that strictly reduce
-//! the local cost. When [`RewriteConfig::with_target_gates`] is configured, the
-//! same matcher becomes target-basis aware. In that mode rules are filtered so
-//! replacement gates stay inside the requested target gate set, and local cost
-//! first minimizes the number of non-target operations before comparing normal
-//! logical cost terms.
+//! the local cost. When [`RewriteConfig::with_target_gates`] or
+//! [`RewriteConfig::with_target_instructions`] is configured, the same matcher
+//! becomes target-basis aware. In that mode rules are filtered so replacement
+//! instructions stay inside the requested target basis, and local cost first
+//! minimizes the number of non-target operations before comparing normal logical
+//! cost terms.
 //!
 //! Target-gate rewrite is intentionally an explicit configuration knob in this
 //! module. It does not infer native gates from a device or attach itself to a
 //! target workflow; callers that want target lowering pass the desired standard
-//! gate set through [`RewriteConfig`].
+//! gate set or gate-like instruction set through [`RewriteConfig`].
 //!
 //! # Processing pipeline
 //!
 //! On each fixpoint round the rewriter:
 //!
 //! 1. **Splits** the top-level operation list (and, when enabled, control-flow
-//!    bodies) into contiguous blocks of standard-gate operations. Non-standard
-//!    operations (barriers, measurements, delays, control-flow gates) act as
-//!    block boundaries and are emitted unchanged.
-//! 2. **Compiles** knowledge-base rewrite rules into a first-gate index and
+//!    bodies) into contiguous blocks of rewrite-safe operations. Opaque or
+//!    non-unitary operations (barriers, measurements, delays, control-flow gates)
+//!    act as block boundaries and are emitted unchanged.
+//! 2. **Compiles** knowledge-base rewrite rules into a first-instruction index and
 //!    extracts `A; B -> B; A` commute rules into a read-only commutation oracle.
 //!    Reverse rewrites are never generated automatically; if both directions
 //!    are wanted, both directions must be present in the knowledge files.
-//! 3. **Filters and matches** candidate rules. In target-gate mode, a rule's
-//!    match gates must appear in the current block and its replacement gates
-//!    must be in the target gate set. Replacement `GPhase` is allowed
-//!    implicitly because top-level replacements are folded into circuit global
-//!    phase and control-flow-body replacements are discarded.
+//! 3. **Filters and matches** candidate rules. In target-basis mode, a rule's
+//!    match instructions must appear in the current block and its replacement
+//!    instructions must be standard gates or multi-controlled gate wrappers in
+//!    the configured target basis. Replacement `GPhase` is allowed implicitly
+//!    because top-level replacements are folded into circuit global phase and
+//!    control-flow-body replacements are discarded.
 //!    [`Commute`](crate::compiler::knowledge::library::RuleKind::Commute) rules
 //!    do not emit standalone swap patches; they only let the matcher cross an
 //!    intervening operation when the oracle can prove the skipped operation
@@ -59,7 +61,7 @@
 //!    rewrite must strictly reduce the
 //!    [`LocalRewriteCost`](config::LocalRewriteCost); in
 //!    [`Lowering`](RewriteMode::Lowering) mode decomposition rules are also
-//!    allowed, but target-gate mode still rejects rewrites that increase the
+//!    allowed, but target-basis mode still rejects rewrites that increase the
 //!    number of non-target operations.
 //! 5. **Rebuilds** the circuit from the selected patches, interleaving replaced
 //!    and unchanged operations. Replacement `GPhase` gates at the top level are
