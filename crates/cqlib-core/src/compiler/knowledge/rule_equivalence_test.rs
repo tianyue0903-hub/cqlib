@@ -12,6 +12,7 @@
 
 use super::*;
 use crate::circuit::{Directive, StandardGate};
+use crate::compiler::knowledge::rule_dsl::load::load_rules_from_str;
 use ndarray::arr2;
 use smallvec::smallvec;
 use std::f64::consts::PI;
@@ -173,6 +174,15 @@ fn verify_accepts_conditioned_eq_rule() {
     )]);
 
     assert_verify_passed(rule.verify_by_sampling(10, 1e-8).unwrap());
+}
+
+#[test]
+fn verify_accepts_multi_controlled_rule_file_by_sampling() {
+    let rules = load_rules_from_str(include_str!("rules/decompose_mc_gate.rule")).unwrap();
+
+    for rule in rules {
+        assert_verify_passed(rule.verify_by_sampling(8, 1e-10).unwrap());
+    }
 }
 
 #[test]

@@ -19,7 +19,7 @@
 
 use crate::circuit::Parameter;
 use crate::compiler::knowledge::rule::Condition;
-use crate::compiler::knowledge::rule_dsl::ast::{GatePattern, RuleDef};
+use crate::compiler::knowledge::rule_dsl::ast::{GatePattern, GateSpec, RuleDef};
 use crate::compiler::knowledge::rule_dsl::lexer::{Lexer, Token, TokenKind};
 
 /// Errors that can occur while parsing a rule DSL source.
@@ -56,6 +56,14 @@ pub enum ParseError {
         expr: String,
         /// Underlying error message.
         reason: String,
+    },
+    /// A bracketed multi-control gate name did not use the `MC<Gate>[n]` form.
+    #[error("invalid multi-controlled gate name at byte {pos}: {gate_name:?}")]
+    InvalidMultiControlledGateName {
+        /// Gate name that appeared before `[n]`.
+        gate_name: String,
+        /// Byte offset where the gate name began.
+        pos: usize,
     },
 }
 
@@ -203,9 +211,42 @@ impl<'a> Parser<'a> {
         Ok(patterns)
     }
 
-    /// Parses a single gate pattern: `ident [ "(" params ")" ] qubits`.
+    /// Parses a single gate pattern: `gate_spec [ "(" params ")" ] qubits`.
     fn parse_gate_pattern(&mut self) -> Result<GatePattern, ParseError> {
-        let gate_name = self.expect(TokenKind::Ident)?.text.to_string();
+        let gate_token = self.expect(TokenKind::Ident)?;
+        let gate_name = gate_token.text.to_string();
+        let gate = if self.current.kind == TokenKind::LBracket {
+            self.advance()?;
+            let control_token = self.expect(TokenKind::Number)?;
+            let added_controls =
+                control_token
+                    .text
+                    .parse::<u8>()
+                    .map_err(|_| ParseError::UnexpectedToken {
+                        expected: "u8 multi-control count".to_string(),
+                        found: control_token.text.to_string(),
+                        pos: control_token.pos,
+                    })?;
+            self.expect(TokenKind::RBracket)?;
+            let base_gate_name = gate_name.strip_prefix("MC").ok_or_else(|| {
+                ParseError::InvalidMultiControlledGateName {
+                    gate_name: gate_name.clone(),
+                    pos: gate_token.pos,
+                }
+            })?;
+            if base_gate_name.is_empty() {
+                return Err(ParseError::InvalidMultiControlledGateName {
+                    gate_name,
+                    pos: gate_token.pos,
+                });
+            }
+            GateSpec::MultiControlled {
+                base_gate_name: base_gate_name.to_string(),
+                added_controls,
+            }
+        } else {
+            GateSpec::Standard { gate_name }
+        };
 
         let mut params = Vec::new();
         if self.current.kind == TokenKind::LParen {
@@ -235,7 +276,7 @@ impl<'a> Parser<'a> {
         }
 
         Ok(GatePattern {
-            gate_name,
+            gate,
             params,
             qubits,
         })
@@ -492,5 +533,69 @@ mod tests {
         assert!(r1.operations[0].qubits.is_empty());
         assert_eq!(r1.conditions.as_ref().unwrap().len(), 1);
         assert!(r1.target.is_empty());
+    }
+
+    #[test]
+    fn parse_multi_controlled_gate_pattern() {
+        let input = r#"rule decompose_m3cx {
+            match { MCX[3] 0 1 2 3 }
+            rewrite { CCX 0 1 2 }
+        }"#;
+        let mut parser = Parser::new(input).unwrap();
+        let rules = parser.parse_rule_file().unwrap();
+        assert_eq!(rules.len(), 1);
+        let pattern = &rules[0].match_ops[0];
+        assert_eq!(
+            pattern.gate,
+            GateSpec::MultiControlled {
+                base_gate_name: "X".to_string(),
+                added_controls: 3
+            }
+        );
+        assert_eq!(pattern.qubits, vec![0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn parse_parameterized_multi_controlled_gate_pattern() {
+        let input = r#"rule decompose_m2rz {
+            match { MCRZ[2](theta) 0 1 2 }
+            rewrite { CRZ(theta) 1 2 }
+        }"#;
+        let mut parser = Parser::new(input).unwrap();
+        let rules = parser.parse_rule_file().unwrap();
+        assert_eq!(rules[0].match_ops[0].params.len(), 1);
+        assert_eq!(
+            rules[0].match_ops[0].gate,
+            GateSpec::MultiControlled {
+                base_gate_name: "RZ".to_string(),
+                added_controls: 2
+            }
+        );
+    }
+
+    #[test]
+    fn reject_bracketed_non_multi_controlled_gate_name() {
+        let input = r#"rule bad {
+            match { X[3] 0 1 2 3 }
+            rewrite {}
+        }"#;
+        let mut parser = Parser::new(input).unwrap();
+        assert!(matches!(
+            parser.parse_rule_file(),
+            Err(ParseError::InvalidMultiControlledGateName { .. })
+        ));
+    }
+
+    #[test]
+    fn reject_fractional_multi_control_count() {
+        let input = r#"rule bad {
+            match { MCX[1.5] 0 1 }
+            rewrite {}
+        }"#;
+        let mut parser = Parser::new(input).unwrap();
+        assert!(matches!(
+            parser.parse_rule_file(),
+            Err(ParseError::UnexpectedToken { .. })
+        ));
     }
 }

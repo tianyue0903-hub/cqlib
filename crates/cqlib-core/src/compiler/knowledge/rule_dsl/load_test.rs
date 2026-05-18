@@ -56,6 +56,7 @@ fn load_builtin_rule_files() {
     let normalize = manifest.join("src/compiler/knowledge/rules/normalize.rule");
     let merge = manifest.join("src/compiler/knowledge/rules/merge.rule");
     let cancel = manifest.join("src/compiler/knowledge/rules/cancel.rule");
+    let mc_gate = manifest.join("src/compiler/knowledge/rules/decompose_mc_gate.rule");
 
     let normalize_rules = load_rules_from_file(&normalize).unwrap();
     assert!(!normalize_rules.is_empty());
@@ -77,6 +78,30 @@ fn load_builtin_rule_files() {
         cancel_rules.iter().map(|r| r.name.as_str()).collect();
     assert!(cancel_names.contains("cancel_rx_inverse"));
     assert!(cancel_names.contains("cancel_h"));
+
+    let mc_gate_rules = load_rules_from_file(&mc_gate).unwrap();
+    assert!(!mc_gate_rules.is_empty());
+    let mc_gate_names: std::collections::HashSet<_> =
+        mc_gate_rules.iter().map(|r| r.name.as_str()).collect();
+    assert!(mc_gate_names.contains("decompose_mcy2_to_ccx"));
+    assert!(mc_gate_names.contains("decompose_mcx3_to_parity_phase"));
+}
+
+#[test]
+fn load_multi_controlled_rule_file_contains_mcgate_patterns() {
+    let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let mc_gate = manifest.join("src/compiler/knowledge/rules/decompose_mc_gate.rule");
+    let rules = load_rules_from_file(&mc_gate).unwrap();
+    let mcz = rules
+        .iter()
+        .find(|rule| rule.name == "decompose_mcz2_to_ccx")
+        .expect("MCZ rule should exist");
+
+    assert!(matches!(
+        mcz.operations[0].instruction,
+        crate::circuit::Instruction::McGate(_)
+    ));
+    assert_eq!(mcz.operations[0].qubits.as_slice(), &[0, 1, 2]);
 }
 
 #[test]
@@ -245,9 +270,9 @@ fn load_commutation_rule_file() {
             | "comm_rzx_tdg_0"
             | "comm_rzx_x2p_1"
             | "comm_rzx_rzx" => {
-                let result = rule.verify(10, 1e-8).unwrap();
+                let result = rule.verify_by_sampling(10, 1e-8).unwrap();
                 match result {
-                    VerifyResult::SymbolicEqual | VerifyResult::NumericallyEqual { .. } => {}
+                    VerifyResult::Equivalent | VerifyResult::SampledEqual { .. } => {}
                     other => panic!("rule {} failed verification: {:?}", rule.name, other),
                 }
             }

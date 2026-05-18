@@ -11,7 +11,7 @@
 // that they have been altered from the originals.
 
 use super::*;
-use crate::circuit::{Directive, Instruction, Parameter, ParameterValue, StandardGate};
+use crate::circuit::{Directive, Instruction, MCGate, Parameter, ParameterValue, StandardGate};
 use smallvec::smallvec;
 use std::collections::HashSet;
 
@@ -90,6 +90,38 @@ fn rule_item_standard_uses_none_for_empty_params_and_some_for_params() {
     ));
     assert_eq!(rz.qubits.as_slice(), &[0]);
     assert_eq!(rz.params.as_ref().map(|params| params.len()), Some(1));
+}
+
+#[test]
+fn validate_accepts_multi_controlled_gate_rule_item() {
+    let rule = Rule::new(
+        "decompose_m3cx",
+        vec![RuleItem::mc_gate(
+            MCGate::new(3, StandardGate::X),
+            &[0, 1, 2, 3],
+            vec![],
+        )],
+        vec![RuleItem::standard(StandardGate::CCX, &[0, 1, 2], vec![])],
+    );
+
+    assert_eq!(rule.validate(), Ok(()));
+}
+
+#[test]
+fn rule_item_mc_gate_uses_none_for_empty_params_and_some_for_params() {
+    let mcx = RuleItem::mc_gate(MCGate::new(3, StandardGate::X), &[0, 1, 2, 3], vec![]);
+    assert!(matches!(mcx.instruction, Instruction::McGate(_)));
+    assert_eq!(mcx.qubits.as_slice(), &[0, 1, 2, 3]);
+    assert!(mcx.params.is_none());
+
+    let mcrz = RuleItem::mc_gate(
+        MCGate::new(2, StandardGate::RZ),
+        &[0, 1, 2],
+        vec![ParameterValue::Param(Parameter::symbol("theta"))],
+    );
+    assert!(matches!(mcrz.instruction, Instruction::McGate(_)));
+    assert_eq!(mcrz.qubits.as_slice(), &[0, 1, 2]);
+    assert_eq!(mcrz.params.as_ref().map(|params| params.len()), Some(1));
 }
 
 #[test]
@@ -229,14 +261,14 @@ fn validate_rejects_wrong_qubit_count() {
         vec![],
     );
 
-    assert_eq!(
+    assert!(matches!(
         rule.validate(),
         Err(RuleValidationError::WrongQubitCount {
-            gate: StandardGate::CX,
+            instruction,
             expected: 2,
             got: 1,
-        })
-    );
+        }) if instruction == "CX"
+    ));
 }
 
 #[test]
@@ -247,14 +279,14 @@ fn validate_rejects_wrong_rewrite_qubit_count() {
         vec![RuleItem::standard(StandardGate::CX, &[0], vec![])],
     );
 
-    assert_eq!(
+    assert!(matches!(
         rule.validate(),
         Err(RuleValidationError::WrongQubitCount {
-            gate: StandardGate::CX,
+            instruction,
             expected: 2,
             got: 1,
-        })
-    );
+        }) if instruction == "CX"
+    ));
 }
 
 #[test]
@@ -265,14 +297,14 @@ fn validate_rejects_wrong_param_count() {
         vec![],
     );
 
-    assert_eq!(
+    assert!(matches!(
         rule.validate(),
         Err(RuleValidationError::WrongParamCount {
-            gate: StandardGate::RZ,
+            instruction,
             expected: 1,
             got: 0,
-        })
-    );
+        }) if instruction == "RZ"
+    ));
 }
 
 #[test]
@@ -287,14 +319,14 @@ fn validate_rejects_wrong_rewrite_param_count() {
         vec![RuleItem::standard(StandardGate::RZ, &[0], vec![])],
     );
 
-    assert_eq!(
+    assert!(matches!(
         rule.validate(),
         Err(RuleValidationError::WrongParamCount {
-            gate: StandardGate::RZ,
+            instruction,
             expected: 1,
             got: 0,
-        })
-    );
+        }) if instruction == "RZ"
+    ));
 }
 
 #[test]
@@ -305,13 +337,13 @@ fn validate_rejects_duplicate_gate_qubits() {
         vec![],
     );
 
-    assert_eq!(
+    assert!(matches!(
         rule.validate(),
         Err(RuleValidationError::DuplicateQubit {
-            gate: StandardGate::CX,
+            instruction,
             qubit: 0,
-        })
-    );
+        }) if instruction == "CX"
+    ));
 }
 
 #[test]
@@ -322,13 +354,52 @@ fn validate_rejects_duplicate_rewrite_gate_qubits() {
         vec![RuleItem::standard(StandardGate::CX, &[0, 0], vec![])],
     );
 
-    assert_eq!(
+    assert!(matches!(
         rule.validate(),
         Err(RuleValidationError::DuplicateQubit {
-            gate: StandardGate::CX,
+            instruction,
             qubit: 0,
-        })
+        }) if instruction == "CX"
+    ));
+}
+
+#[test]
+fn validate_reports_full_multi_controlled_instruction_name() {
+    let wrong_qubits = Rule::new(
+        "bad_mcx",
+        vec![RuleItem::mc_gate(
+            MCGate::new(3, StandardGate::X),
+            &[0, 1, 2],
+            vec![],
+        )],
+        vec![],
     );
+    assert!(matches!(
+        wrong_qubits.validate(),
+        Err(RuleValidationError::WrongQubitCount {
+            instruction,
+            expected: 4,
+            got: 3,
+        }) if instruction == "MCX[3]"
+    ));
+
+    let wrong_params = Rule::new(
+        "bad_mcrz",
+        vec![RuleItem::mc_gate(
+            MCGate::new(2, StandardGate::RZ),
+            &[0, 1, 2],
+            vec![],
+        )],
+        vec![],
+    );
+    assert!(matches!(
+        wrong_params.validate(),
+        Err(RuleValidationError::WrongParamCount {
+            instruction,
+            expected: 1,
+            got: 0,
+        }) if instruction == "MCRZ[2]"
+    ));
 }
 
 #[test]

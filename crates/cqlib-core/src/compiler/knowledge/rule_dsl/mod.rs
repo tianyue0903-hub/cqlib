@@ -32,7 +32,8 @@
 //!
 //! gate_patterns ::= [gate_pattern (","? gate_pattern)*]
 //!
-//! gate_pattern  ::= ident ["(" param_list ")"] qubit_list
+//! gate_pattern  ::= gate_spec ["(" param_list ")"] qubit_list
+//! gate_spec     ::= ident | "MC" ident "[" number "]"
 //! param_list    ::= expr ("," expr)*
 //! qubit_list    ::= number+
 //!
@@ -89,7 +90,7 @@ pub mod load;
 pub mod lower;
 pub mod parser;
 
-pub use ast::{GatePattern, RuleDef};
+pub use ast::{GatePattern, GateSpec, RuleDef};
 pub use dump::{dump_rule_to_file, dump_rule_to_string, dump_rules_to_file};
 pub use lexer::{LexError, Lexer, Token, TokenKind};
 pub use load::{

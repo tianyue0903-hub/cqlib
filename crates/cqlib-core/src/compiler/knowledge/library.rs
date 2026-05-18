@@ -13,11 +13,11 @@
 //! Rule library and indexes for compiler knowledge-base rules.
 //!
 //! A [`RuleLibrary`] owns validated rules, assigns stable [`RuleId`] values,
-//! and precomputes the metadata and first-gate index needed by matchers. DSL
+//! and precomputes the metadata and first-instruction index needed by matchers. DSL
 //! parsing remains in `rule_dsl`; this module only delegates to it.
 
-use crate::circuit::{Instruction, StandardGate};
-use crate::compiler::knowledge::rule::{Rule, RuleItem, RuleValidationError};
+use crate::circuit::Instruction;
+use crate::compiler::knowledge::rule::{Rule, RuleValidationError};
 use crate::compiler::knowledge::rule_dsl::load::{
     LoadError, load_rules_from_file, load_rules_from_str,
 };
@@ -53,58 +53,22 @@ pub enum RuleKind {
 }
 
 /// Precomputed metadata used by rule selection and diagnostics.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct RuleMetadata {
     pub id: RuleId,
     pub kind: RuleKind,
     pub pattern_len: usize,
     pub rewrite_len: usize,
     pub qubit_count: usize,
-    pub first_gate: StandardGate,
+    pub first_instruction: Instruction,
     pub cost_delta: isize,
     pub has_conditions: bool,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-struct GateMask(u64);
-
-impl GateMask {
-    fn from_gates(gates: &[StandardGate]) -> Self {
-        let mut mask = Self::default();
-        for &gate in gates {
-            mask.insert(gate);
-        }
-        mask
-    }
-
-    fn from_rule_items(items: &[RuleItem]) -> Self {
-        let mut mask = Self::default();
-        for item in items {
-            let gate = match &item.instruction {
-                Instruction::Standard(gate) => *gate,
-                other => unreachable!("validated rule contains unsupported instruction: {other:?}"),
-            };
-            mask.insert(gate);
-        }
-        mask
-    }
-
-    fn insert(&mut self, gate: StandardGate) {
-        let bit = 1u64
-            .checked_shl(gate as u32)
-            .expect("standard gate discriminant must fit in GateMask");
-        self.0 |= bit;
-    }
-
-    fn contains_all(self, required: Self) -> bool {
-        required.0 & !self.0 == 0
-    }
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default)]
 struct RuleGateMetadata {
-    match_gate_mask: GateMask,
-    rewrite_gate_mask: GateMask,
+    match_instruction_keys: SmallVec<[Instruction; 4]>,
+    rewrite_instruction_keys: SmallVec<[Instruction; 4]>,
 }
 
 /// Errors produced while building or extending a rule library.
@@ -117,6 +81,8 @@ pub enum RuleLibraryError {
     },
     #[error("duplicate rule name: {0}")]
     DuplicateRuleName(String),
+    #[error("unsupported instruction for rule library index: {instruction}")]
+    UnsupportedInstruction { instruction: String },
     #[error("failed to load rules: {0}")]
     Load(LoadError),
 }
@@ -128,7 +94,7 @@ pub struct RuleLibrary {
     metadata: Vec<RuleMetadata>,
     gate_metadata: Vec<RuleGateMetadata>,
     name_map: HashMap<String, RuleId>,
-    first_gate_map: HashMap<StandardGate, SmallVec<[RuleId; 8]>>,
+    first_instruction_map: Vec<(Instruction, SmallVec<[RuleId; 8]>)>,
     kind_map: HashMap<RuleKind, SmallVec<[RuleId; 8]>>,
 }
 
@@ -138,7 +104,16 @@ impl RuleLibrary {
     }
 
     pub fn builtin_rules() -> Result<&'static RuleLibrary, RuleLibraryError> {
-        match BUILTIN_RULES.get_or_init(load_builtin_rules) {
+        match BUILTIN_RULES.get_or_init(|| {
+            let mut library = RuleLibrary::new();
+
+            for (source, kind) in BUILTIN_RULE_SOURCES {
+                let rules = load_rules_from_str(source).map_err(RuleLibraryError::Load)?;
+                library.extend_rules_with_validation(rules, *kind, false)?;
+            }
+
+            Ok(library)
+        }) {
             Ok(library) => Ok(library),
             Err(err) => Err(err.clone()),
         }
@@ -183,14 +158,64 @@ impl RuleLibrary {
         }
 
         let id = RuleId(self.rules.len());
-        let metadata = build_metadata(id, kind, &rule);
-        let gate_metadata = build_gate_metadata(&rule);
+        let first_operation =
+            rule.operations
+                .first()
+                .ok_or_else(|| RuleLibraryError::InvalidRule {
+                    name: rule.name.clone(),
+                    source: RuleValidationError::EmptyMatch,
+                })?;
+        let first_instruction = match &first_operation.instruction {
+            Instruction::Standard(gate) => Instruction::Standard(*gate),
+            Instruction::McGate(gate) => Instruction::McGate(gate.clone()),
+            other => {
+                return Err(RuleLibraryError::UnsupportedInstruction {
+                    instruction: format!("{other:?}"),
+                });
+            }
+        };
+        let pattern_len = rule.operations.len();
+        let rewrite_len = rule.target.len();
+        let metadata = RuleMetadata {
+            id,
+            kind,
+            pattern_len,
+            rewrite_len,
+            qubit_count: rule
+                .operations
+                .iter()
+                .chain(&rule.target)
+                .flat_map(|item| item.qubits.iter().copied())
+                .collect::<BTreeSet<_>>()
+                .len(),
+            first_instruction,
+            cost_delta: rewrite_len as isize - pattern_len as isize,
+            has_conditions: rule
+                .conditions
+                .as_ref()
+                .is_some_and(|conditions| !conditions.is_empty()),
+        };
+        let gate_metadata = build_gate_metadata(&rule)?;
 
         self.name_map.insert(rule.name.clone(), id);
-        self.first_gate_map
-            .entry(metadata.first_gate)
-            .or_default()
-            .push(id);
+        if let Some((_, ids)) =
+            self.first_instruction_map
+                .iter_mut()
+                .find(
+                    |(instruction, _)| match (instruction, &metadata.first_instruction) {
+                        (Instruction::Standard(lhs), Instruction::Standard(rhs)) => lhs == rhs,
+                        (Instruction::McGate(lhs), Instruction::McGate(rhs)) => lhs == rhs,
+                        _ => false,
+                    },
+                )
+        {
+            ids.push(id);
+        } else {
+            self.first_instruction_map.push((
+                metadata.first_instruction.clone(),
+                SmallVec::from_vec(vec![id]),
+            ));
+        }
         self.kind_map.entry(kind).or_default().push(id);
         self.metadata.push(metadata);
         self.gate_metadata.push(gate_metadata);
@@ -256,11 +281,29 @@ impl RuleLibrary {
         self.name_map.contains_key(name)
     }
 
-    pub fn candidates_for_first_gate(&self, gate: StandardGate) -> &[RuleId] {
-        self.first_gate_map
-            .get(&gate)
-            .map(SmallVec::as_slice)
-            .unwrap_or(&[])
+    pub fn candidates_for_first_instruction(
+        &self,
+        instruction: &Instruction,
+    ) -> Result<&[RuleId], RuleLibraryError> {
+        match instruction {
+            Instruction::Standard(_) | Instruction::McGate(_) => {}
+            other => {
+                return Err(RuleLibraryError::UnsupportedInstruction {
+                    instruction: format!("{other:?}"),
+                });
+            }
+        }
+
+        Ok(self
+            .first_instruction_map
+            .iter()
+            .find(|(key, _)| match (key, instruction) {
+                (Instruction::Standard(lhs), Instruction::Standard(rhs)) => lhs == rhs,
+                (Instruction::McGate(lhs), Instruction::McGate(rhs)) => lhs == rhs,
+                _ => false,
+            })
+            .map(|(_, ids)| ids.as_slice())
+            .unwrap_or(&[]))
     }
 
     pub fn rules_by_kind(&self, kind: RuleKind) -> &[RuleId] {
@@ -270,75 +313,93 @@ impl RuleLibrary {
             .unwrap_or(&[])
     }
 
-    pub fn filter_rule_ids_by_gates(
+    pub fn filter_rule_ids_by_instruction_keys(
         &self,
-        op_gates: &[StandardGate],
-        target_gates: &[StandardGate],
-    ) -> SmallVec<[RuleId; 16]> {
-        let op_mask = GateMask::from_gates(op_gates);
-        let target_mask = GateMask::from_gates(target_gates);
+        op_instructions: &[Instruction],
+        target_instructions: &[Instruction],
+    ) -> Result<SmallVec<[RuleId; 16]>, RuleLibraryError> {
+        for instruction in op_instructions.iter().chain(target_instructions) {
+            match instruction {
+                Instruction::Standard(_) | Instruction::McGate(_) => {}
+                other => {
+                    return Err(RuleLibraryError::UnsupportedInstruction {
+                        instruction: format!("{other:?}"),
+                    });
+                }
+            }
+        }
+
         let mut ids = SmallVec::new();
 
         for (index, metadata) in self.gate_metadata.iter().enumerate() {
-            if op_mask.contains_all(metadata.match_gate_mask)
-                && target_mask.contains_all(metadata.rewrite_gate_mask)
-            {
+            let match_supported = metadata.match_instruction_keys.iter().all(|required| {
+                op_instructions
+                    .iter()
+                    .any(|available| match (available, required) {
+                        (Instruction::Standard(lhs), Instruction::Standard(rhs)) => lhs == rhs,
+                        (Instruction::McGate(lhs), Instruction::McGate(rhs)) => lhs == rhs,
+                        _ => false,
+                    })
+            });
+            let rewrite_supported = metadata.rewrite_instruction_keys.iter().all(|required| {
+                target_instructions
+                    .iter()
+                    .any(|available| match (available, required) {
+                        (Instruction::Standard(lhs), Instruction::Standard(rhs)) => lhs == rhs,
+                        (Instruction::McGate(lhs), Instruction::McGate(rhs)) => lhs == rhs,
+                        _ => false,
+                    })
+            });
+
+            if match_supported && rewrite_supported {
                 ids.push(RuleId(index));
             }
         }
 
-        ids
+        Ok(ids)
     }
 }
 
-fn build_metadata(id: RuleId, kind: RuleKind, rule: &Rule) -> RuleMetadata {
-    let first_gate = match &rule.operations[0].instruction {
-        Instruction::Standard(gate) => *gate,
-        other => unreachable!("validated rule contains unsupported instruction: {other:?}"),
-    };
-    let pattern_len = rule.operations.len();
-    let rewrite_len = rule.target.len();
+fn build_gate_metadata(rule: &Rule) -> Result<RuleGateMetadata, RuleLibraryError> {
+    let mut match_instruction_keys = SmallVec::new();
+    let mut rewrite_instruction_keys = SmallVec::new();
 
-    RuleMetadata {
-        id,
-        kind,
-        pattern_len,
-        rewrite_len,
-        qubit_count: qubit_count(rule),
-        first_gate,
-        cost_delta: rewrite_len as isize - pattern_len as isize,
-        has_conditions: rule
-            .conditions
-            .as_ref()
-            .is_some_and(|conditions| !conditions.is_empty()),
-    }
-}
-
-fn build_gate_metadata(rule: &Rule) -> RuleGateMetadata {
-    RuleGateMetadata {
-        match_gate_mask: GateMask::from_rule_items(&rule.operations),
-        rewrite_gate_mask: GateMask::from_rule_items(&rule.target),
-    }
-}
-
-fn qubit_count(rule: &Rule) -> usize {
-    rule.operations
-        .iter()
-        .chain(&rule.target)
-        .flat_map(|item| item.qubits.iter().copied())
-        .collect::<BTreeSet<_>>()
-        .len()
-}
-
-fn load_builtin_rules() -> Result<RuleLibrary, RuleLibraryError> {
-    let mut library = RuleLibrary::new();
-
-    for (source, kind) in BUILTIN_RULE_SOURCES {
-        let rules = load_rules_from_str(source).map_err(RuleLibraryError::Load)?;
-        library.extend_rules_with_validation(rules, *kind, false)?;
+    for item in &rule.operations {
+        match &item.instruction {
+            Instruction::Standard(gate) => {
+                match_instruction_keys.push(Instruction::Standard(*gate))
+            }
+            Instruction::McGate(gate) => {
+                match_instruction_keys.push(Instruction::McGate(gate.clone()))
+            }
+            other => {
+                return Err(RuleLibraryError::UnsupportedInstruction {
+                    instruction: format!("{other:?}"),
+                });
+            }
+        }
     }
 
-    Ok(library)
+    for item in &rule.target {
+        match &item.instruction {
+            Instruction::Standard(gate) => {
+                rewrite_instruction_keys.push(Instruction::Standard(*gate))
+            }
+            Instruction::McGate(gate) => {
+                rewrite_instruction_keys.push(Instruction::McGate(gate.clone()))
+            }
+            other => {
+                return Err(RuleLibraryError::UnsupportedInstruction {
+                    instruction: format!("{other:?}"),
+                });
+            }
+        }
+    }
+
+    Ok(RuleGateMetadata {
+        match_instruction_keys,
+        rewrite_instruction_keys,
+    })
 }
 
 const BUILTIN_RULE_SOURCES: &[(&str, RuleKind)] = &[
@@ -358,6 +419,10 @@ const BUILTIN_RULE_SOURCES: &[(&str, RuleKind)] = &[
     ),
     (
         include_str!("rules/decompose_controlled_rotation.rule"),
+        RuleKind::Decompose,
+    ),
+    (
+        include_str!("rules/decompose_mc_gate.rule"),
         RuleKind::Decompose,
     ),
     (

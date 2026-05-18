@@ -187,6 +187,7 @@ fn rule_items_to_circuit(ops: &[RuleItem], num_qubits: usize) -> Result<Circuit,
     for op in ops {
         let instruction = match &op.instruction {
             Instruction::Standard(gate) => Instruction::Standard(*gate),
+            Instruction::McGate(gate) => Instruction::McGate(gate.clone()),
             other => {
                 return Err(VerifyError::UnsupportedPattern(format!("{other:?}")));
             }

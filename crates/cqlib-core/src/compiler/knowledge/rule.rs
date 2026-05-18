@@ -16,7 +16,7 @@
 //! `rule_equivalence` because matrix construction, parameter sampling, and
 //! numerical comparison are validation strategies rather than rule structure.
 
-use crate::circuit::{Instruction, Parameter, ParameterValue, StandardGate};
+use crate::circuit::{Instruction, MCGate, Parameter, ParameterValue, StandardGate};
 use smallvec::SmallVec;
 use std::collections::{BTreeSet, HashSet};
 
@@ -32,6 +32,18 @@ impl RuleItem {
     pub fn standard(gate: StandardGate, qubits: &[u32], params: Vec<ParameterValue>) -> Self {
         Self {
             instruction: Instruction::Standard(gate),
+            qubits: SmallVec::from_slice(qubits),
+            params: if params.is_empty() {
+                None
+            } else {
+                Some(SmallVec::from_vec(params))
+            },
+        }
+    }
+
+    pub fn mc_gate(gate: MCGate, qubits: &[u32], params: Vec<ParameterValue>) -> Self {
+        Self {
+            instruction: Instruction::McGate(Box::new(gate)),
             qubits: SmallVec::from_slice(qubits),
             params: if params.is_empty() {
                 None
@@ -57,8 +69,17 @@ impl RuleItem {
 
     /// Validate invariants that depend only on this item, not on its rule block.
     pub fn validate(&self) -> Result<(), RuleValidationError> {
-        let gate = match &self.instruction {
-            Instruction::Standard(gate) => *gate,
+        let (instruction, expected_qubits, expected_params) = match &self.instruction {
+            Instruction::Standard(gate) => (gate.to_string(), gate.num_qubits(), gate.num_params()),
+            Instruction::McGate(gate) => (
+                format!(
+                    "MC{}[{}]",
+                    gate.base_gate(),
+                    gate.num_qubits() - gate.base_gate().num_qubits()
+                ),
+                gate.num_qubits(),
+                gate.num_params(),
+            ),
             other => {
                 return Err(RuleValidationError::UnsupportedInstruction {
                     instruction: format!("{other:?}"),
@@ -66,20 +87,18 @@ impl RuleItem {
             }
         };
 
-        let expected_qubits = gate.num_qubits();
         if self.qubits.len() != expected_qubits {
             return Err(RuleValidationError::WrongQubitCount {
-                gate,
+                instruction: instruction.clone(),
                 expected: expected_qubits,
                 got: self.qubits.len(),
             });
         }
 
-        let expected_params = gate.num_params();
         let got_params = self.params.as_ref().map_or(0, SmallVec::len);
         if got_params != expected_params {
             return Err(RuleValidationError::WrongParamCount {
-                gate,
+                instruction: instruction.clone(),
                 expected: expected_params,
                 got: got_params,
             });
@@ -88,7 +107,10 @@ impl RuleItem {
         let mut seen = SmallVec::<[u32; 3]>::new();
         for &qubit in &self.qubits {
             if seen.contains(&qubit) {
-                return Err(RuleValidationError::DuplicateQubit { gate, qubit });
+                return Err(RuleValidationError::DuplicateQubit {
+                    instruction: instruction.clone(),
+                    qubit,
+                });
             }
             seen.push(qubit);
         }
@@ -142,20 +164,20 @@ pub enum RuleValidationError {
     EmptyMatch,
     #[error("unsupported instruction: {instruction}")]
     UnsupportedInstruction { instruction: String },
-    #[error("wrong qubit count for {gate:?}: expected {expected}, got {got}")]
+    #[error("wrong qubit count for {instruction}: expected {expected}, got {got}")]
     WrongQubitCount {
-        gate: StandardGate,
+        instruction: String,
         expected: usize,
         got: usize,
     },
-    #[error("wrong parameter count for {gate:?}: expected {expected}, got {got}")]
+    #[error("wrong parameter count for {instruction}: expected {expected}, got {got}")]
     WrongParamCount {
-        gate: StandardGate,
+        instruction: String,
         expected: usize,
         got: usize,
     },
-    #[error("duplicate qubit {qubit} in {gate:?}")]
-    DuplicateQubit { gate: StandardGate, qubit: u32 },
+    #[error("duplicate qubit {qubit} in {instruction}")]
+    DuplicateQubit { instruction: String, qubit: u32 },
     #[error("rewrite qubit {qubit} is not bound by the match block")]
     UnboundRewriteQubit { qubit: u32 },
     #[error("rewrite symbol {symbol} is not bound by the match block")]

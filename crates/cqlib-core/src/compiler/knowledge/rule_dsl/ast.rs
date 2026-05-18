@@ -32,16 +32,43 @@ pub struct RuleDef {
     pub rewrite_ops: Vec<GatePattern>,
 }
 
+/// Gate identifier used by one surface pattern.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GateSpec {
+    /// Standard gate identifier, e.g. `H`, `RX`, `CX`.
+    Standard { gate_name: String },
+    /// Multi-controlled gate identifier, e.g. `MCX[3]`.
+    MultiControlled {
+        /// Base standard gate to control.
+        base_gate_name: String,
+        /// Number of controls added by the `MC` wrapper.
+        added_controls: u8,
+    },
+}
+
+impl GateSpec {
+    /// Returns the canonical DSL spelling of this gate spec.
+    pub fn display_name(&self) -> String {
+        match self {
+            Self::Standard { gate_name } => gate_name.clone(),
+            Self::MultiControlled {
+                base_gate_name,
+                added_controls,
+            } => format!("MC{base_gate_name}[{added_controls}]"),
+        }
+    }
+}
+
 /// Surface AST for a single gate pattern.
 ///
-/// A pattern looks like `RZ(a + b) 0`:
-/// - `gate_name` = `"RZ"`
-/// - `params`    = `[Parameter("a + b")]`
-/// - `qubits`    = `[0]`
+/// A pattern looks like `RZ(a + b) 0` or `MCX[3] 0 1 2 3`:
+/// - `gate`   = gate identifier
+/// - `params` = `[Parameter("a + b")]`
+/// - `qubits` = `[0]`
 #[derive(Debug, Clone)]
 pub struct GatePattern {
-    /// Gate identifier, e.g. `H`, `RX`, `CX`.
-    pub gate_name: String,
+    /// Gate identifier.
+    pub gate: GateSpec,
     /// Parameter expressions appearing inside the parentheses.
     pub params: Vec<Parameter>,
     /// Qubit indices appearing after the parentheses.

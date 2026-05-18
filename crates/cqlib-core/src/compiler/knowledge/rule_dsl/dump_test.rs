@@ -11,6 +11,7 @@
 // that they have been altered from the originals.
 
 use super::*;
+use crate::circuit::{Instruction, StandardGate};
 use crate::compiler::knowledge::rule_dsl::load::load_rules_from_str;
 use crate::compiler::knowledge::rule_dsl::parser::Parser;
 
@@ -138,4 +139,37 @@ fn dump_gphase_roundtrip() {
     assert!(reparsed[0].operations[0].qubits.is_empty());
     assert_eq!(reparsed[1].name, "cancel_gphase_inverse");
     assert_eq!(reparsed[1].conditions.as_ref().unwrap().len(), 1);
+}
+
+#[test]
+fn dump_multi_controlled_gate_roundtrip() {
+    let rules = load_rules_from_str(
+        r#"
+            rule decompose_m3cx {
+                match { MCX[3] 0 1 2 3 }
+                rewrite { CCX 0 1 2 }
+            }
+            rule decompose_m2rz {
+                match { MCRZ[2](theta) 0 1 2 }
+                rewrite { CRZ(theta) 1 2 }
+            }
+        "#,
+    )
+    .unwrap();
+
+    let dumped = rules
+        .iter()
+        .map(|r| dump_rule_to_string(r))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(dumped.contains("MCX[3] 0 1 2 3"));
+    assert!(dumped.contains("MCRZ[2](theta) 0 1 2"));
+
+    let reparsed = load_rules_from_str(&dumped).unwrap();
+    assert_eq!(reparsed.len(), 2);
+    let Instruction::McGate(gate) = &reparsed[0].operations[0].instruction else {
+        panic!("expected MCGate");
+    };
+    assert_eq!(*gate.base_gate(), StandardGate::X);
+    assert_eq!(gate.num_ctrl_qubits(), 3);
 }

@@ -13,9 +13,9 @@
 //! Lowering logic from AST ([`RuleDef`], [`GatePattern`]) to runtime rule structures.
 
 use crate::circuit::gate::StandardGate;
-use crate::circuit::{Instruction, ParameterValue};
+use crate::circuit::{Instruction, MCGate, ParameterValue};
 use crate::compiler::knowledge::rule::{Rule, RuleItem, RuleValidationError};
-use crate::compiler::knowledge::rule_dsl::ast::{GatePattern, RuleDef};
+use crate::compiler::knowledge::rule_dsl::ast::{GatePattern, GateSpec, RuleDef};
 use smallvec::SmallVec;
 use std::collections::HashSet;
 
@@ -84,7 +84,7 @@ impl GatePattern {
     /// Lowers this surface pattern into a runtime [`PatternOp`].
     ///
     /// The lowering process:
-    /// 1. Resolves `gate_name` to a [`StandardGate`].
+    /// 1. Resolves the pattern gate to a standard gate or an [`MCGate`].
     /// 2. Validates that `qubits.len()` equals the gate's expected qubit count.
     /// 3. Validates that `params.len()` equals the gate's expected parameter count.
     /// 4. Attempts to evaluate each parameter to a constant; if that fails,
@@ -93,7 +93,7 @@ impl GatePattern {
         let lowered = lower_gate_pattern(self)?;
 
         Ok(RuleItem {
-            instruction: Instruction::Standard(lowered.gate),
+            instruction: lowered.instruction,
             qubits: lowered.qubits,
             params: if lowered.params.is_empty() {
                 None
@@ -112,7 +112,7 @@ impl GatePattern {
         let lowered = lower_gate_pattern(self)?;
 
         Ok(RuleItem {
-            instruction: Instruction::from(lowered.gate),
+            instruction: lowered.instruction,
             qubits: lowered.qubits,
             params: if lowered.params.is_empty() {
                 None
@@ -177,31 +177,31 @@ impl RuleDef {
 }
 
 struct LoweredGate {
-    gate: StandardGate,
+    instruction: Instruction,
     qubits: SmallVec<[u32; 3]>,
     params: SmallVec<[ParameterValue; 1]>,
 }
 
 fn lower_gate_pattern(pattern: GatePattern) -> Result<LoweredGate, LowerError> {
-    let gate = parse_gate_name(&pattern.gate_name)?;
-    let expected_qubits = gate.num_qubits();
-    let expected_params = gate.num_params();
+    let display_name = pattern.gate.display_name();
+    let instruction = lower_gate_spec(pattern.gate)?;
+    let (expected_qubits, expected_params) = instruction_arity(&instruction);
 
     if pattern.qubits.len() != expected_qubits {
         return Err(LowerError::WrongQubitCount {
-            gate: pattern.gate_name,
+            gate: display_name,
             expected: expected_qubits,
             got: pattern.qubits.len(),
         });
     }
     if pattern.params.len() != expected_params {
         return Err(LowerError::WrongParamCount {
-            gate: pattern.gate_name,
+            gate: display_name,
             expected: expected_params,
             got: pattern.params.len(),
         });
     }
-    validate_unique_qubits(&pattern.gate_name, &pattern.qubits)?;
+    validate_unique_qubits(&display_name, &pattern.qubits)?;
 
     let params = pattern
         .params
@@ -210,10 +210,34 @@ fn lower_gate_pattern(pattern: GatePattern) -> Result<LoweredGate, LowerError> {
         .collect();
 
     Ok(LoweredGate {
-        gate,
+        instruction,
         qubits: SmallVec::from_vec(pattern.qubits),
         params,
     })
+}
+
+fn lower_gate_spec(gate: GateSpec) -> Result<Instruction, LowerError> {
+    match gate {
+        GateSpec::Standard { gate_name } => Ok(Instruction::Standard(parse_gate_name(&gate_name)?)),
+        GateSpec::MultiControlled {
+            base_gate_name,
+            added_controls,
+        } => {
+            let base_gate = parse_gate_name(&base_gate_name)?;
+            Ok(Instruction::McGate(Box::new(MCGate::new(
+                added_controls,
+                base_gate,
+            ))))
+        }
+    }
+}
+
+fn instruction_arity(instruction: &Instruction) -> (usize, usize) {
+    match instruction {
+        Instruction::Standard(gate) => (gate.num_qubits(), gate.num_params()),
+        Instruction::McGate(gate) => (gate.num_qubits(), gate.num_params()),
+        _ => unreachable!("rule DSL lowering emits only standard gates and MCGates"),
+    }
 }
 
 fn lower_param_pattern(param: crate::circuit::Parameter) -> ParameterValue {
@@ -459,6 +483,84 @@ mod tests {
         assert!(rule.operations[0].qubits.is_empty());
         assert_eq!(rule.target.len(), 1);
         assert!(rule.target[0].qubits.is_empty());
+    }
+
+    #[test]
+    fn lower_multi_controlled_gate_rule_ok() {
+        let rule = lower_single_rule(
+            r#"rule decompose_m3cx {
+                match { MCX[3] 0 1 2 3 }
+                rewrite { CCX 0 1 2 }
+            }"#,
+        )
+        .unwrap();
+
+        let Instruction::McGate(gate) = &rule.operations[0].instruction else {
+            panic!("expected MCGate");
+        };
+        assert_eq!(gate.num_ctrl_qubits(), 3);
+        assert_eq!(*gate.base_gate(), StandardGate::X);
+        assert_eq!(rule.operations[0].qubits.as_slice(), &[0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn lower_parameterized_multi_controlled_gate_rule_ok() {
+        let rule = lower_single_rule(
+            r#"rule decompose_m2rz {
+                match { MCRZ[2](theta) 0 1 2 }
+                rewrite { CRZ(theta) 1 2 }
+            }"#,
+        )
+        .unwrap();
+
+        let Instruction::McGate(gate) = &rule.operations[0].instruction else {
+            panic!("expected MCGate");
+        };
+        assert_eq!(gate.num_ctrl_qubits(), 2);
+        assert_eq!(*gate.base_gate(), StandardGate::RZ);
+        assert_eq!(rule.operations[0].params.as_ref().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn reject_multi_controlled_gate_wrong_qubit_count() {
+        let err = lower_single_rule(
+            r#"rule bad {
+                match { MCX[3] 0 1 2 }
+                rewrite {}
+            }"#,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            LowerError::WrongQubitCount { gate, expected: 4, got: 3 } if gate == "MCX[3]"
+        ));
+    }
+
+    #[test]
+    fn reject_multi_controlled_gate_wrong_param_count() {
+        let err = lower_single_rule(
+            r#"rule bad {
+                match { MCRZ[2] 0 1 2 }
+                rewrite {}
+            }"#,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            LowerError::WrongParamCount { gate, expected: 1, got: 0 } if gate == "MCRZ[2]"
+        ));
+    }
+
+    #[test]
+    fn reject_multi_controlled_gate_unknown_base_gate() {
+        let err = lower_single_rule(
+            r#"rule bad {
+                match { MCNOPE[1] 0 1 }
+                rewrite {}
+            }"#,
+        )
+        .unwrap_err();
+        assert!(matches!(err, LowerError::UnknownGate(gate) if gate == "NOPE"));
     }
 
     #[test]

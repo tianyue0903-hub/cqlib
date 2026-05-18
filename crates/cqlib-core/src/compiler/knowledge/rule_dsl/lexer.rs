@@ -41,6 +41,10 @@ pub enum TokenKind {
     LParen,
     /// Right parenthesis `)`.
     RParen,
+    /// Left bracket `[`.
+    LBracket,
+    /// Right bracket `]`.
+    RBracket,
     /// Comma `,`.
     Comma,
     /// A line break.
@@ -165,6 +169,14 @@ impl<'a> Lexer<'a> {
             ')' => {
                 self.advance();
                 self.make_token(TokenKind::RParen, start)
+            }
+            '[' => {
+                self.advance();
+                self.make_token(TokenKind::LBracket, start)
+            }
+            ']' => {
+                self.advance();
+                self.make_token(TokenKind::RBracket, start)
             }
             ',' => {
                 self.advance();
@@ -339,7 +351,7 @@ mod tests {
 
     #[test]
     fn lex_punctuation() {
-        let kinds = lex_all("{ } ( ) , \n == + - * /");
+        let kinds = lex_all("{ } ( ) [ ] , \n == + - * /");
         assert_eq!(
             kinds,
             vec![
@@ -347,6 +359,8 @@ mod tests {
                 TokenKind::RBrace,
                 TokenKind::LParen,
                 TokenKind::RParen,
+                TokenKind::LBracket,
+                TokenKind::RBracket,
                 TokenKind::Comma,
                 TokenKind::Newline,
                 TokenKind::EqEq,

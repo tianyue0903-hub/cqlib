@@ -12,7 +12,7 @@
 
 //! Serialization helpers for writing [`Rule`] or [`RuleDef`] back to the DSL text format.
 
-use crate::circuit::{Instruction, Parameter, ParameterValue};
+use crate::circuit::{Instruction, MCGate, Parameter, ParameterValue};
 use crate::compiler::knowledge::rule::{Condition, Rule, RuleItem};
 use crate::compiler::knowledge::rule_dsl::ast::{GatePattern, RuleDef};
 use std::fmt::Write;
@@ -116,7 +116,7 @@ fn write_rule_def(w: &mut impl Write, rule: &RuleDef) -> std::fmt::Result {
 }
 
 fn write_gate_pattern(w: &mut impl Write, pat: &GatePattern) -> std::fmt::Result {
-    write!(w, "{}", pat.gate_name)?;
+    write!(w, "{}", pat.gate.display_name())?;
     if !pat.params.is_empty() {
         write!(w, "(")?;
         for (i, p) in pat.params.iter().enumerate() {
@@ -143,7 +143,8 @@ fn write_condition(w: &mut impl Write, cond: &Condition) -> std::fmt::Result {
 fn write_rule_item(w: &mut impl Write, op: &RuleItem) -> std::fmt::Result {
     let gate_name = match &op.instruction {
         Instruction::Standard(gate) => gate.to_string(),
-        _ => unreachable!("non-standard instruction cannot appear in a PatternOp"),
+        Instruction::McGate(gate) => mc_gate_name(gate),
+        _ => unreachable!("unsupported instruction cannot appear in a RuleItem"),
     };
     write!(w, "{}", gate_name)?;
     if let Some(params) = &op.params {
@@ -166,6 +167,11 @@ fn write_rule_item(w: &mut impl Write, op: &RuleItem) -> std::fmt::Result {
         write!(w, " {}", q)?;
     }
     Ok(())
+}
+
+fn mc_gate_name(gate: &MCGate) -> String {
+    let added_controls = gate.num_qubits() - gate.base_gate().num_qubits();
+    format!("MC{}[{added_controls}]", gate.base_gate())
 }
 
 #[cfg(test)]
