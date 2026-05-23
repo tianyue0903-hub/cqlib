@@ -24,32 +24,20 @@ fn assert_verify_passed(result: VerifyResult) {
     }
 }
 
-fn h_cancel_rule() -> Rule {
-    Rule::new(
-        "cancel_h",
-        vec![
-            RuleItem::standard(StandardGate::H, &[0], vec![]),
-            RuleItem::standard(StandardGate::H, &[0], vec![]),
-        ],
-        vec![],
-    )
-}
-
-fn rx_pi_to_x_rule() -> Rule {
-    Rule::new(
-        "rx_pi_to_x",
-        vec![RuleItem::standard(
-            StandardGate::RX,
-            &[0],
-            vec![ParameterValue::from(PI)],
-        )],
-        vec![RuleItem::standard(StandardGate::X, &[0], vec![])],
-    )
-}
-
 #[test]
 fn verify_accepts_cancel_h_up_to_global_phase() {
-    assert_verify_passed(h_cancel_rule().verify().unwrap());
+    assert_verify_passed(
+        Rule::new(
+            "cancel_h",
+            vec![
+                RuleItem::standard(StandardGate::H, &[0], vec![]),
+                RuleItem::standard(StandardGate::H, &[0], vec![]),
+            ],
+            vec![],
+        )
+        .verify()
+        .unwrap(),
+    );
 }
 
 #[test]
@@ -131,7 +119,19 @@ fn verify_returns_unsupported_pattern_for_non_standard_instruction() {
 
 #[test]
 fn verify_accepts_rx_pi_to_x_up_to_global_phase() {
-    assert_verify_passed(rx_pi_to_x_rule().verify().unwrap());
+    assert_verify_passed(
+        Rule::new(
+            "rx_pi_to_x",
+            vec![RuleItem::standard(
+                StandardGate::RX,
+                &[0],
+                vec![ParameterValue::from(PI)],
+            )],
+            vec![RuleItem::standard(StandardGate::X, &[0], vec![])],
+        )
+        .verify()
+        .unwrap(),
+    );
 }
 
 #[test]

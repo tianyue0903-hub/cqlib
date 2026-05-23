@@ -15,75 +15,6 @@ use crate::circuit::{Instruction, MCGate, Parameter, ParameterValue, StandardGat
 use crate::compiler::knowledge::rule::{Condition, RuleItem};
 use smallvec::smallvec;
 
-fn standard(gate: StandardGate) -> Instruction {
-    Instruction::Standard(gate)
-}
-
-fn mc_gate(added_controls: u8, base_gate: StandardGate) -> Instruction {
-    Instruction::McGate(Box::new(MCGate::new(added_controls, base_gate)))
-}
-
-fn h_rule(name: &str) -> Rule {
-    Rule::new(
-        name,
-        vec![
-            RuleItem::standard(StandardGate::H, &[0], vec![]),
-            RuleItem::standard(StandardGate::H, &[0], vec![]),
-        ],
-        vec![],
-    )
-}
-
-fn cx_h_rule(name: &str) -> Rule {
-    Rule::new(
-        name,
-        vec![
-            RuleItem::standard(StandardGate::CX, &[0, 1], vec![]),
-            RuleItem::standard(StandardGate::H, &[1], vec![]),
-        ],
-        vec![RuleItem::standard(StandardGate::H, &[1], vec![])],
-    )
-}
-
-fn swap_to_cx_rule(name: &str) -> Rule {
-    Rule::new(
-        name,
-        vec![RuleItem::standard(StandardGate::SWAP, &[0, 1], vec![])],
-        vec![
-            RuleItem::standard(StandardGate::CX, &[0, 1], vec![]),
-            RuleItem::standard(StandardGate::CX, &[1, 0], vec![]),
-            RuleItem::standard(StandardGate::CX, &[0, 1], vec![]),
-        ],
-    )
-}
-
-fn swap_to_cz_h_rule(name: &str) -> Rule {
-    Rule::new(
-        name,
-        vec![RuleItem::standard(StandardGate::SWAP, &[0, 1], vec![])],
-        vec![
-            RuleItem::standard(StandardGate::H, &[1], vec![]),
-            RuleItem::standard(StandardGate::CZ, &[0, 1], vec![]),
-            RuleItem::standard(StandardGate::H, &[1], vec![]),
-        ],
-    )
-}
-
-fn phase_to_rz_gphase_rule(name: &str) -> Rule {
-    Rule::new(
-        name,
-        vec![RuleItem::standard(
-            StandardGate::Phase,
-            &[0],
-            vec![ParameterValue::Fixed(0.5)],
-        )],
-        vec![
-            RuleItem::standard(StandardGate::RZ, &[0], vec![ParameterValue::Fixed(0.5)]),
-            RuleItem::standard(StandardGate::GPhase, &[], vec![ParameterValue::Fixed(0.25)]),
-        ],
-    )
-}
-
 #[test]
 fn empty_library_can_be_created() {
     let library = RuleLibrary::new();
@@ -95,7 +26,24 @@ fn empty_library_can_be_created() {
 #[test]
 fn from_rules_preserves_insertion_order() {
     let library = RuleLibrary::from_rules(
-        vec![h_rule("cancel_h"), cx_h_rule("cx_h")],
+        vec![
+            Rule::new(
+                "cancel_h",
+                vec![
+                    RuleItem::standard(StandardGate::H, &[0], vec![]),
+                    RuleItem::standard(StandardGate::H, &[0], vec![]),
+                ],
+                vec![],
+            ),
+            Rule::new(
+                "cx_h",
+                vec![
+                    RuleItem::standard(StandardGate::CX, &[0, 1], vec![]),
+                    RuleItem::standard(StandardGate::H, &[1], vec![]),
+                ],
+                vec![RuleItem::standard(StandardGate::H, &[1], vec![])],
+            ),
+        ],
         RuleKind::Simplify,
     )
     .unwrap();
@@ -109,10 +57,32 @@ fn add_rule_returns_stable_ids() {
     let mut library = RuleLibrary::new();
 
     let first = library
-        .add_rule(h_rule("first"), RuleKind::Cancel, true)
+        .add_rule(
+            Rule::new(
+                "first",
+                vec![
+                    RuleItem::standard(StandardGate::H, &[0], vec![]),
+                    RuleItem::standard(StandardGate::H, &[0], vec![]),
+                ],
+                vec![],
+            ),
+            RuleKind::Cancel,
+            true,
+        )
         .unwrap();
     let second = library
-        .add_rule(cx_h_rule("second"), RuleKind::Simplify, true)
+        .add_rule(
+            Rule::new(
+                "second",
+                vec![
+                    RuleItem::standard(StandardGate::CX, &[0, 1], vec![]),
+                    RuleItem::standard(StandardGate::H, &[1], vec![]),
+                ],
+                vec![RuleItem::standard(StandardGate::H, &[1], vec![])],
+            ),
+            RuleKind::Simplify,
+            true,
+        )
         .unwrap();
 
     assert_eq!(first.as_usize(), 0);
@@ -123,7 +93,18 @@ fn add_rule_returns_stable_ids() {
 
 #[test]
 fn name_lookup_works() {
-    let library = RuleLibrary::from_rules(vec![h_rule("cancel_h")], RuleKind::Cancel).unwrap();
+    let library = RuleLibrary::from_rules(
+        vec![Rule::new(
+            "cancel_h",
+            vec![
+                RuleItem::standard(StandardGate::H, &[0], vec![]),
+                RuleItem::standard(StandardGate::H, &[0], vec![]),
+            ],
+            vec![],
+        )],
+        RuleKind::Cancel,
+    )
+    .unwrap();
 
     let id = library.id_by_name("cancel_h").unwrap();
     assert_eq!(id.as_usize(), 0);
@@ -135,7 +116,24 @@ fn name_lookup_works() {
 #[test]
 fn duplicate_rule_names_are_rejected() {
     let err = RuleLibrary::from_rules(
-        vec![h_rule("duplicate"), cx_h_rule("duplicate")],
+        vec![
+            Rule::new(
+                "duplicate",
+                vec![
+                    RuleItem::standard(StandardGate::H, &[0], vec![]),
+                    RuleItem::standard(StandardGate::H, &[0], vec![]),
+                ],
+                vec![],
+            ),
+            Rule::new(
+                "duplicate",
+                vec![
+                    RuleItem::standard(StandardGate::CX, &[0, 1], vec![]),
+                    RuleItem::standard(StandardGate::H, &[1], vec![]),
+                ],
+                vec![RuleItem::standard(StandardGate::H, &[1], vec![])],
+            ),
+        ],
         RuleKind::Simplify,
     )
     .unwrap_err();
@@ -212,19 +210,63 @@ fn metadata_is_precomputed() {
 
 #[test]
 fn candidates_use_only_first_match_gate() {
-    let library = RuleLibrary::from_rules(vec![cx_h_rule("cx_h")], RuleKind::Simplify).unwrap();
+    let library = RuleLibrary::from_rules(
+        vec![Rule::new(
+            "cx_h",
+            vec![
+                RuleItem::standard(StandardGate::CX, &[0, 1], vec![]),
+                RuleItem::standard(StandardGate::H, &[1], vec![]),
+            ],
+            vec![RuleItem::standard(StandardGate::H, &[1], vec![])],
+        )],
+        RuleKind::Simplify,
+    )
+    .unwrap();
 
     assert_eq!(
         library
-            .candidates_for_first_instruction(&standard(StandardGate::CX))
+            .candidates_for_first_instruction(&Instruction::Standard(StandardGate::CX))
             .unwrap(),
         &[RuleId(0)]
     );
     assert!(
         library
-            .candidates_for_first_instruction(&standard(StandardGate::H))
+            .candidates_for_first_instruction(&Instruction::Standard(StandardGate::H))
             .unwrap()
             .is_empty()
+    );
+}
+
+#[test]
+fn candidates_for_first_instruction_preserve_same_key_insertion_order() {
+    let library = RuleLibrary::from_rules(
+        vec![
+            Rule::new(
+                "first_cancel_h",
+                vec![
+                    RuleItem::standard(StandardGate::H, &[0], vec![]),
+                    RuleItem::standard(StandardGate::H, &[0], vec![]),
+                ],
+                vec![],
+            ),
+            Rule::new(
+                "second_cancel_h",
+                vec![
+                    RuleItem::standard(StandardGate::H, &[0], vec![]),
+                    RuleItem::standard(StandardGate::H, &[0], vec![]),
+                ],
+                vec![],
+            ),
+        ],
+        RuleKind::Cancel,
+    )
+    .unwrap();
+
+    assert_eq!(
+        library
+            .candidates_for_first_instruction(&Instruction::Standard(StandardGate::H))
+            .unwrap(),
+        &[RuleId(0), RuleId(1)]
     );
 }
 
@@ -249,27 +291,86 @@ fn indexes_distinguish_standard_and_multi_controlled_instructions() {
 
     assert_eq!(
         library
-            .candidates_for_first_instruction(&standard(StandardGate::X))
+            .candidates_for_first_instruction(&Instruction::Standard(StandardGate::X))
             .unwrap(),
         &[RuleId(0)]
     );
     assert_eq!(
         library
-            .candidates_for_first_instruction(&mc_gate(3, StandardGate::X))
+            .candidates_for_first_instruction(&Instruction::McGate(Box::new(MCGate::new(
+                3,
+                StandardGate::X
+            ))))
             .unwrap(),
         &[RuleId(1)]
     );
 
     let standard_ids = library
         .filter_rule_ids_by_instruction_keys(
-            &[standard(StandardGate::X)],
-            &[standard(StandardGate::H)],
+            &[Instruction::Standard(StandardGate::X)],
+            &[Instruction::Standard(StandardGate::H)],
         )
         .unwrap();
     let mc_ids = library
         .filter_rule_ids_by_instruction_keys(
-            &[mc_gate(3, StandardGate::X)],
-            &[standard(StandardGate::H)],
+            &[Instruction::McGate(Box::new(MCGate::new(
+                3,
+                StandardGate::X,
+            )))],
+            &[Instruction::Standard(StandardGate::H)],
+        )
+        .unwrap();
+
+    assert_eq!(standard_ids.as_slice(), &[RuleId(0)]);
+    assert_eq!(mc_ids.as_slice(), &[RuleId(1)]);
+}
+
+#[test]
+fn filter_rule_ids_by_gates_distinguishes_standard_and_multi_controlled_rewrites() {
+    let standard_rewrite = Rule::new(
+        "mcx3_to_x",
+        vec![RuleItem::mc_gate(
+            MCGate::new(3, StandardGate::X),
+            &[0, 1, 2, 3],
+            vec![],
+        )],
+        vec![RuleItem::standard(StandardGate::X, &[3], vec![])],
+    );
+    let mc_rewrite = Rule::new(
+        "mcx3_to_mcx2",
+        vec![RuleItem::mc_gate(
+            MCGate::new(3, StandardGate::X),
+            &[0, 1, 2, 3],
+            vec![],
+        )],
+        vec![RuleItem::mc_gate(
+            MCGate::new(2, StandardGate::X),
+            &[0, 1, 2],
+            vec![],
+        )],
+    );
+    let library =
+        RuleLibrary::from_rules(vec![standard_rewrite, mc_rewrite], RuleKind::Decompose).unwrap();
+
+    let standard_ids = library
+        .filter_rule_ids_by_instruction_keys(
+            &[Instruction::McGate(Box::new(MCGate::new(
+                3,
+                StandardGate::X,
+            )))],
+            &[Instruction::Standard(StandardGate::X)],
+        )
+        .unwrap();
+    let mc_ids = library
+        .filter_rule_ids_by_instruction_keys(
+            &[Instruction::McGate(Box::new(MCGate::new(
+                3,
+                StandardGate::X,
+            )))],
+            &[Instruction::McGate(Box::new(MCGate::new(
+                2,
+                StandardGate::X,
+            )))],
         )
         .unwrap();
 
@@ -279,7 +380,18 @@ fn indexes_distinguish_standard_and_multi_controlled_instructions() {
 
 #[test]
 fn instruction_indexes_reject_unsupported_instruction_keys() {
-    let library = RuleLibrary::from_rules(vec![h_rule("cancel_h")], RuleKind::Cancel).unwrap();
+    let library = RuleLibrary::from_rules(
+        vec![Rule::new(
+            "cancel_h",
+            vec![
+                RuleItem::standard(StandardGate::H, &[0], vec![]),
+                RuleItem::standard(StandardGate::H, &[0], vec![]),
+            ],
+            vec![],
+        )],
+        RuleKind::Cancel,
+    )
+    .unwrap();
 
     assert!(matches!(
         library.candidates_for_first_instruction(&Instruction::Delay),
@@ -289,16 +401,42 @@ fn instruction_indexes_reject_unsupported_instruction_keys() {
         library.filter_rule_ids_by_instruction_keys(&[Instruction::Delay], &[]),
         Err(RuleLibraryError::UnsupportedInstruction { .. })
     ));
+    assert!(matches!(
+        library.filter_rule_ids_by_instruction_keys(&[], &[Instruction::Delay]),
+        Err(RuleLibraryError::UnsupportedInstruction { .. })
+    ));
 }
 
 #[test]
 fn rules_by_kind_returns_matching_rules() {
     let mut library = RuleLibrary::new();
     let cancel = library
-        .add_rule(h_rule("cancel_h"), RuleKind::Cancel, true)
+        .add_rule(
+            Rule::new(
+                "cancel_h",
+                vec![
+                    RuleItem::standard(StandardGate::H, &[0], vec![]),
+                    RuleItem::standard(StandardGate::H, &[0], vec![]),
+                ],
+                vec![],
+            ),
+            RuleKind::Cancel,
+            true,
+        )
         .unwrap();
     let simplify = library
-        .add_rule(cx_h_rule("cx_h"), RuleKind::Simplify, true)
+        .add_rule(
+            Rule::new(
+                "cx_h",
+                vec![
+                    RuleItem::standard(StandardGate::CX, &[0, 1], vec![]),
+                    RuleItem::standard(StandardGate::H, &[1], vec![]),
+                ],
+                vec![RuleItem::standard(StandardGate::H, &[1], vec![])],
+            ),
+            RuleKind::Simplify,
+            true,
+        )
         .unwrap();
 
     assert_eq!(library.rules_by_kind(RuleKind::Cancel), &[cancel]);
@@ -310,8 +448,24 @@ fn rules_by_kind_returns_matching_rules() {
 fn filter_rule_ids_by_gates_returns_rules_matching_source_and_target_basis() {
     let library = RuleLibrary::from_rules(
         vec![
-            swap_to_cx_rule("decompose_swap_to_cx"),
-            swap_to_cz_h_rule("decompose_swap_to_cz_h"),
+            Rule::new(
+                "decompose_swap_to_cx",
+                vec![RuleItem::standard(StandardGate::SWAP, &[0, 1], vec![])],
+                vec![
+                    RuleItem::standard(StandardGate::CX, &[0, 1], vec![]),
+                    RuleItem::standard(StandardGate::CX, &[1, 0], vec![]),
+                    RuleItem::standard(StandardGate::CX, &[0, 1], vec![]),
+                ],
+            ),
+            Rule::new(
+                "decompose_swap_to_cz_h",
+                vec![RuleItem::standard(StandardGate::SWAP, &[0, 1], vec![])],
+                vec![
+                    RuleItem::standard(StandardGate::H, &[1], vec![]),
+                    RuleItem::standard(StandardGate::CZ, &[0, 1], vec![]),
+                    RuleItem::standard(StandardGate::H, &[1], vec![]),
+                ],
+            ),
         ],
         RuleKind::Decompose,
     )
@@ -319,8 +473,8 @@ fn filter_rule_ids_by_gates_returns_rules_matching_source_and_target_basis() {
 
     let ids = library
         .filter_rule_ids_by_instruction_keys(
-            &[standard(StandardGate::SWAP)],
-            &[standard(StandardGate::CX)],
+            &[Instruction::Standard(StandardGate::SWAP)],
+            &[Instruction::Standard(StandardGate::CX)],
         )
         .unwrap();
 
@@ -329,10 +483,21 @@ fn filter_rule_ids_by_gates_returns_rules_matching_source_and_target_basis() {
 
 #[test]
 fn filter_rule_ids_by_gates_rejects_rules_with_unlisted_match_gates() {
-    let library = RuleLibrary::from_rules(vec![h_rule("cancel_h")], RuleKind::Cancel).unwrap();
+    let library = RuleLibrary::from_rules(
+        vec![Rule::new(
+            "cancel_h",
+            vec![
+                RuleItem::standard(StandardGate::H, &[0], vec![]),
+                RuleItem::standard(StandardGate::H, &[0], vec![]),
+            ],
+            vec![],
+        )],
+        RuleKind::Cancel,
+    )
+    .unwrap();
 
     let ids = library
-        .filter_rule_ids_by_instruction_keys(&[standard(StandardGate::X)], &[])
+        .filter_rule_ids_by_instruction_keys(&[Instruction::Standard(StandardGate::X)], &[])
         .unwrap();
 
     assert!(ids.is_empty());
@@ -340,10 +505,21 @@ fn filter_rule_ids_by_gates_rejects_rules_with_unlisted_match_gates() {
 
 #[test]
 fn filter_rule_ids_by_gates_allows_empty_rewrite() {
-    let library = RuleLibrary::from_rules(vec![h_rule("cancel_h")], RuleKind::Cancel).unwrap();
+    let library = RuleLibrary::from_rules(
+        vec![Rule::new(
+            "cancel_h",
+            vec![
+                RuleItem::standard(StandardGate::H, &[0], vec![]),
+                RuleItem::standard(StandardGate::H, &[0], vec![]),
+            ],
+            vec![],
+        )],
+        RuleKind::Cancel,
+    )
+    .unwrap();
 
     let ids = library
-        .filter_rule_ids_by_instruction_keys(&[standard(StandardGate::H)], &[])
+        .filter_rule_ids_by_instruction_keys(&[Instruction::Standard(StandardGate::H)], &[])
         .unwrap();
 
     assert_eq!(ids.as_slice(), &[RuleId(0)]);
@@ -352,21 +528,32 @@ fn filter_rule_ids_by_gates_allows_empty_rewrite() {
 #[test]
 fn filter_rule_ids_by_gates_requires_all_rewrite_gates() {
     let library = RuleLibrary::from_rules(
-        vec![swap_to_cz_h_rule("decompose_swap_to_cz_h")],
+        vec![Rule::new(
+            "decompose_swap_to_cz_h",
+            vec![RuleItem::standard(StandardGate::SWAP, &[0, 1], vec![])],
+            vec![
+                RuleItem::standard(StandardGate::H, &[1], vec![]),
+                RuleItem::standard(StandardGate::CZ, &[0, 1], vec![]),
+                RuleItem::standard(StandardGate::H, &[1], vec![]),
+            ],
+        )],
         RuleKind::Decompose,
     )
     .unwrap();
 
     let missing_h = library
         .filter_rule_ids_by_instruction_keys(
-            &[standard(StandardGate::SWAP)],
-            &[standard(StandardGate::CZ)],
+            &[Instruction::Standard(StandardGate::SWAP)],
+            &[Instruction::Standard(StandardGate::CZ)],
         )
         .unwrap();
     let complete = library
         .filter_rule_ids_by_instruction_keys(
-            &[standard(StandardGate::SWAP)],
-            &[standard(StandardGate::H), standard(StandardGate::CZ)],
+            &[Instruction::Standard(StandardGate::SWAP)],
+            &[
+                Instruction::Standard(StandardGate::H),
+                Instruction::Standard(StandardGate::CZ),
+            ],
         )
         .unwrap();
 
@@ -377,21 +564,35 @@ fn filter_rule_ids_by_gates_requires_all_rewrite_gates() {
 #[test]
 fn filter_rule_ids_by_gates_treats_gphase_as_required_target_gate() {
     let library = RuleLibrary::from_rules(
-        vec![phase_to_rz_gphase_rule("decompose_phase_to_rz_gphase")],
+        vec![Rule::new(
+            "decompose_phase_to_rz_gphase",
+            vec![RuleItem::standard(
+                StandardGate::Phase,
+                &[0],
+                vec![ParameterValue::Fixed(0.5)],
+            )],
+            vec![
+                RuleItem::standard(StandardGate::RZ, &[0], vec![ParameterValue::Fixed(0.5)]),
+                RuleItem::standard(StandardGate::GPhase, &[], vec![ParameterValue::Fixed(0.25)]),
+            ],
+        )],
         RuleKind::Decompose,
     )
     .unwrap();
 
     let missing_gphase = library
         .filter_rule_ids_by_instruction_keys(
-            &[standard(StandardGate::Phase)],
-            &[standard(StandardGate::RZ)],
+            &[Instruction::Standard(StandardGate::Phase)],
+            &[Instruction::Standard(StandardGate::RZ)],
         )
         .unwrap();
     let complete = library
         .filter_rule_ids_by_instruction_keys(
-            &[standard(StandardGate::Phase)],
-            &[standard(StandardGate::RZ), standard(StandardGate::GPhase)],
+            &[Instruction::Standard(StandardGate::Phase)],
+            &[
+                Instruction::Standard(StandardGate::RZ),
+                Instruction::Standard(StandardGate::GPhase),
+            ],
         )
         .unwrap();
 
@@ -403,9 +604,31 @@ fn filter_rule_ids_by_gates_treats_gphase_as_required_target_gate() {
 fn filter_rule_ids_by_gates_preserves_library_rule_ids() {
     let library = RuleLibrary::from_rules(
         vec![
-            h_rule("cancel_h"),
-            swap_to_cx_rule("decompose_swap_to_cx"),
-            cx_h_rule("cx_h"),
+            Rule::new(
+                "cancel_h",
+                vec![
+                    RuleItem::standard(StandardGate::H, &[0], vec![]),
+                    RuleItem::standard(StandardGate::H, &[0], vec![]),
+                ],
+                vec![],
+            ),
+            Rule::new(
+                "decompose_swap_to_cx",
+                vec![RuleItem::standard(StandardGate::SWAP, &[0, 1], vec![])],
+                vec![
+                    RuleItem::standard(StandardGate::CX, &[0, 1], vec![]),
+                    RuleItem::standard(StandardGate::CX, &[1, 0], vec![]),
+                    RuleItem::standard(StandardGate::CX, &[0, 1], vec![]),
+                ],
+            ),
+            Rule::new(
+                "cx_h",
+                vec![
+                    RuleItem::standard(StandardGate::CX, &[0, 1], vec![]),
+                    RuleItem::standard(StandardGate::H, &[1], vec![]),
+                ],
+                vec![RuleItem::standard(StandardGate::H, &[1], vec![])],
+            ),
         ],
         RuleKind::Simplify,
     )
@@ -414,11 +637,14 @@ fn filter_rule_ids_by_gates_preserves_library_rule_ids() {
     let ids = library
         .filter_rule_ids_by_instruction_keys(
             &[
-                standard(StandardGate::SWAP),
-                standard(StandardGate::CX),
-                standard(StandardGate::H),
+                Instruction::Standard(StandardGate::SWAP),
+                Instruction::Standard(StandardGate::CX),
+                Instruction::Standard(StandardGate::H),
             ],
-            &[standard(StandardGate::CX), standard(StandardGate::H)],
+            &[
+                Instruction::Standard(StandardGate::CX),
+                Instruction::Standard(StandardGate::H),
+            ],
         )
         .unwrap();
 
@@ -443,7 +669,7 @@ fn from_dsl_str_loads_rules_and_builds_indexes() {
     assert_eq!(library.get_by_name("cancel_h").unwrap().name, "cancel_h");
     assert_eq!(
         library
-            .candidates_for_first_instruction(&standard(StandardGate::H))
+            .candidates_for_first_instruction(&Instruction::Standard(StandardGate::H))
             .unwrap(),
         &[RuleId(0)]
     );
@@ -496,7 +722,7 @@ fn add_rule_without_validation_skips_rule_validate() {
     assert_eq!(library.get_by_name("bad").unwrap().name, "bad");
     assert_eq!(
         library
-            .candidates_for_first_instruction(&standard(StandardGate::CX))
+            .candidates_for_first_instruction(&Instruction::Standard(StandardGate::CX))
             .unwrap(),
         &[RuleId(0)]
     );
@@ -524,12 +750,39 @@ fn add_rule_without_validation_still_rejects_unsupported_instruction() {
 
 #[test]
 fn extend_rules_is_atomic_on_error() {
-    let mut library = RuleLibrary::from_rules(vec![h_rule("existing")], RuleKind::Cancel)
-        .expect("initial library should be valid");
+    let mut library = RuleLibrary::from_rules(
+        vec![Rule::new(
+            "existing",
+            vec![
+                RuleItem::standard(StandardGate::H, &[0], vec![]),
+                RuleItem::standard(StandardGate::H, &[0], vec![]),
+            ],
+            vec![],
+        )],
+        RuleKind::Cancel,
+    )
+    .expect("initial library should be valid");
 
     let err = library
         .extend_rules(
-            vec![cx_h_rule("new"), h_rule("existing")],
+            vec![
+                Rule::new(
+                    "new",
+                    vec![
+                        RuleItem::standard(StandardGate::CX, &[0, 1], vec![]),
+                        RuleItem::standard(StandardGate::H, &[1], vec![]),
+                    ],
+                    vec![RuleItem::standard(StandardGate::H, &[1], vec![])],
+                ),
+                Rule::new(
+                    "existing",
+                    vec![
+                        RuleItem::standard(StandardGate::H, &[0], vec![]),
+                        RuleItem::standard(StandardGate::H, &[0], vec![]),
+                    ],
+                    vec![],
+                ),
+            ],
             RuleKind::Simplify,
         )
         .unwrap_err();
@@ -595,7 +848,7 @@ fn builtin_rules_build_candidate_index() {
 
     assert!(
         library
-            .candidates_for_first_instruction(&standard(StandardGate::H))
+            .candidates_for_first_instruction(&Instruction::Standard(StandardGate::H))
             .unwrap()
             .iter()
             .any(|&id| library.get(id).is_some_and(|rule| rule.name == "cancel_h"))

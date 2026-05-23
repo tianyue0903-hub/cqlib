@@ -125,6 +125,42 @@ fn rule_item_mc_gate_uses_none_for_empty_params_and_some_for_params() {
 }
 
 #[test]
+fn rule_item_equivalent_to_accepts_identical_standard_items() {
+    let lhs = RuleItem::standard(
+        StandardGate::RZ,
+        &[0],
+        vec![ParameterValue::Param(Parameter::symbol("theta"))],
+    );
+    let rhs = RuleItem::standard(StandardGate::RZ, &[0], vec![ParameterValue::from("theta")]);
+
+    assert!(lhs.equivalent_to(&rhs));
+}
+
+#[test]
+fn rule_item_equivalent_to_accepts_identical_multi_controlled_items() {
+    let lhs = RuleItem::mc_gate(MCGate::new(2, StandardGate::X), &[0, 1, 2], vec![]);
+    let rhs = RuleItem::mc_gate(MCGate::new(2, StandardGate::X), &[0, 1, 2], vec![]);
+
+    assert!(lhs.equivalent_to(&rhs));
+}
+
+#[test]
+fn rule_item_equivalent_to_rejects_different_qubits_and_params() {
+    let lhs = RuleItem::standard(
+        StandardGate::RZ,
+        &[0],
+        vec![ParameterValue::Param(Parameter::symbol("theta"))],
+    );
+    let different_qubits =
+        RuleItem::standard(StandardGate::RZ, &[1], vec![ParameterValue::from("theta")]);
+    let different_params =
+        RuleItem::standard(StandardGate::RZ, &[0], vec![ParameterValue::from("phi")]);
+
+    assert!(!lhs.equivalent_to(&different_qubits));
+    assert!(!lhs.equivalent_to(&different_params));
+}
+
+#[test]
 fn validate_accepts_rewrite_on_subset_of_match_qubits() {
     let rule = Rule::new(
         "drop_second_qubit",

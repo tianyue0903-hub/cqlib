@@ -17,6 +17,7 @@
 //! parsing remains in `rule_dsl`; this module only delegates to it.
 
 use crate::circuit::Instruction;
+use crate::compiler::knowledge::matcher::KnowledgeInstructionKey;
 use crate::compiler::knowledge::rule::{Rule, RuleValidationError};
 use crate::compiler::knowledge::rule_dsl::load::{
     LoadError, load_rules_from_file, load_rules_from_str,
@@ -67,8 +68,8 @@ pub struct RuleMetadata {
 
 #[derive(Debug, Clone, Default)]
 struct RuleGateMetadata {
-    match_instruction_keys: SmallVec<[Instruction; 4]>,
-    rewrite_instruction_keys: SmallVec<[Instruction; 4]>,
+    match_instruction_keys: SmallVec<[KnowledgeInstructionKey; 4]>,
+    rewrite_instruction_keys: SmallVec<[KnowledgeInstructionKey; 4]>,
 }
 
 /// Errors produced while building or extending a rule library.
@@ -94,7 +95,7 @@ pub struct RuleLibrary {
     metadata: Vec<RuleMetadata>,
     gate_metadata: Vec<RuleGateMetadata>,
     name_map: HashMap<String, RuleId>,
-    first_instruction_map: Vec<(Instruction, SmallVec<[RuleId; 8]>)>,
+    first_instruction_map: Vec<(KnowledgeInstructionKey, SmallVec<[RuleId; 8]>)>,
     kind_map: HashMap<RuleKind, SmallVec<[RuleId; 8]>>,
 }
 
@@ -165,15 +166,12 @@ impl RuleLibrary {
                     name: rule.name.clone(),
                     source: RuleValidationError::EmptyMatch,
                 })?;
-        let first_instruction = match &first_operation.instruction {
-            Instruction::Standard(gate) => Instruction::Standard(*gate),
-            Instruction::McGate(gate) => Instruction::McGate(gate.clone()),
-            other => {
-                return Err(RuleLibraryError::UnsupportedInstruction {
-                    instruction: format!("{other:?}"),
-                });
-            }
-        };
+        let first_instruction_key = KnowledgeInstructionKey::from_instruction(
+            &first_operation.instruction,
+        )
+        .ok_or_else(|| RuleLibraryError::UnsupportedInstruction {
+            instruction: format!("{:?}", first_operation.instruction),
+        })?;
         let pattern_len = rule.operations.len();
         let rewrite_len = rule.target.len();
         let metadata = RuleMetadata {
@@ -188,7 +186,7 @@ impl RuleLibrary {
                 .flat_map(|item| item.qubits.iter().copied())
                 .collect::<BTreeSet<_>>()
                 .len(),
-            first_instruction,
+            first_instruction: first_operation.instruction.clone(),
             cost_delta: rewrite_len as isize - pattern_len as isize,
             has_conditions: rule
                 .conditions
@@ -198,23 +196,15 @@ impl RuleLibrary {
         let gate_metadata = build_gate_metadata(&rule)?;
 
         self.name_map.insert(rule.name.clone(), id);
-        if let Some((_, ids)) =
-            self.first_instruction_map
-                .iter_mut()
-                .find(
-                    |(instruction, _)| match (instruction, &metadata.first_instruction) {
-                        (Instruction::Standard(lhs), Instruction::Standard(rhs)) => lhs == rhs,
-                        (Instruction::McGate(lhs), Instruction::McGate(rhs)) => lhs == rhs,
-                        _ => false,
-                    },
-                )
+        if let Some((_, ids)) = self
+            .first_instruction_map
+            .iter_mut()
+            .find(|(key, _)| key == &first_instruction_key)
         {
             ids.push(id);
         } else {
-            self.first_instruction_map.push((
-                metadata.first_instruction.clone(),
-                SmallVec::from_vec(vec![id]),
-            ));
+            self.first_instruction_map
+                .push((first_instruction_key, SmallVec::from_vec(vec![id])));
         }
         self.kind_map.entry(kind).or_default().push(id);
         self.metadata.push(metadata);
@@ -285,23 +275,16 @@ impl RuleLibrary {
         &self,
         instruction: &Instruction,
     ) -> Result<&[RuleId], RuleLibraryError> {
-        match instruction {
-            Instruction::Standard(_) | Instruction::McGate(_) => {}
-            other => {
-                return Err(RuleLibraryError::UnsupportedInstruction {
-                    instruction: format!("{other:?}"),
-                });
+        let key = KnowledgeInstructionKey::from_instruction(instruction).ok_or_else(|| {
+            RuleLibraryError::UnsupportedInstruction {
+                instruction: format!("{instruction:?}"),
             }
-        }
+        })?;
 
         Ok(self
             .first_instruction_map
             .iter()
-            .find(|(key, _)| match (key, instruction) {
-                (Instruction::Standard(lhs), Instruction::Standard(rhs)) => lhs == rhs,
-                (Instruction::McGate(lhs), Instruction::McGate(rhs)) => lhs == rhs,
-                _ => false,
-            })
+            .find(|(candidate, _)| candidate == &key)
             .map(|(_, ids)| ids.as_slice())
             .unwrap_or(&[]))
     }
@@ -318,38 +301,38 @@ impl RuleLibrary {
         op_instructions: &[Instruction],
         target_instructions: &[Instruction],
     ) -> Result<SmallVec<[RuleId; 16]>, RuleLibraryError> {
-        for instruction in op_instructions.iter().chain(target_instructions) {
-            match instruction {
-                Instruction::Standard(_) | Instruction::McGate(_) => {}
-                other => {
-                    return Err(RuleLibraryError::UnsupportedInstruction {
-                        instruction: format!("{other:?}"),
-                    });
-                }
-            }
-        }
+        let op_keys = op_instructions
+            .iter()
+            .map(|instruction| {
+                KnowledgeInstructionKey::from_instruction(instruction).ok_or_else(|| {
+                    RuleLibraryError::UnsupportedInstruction {
+                        instruction: format!("{instruction:?}"),
+                    }
+                })
+            })
+            .collect::<Result<SmallVec<[_; 8]>, _>>()?;
+        let target_keys = target_instructions
+            .iter()
+            .map(|instruction| {
+                KnowledgeInstructionKey::from_instruction(instruction).ok_or_else(|| {
+                    RuleLibraryError::UnsupportedInstruction {
+                        instruction: format!("{instruction:?}"),
+                    }
+                })
+            })
+            .collect::<Result<SmallVec<[_; 8]>, _>>()?;
 
         let mut ids = SmallVec::new();
 
         for (index, metadata) in self.gate_metadata.iter().enumerate() {
-            let match_supported = metadata.match_instruction_keys.iter().all(|required| {
-                op_instructions
-                    .iter()
-                    .any(|available| match (available, required) {
-                        (Instruction::Standard(lhs), Instruction::Standard(rhs)) => lhs == rhs,
-                        (Instruction::McGate(lhs), Instruction::McGate(rhs)) => lhs == rhs,
-                        _ => false,
-                    })
-            });
-            let rewrite_supported = metadata.rewrite_instruction_keys.iter().all(|required| {
-                target_instructions
-                    .iter()
-                    .any(|available| match (available, required) {
-                        (Instruction::Standard(lhs), Instruction::Standard(rhs)) => lhs == rhs,
-                        (Instruction::McGate(lhs), Instruction::McGate(rhs)) => lhs == rhs,
-                        _ => false,
-                    })
-            });
+            let match_supported = metadata
+                .match_instruction_keys
+                .iter()
+                .all(|required| op_keys.iter().any(|available| available == required));
+            let rewrite_supported = metadata
+                .rewrite_instruction_keys
+                .iter()
+                .all(|required| target_keys.iter().any(|available| available == required));
 
             if match_supported && rewrite_supported {
                 ids.push(RuleId(index));
@@ -365,35 +348,23 @@ fn build_gate_metadata(rule: &Rule) -> Result<RuleGateMetadata, RuleLibraryError
     let mut rewrite_instruction_keys = SmallVec::new();
 
     for item in &rule.operations {
-        match &item.instruction {
-            Instruction::Standard(gate) => {
-                match_instruction_keys.push(Instruction::Standard(*gate))
-            }
-            Instruction::McGate(gate) => {
-                match_instruction_keys.push(Instruction::McGate(gate.clone()))
-            }
-            other => {
-                return Err(RuleLibraryError::UnsupportedInstruction {
-                    instruction: format!("{other:?}"),
-                });
-            }
-        }
+        match_instruction_keys.push(
+            KnowledgeInstructionKey::from_instruction(&item.instruction).ok_or_else(|| {
+                RuleLibraryError::UnsupportedInstruction {
+                    instruction: format!("{:?}", item.instruction),
+                }
+            })?,
+        );
     }
 
     for item in &rule.target {
-        match &item.instruction {
-            Instruction::Standard(gate) => {
-                rewrite_instruction_keys.push(Instruction::Standard(*gate))
-            }
-            Instruction::McGate(gate) => {
-                rewrite_instruction_keys.push(Instruction::McGate(gate.clone()))
-            }
-            other => {
-                return Err(RuleLibraryError::UnsupportedInstruction {
-                    instruction: format!("{other:?}"),
-                });
-            }
-        }
+        rewrite_instruction_keys.push(
+            KnowledgeInstructionKey::from_instruction(&item.instruction).ok_or_else(|| {
+                RuleLibraryError::UnsupportedInstruction {
+                    instruction: format!("{:?}", item.instruction),
+                }
+            })?,
+        );
     }
 
     Ok(RuleGateMetadata {

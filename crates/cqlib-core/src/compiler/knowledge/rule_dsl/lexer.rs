@@ -136,7 +136,7 @@ impl<'a> Lexer<'a> {
                 if ch == '\r' && self.peek_char() == Some('\n') {
                     self.advance();
                 }
-                // 合并连续换行（包括 \r\n 和 \n 的混合）
+                // Collapse consecutive line breaks, including mixed CRLF and LF input.
                 loop {
                     self.skip_horizontal_whitespace_and_comments();
                     match self.peek_char() {
@@ -418,7 +418,7 @@ mod tests {
 
     #[test]
     fn lex_unicode_identifier_accepted() {
-        // Greek and CJK characters are alphabetic per Unicode → accepted as Ident
+        // Greek and CJK characters are alphabetic per Unicode, so they are identifiers.
         let kinds = lex_all("rule α");
         assert_eq!(
             kinds,

@@ -81,14 +81,14 @@ pub enum LowerError {
 }
 
 impl GatePattern {
-    /// Lowers this surface pattern into a runtime [`PatternOp`].
+    /// Lowers this surface pattern into a runtime match [`RuleItem`].
     ///
     /// The lowering process:
     /// 1. Resolves the pattern gate to a standard gate or an [`MCGate`].
     /// 2. Validates that `qubits.len()` equals the gate's expected qubit count.
     /// 3. Validates that `params.len()` equals the gate's expected parameter count.
     /// 4. Attempts to evaluate each parameter to a constant; if that fails,
-    ///    the parameter is kept as a symbolic [`ParamPattern::Expr`].
+    ///    the parameter is kept as a symbolic [`ParameterValue::Param`].
     pub fn into_pattern_op(self) -> Result<RuleItem, LowerError> {
         let lowered = lower_gate_pattern(self)?;
 
@@ -103,11 +103,10 @@ impl GatePattern {
         })
     }
 
-    /// Lowers this surface pattern into a runtime [`BuildOp`] for rewrite blocks.
+    /// Lowers this surface pattern into a runtime rewrite [`RuleItem`].
     ///
     /// The lowering process is identical to [`into_pattern_op`](Self::into_pattern_op)
-    /// except the resulting structure stores the gate directly instead of wrapping it
-    /// in an [`InstructionPattern`].
+    /// except it is used for rewrite block diagnostics and validation.
     pub fn into_build_op(self) -> Result<RuleItem, LowerError> {
         let lowered = lower_gate_pattern(self)?;
 
