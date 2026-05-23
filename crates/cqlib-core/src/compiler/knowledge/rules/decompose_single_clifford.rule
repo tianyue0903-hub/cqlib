@@ -1,0 +1,128 @@
+// Single-qubit fixed-gate decomposition rules.
+//
+// These rules own H/X/Y and half-turn lowering into parameterized rotations.
+
+rule decompose_h_to_rz_rx {
+    match { H 0 }
+    rewrite { RZ(π/2) 0, RX(π/2) 0, RZ(π/2) 0, GPhase(π/2) }
+}
+
+rule decompose_h_to_rz_ry {
+    match { H 0 }
+    rewrite { RZ(π) 0, RY(π/2) 0, GPhase(π/2) }
+}
+
+rule decompose_x_to_rx {
+    match { X 0 }
+    rewrite { RX(π) 0, GPhase(π/2) }
+}
+
+rule decompose_x_to_x2p {
+    match { X 0 }
+    rewrite { X2P 0, X2P 0, GPhase(π/2) }
+}
+
+rule decompose_x_to_x2m {
+    match { X 0 }
+    rewrite { X2M 0, X2M 0, GPhase(-π/2) }
+}
+
+rule decompose_x_to_ry {
+    match { X 0 }
+    rewrite { RZ(π) 0, RY(π) 0, GPhase(π/2) }
+}
+
+rule decompose_y_to_ry {
+    match { Y 0 }
+    rewrite { RY(π) 0, GPhase(π/2) }
+}
+
+rule decompose_y_to_y2p {
+    match { Y 0 }
+    rewrite { Y2P 0, Y2P 0, GPhase(π/2) }
+}
+
+rule decompose_y_to_y2m {
+    match { Y 0 }
+    rewrite { Y2M 0, Y2M 0, GPhase(-π/2) }
+}
+
+rule decompose_y_to_rx {
+    match { Y 0 }
+    rewrite { RZ(π) 0, RX(π) 0, GPhase(-π/2) }
+}
+
+rule decompose_z_to_h_x {
+    match { Z 0 }
+    rewrite { H 0, X 0, H 0 }
+}
+
+rule decompose_z_to_s {
+    match { Z 0 }
+    rewrite { S 0, S 0 }
+}
+
+rule decompose_z_to_sdg {
+    match { Z 0 }
+    rewrite { SDG 0, SDG 0 }
+}
+
+rule decompose_x2p_to_rx {
+    match { X2P 0 }
+    rewrite { RX(π/2) 0 }
+}
+
+rule decompose_x2m_to_rx {
+    match { X2M 0 }
+    rewrite { RX(-π/2) 0 }
+}
+
+rule decompose_y2p_to_ry {
+    match { Y2P 0 }
+    rewrite { RY(π/2) 0 }
+}
+
+rule decompose_y2m_to_ry {
+    match { Y2M 0 }
+    rewrite { RY(-π/2) 0 }
+}
+
+rule decompose_x2p_to_rz_ry {
+    match { X2P 0 }
+    rewrite { RZ(π/2) 0, RY(π/2) 0, RZ(-π/2) 0 }
+}
+
+rule decompose_x2m_to_rz_ry {
+    match { X2M 0 }
+    rewrite { RZ(π/2) 0, RY(-π/2) 0, RZ(-π/2) 0 }
+}
+
+rule decompose_y2p_to_rz_rx {
+    match { Y2P 0 }
+    rewrite { RZ(-π/2) 0, RX(π/2) 0, RZ(π/2) 0 }
+}
+
+rule decompose_y2m_to_rz_rx {
+    match { Y2M 0 }
+    rewrite { RZ(-π/2) 0, RX(-π/2) 0, RZ(π/2) 0 }
+}
+
+rule decompose_x2p_to_y2p {
+    match { X2P 0 }
+    rewrite { RZ(π/2) 0, Y2P 0, RZ(-π/2) 0 }
+}
+
+rule decompose_x2m_to_y2m {
+    match { X2M 0 }
+    rewrite { RZ(π/2) 0, Y2M 0, RZ(-π/2) 0 }
+}
+
+rule decompose_y2p_to_x2p {
+    match { Y2P 0 }
+    rewrite { RZ(-π/2) 0, X2P 0, RZ(π/2) 0 }
+}
+
+rule decompose_y2m_to_x2m {
+    match { Y2M 0 }
+    rewrite { RZ(-π/2) 0, X2M 0, RZ(π/2) 0 }
+}

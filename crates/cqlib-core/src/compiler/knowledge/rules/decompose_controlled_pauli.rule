@@ -1,0 +1,53 @@
+// Controlled Pauli decomposition rules.
+//
+// These rules own CX/CY/CZ interconversion.
+
+rule decompose_cx_to_cz {
+    match { CX 0 1 }
+    rewrite { H 1, CZ 0 1, H 1 }
+}
+
+rule decompose_cx_to_crx {
+    match { CX 0 1 }
+    rewrite { S 0, CRX(π) 0 1 }
+}
+
+rule decompose_cz_to_cx {
+    match { CZ 0 1 }
+    rewrite { H 1, CX 0 1, H 1 }
+}
+
+rule decompose_cz_to_crz {
+    match { CZ 0 1 }
+    rewrite { S 0, CRZ(π) 0 1 }
+}
+
+rule decompose_cx_to_cy {
+    match { CX 0 1 }
+    rewrite { S 1, CY 0 1, SDG 1 }
+}
+
+rule decompose_cy_to_cx {
+    match { CY 0 1 }
+    rewrite { SDG 1, CX 0 1, S 1 }
+}
+
+rule decompose_cy_to_cry {
+    match { CY 0 1 }
+    rewrite { S 0, CRY(π) 0 1 }
+}
+
+rule decompose_cy_direction_flip {
+    match { CY 0 1 }
+    rewrite { SDG 1, H 0, H 1, S 0, CY 1 0, SDG 0, H 0, H 1, S 1 }
+}
+
+rule decompose_cy_to_cz {
+    match { CY 0 1 }
+    rewrite { SDG 1, H 1, CZ 0 1, H 1, S 1 }
+}
+
+rule decompose_cz_to_cy {
+    match { CZ 0 1 }
+    rewrite { H 1, S 1, CY 0 1, SDG 1, H 1 }
+}

@@ -1,0 +1,971 @@
+// Gate commutation rules: reorder adjacent gates that commute.
+//
+// These rules allow the compiler to move gates past each other, enabling
+// better pattern matching for cancellation, merging, and decomposition.
+//
+// Note: These rules only cover gates acting on the SAME qubit(s). Gates
+// on disjoint qubits always commute but cannot be expressed in the DSL
+// because it requires matching different qubit labels — that must be
+// handled at the Rust level.
+
+
+// 1. RZ family commutation (all Z-axis rotations commute with each other)
+
+
+rule comm_rz_s {
+    match { RZ(a) 0, S 0 }
+    rewrite { S 0, RZ(a) 0 }
+}
+
+rule comm_rz_sdg {
+    match { RZ(a) 0, SDG 0 }
+    rewrite { SDG 0, RZ(a) 0 }
+}
+
+rule comm_rz_t {
+    match { RZ(a) 0, T 0 }
+    rewrite { T 0, RZ(a) 0 }
+}
+
+rule comm_rz_tdg {
+    match { RZ(a) 0, TDG 0 }
+    rewrite { TDG 0, RZ(a) 0 }
+}
+
+rule comm_rz_z {
+    match { RZ(a) 0, Z 0 }
+    rewrite { Z 0, RZ(a) 0 }
+}
+
+rule comm_rz_phase {
+    match { RZ(a) 0, Phase(b) 0 }
+    rewrite { Phase(b) 0, RZ(a) 0 }
+}
+
+rule comm_rz_rz {
+    match { RZ(a) 0, RZ(b) 0 }
+    rewrite { RZ(b) 0, RZ(a) 0 }
+}
+
+
+// 1b. Z-axis discrete gate commutation (all Z-axis discrete gates commute)
+
+rule comm_s_sdg {
+    match { SDG 0, S 0 }
+    rewrite { S 0, SDG 0 }
+}
+
+rule comm_s_t {
+    match { T 0, S 0 }
+    rewrite { S 0, T 0 }
+}
+
+rule comm_s_tdg {
+    match { TDG 0, S 0 }
+    rewrite { S 0, TDG 0 }
+}
+
+rule comm_sdg_t {
+    match { T 0, SDG 0 }
+    rewrite { SDG 0, T 0 }
+}
+
+rule comm_sdg_tdg {
+    match { TDG 0, SDG 0 }
+    rewrite { SDG 0, TDG 0 }
+}
+
+rule comm_t_tdg {
+    match { TDG 0, T 0 }
+    rewrite { T 0, TDG 0 }
+}
+
+rule comm_z_s {
+    match { Z 0, S 0 }
+    rewrite { S 0, Z 0 }
+}
+
+rule comm_z_sdg {
+    match { Z 0, SDG 0 }
+    rewrite { SDG 0, Z 0 }
+}
+
+rule comm_z_t {
+    match { Z 0, T 0 }
+    rewrite { T 0, Z 0 }
+}
+
+rule comm_z_tdg {
+    match { Z 0, TDG 0 }
+    rewrite { TDG 0, Z 0 }
+}
+
+
+// 1c. Phase gate commutation with Z-axis discrete gates
+
+rule comm_phase_z {
+    match { Z 0, Phase(a) 0 }
+    rewrite { Phase(a) 0, Z 0 }
+}
+
+rule comm_phase_s {
+    match { S 0, Phase(a) 0 }
+    rewrite { Phase(a) 0, S 0 }
+}
+
+rule comm_phase_sdg {
+    match { SDG 0, Phase(a) 0 }
+    rewrite { Phase(a) 0, SDG 0 }
+}
+
+rule comm_phase_t {
+    match { T 0, Phase(a) 0 }
+    rewrite { Phase(a) 0, T 0 }
+}
+
+rule comm_phase_tdg {
+    match { TDG 0, Phase(a) 0 }
+    rewrite { Phase(a) 0, TDG 0 }
+}
+
+rule comm_phase_phase {
+    match { Phase(a) 0, Phase(b) 0 }
+    rewrite { Phase(b) 0, Phase(a) 0 }
+}
+
+
+// 2. CZ with single-qubit Z-axis gates (Z-axis rotations commute with CZ)
+
+
+rule comm_cz_rz_0 {
+    match { CZ 0 1, RZ(a) 0 }
+    rewrite { RZ(a) 0, CZ 0 1 }
+}
+
+rule comm_cz_rz_1 {
+    match { CZ 0 1, RZ(a) 1 }
+    rewrite { RZ(a) 1, CZ 0 1 }
+}
+
+rule comm_cz_z_0 {
+    match { CZ 0 1, Z 0 }
+    rewrite { Z 0, CZ 0 1 }
+}
+
+rule comm_cz_z_1 {
+    match { CZ 0 1, Z 1 }
+    rewrite { Z 1, CZ 0 1 }
+}
+
+rule comm_cz_s_0 {
+    match { CZ 0 1, S 0 }
+    rewrite { S 0, CZ 0 1 }
+}
+
+rule comm_cz_s_1 {
+    match { CZ 0 1, S 1 }
+    rewrite { S 1, CZ 0 1 }
+}
+
+rule comm_cz_sdg_0 {
+    match { CZ 0 1, SDG 0 }
+    rewrite { SDG 0, CZ 0 1 }
+}
+
+rule comm_cz_sdg_1 {
+    match { CZ 0 1, SDG 1 }
+    rewrite { SDG 1, CZ 0 1 }
+}
+
+rule comm_cz_t_0 {
+    match { CZ 0 1, T 0 }
+    rewrite { T 0, CZ 0 1 }
+}
+
+rule comm_cz_t_1 {
+    match { CZ 0 1, T 1 }
+    rewrite { T 1, CZ 0 1 }
+}
+
+rule comm_cz_phase_0 {
+    match { CZ 0 1, Phase(a) 0 }
+    rewrite { Phase(a) 0, CZ 0 1 }
+}
+
+rule comm_cz_phase_1 {
+    match { CZ 0 1, Phase(a) 1 }
+    rewrite { Phase(a) 1, CZ 0 1 }
+}
+
+
+// 3. CX with single-qubit gates
+//   CX commutes with Z-axis rotations on control qubit
+//   CX commutes with X-axis rotations on target qubit
+
+
+rule comm_cx_rz_ctrl {
+    match { CX 0 1, RZ(a) 0 }
+    rewrite { RZ(a) 0, CX 0 1 }
+}
+
+rule comm_cx_rx_target {
+    match { CX 0 1, RX(a) 1 }
+    rewrite { RX(a) 1, CX 0 1 }
+}
+
+rule comm_cx_z_ctrl {
+    match { CX 0 1, Z 0 }
+    rewrite { Z 0, CX 0 1 }
+}
+
+rule comm_cx_x_target {
+    match { CX 0 1, X 1 }
+    rewrite { X 1, CX 0 1 }
+}
+
+rule comm_cx_s_ctrl {
+    match { CX 0 1, S 0 }
+    rewrite { S 0, CX 0 1 }
+}
+
+rule comm_cx_x2p_target {
+    match { CX 0 1, X2P 1 }
+    rewrite { X2P 1, CX 0 1 }
+}
+
+rule comm_cx_x2m_target {
+    match { CX 0 1, X2M 1 }
+    rewrite { X2M 1, CX 0 1 }
+}
+
+rule comm_cx_phase_ctrl {
+    match { CX 0 1, Phase(a) 0 }
+    rewrite { Phase(a) 0, CX 0 1 }
+}
+
+rule comm_cx_sdg_ctrl {
+    match { CX 0 1, SDG 0 }
+    rewrite { SDG 0, CX 0 1 }
+}
+
+rule comm_cx_tdg_ctrl {
+    match { CX 0 1, TDG 0 }
+    rewrite { TDG 0, CX 0 1 }
+}
+
+
+// 3b. CZ with single-qubit Z-axis gates — TDG coverage
+
+rule comm_cz_tdg_0 {
+    match { CZ 0 1, TDG 0 }
+    rewrite { TDG 0, CZ 0 1 }
+}
+
+rule comm_cz_tdg_1 {
+    match { CZ 0 1, TDG 1 }
+    rewrite { TDG 1, CZ 0 1 }
+}
+
+
+// 3c. CY with single-qubit gates
+//   CY commutes with Z-axis rotations on control qubit
+//   CY commutes with Y-axis rotations on target qubit
+
+rule comm_cy_rz_ctrl {
+    match { CY 0 1, RZ(a) 0 }
+    rewrite { RZ(a) 0, CY 0 1 }
+}
+
+rule comm_cy_z_ctrl {
+    match { CY 0 1, Z 0 }
+    rewrite { Z 0, CY 0 1 }
+}
+
+rule comm_cy_s_ctrl {
+    match { CY 0 1, S 0 }
+    rewrite { S 0, CY 0 1 }
+}
+
+rule comm_cy_sdg_ctrl {
+    match { CY 0 1, SDG 0 }
+    rewrite { SDG 0, CY 0 1 }
+}
+
+rule comm_cy_t_ctrl {
+    match { CY 0 1, T 0 }
+    rewrite { T 0, CY 0 1 }
+}
+
+rule comm_cy_tdg_ctrl {
+    match { CY 0 1, TDG 0 }
+    rewrite { TDG 0, CY 0 1 }
+}
+
+rule comm_cy_phase_ctrl {
+    match { CY 0 1, Phase(a) 0 }
+    rewrite { Phase(a) 0, CY 0 1 }
+}
+
+rule comm_cy_ry_target {
+    match { CY 0 1, RY(a) 1 }
+    rewrite { RY(a) 1, CY 0 1 }
+}
+
+rule comm_cy_y_target {
+    match { CY 0 1, Y 1 }
+    rewrite { Y 1, CY 0 1 }
+}
+
+rule comm_cy_y2p_target {
+    match { CY 0 1, Y2P 1 }
+    rewrite { Y2P 1, CY 0 1 }
+}
+
+rule comm_cy_y2m_target {
+    match { CY 0 1, Y2M 1 }
+    rewrite { Y2M 1, CY 0 1 }
+}
+
+
+// 4. RX / RY family commutation (same-axis rotations commute)
+
+
+rule comm_rx_x {
+    match { RX(a) 0, X 0 }
+    rewrite { X 0, RX(a) 0 }
+}
+
+rule comm_rx_x2p {
+    match { RX(a) 0, X2P 0 }
+    rewrite { X2P 0, RX(a) 0 }
+}
+
+rule comm_rx_x2m {
+    match { RX(a) 0, X2M 0 }
+    rewrite { X2M 0, RX(a) 0 }
+}
+
+rule comm_rx_rx {
+    match { RX(a) 0, RX(b) 0 }
+    rewrite { RX(b) 0, RX(a) 0 }
+}
+
+rule comm_ry_y {
+    match { RY(a) 0, Y 0 }
+    rewrite { Y 0, RY(a) 0 }
+}
+
+rule comm_ry_y2p {
+    match { RY(a) 0, Y2P 0 }
+    rewrite { Y2P 0, RY(a) 0 }
+}
+
+rule comm_ry_y2m {
+    match { RY(a) 0, Y2M 0 }
+    rewrite { Y2M 0, RY(a) 0 }
+}
+
+rule comm_ry_ry {
+    match { RY(a) 0, RY(b) 0 }
+    rewrite { RY(b) 0, RY(a) 0 }
+}
+
+
+// 4b. X-axis discrete gate commutation (all X-axis discrete gates commute)
+
+rule comm_x_x2p {
+    match { X2P 0, X 0 }
+    rewrite { X 0, X2P 0 }
+}
+
+rule comm_x_x2m {
+    match { X2M 0, X 0 }
+    rewrite { X 0, X2M 0 }
+}
+
+rule comm_x2p_x2m {
+    match { X2P 0, X2M 0 }
+    rewrite { X2M 0, X2P 0 }
+}
+
+
+// 4c. Y-axis discrete gate commutation (all Y-axis discrete gates commute)
+
+rule comm_y_y2p {
+    match { Y2P 0, Y 0 }
+    rewrite { Y 0, Y2P 0 }
+}
+
+rule comm_y_y2m {
+    match { Y2M 0, Y 0 }
+    rewrite { Y 0, Y2M 0 }
+}
+
+rule comm_y2p_y2m {
+    match { Y2P 0, Y2M 0 }
+    rewrite { Y2M 0, Y2P 0 }
+}
+
+
+// 4d. CRX with single-qubit gates
+//   CRX commutes with Z-axis rotations on control qubit
+//   CRX commutes with X-axis rotations on target qubit
+
+rule comm_crx_rz_ctrl {
+    match { CRX(a) 0 1, RZ(b) 0 }
+    rewrite { RZ(b) 0, CRX(a) 0 1 }
+}
+
+rule comm_crx_z_ctrl {
+    match { CRX(a) 0 1, Z 0 }
+    rewrite { Z 0, CRX(a) 0 1 }
+}
+
+rule comm_crx_s_ctrl {
+    match { CRX(a) 0 1, S 0 }
+    rewrite { S 0, CRX(a) 0 1 }
+}
+
+rule comm_crx_sdg_ctrl {
+    match { CRX(a) 0 1, SDG 0 }
+    rewrite { SDG 0, CRX(a) 0 1 }
+}
+
+rule comm_crx_t_ctrl {
+    match { CRX(a) 0 1, T 0 }
+    rewrite { T 0, CRX(a) 0 1 }
+}
+
+rule comm_crx_tdg_ctrl {
+    match { CRX(a) 0 1, TDG 0 }
+    rewrite { TDG 0, CRX(a) 0 1 }
+}
+
+rule comm_crx_phase_ctrl {
+    match { CRX(a) 0 1, Phase(b) 0 }
+    rewrite { Phase(b) 0, CRX(a) 0 1 }
+}
+
+rule comm_crx_rx_target {
+    match { CRX(a) 0 1, RX(b) 1 }
+    rewrite { RX(b) 1, CRX(a) 0 1 }
+}
+
+rule comm_crx_x_target {
+    match { CRX(a) 0 1, X 1 }
+    rewrite { X 1, CRX(a) 0 1 }
+}
+
+rule comm_crx_x2p_target {
+    match { CRX(a) 0 1, X2P 1 }
+    rewrite { X2P 1, CRX(a) 0 1 }
+}
+
+rule comm_crx_x2m_target {
+    match { CRX(a) 0 1, X2M 1 }
+    rewrite { X2M 1, CRX(a) 0 1 }
+}
+
+
+// 4e. CRY with single-qubit gates
+//   CRY commutes with Z-axis rotations on control qubit
+//   CRY commutes with Y-axis rotations on target qubit
+
+rule comm_cry_rz_ctrl {
+    match { CRY(a) 0 1, RZ(b) 0 }
+    rewrite { RZ(b) 0, CRY(a) 0 1 }
+}
+
+rule comm_cry_z_ctrl {
+    match { CRY(a) 0 1, Z 0 }
+    rewrite { Z 0, CRY(a) 0 1 }
+}
+
+rule comm_cry_s_ctrl {
+    match { CRY(a) 0 1, S 0 }
+    rewrite { S 0, CRY(a) 0 1 }
+}
+
+rule comm_cry_sdg_ctrl {
+    match { CRY(a) 0 1, SDG 0 }
+    rewrite { SDG 0, CRY(a) 0 1 }
+}
+
+rule comm_cry_t_ctrl {
+    match { CRY(a) 0 1, T 0 }
+    rewrite { T 0, CRY(a) 0 1 }
+}
+
+rule comm_cry_tdg_ctrl {
+    match { CRY(a) 0 1, TDG 0 }
+    rewrite { TDG 0, CRY(a) 0 1 }
+}
+
+rule comm_cry_phase_ctrl {
+    match { CRY(a) 0 1, Phase(b) 0 }
+    rewrite { Phase(b) 0, CRY(a) 0 1 }
+}
+
+rule comm_cry_ry_target {
+    match { CRY(a) 0 1, RY(b) 1 }
+    rewrite { RY(b) 1, CRY(a) 0 1 }
+}
+
+rule comm_cry_y_target {
+    match { CRY(a) 0 1, Y 1 }
+    rewrite { Y 1, CRY(a) 0 1 }
+}
+
+rule comm_cry_y2p_target {
+    match { CRY(a) 0 1, Y2P 1 }
+    rewrite { Y2P 1, CRY(a) 0 1 }
+}
+
+rule comm_cry_y2m_target {
+    match { CRY(a) 0 1, Y2M 1 }
+    rewrite { Y2M 1, CRY(a) 0 1 }
+}
+
+
+// 4f. CRZ with single-qubit gates
+//   CRZ commutes with Z-axis rotations on both control and target qubits
+
+rule comm_crz_rz_ctrl {
+    match { CRZ(a) 0 1, RZ(b) 0 }
+    rewrite { RZ(b) 0, CRZ(a) 0 1 }
+}
+
+rule comm_crz_z_ctrl {
+    match { CRZ(a) 0 1, Z 0 }
+    rewrite { Z 0, CRZ(a) 0 1 }
+}
+
+rule comm_crz_s_ctrl {
+    match { CRZ(a) 0 1, S 0 }
+    rewrite { S 0, CRZ(a) 0 1 }
+}
+
+rule comm_crz_sdg_ctrl {
+    match { CRZ(a) 0 1, SDG 0 }
+    rewrite { SDG 0, CRZ(a) 0 1 }
+}
+
+rule comm_crz_t_ctrl {
+    match { CRZ(a) 0 1, T 0 }
+    rewrite { T 0, CRZ(a) 0 1 }
+}
+
+rule comm_crz_tdg_ctrl {
+    match { CRZ(a) 0 1, TDG 0 }
+    rewrite { TDG 0, CRZ(a) 0 1 }
+}
+
+rule comm_crz_phase_ctrl {
+    match { CRZ(a) 0 1, Phase(b) 0 }
+    rewrite { Phase(b) 0, CRZ(a) 0 1 }
+}
+
+rule comm_crz_rz_target {
+    match { CRZ(a) 0 1, RZ(b) 1 }
+    rewrite { RZ(b) 1, CRZ(a) 0 1 }
+}
+
+rule comm_crz_z_target {
+    match { CRZ(a) 0 1, Z 1 }
+    rewrite { Z 1, CRZ(a) 0 1 }
+}
+
+rule comm_crz_s_target {
+    match { CRZ(a) 0 1, S 1 }
+    rewrite { S 1, CRZ(a) 0 1 }
+}
+
+rule comm_crz_sdg_target {
+    match { CRZ(a) 0 1, SDG 1 }
+    rewrite { SDG 1, CRZ(a) 0 1 }
+}
+
+rule comm_crz_t_target {
+    match { CRZ(a) 0 1, T 1 }
+    rewrite { T 1, CRZ(a) 0 1 }
+}
+
+rule comm_crz_tdg_target {
+    match { CRZ(a) 0 1, TDG 1 }
+    rewrite { TDG 1, CRZ(a) 0 1 }
+}
+
+rule comm_crz_phase_target {
+    match { CRZ(a) 0 1, Phase(b) 1 }
+    rewrite { Phase(b) 1, CRZ(a) 0 1 }
+}
+
+
+// 4g. CCX with single-qubit gates
+//   CCX commutes with Z-axis rotations on either control qubit
+//   CCX commutes with X-axis rotations on target qubit
+
+rule comm_ccx_rz_ctrl0 {
+    match { CCX 0 1 2, RZ(a) 0 }
+    rewrite { RZ(a) 0, CCX 0 1 2 }
+}
+
+rule comm_ccx_z_ctrl0 {
+    match { CCX 0 1 2, Z 0 }
+    rewrite { Z 0, CCX 0 1 2 }
+}
+
+rule comm_ccx_s_ctrl0 {
+    match { CCX 0 1 2, S 0 }
+    rewrite { S 0, CCX 0 1 2 }
+}
+
+rule comm_ccx_sdg_ctrl0 {
+    match { CCX 0 1 2, SDG 0 }
+    rewrite { SDG 0, CCX 0 1 2 }
+}
+
+rule comm_ccx_t_ctrl0 {
+    match { CCX 0 1 2, T 0 }
+    rewrite { T 0, CCX 0 1 2 }
+}
+
+rule comm_ccx_tdg_ctrl0 {
+    match { CCX 0 1 2, TDG 0 }
+    rewrite { TDG 0, CCX 0 1 2 }
+}
+
+rule comm_ccx_phase_ctrl0 {
+    match { CCX 0 1 2, Phase(a) 0 }
+    rewrite { Phase(a) 0, CCX 0 1 2 }
+}
+
+rule comm_ccx_rz_ctrl1 {
+    match { CCX 0 1 2, RZ(a) 1 }
+    rewrite { RZ(a) 1, CCX 0 1 2 }
+}
+
+rule comm_ccx_z_ctrl1 {
+    match { CCX 0 1 2, Z 1 }
+    rewrite { Z 1, CCX 0 1 2 }
+}
+
+rule comm_ccx_s_ctrl1 {
+    match { CCX 0 1 2, S 1 }
+    rewrite { S 1, CCX 0 1 2 }
+}
+
+rule comm_ccx_sdg_ctrl1 {
+    match { CCX 0 1 2, SDG 1 }
+    rewrite { SDG 1, CCX 0 1 2 }
+}
+
+rule comm_ccx_t_ctrl1 {
+    match { CCX 0 1 2, T 1 }
+    rewrite { T 1, CCX 0 1 2 }
+}
+
+rule comm_ccx_tdg_ctrl1 {
+    match { CCX 0 1 2, TDG 1 }
+    rewrite { TDG 1, CCX 0 1 2 }
+}
+
+rule comm_ccx_phase_ctrl1 {
+    match { CCX 0 1 2, Phase(a) 1 }
+    rewrite { Phase(a) 1, CCX 0 1 2 }
+}
+
+rule comm_ccx_rx_target {
+    match { CCX 0 1 2, RX(a) 2 }
+    rewrite { RX(a) 2, CCX 0 1 2 }
+}
+
+rule comm_ccx_x_target {
+    match { CCX 0 1 2, X 2 }
+    rewrite { X 2, CCX 0 1 2 }
+}
+
+rule comm_ccx_x2p_target {
+    match { CCX 0 1 2, X2P 2 }
+    rewrite { X2P 2, CCX 0 1 2 }
+}
+
+rule comm_ccx_x2m_target {
+    match { CCX 0 1 2, X2M 2 }
+    rewrite { X2M 2, CCX 0 1 2 }
+}
+
+
+// 4h. RZZ with single-qubit Z-axis gates and other RZZ
+//   RZZ commutes with Z-axis rotations on either qubit
+//   RZZ commutes with another RZZ
+
+rule comm_rzz_rz_0 {
+    match { RZZ(a) 0 1, RZ(b) 0 }
+    rewrite { RZ(b) 0, RZZ(a) 0 1 }
+}
+
+rule comm_rzz_z_0 {
+    match { RZZ(a) 0 1, Z 0 }
+    rewrite { Z 0, RZZ(a) 0 1 }
+}
+
+rule comm_rzz_s_0 {
+    match { RZZ(a) 0 1, S 0 }
+    rewrite { S 0, RZZ(a) 0 1 }
+}
+
+rule comm_rzz_sdg_0 {
+    match { RZZ(a) 0 1, SDG 0 }
+    rewrite { SDG 0, RZZ(a) 0 1 }
+}
+
+rule comm_rzz_t_0 {
+    match { RZZ(a) 0 1, T 0 }
+    rewrite { T 0, RZZ(a) 0 1 }
+}
+
+rule comm_rzz_tdg_0 {
+    match { RZZ(a) 0 1, TDG 0 }
+    rewrite { TDG 0, RZZ(a) 0 1 }
+}
+
+rule comm_rzz_phase_0 {
+    match { RZZ(a) 0 1, Phase(b) 0 }
+    rewrite { Phase(b) 0, RZZ(a) 0 1 }
+}
+
+rule comm_rzz_rz_1 {
+    match { RZZ(a) 0 1, RZ(b) 1 }
+    rewrite { RZ(b) 1, RZZ(a) 0 1 }
+}
+
+rule comm_rzz_z_1 {
+    match { RZZ(a) 0 1, Z 1 }
+    rewrite { Z 1, RZZ(a) 0 1 }
+}
+
+rule comm_rzz_s_1 {
+    match { RZZ(a) 0 1, S 1 }
+    rewrite { S 1, RZZ(a) 0 1 }
+}
+
+rule comm_rzz_sdg_1 {
+    match { RZZ(a) 0 1, SDG 1 }
+    rewrite { SDG 1, RZZ(a) 0 1 }
+}
+
+rule comm_rzz_t_1 {
+    match { RZZ(a) 0 1, T 1 }
+    rewrite { T 1, RZZ(a) 0 1 }
+}
+
+rule comm_rzz_tdg_1 {
+    match { RZZ(a) 0 1, TDG 1 }
+    rewrite { TDG 1, RZZ(a) 0 1 }
+}
+
+rule comm_rzz_phase_1 {
+    match { RZZ(a) 0 1, Phase(b) 1 }
+    rewrite { Phase(b) 1, RZZ(a) 0 1 }
+}
+
+rule comm_rzz_rzz {
+    match { RZZ(a) 0 1, RZZ(b) 0 1 }
+    rewrite { RZZ(b) 0 1, RZZ(a) 0 1 }
+}
+
+
+// 4i. RXX with single-qubit X-axis gates and other RXX
+//   RXX commutes with X-axis rotations on either qubit
+//   RXX commutes with another RXX
+
+rule comm_rxx_rx_0 {
+    match { RXX(a) 0 1, RX(b) 0 }
+    rewrite { RX(b) 0, RXX(a) 0 1 }
+}
+
+rule comm_rxx_x_0 {
+    match { RXX(a) 0 1, X 0 }
+    rewrite { X 0, RXX(a) 0 1 }
+}
+
+rule comm_rxx_x2p_0 {
+    match { RXX(a) 0 1, X2P 0 }
+    rewrite { X2P 0, RXX(a) 0 1 }
+}
+
+rule comm_rxx_x2m_0 {
+    match { RXX(a) 0 1, X2M 0 }
+    rewrite { X2M 0, RXX(a) 0 1 }
+}
+
+rule comm_rxx_rx_1 {
+    match { RXX(a) 0 1, RX(b) 1 }
+    rewrite { RX(b) 1, RXX(a) 0 1 }
+}
+
+rule comm_rxx_x_1 {
+    match { RXX(a) 0 1, X 1 }
+    rewrite { X 1, RXX(a) 0 1 }
+}
+
+rule comm_rxx_x2p_1 {
+    match { RXX(a) 0 1, X2P 1 }
+    rewrite { X2P 1, RXX(a) 0 1 }
+}
+
+rule comm_rxx_x2m_1 {
+    match { RXX(a) 0 1, X2M 1 }
+    rewrite { X2M 1, RXX(a) 0 1 }
+}
+
+rule comm_rxx_rxx {
+    match { RXX(a) 0 1, RXX(b) 0 1 }
+    rewrite { RXX(b) 0 1, RXX(a) 0 1 }
+}
+
+
+// 4j. RYY with single-qubit Y-axis gates and other RYY
+//   RYY commutes with Y-axis rotations on either qubit
+//   RYY commutes with another RYY
+
+rule comm_ryy_ry_0 {
+    match { RYY(a) 0 1, RY(b) 0 }
+    rewrite { RY(b) 0, RYY(a) 0 1 }
+}
+
+rule comm_ryy_y_0 {
+    match { RYY(a) 0 1, Y 0 }
+    rewrite { Y 0, RYY(a) 0 1 }
+}
+
+rule comm_ryy_y2p_0 {
+    match { RYY(a) 0 1, Y2P 0 }
+    rewrite { Y2P 0, RYY(a) 0 1 }
+}
+
+rule comm_ryy_y2m_0 {
+    match { RYY(a) 0 1, Y2M 0 }
+    rewrite { Y2M 0, RYY(a) 0 1 }
+}
+
+rule comm_ryy_ry_1 {
+    match { RYY(a) 0 1, RY(b) 1 }
+    rewrite { RY(b) 1, RYY(a) 0 1 }
+}
+
+rule comm_ryy_y_1 {
+    match { RYY(a) 0 1, Y 1 }
+    rewrite { Y 1, RYY(a) 0 1 }
+}
+
+rule comm_ryy_y2p_1 {
+    match { RYY(a) 0 1, Y2P 1 }
+    rewrite { Y2P 1, RYY(a) 0 1 }
+}
+
+rule comm_ryy_y2m_1 {
+    match { RYY(a) 0 1, Y2M 1 }
+    rewrite { Y2M 1, RYY(a) 0 1 }
+}
+
+rule comm_ryy_ryy {
+    match { RYY(a) 0 1, RYY(b) 0 1 }
+    rewrite { RYY(b) 0 1, RYY(a) 0 1 }
+}
+
+
+// 4k. RZX with single-qubit gates and other RZX
+//   RZX commutes with Z-axis rotations on qubit 0
+//   RZX commutes with X-axis rotations on qubit 1
+//   RZX commutes with another RZX
+
+rule comm_rzx_rz_0 {
+    match { RZX(a) 0 1, RZ(b) 0 }
+    rewrite { RZ(b) 0, RZX(a) 0 1 }
+}
+
+rule comm_rzx_z_0 {
+    match { RZX(a) 0 1, Z 0 }
+    rewrite { Z 0, RZX(a) 0 1 }
+}
+
+rule comm_rzx_s_0 {
+    match { RZX(a) 0 1, S 0 }
+    rewrite { S 0, RZX(a) 0 1 }
+}
+
+rule comm_rzx_sdg_0 {
+    match { RZX(a) 0 1, SDG 0 }
+    rewrite { SDG 0, RZX(a) 0 1 }
+}
+
+rule comm_rzx_t_0 {
+    match { RZX(a) 0 1, T 0 }
+    rewrite { T 0, RZX(a) 0 1 }
+}
+
+rule comm_rzx_tdg_0 {
+    match { RZX(a) 0 1, TDG 0 }
+    rewrite { TDG 0, RZX(a) 0 1 }
+}
+
+rule comm_rzx_phase_0 {
+    match { RZX(a) 0 1, Phase(b) 0 }
+    rewrite { Phase(b) 0, RZX(a) 0 1 }
+}
+
+rule comm_rzx_rx_1 {
+    match { RZX(a) 0 1, RX(b) 1 }
+    rewrite { RX(b) 1, RZX(a) 0 1 }
+}
+
+rule comm_rzx_x_1 {
+    match { RZX(a) 0 1, X 1 }
+    rewrite { X 1, RZX(a) 0 1 }
+}
+
+rule comm_rzx_x2p_1 {
+    match { RZX(a) 0 1, X2P 1 }
+    rewrite { X2P 1, RZX(a) 0 1 }
+}
+
+rule comm_rzx_x2m_1 {
+    match { RZX(a) 0 1, X2M 1 }
+    rewrite { X2M 1, RZX(a) 0 1 }
+}
+
+rule comm_rzx_rzx {
+    match { RZX(a) 0 1, RZX(b) 0 1 }
+    rewrite { RZX(b) 0 1, RZX(a) 0 1 }
+}
+
+
+// 5. GPhase commutation (global phase commutes with everything)
+
+
+rule comm_gphase_rz {
+    match { GPhase(a), RZ(b) 0 }
+    rewrite { RZ(b) 0, GPhase(a) }
+}
+
+rule comm_gphase_rx {
+    match { GPhase(a), RX(b) 0 }
+    rewrite { RX(b) 0, GPhase(a) }
+}
+
+rule comm_gphase_ry {
+    match { GPhase(a), RY(b) 0 }
+    rewrite { RY(b) 0, GPhase(a) }
+}
+
+rule comm_gphase_cz {
+    match { GPhase(a), CZ 0 1 }
+    rewrite { CZ 0 1, GPhase(a) }
+}
+
+rule comm_gphase_cx {
+    match { GPhase(a), CX 0 1 }
+    rewrite { CX 0 1, GPhase(a) }
+}

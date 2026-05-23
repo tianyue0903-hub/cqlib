@@ -1,0 +1,319 @@
+// Specialization rules: replace parameterized gates at specific angles
+// with their dedicated fixed-angle equivalents.
+//
+// These rules enable the compiler to exploit hardware-native fixed-angle
+// gates (X2P, Y2P, S, T, etc.) when the rotation angle matches.
+
+
+// 1. RX specialization
+
+
+rule specialize_rx_pi_to_x {
+    match { RX(a) 0 }
+    require { a == π mod 4*π }
+    rewrite { X 0, GPhase(-π/2) }
+}
+
+rule specialize_rx_pi_2_to_x2p {
+    match { RX(a) 0 }
+    require { a == π/2 mod 4*π }
+    rewrite { X2P 0 }
+}
+
+rule specialize_rx_minus_pi_2_to_x2m {
+    match { RX(a) 0 }
+    require { a == -π/2 mod 4*π }
+    rewrite { X2M 0 }
+}
+
+rule specialize_rx_pi_to_x_global {
+    match { RX(a) 0 }
+    require { a == 3*π mod 4*π }
+    rewrite { X 0, GPhase(π/2) }
+}
+
+
+// 2. RY specialization
+
+
+rule specialize_ry_pi_to_y {
+    match { RY(a) 0 }
+    require { a == π mod 4*π }
+    rewrite { Y 0, GPhase(-π/2) }
+}
+
+rule specialize_ry_pi_2_to_y2p {
+    match { RY(a) 0 }
+    require { a == π/2 mod 4*π }
+    rewrite { Y2P 0 }
+}
+
+rule specialize_ry_minus_pi_2_to_y2m {
+    match { RY(a) 0 }
+    require { a == -π/2 mod 4*π }
+    rewrite { Y2M 0 }
+}
+
+
+// 3. RZ specialization
+
+
+rule specialize_rz_pi_to_z {
+    match { RZ(a) 0 }
+    require { a == π mod 4*π }
+    rewrite { Z 0, GPhase(-π/2) }
+}
+
+rule specialize_rz_pi_2_to_s {
+    match { RZ(a) 0 }
+    require { a == π/2 mod 4*π }
+    rewrite { S 0, GPhase(-π/4) }
+}
+
+rule specialize_rz_minus_pi_2_to_sdg {
+    match { RZ(a) 0 }
+    require { a == -π/2 mod 4*π }
+    rewrite { SDG 0, GPhase(π/4) }
+}
+
+rule specialize_rz_pi_4_to_t {
+    match { RZ(a) 0 }
+    require { a == π/4 mod 4*π }
+    rewrite { T 0, GPhase(-π/8) }
+}
+
+rule specialize_rz_minus_pi_4_to_tdg {
+    match { RZ(a) 0 }
+    require { a == -π/4 mod 4*π }
+    rewrite { TDG 0, GPhase(π/8) }
+}
+
+
+// 4. Phase specialization
+
+
+rule specialize_phase_pi_to_z {
+    match { Phase(a) 0 }
+    require { a == π mod 2*π }
+    rewrite { Z 0 }
+}
+
+rule specialize_phase_pi_2_to_s {
+    match { Phase(a) 0 }
+    require { a == π/2 mod 2*π }
+    rewrite { S 0 }
+}
+
+rule specialize_phase_minus_pi_2_to_sdg {
+    match { Phase(a) 0 }
+    require { a == -π/2 mod 2*π }
+    rewrite { SDG 0 }
+}
+
+rule specialize_phase_pi_4_to_t {
+    match { Phase(a) 0 }
+    require { a == π/4 mod 2*π }
+    rewrite { T 0 }
+}
+
+rule specialize_phase_minus_pi_4_to_tdg {
+    match { Phase(a) 0 }
+    require { a == -π/4 mod 2*π }
+    rewrite { TDG 0 }
+}
+
+
+// 5. RXY specialization (QCIS-oriented)
+
+
+rule specialize_rxy_pi2_0_to_x2p {
+    match { RXY(a, b) 0 }
+    require { a == π/2 mod 4*π, b == 0 mod 2*π }
+    rewrite { X2P 0 }
+}
+
+rule specialize_rxy_minus_pi2_0_to_x2m {
+    match { RXY(a, b) 0 }
+    require { a == -π/2 mod 4*π, b == 0 mod 2*π }
+    rewrite { X2M 0 }
+}
+
+rule specialize_rxy_pi2_pi2_to_y2p {
+    match { RXY(a, b) 0 }
+    require { a == π/2 mod 4*π, b == π/2 mod 2*π }
+    rewrite { Y2P 0 }
+}
+
+rule specialize_rxy_minus_pi2_pi2_to_y2m {
+    match { RXY(a, b) 0 }
+    require { a == -π/2 mod 4*π, b == π/2 mod 2*π }
+    rewrite { Y2M 0 }
+}
+
+rule specialize_rxy_pi_0_to_x {
+    match { RXY(a, b) 0 }
+    require { a == π mod 4*π, b == 0 mod 2*π }
+    rewrite { X 0, GPhase(-π/2) }
+}
+
+rule specialize_rxy_pi_pi2_to_y {
+    match { RXY(a, b) 0 }
+    require { a == π mod 4*π, b == π/2 mod 2*π }
+    rewrite { Y 0, GPhase(-π/2) }
+}
+
+
+// 6. XY / XY2P / XY2M specialization
+
+
+rule specialize_xy_pi_to_x {
+    match { XY(a) 0 }
+    require { a == π mod 2*π }
+    rewrite { X 0, GPhase(π/2) }
+}
+
+rule specialize_xy2p_0_to_x2p {
+    match { XY2P(a) 0 }
+    require { a == 0 mod 2*π }
+    rewrite { X2P 0 }
+}
+
+rule specialize_xy2m_0_to_x2m {
+    match { XY2M(a) 0 }
+    require { a == 0 mod 2*π }
+    rewrite { X2M 0 }
+}
+
+rule specialize_xy2p_pi2_to_y2p {
+    match { XY2P(a) 0 }
+    require { a == π/2 mod 2*π }
+    rewrite { Y2P 0 }
+}
+
+rule specialize_xy2m_pi2_to_y2m {
+    match { XY2M(a) 0 }
+    require { a == π/2 mod 2*π }
+    rewrite { Y2M 0 }
+}
+
+
+// 7. Two-qubit gate specialization
+
+
+rule specialize_rzz_pi_to_cz {
+    match { RZZ(a) 0 1 }
+    require { a == π mod 4*π }
+    rewrite { Z 0, Z 1, GPhase(-π/2) }
+}
+
+rule specialize_rzz_minus_pi_to_cz {
+    match { RZZ(a) 0 1 }
+    require { a == -π mod 4*π }
+    rewrite { Z 0, Z 1, GPhase(π/2) }
+}
+
+rule specialize_rxx_pi_to_xx {
+    match { RXX(a) 0 1 }
+    require { a == π mod 4*π }
+    rewrite { X 0, X 1, GPhase(-π/2) }
+}
+
+rule specialize_ryy_pi_to_yy {
+    match { RYY(a) 0 1 }
+    require { a == π mod 4*π }
+    rewrite { Y 0, Y 1, GPhase(-π/2) }
+}
+
+rule specialize_crx_pi_to_cx {
+    match { CRX(a) 0 1 }
+    require { a == π mod 4*π }
+    rewrite { Phase(-π/2) 0, CX 0 1 }
+}
+
+rule specialize_cry_pi_to_cy {
+    match { CRY(a) 0 1 }
+    require { a == π mod 4*π }
+    rewrite { Phase(-π/2) 0, CY 0 1 }
+}
+
+rule specialize_crz_pi_to_cz {
+    match { CRZ(a) 0 1 }
+    require { a == π mod 4*π }
+    rewrite { Phase(-π/2) 0, CZ 0 1 }
+}
+
+
+// 8. U gate specialization (U(θ,φ,λ) at specific angle combinations)
+
+
+rule specialize_u_to_x {
+    match { U(a, b, c) 0 }
+    require { a == π mod 4*π, b == -π/2 mod 2*π, c == π/2 mod 2*π }
+    rewrite { X 0, GPhase(-π/2) }
+}
+
+rule specialize_u_to_y {
+    match { U(a, b, c) 0 }
+    require { a == π mod 4*π, b == 0 mod 2*π, c == 0 mod 2*π }
+    rewrite { Y 0, GPhase(-π/2) }
+}
+
+rule specialize_u_to_h {
+    match { U(a, b, c) 0 }
+    require { a == π/2 mod 4*π, b == 0 mod 2*π, c == π mod 2*π }
+    rewrite { H 0 }
+}
+
+rule specialize_u_to_x2p {
+    match { U(a, b, c) 0 }
+    require { a == π/2 mod 4*π, b == -π/2 mod 2*π, c == π/2 mod 2*π }
+    rewrite { X2P 0 }
+}
+
+rule specialize_u_to_x2m {
+    match { U(a, b, c) 0 }
+    require { a == π/2 mod 4*π, b == π/2 mod 2*π, c == -π/2 mod 2*π }
+    rewrite { X2M 0 }
+}
+
+rule specialize_u_to_y2p {
+    match { U(a, b, c) 0 }
+    require { a == π/2 mod 4*π, b == 0 mod 2*π, c == 0 mod 2*π }
+    rewrite { Y2P 0 }
+}
+
+rule specialize_u_to_y2m {
+    match { U(a, b, c) 0 }
+    require { a == π/2 mod 4*π, b == π mod 2*π, c == π mod 2*π }
+    rewrite { Y2M 0 }
+}
+
+rule specialize_u_to_s {
+    match { U(a, b, c) 0 }
+    require { a == 0 mod 4*π, b == 0 mod 2*π, c == π/2 mod 2*π }
+    rewrite { S 0 }
+}
+
+rule specialize_u_to_sdg {
+    match { U(a, b, c) 0 }
+    require { a == 0 mod 4*π, b == 0 mod 2*π, c == -π/2 mod 2*π }
+    rewrite { SDG 0 }
+}
+
+rule specialize_u_to_t {
+    match { U(a, b, c) 0 }
+    require { a == 0 mod 4*π, b == 0 mod 2*π, c == π/4 mod 2*π }
+    rewrite { T 0 }
+}
+
+rule specialize_u_to_tdg {
+    match { U(a, b, c) 0 }
+    require { a == 0 mod 4*π, b == 0 mod 2*π, c == -π/4 mod 2*π }
+    rewrite { TDG 0 }
+}
+
+rule specialize_u_to_z {
+    match { U(a, b, c) 0 }
+    require { a == 0 mod 4*π, b == 0 mod 2*π, c == π mod 2*π }
+    rewrite { Z 0 }
+}

@@ -1,0 +1,362 @@
+// Self-inverse single-qubit gates
+rule cancel_h {
+    match { H 0, H 0 }
+    rewrite {}
+}
+
+rule cancel_x {
+    match { X 0, X 0 }
+    rewrite {}
+}
+
+rule cancel_y {
+    match { Y 0, Y 0 }
+    rewrite {}
+}
+
+rule cancel_z {
+    match { Z 0, Z 0 }
+    rewrite {}
+}
+
+rule cancel_i {
+    match { I 0 }
+    rewrite {}
+}
+
+// Self-inverse multi-qubit gates
+rule cancel_cx {
+    match { CX 0 1, CX 0 1 }
+    rewrite {}
+}
+
+rule cancel_cy {
+    match { CY 0 1, CY 0 1 }
+    rewrite {}
+}
+
+rule cancel_cz {
+    match { CZ 0 1, CZ 0 1 }
+    rewrite {}
+}
+
+rule cancel_cz_swapped {
+    match { CZ 0 1, CZ 1 0 }
+    rewrite {}
+}
+
+rule cancel_swap {
+    match { SWAP 0 1, SWAP 0 1 }
+    rewrite {}
+}
+
+rule cancel_swap_swapped {
+    match { SWAP 0 1, SWAP 1 0 }
+    rewrite {}
+}
+
+rule cancel_ccx {
+    match { CCX 0 1 2, CCX 0 1 2 }
+    rewrite {}
+}
+
+rule cancel_ccx_controls_swapped {
+    match { CCX 0 1 2, CCX 1 0 2 }
+    rewrite {}
+}
+
+// Inverse pairs
+rule cancel_s_sdg {
+    match { S 0, SDG 0 }
+    rewrite {}
+}
+
+rule cancel_sdg_s {
+    match { SDG 0, S 0 }
+    rewrite {}
+}
+
+rule cancel_t_tdg {
+    match { T 0, TDG 0 }
+    rewrite {}
+}
+
+rule cancel_tdg_t {
+    match { TDG 0, T 0 }
+    rewrite {}
+}
+
+rule cancel_x2p_x2m {
+    match { X2P 0, X2M 0 }
+    rewrite {}
+}
+
+rule cancel_x2m_x2p {
+    match { X2M 0, X2P 0 }
+    rewrite {}
+}
+
+rule cancel_y2p_y2m {
+    match { Y2P 0, Y2M 0 }
+    rewrite {}
+}
+
+rule cancel_y2m_y2p {
+    match { Y2M 0, Y2P 0 }
+    rewrite {}
+}
+
+rule cancel_xy2p_xy2m {
+    match { XY2P(a) 0, XY2M(b) 0 }
+    require { a - b == 0 mod 2*π }
+    rewrite {}
+}
+
+rule cancel_xy2m_xy2p {
+    match { XY2M(a) 0, XY2P(b) 0 }
+    require { a - b == 0 mod 2*π }
+    rewrite {}
+}
+
+// Parametric single-qubit rotations
+rule cancel_rx_inverse {
+    match { RX(a) 0, RX(b) 0 }
+    require { a + b == 0 mod 4*π }
+    rewrite {}
+}
+
+rule cancel_rx_inverse_global_phase {
+    match { RX(a) 0, RX(b) 0 }
+    require { a + b == 2*π mod 4*π }
+    rewrite { GPhase(π) }
+}
+
+rule cancel_ry_inverse {
+    match { RY(a) 0, RY(b) 0 }
+    require { a + b == 0 mod 4*π }
+    rewrite {}
+}
+
+rule cancel_ry_inverse_global_phase {
+    match { RY(a) 0, RY(b) 0 }
+    require { a + b == 2*π mod 4*π }
+    rewrite { GPhase(π) }
+}
+
+rule cancel_rz_inverse {
+    match { RZ(a) 0, RZ(b) 0 }
+    require { a + b == 0 mod 4*π }
+    rewrite {}
+}
+
+rule cancel_rz_inverse_global_phase {
+    match { RZ(a) 0, RZ(b) 0 }
+    require { a + b == 2*π mod 4*π }
+    rewrite { GPhase(π) }
+}
+
+rule cancel_phase_inverse {
+    match { Phase(a) 0, Phase(b) 0 }
+    require { a + b == 0 mod 2*π }
+    rewrite {}
+}
+
+rule cancel_gphase_inverse {
+    match { GPhase(a), GPhase(b) }
+    require { a + b == 0 mod 2*π }
+    rewrite {}
+}
+
+// Parametric two-qubit gates
+rule cancel_rxx_inverse {
+    match { RXX(a) 0 1, RXX(b) 0 1 }
+    require { a + b == 0 mod 4*π }
+    rewrite {}
+}
+
+rule cancel_rxx_inverse_global_phase {
+    match { RXX(a) 0 1, RXX(b) 0 1 }
+    require { a + b == 2*π mod 4*π }
+    rewrite { GPhase(π) }
+}
+
+rule cancel_rxx_inverse_swapped {
+    match { RXX(a) 0 1, RXX(b) 1 0 }
+    require { a + b == 0 mod 4*π }
+    rewrite {}
+}
+
+rule cancel_rxx_inverse_swapped_global_phase {
+    match { RXX(a) 0 1, RXX(b) 1 0 }
+    require { a + b == 2*π mod 4*π }
+    rewrite { GPhase(π) }
+}
+
+rule cancel_ryy_inverse {
+    match { RYY(a) 0 1, RYY(b) 0 1 }
+    require { a + b == 0 mod 4*π }
+    rewrite {}
+}
+
+rule cancel_ryy_inverse_global_phase {
+    match { RYY(a) 0 1, RYY(b) 0 1 }
+    require { a + b == 2*π mod 4*π }
+    rewrite { GPhase(π) }
+}
+
+rule cancel_ryy_inverse_swapped {
+    match { RYY(a) 0 1, RYY(b) 1 0 }
+    require { a + b == 0 mod 4*π }
+    rewrite {}
+}
+
+rule cancel_ryy_inverse_swapped_global_phase {
+    match { RYY(a) 0 1, RYY(b) 1 0 }
+    require { a + b == 2*π mod 4*π }
+    rewrite { GPhase(π) }
+}
+
+rule cancel_rzz_inverse {
+    match { RZZ(a) 0 1, RZZ(b) 0 1 }
+    require { a + b == 0 mod 4*π }
+    rewrite {}
+}
+
+rule cancel_rzz_inverse_global_phase {
+    match { RZZ(a) 0 1, RZZ(b) 0 1 }
+    require { a + b == 2*π mod 4*π }
+    rewrite { GPhase(π) }
+}
+
+rule cancel_rzz_inverse_swapped {
+    match { RZZ(a) 0 1, RZZ(b) 1 0 }
+    require { a + b == 0 mod 4*π }
+    rewrite {}
+}
+
+rule cancel_rzz_inverse_swapped_global_phase {
+    match { RZZ(a) 0 1, RZZ(b) 1 0 }
+    require { a + b == 2*π mod 4*π }
+    rewrite { GPhase(π) }
+}
+
+rule cancel_rzx_inverse {
+    match { RZX(a) 0 1, RZX(b) 0 1 }
+    require { a + b == 0 mod 4*π }
+    rewrite {}
+}
+
+rule cancel_rzx_inverse_global_phase {
+    match { RZX(a) 0 1, RZX(b) 0 1 }
+    require { a + b == 2*π mod 4*π }
+    rewrite { GPhase(π) }
+}
+
+// Controlled rotations
+rule cancel_crx_inverse {
+    match { CRX(a) 0 1, CRX(b) 0 1 }
+    require { a + b == 0 mod 4*π }
+    rewrite {}
+}
+
+rule cancel_crx_inverse_control_phase {
+    match { CRX(a) 0 1, CRX(b) 0 1 }
+    require { a + b == 2*π mod 4*π }
+    rewrite { Phase(π) 0 }
+}
+
+rule cancel_cry_inverse {
+    match { CRY(a) 0 1, CRY(b) 0 1 }
+    require { a + b == 0 mod 4*π }
+    rewrite {}
+}
+
+rule cancel_cry_inverse_control_phase {
+    match { CRY(a) 0 1, CRY(b) 0 1 }
+    require { a + b == 2*π mod 4*π }
+    rewrite { Phase(π) 0 }
+}
+
+rule cancel_crz_inverse {
+    match { CRZ(a) 0 1, CRZ(b) 0 1 }
+    require { a + b == 0 mod 4*π }
+    rewrite {}
+}
+
+rule cancel_crz_inverse_control_phase {
+    match { CRZ(a) 0 1, CRZ(b) 0 1 }
+    require { a + b == 2*π mod 4*π }
+    rewrite { Phase(π) 0 }
+}
+
+// RXY: inverse is RXY(-theta, phi) — same phi, negated angle
+rule cancel_rxy_inverse {
+    match { RXY(a, phi_a) 0, RXY(b, phi_b) 0 }
+    require {
+        a + b == 0 mod 4*π,
+        phi_a - phi_b == 0 mod 2*π
+    }
+    rewrite {}
+}
+
+rule cancel_rxy_inverse_global_phase {
+    match { RXY(a, phi_a) 0, RXY(b, phi_b) 0 }
+    require {
+        a + b == 2*π mod 4*π,
+        phi_a - phi_b == 0 mod 2*π
+    }
+    rewrite { GPhase(π) }
+}
+
+// XY: inverse is XY(π + theta)
+rule cancel_xy_inverse {
+    match { XY(a) 0, XY(b) 0 }
+    require { b - a == π mod 2*π }
+    rewrite {}
+}
+
+rule cancel_xy_inverse_global_phase {
+    match { XY(a) 0, XY(b) 0 }
+    require { b - a == 0 mod 2*π }
+    rewrite { GPhase(π) }
+}
+
+// fSim: inverse is fSim(-theta, -phi)
+rule cancel_fsim_inverse {
+    match { FSIM(a, b) 0 1, FSIM(c, d) 0 1 }
+    require {
+        a + c == 0 mod 2*π,
+        b + d == 0 mod 2*π
+    }
+    rewrite {}
+}
+
+rule cancel_fsim_inverse_swapped {
+    match { FSIM(a, b) 0 1, FSIM(c, d) 1 0 }
+    require {
+        a + c == 0 mod 2*π,
+        b + d == 0 mod 2*π
+    }
+    rewrite {}
+}
+
+// U gate: U(theta, phi, lambda)† = U(-theta, -lambda, -phi)
+rule cancel_u_inverse {
+    match { U(a, b, c) 0, U(d, e, f) 0 }
+    require {
+        a + d == 0 mod 4*π,
+        b + f == 0 mod 2*π,
+        c + e == 0 mod 2*π
+    }
+    rewrite {}
+}
+
+rule cancel_u_inverse_global_phase {
+    match { U(a, b, c) 0, U(d, e, f) 0 }
+    require {
+        a + d == 2*π mod 4*π,
+        b + f == 0 mod 2*π,
+        c + e == 0 mod 2*π
+    }
+    rewrite { GPhase(π) }
+}

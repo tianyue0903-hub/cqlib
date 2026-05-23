@@ -1,0 +1,83 @@
+// Controlled rotation decomposition rules.
+//
+// These rules own CRX/CRY/CRZ lowering to CX, CZ, and RZZ target paths.
+
+rule decompose_crz_to_cx {
+    match { CRZ(theta) 0 1 }
+    rewrite { CX 0 1, RZ(-theta/2) 1, CX 0 1, RZ(theta/2) 1 }
+}
+
+rule decompose_crz_to_crx {
+    match { CRZ(theta) 0 1 }
+    rewrite { H 1, CRX(theta) 0 1, H 1 }
+}
+
+rule decompose_crz_to_cry {
+    match { CRZ(theta) 0 1 }
+    rewrite { RX(-π/2) 1, CRY(theta) 0 1, RX(π/2) 1 }
+}
+
+rule decompose_crz_to_rzx {
+    match { CRZ(theta) 0 1 }
+    rewrite { RZ(theta/2) 1, H 1, RZX(-theta/2) 0 1, H 1 }
+}
+
+rule decompose_crx_to_cx {
+    match { CRX(theta) 0 1 }
+    rewrite { H 1, CX 0 1, RZ(-theta/2) 1, CX 0 1, RZ(theta/2) 1, H 1 }
+}
+
+rule decompose_crx_to_crz {
+    match { CRX(theta) 0 1 }
+    rewrite { H 1, CRZ(theta) 0 1, H 1 }
+}
+
+rule decompose_crx_to_rzx {
+    match { CRX(theta) 0 1 }
+    rewrite { RX(theta/2) 1, RZX(-theta/2) 0 1 }
+}
+
+rule decompose_cry_to_cx {
+    match { CRY(theta) 0 1 }
+    rewrite { CX 0 1, RY(-theta/2) 1, CX 0 1, RY(theta/2) 1 }
+}
+
+rule decompose_cry_to_crz {
+    match { CRY(theta) 0 1 }
+    rewrite { RX(π/2) 1, CRZ(theta) 0 1, RX(-π/2) 1 }
+}
+
+rule decompose_cry_to_rzx {
+    match { CRY(theta) 0 1 }
+    rewrite { RY(theta/2) 1, SDG 1, RZX(-theta/2) 0 1, S 1 }
+}
+
+rule decompose_crz_to_rzz {
+    match { CRZ(theta) 0 1 }
+    rewrite { RZ(theta/2) 1, RZZ(-theta/2) 0 1 }
+}
+
+rule decompose_crx_to_rzz {
+    match { CRX(theta) 0 1 }
+    rewrite { H 1, RZ(theta/2) 1, RZZ(-theta/2) 0 1, H 1 }
+}
+
+rule decompose_cry_to_rzz {
+    match { CRY(theta) 0 1 }
+    rewrite { RX(π/2) 1, RZ(theta/2) 1, RZZ(-theta/2) 0 1, RX(-π/2) 1 }
+}
+
+rule decompose_crz_to_cz {
+    match { CRZ(theta) 0 1 }
+    rewrite { H 1, CZ 0 1, H 1, RZ(-theta/2) 1, H 1, CZ 0 1, H 1, RZ(theta/2) 1 }
+}
+
+rule decompose_crx_to_cz {
+    match { CRX(theta) 0 1 }
+    rewrite { CZ 0 1, H 1, RZ(-theta/2) 1, H 1, CZ 0 1, H 1, RZ(theta/2) 1, H 1 }
+}
+
+rule decompose_cry_to_cz {
+    match { CRY(theta) 0 1 }
+    rewrite { H 1, CZ 0 1, H 1, RY(-theta/2) 1, H 1, CZ 0 1, H 1, RY(theta/2) 1 }
+}

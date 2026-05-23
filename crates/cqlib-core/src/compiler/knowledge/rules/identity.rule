@@ -1,0 +1,221 @@
+// Identity transformation rules: equivalent rearrangements useful for
+// topology matching, canonicalization, and gate movement.
+
+// 1. H conjugation (H·gate·H = gate')
+
+// H·X·H = Z
+rule identity_hxh_to_z {
+    match { H 0, X 0, H 0 }
+    rewrite { Z 0 }
+}
+
+// H·Z·H = X
+rule identity_hzh_to_x {
+    match { H 0, Z 0, H 0 }
+    rewrite { X 0 }
+}
+
+// H·Y·H = -Y → Y + GPhase(π)
+rule identity_hyh_to_my {
+    match { H 0, Y 0, H 0 }
+    rewrite { Y 0, GPhase(π) }
+}
+
+// H·S·H = e^(iπ/4)·X2P
+rule identity_hsh_to_sdg {
+    match { H 0, S 0, H 0 }
+    rewrite { X2P 0, GPhase(π/4) }
+}
+
+// H·SDG·H = e^(-iπ/4)·X2M
+rule identity_hsdgh_to_s {
+    match { H 0, SDG 0, H 0 }
+    rewrite { X2M 0, GPhase(-π/4) }
+}
+
+
+// 2. S conjugation (S·gate·SDG = gate')
+
+
+// S·X·SDG = Y
+rule identity_sxs_to_y {
+    match { S 0, X 0, SDG 0 }
+    rewrite { Y 0, GPhase(π) }
+}
+
+// SDG·Y·S = X
+rule identity_sdg_ys_to_x {
+    match { SDG 0, Y 0, S 0 }
+    rewrite { X 0, GPhase(π) }
+}
+
+// S·Z·SDG = Z (Z commutes with S)
+rule identity_szs_to_z {
+    match { S 0, Z 0, SDG 0 }
+    rewrite { Z 0 }
+}
+
+// S·X2P·SDG = Y2M
+rule identity_sx2ps_to_x2m {
+    match { S 0, X2P 0, SDG 0 }
+    rewrite { Y2M 0 }
+}
+
+// S·X2M·SDG = Y2P
+rule identity_sx2ms_to_x2p {
+    match { S 0, X2M 0, SDG 0 }
+    rewrite { Y2P 0 }
+}
+
+// S·Y2P·SDG = X2P
+rule identity_sy2ps_to_y2m {
+    match { S 0, Y2P 0, SDG 0 }
+    rewrite { X2P 0 }
+}
+
+// S·Y2M·SDG = X2M
+rule identity_sy2ms_to_y2p {
+    match { S 0, Y2M 0, SDG 0 }
+    rewrite { X2M 0 }
+}
+
+
+// 3. X2P/X2M conjugation (X2P·gate·X2M = gate')
+
+// X2P·Z·X2M = Y
+rule identity_x2pzx2m_to_y {
+    match { X2P 0, Z 0, X2M 0 }
+    rewrite { Y 0 }
+}
+
+// X2M·Z·X2P = -Y
+rule identity_x2mzx2p_to_my {
+    match { X2M 0, Z 0, X2P 0 }
+    rewrite { Y 0, GPhase(π) }
+}
+
+// X2P·X·X2M = X
+rule identity_x2pxx2m_to_x {
+    match { X2P 0, X 0, X2M 0 }
+    rewrite { X 0 }
+}
+
+// X2M·Y·X2P = Z
+rule identity_x2myx2p_to_z {
+    match { X2M 0, Y 0, X2P 0 }
+    rewrite { Z 0 }
+}
+
+// Y2P·Z·Y2M = -X
+rule identity_y2pzy2m_to_mx {
+    match { Y2P 0, Z 0, Y2M 0 }
+    rewrite { X 0, GPhase(π) }
+}
+
+// Y2M·Z·Y2P = X
+rule identity_y2mzy2p_to_x {
+    match { Y2M 0, Z 0, Y2P 0 }
+    rewrite { X 0 }
+}
+
+// Y2P·X·Y2M = Z
+rule identity_y2pxy2m_to_z {
+    match { Y2P 0, X 0, Y2M 0 }
+    rewrite { Z 0 }
+}
+
+// Y2M·Y·Y2P = Y (needs verification)
+rule identity_y2myy2p_to_y {
+    match { Y2M 0, Y 0, Y2P 0 }
+    rewrite { Y 0 }
+}
+
+// 4. CZ / CX conjugation (2-qubit Clifford)
+
+
+// CZ·(X⊗I)·CZ = X⊗Z
+rule identity_cz_x0_cz_to_xz {
+    match { CZ 0 1, X 0, CZ 0 1 }
+    rewrite { X 0, Z 1 }
+}
+
+// CZ·(I⊗X)·CZ = Z⊗X
+rule identity_cz_x1_cz_to_zx {
+    match { CZ 0 1, X 1, CZ 0 1 }
+    rewrite { Z 0, X 1 }
+}
+
+// CX·(X⊗I)·CX = X⊗X
+rule identity_cx_x0_cx_to_xx {
+    match { CX 0 1, X 0, CX 0 1 }
+    rewrite { X 0, X 1 }
+}
+
+// CX·(I⊗Z)·CX = Z⊗Z
+rule identity_cx_z1_cx_to_zz {
+    match { CX 0 1, Z 1, CX 0 1 }
+    rewrite { Z 0, Z 1 }
+}
+
+
+// 5. Gate movement through CZ/CX (partial commutation)
+
+// S on either qubit passes through CZ
+rule identity_cz_s0_to_s_cz {
+    match { CZ 0 1, S 0 }
+    rewrite { S 0, CZ 0 1 }
+}
+
+rule identity_cz_s1_to_s_cz {
+    match { CZ 0 1, S 1 }
+    rewrite { S 1, CZ 0 1 }
+}
+
+
+// 6. CX direction flipping
+
+
+// CX 0 1 → H⊗H · CX 1 0 · H⊗H
+rule identity_cx_flip {
+    match { CX 0 1 }
+    rewrite { H 0, H 1, CX 1 0, H 0, H 1 }
+}
+
+
+// 7. Other identities
+
+// SWAP symmetry
+rule identity_swap_sym {
+    match { SWAP 0 1 }
+    rewrite { SWAP 1 0 }
+}
+
+// CZ = H⊗H · CX(reverse) · H⊗H (alternative CZ expression)
+rule identity_cz_to_hcxh {
+    match { CZ 0 1 }
+    rewrite { H 1, CX 0 1, H 1 }
+}
+
+// X·Z = -Y
+rule identity_xz_to_y_phase {
+    match { X 0, Z 0 }
+    rewrite { Y 0, GPhase(π/2) }
+}
+
+// Z·X = -Y
+rule identity_zx_to_y_phase {
+    match { Z 0, X 0 }
+    rewrite { Y 0, GPhase(-π/2) }
+}
+
+// X2P·Y2M composition
+rule identity_x2p_y2m {
+    match { X2P 0, Y2M 0 }
+    rewrite { H 0, SDG 0, GPhase(-π/4) }
+}
+
+// Y2P·X2M composition
+rule identity_y2p_x2m {
+    match { Y2P 0, X2M 0 }
+    rewrite { S 0, H 0, GPhase(π/4) }
+}

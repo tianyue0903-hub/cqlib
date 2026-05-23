@@ -1,0 +1,73 @@
+// Phase-family decomposition rules.
+//
+// These rules own exact phase lowering for Phase/GPhase-adjacent fixed gates.
+
+rule decompose_phase_to_rz {
+    match { Phase(theta) 0 }
+    rewrite { RZ(theta) 0, GPhase(theta/2) }
+}
+
+rule decompose_rz_to_phase {
+    match { RZ(theta) 0 }
+    rewrite { Phase(theta) 0, GPhase(-theta/2) }
+}
+
+rule decompose_s_to_phase {
+    match { S 0 }
+    rewrite { Phase(π/2) 0 }
+}
+
+rule decompose_s_to_t {
+    match { S 0 }
+    rewrite { T 0, T 0 }
+}
+
+rule decompose_s_to_rz {
+    match { S 0 }
+    rewrite { RZ(π/2) 0, GPhase(π/4) }
+}
+
+rule decompose_sdg_to_phase {
+    match { SDG 0 }
+    rewrite { Phase(-π/2) 0 }
+}
+
+rule decompose_sdg_to_tdg {
+    match { SDG 0 }
+    rewrite { TDG 0, TDG 0 }
+}
+
+rule decompose_sdg_to_rz {
+    match { SDG 0 }
+    rewrite { RZ(-π/2) 0, GPhase(-π/4) }
+}
+
+rule decompose_t_to_phase {
+    match { T 0 }
+    rewrite { Phase(π/4) 0 }
+}
+
+rule decompose_t_to_rz {
+    match { T 0 }
+    rewrite { RZ(π/4) 0, GPhase(π/8) }
+}
+
+rule decompose_tdg_to_phase {
+    match { TDG 0 }
+    rewrite { Phase(-π/4) 0 }
+}
+
+rule decompose_tdg_to_rz {
+    match { TDG 0 }
+    rewrite { RZ(-π/4) 0, GPhase(-π/8) }
+}
+
+rule decompose_z_to_phase {
+    match { Z 0 }
+    rewrite { Phase(π) 0 }
+}
+
+rule decompose_z_to_rz {
+    match { Z 0 }
+    rewrite { RZ(π) 0, GPhase(π/2) }
+}

@@ -1,0 +1,290 @@
+rule decompose_mci0_to_i {
+    match { MCI[0] 0 }
+    rewrite { I 0 }
+}
+
+rule decompose_mch0_to_h {
+    match { MCH[0] 0 }
+    rewrite { H 0 }
+}
+
+rule decompose_mcrx0_to_rx {
+    match { MCRX[0](theta) 0 }
+    rewrite { RX(theta) 0 }
+}
+
+rule decompose_mcrxx0_to_rxx {
+    match { MCRXX[0](theta) 0 1 }
+    rewrite { RXX(theta) 0 1 }
+}
+
+rule decompose_mcrxy0_to_rxy {
+    match { MCRXY[0](theta, phi) 0 }
+    rewrite { RXY(theta, phi) 0 }
+}
+
+rule decompose_mcry0_to_ry {
+    match { MCRY[0](theta) 0 }
+    rewrite { RY(theta) 0 }
+}
+
+rule decompose_mcryy0_to_ryy {
+    match { MCRYY[0](theta) 0 1 }
+    rewrite { RYY(theta) 0 1 }
+}
+
+rule decompose_mcrz0_to_rz {
+    match { MCRZ[0](theta) 0 }
+    rewrite { RZ(theta) 0 }
+}
+
+rule decompose_mcrzx0_to_rzx {
+    match { MCRZX[0](theta) 0 1 }
+    rewrite { RZX(theta) 0 1 }
+}
+
+rule decompose_mcrzz0_to_rzz {
+    match { MCRZZ[0](theta) 0 1 }
+    rewrite { RZZ(theta) 0 1 }
+}
+
+rule decompose_mcs0_to_s {
+    match { MCS[0] 0 }
+    rewrite { S 0 }
+}
+
+rule decompose_mcsdg0_to_sdg {
+    match { MCSDG[0] 0 }
+    rewrite { SDG 0 }
+}
+
+rule decompose_mcswap0_to_swap {
+    match { MCSWAP[0] 0 1 }
+    rewrite { SWAP 0 1 }
+}
+
+rule decompose_mct0_to_t {
+    match { MCT[0] 0 }
+    rewrite { T 0 }
+}
+
+rule decompose_mctdg0_to_tdg {
+    match { MCTDG[0] 0 }
+    rewrite { TDG 0 }
+}
+
+rule decompose_mcu0_to_u {
+    match { MCU[0](theta, phi, lambda) 0 }
+    rewrite { U(theta, phi, lambda) 0 }
+}
+
+rule decompose_mcx0_to_x {
+    match { MCX[0] 0 }
+    rewrite { X 0 }
+}
+
+rule decompose_mcxy0_to_xy {
+    match { MCXY[0](theta) 0 }
+    rewrite { XY(theta) 0 }
+}
+
+rule decompose_mcx2p0_to_x2p {
+    match { MCX2P[0] 0 }
+    rewrite { X2P 0 }
+}
+
+rule decompose_mcx2m0_to_x2m {
+    match { MCX2M[0] 0 }
+    rewrite { X2M 0 }
+}
+
+rule decompose_mcxy2p0_to_xy2p {
+    match { MCXY2P[0](theta) 0 }
+    rewrite { XY2P(theta) 0 }
+}
+
+rule decompose_mcxy2m0_to_xy2m {
+    match { MCXY2M[0](theta) 0 }
+    rewrite { XY2M(theta) 0 }
+}
+
+rule decompose_mcy0_to_y {
+    match { MCY[0] 0 }
+    rewrite { Y 0 }
+}
+
+rule decompose_mcy2p0_to_y2p {
+    match { MCY2P[0] 0 }
+    rewrite { Y2P 0 }
+}
+
+rule decompose_mcy2m0_to_y2m {
+    match { MCY2M[0] 0 }
+    rewrite { Y2M 0 }
+}
+
+rule decompose_mcz0_to_z {
+    match { MCZ[0] 0 }
+    rewrite { Z 0 }
+}
+
+rule decompose_mcphase0_to_phase {
+    match { MCPhase[0](theta) 0 }
+    rewrite { Phase(theta) 0 }
+}
+
+rule decompose_mccx0_to_cx {
+    match { MCCX[0] 0 1 }
+    rewrite { CX 0 1 }
+}
+
+rule decompose_mcccx0_to_ccx {
+    match { MCCCX[0] 0 1 2 }
+    rewrite { CCX 0 1 2 }
+}
+
+rule decompose_mccy0_to_cy {
+    match { MCCY[0] 0 1 }
+    rewrite { CY 0 1 }
+}
+
+rule decompose_mccz0_to_cz {
+    match { MCCZ[0] 0 1 }
+    rewrite { CZ 0 1 }
+}
+
+rule decompose_mcfsim0_to_fsim {
+    match { MCFSIM[0](theta, phi) 0 1 }
+    rewrite { FSIM(theta, phi) 0 1 }
+}
+
+rule decompose_mcx1_to_cx {
+    match { MCX[1] 0 1 }
+    rewrite { CX 0 1 }
+}
+
+rule decompose_mcx2_to_ccx {
+    match { MCX[2] 0 1 2 }
+    rewrite { CCX 0 1 2 }
+}
+
+rule decompose_mcy1_to_cy {
+    match { MCY[1] 0 1 }
+    rewrite { CY 0 1 }
+}
+
+rule decompose_mcz1_to_cz {
+    match { MCZ[1] 0 1 }
+    rewrite { CZ 0 1 }
+}
+
+rule decompose_mcrx1_to_crx {
+    match { MCRX[1](theta) 0 1 }
+    rewrite { CRX(theta) 0 1 }
+}
+
+rule decompose_mcry1_to_cry {
+    match { MCRY[1](theta) 0 1 }
+    rewrite { CRY(theta) 0 1 }
+}
+
+rule decompose_mcrz1_to_crz {
+    match { MCRZ[1](theta) 0 1 }
+    rewrite { CRZ(theta) 0 1 }
+}
+
+rule decompose_mcy2_to_ccx {
+    match { MCY[2] 0 1 2 }
+    rewrite { SDG 2, CCX 0 1 2, S 2 }
+}
+
+rule decompose_mcz2_to_ccx {
+    match { MCZ[2] 0 1 2 }
+    rewrite { H 2, CCX 0 1 2, H 2 }
+}
+
+rule decompose_mcs1_to_phase_cx {
+    match { MCS[1] 0 1 }
+    rewrite { Phase(π/4) 0, Phase(π/4) 1, CX 0 1, Phase(-π/4) 1, CX 0 1 }
+}
+
+rule decompose_mcsdg1_to_phase_cx {
+    match { MCSDG[1] 0 1 }
+    rewrite { Phase(-π/4) 0, Phase(-π/4) 1, CX 0 1, Phase(π/4) 1, CX 0 1 }
+}
+
+rule decompose_mct1_to_phase_cx {
+    match { MCT[1] 0 1 }
+    rewrite { Phase(π/8) 0, Phase(π/8) 1, CX 0 1, Phase(-π/8) 1, CX 0 1 }
+}
+
+rule decompose_mctdg1_to_phase_cx {
+    match { MCTDG[1] 0 1 }
+    rewrite { Phase(-π/8) 0, Phase(-π/8) 1, CX 0 1, Phase(π/8) 1, CX 0 1 }
+}
+
+rule decompose_mcphase1_to_phase_cx {
+    match { MCPhase[1](theta) 0 1 }
+    rewrite { Phase(theta/2) 0, Phase(theta/2) 1, CX 0 1, Phase(-theta/2) 1, CX 0 1 }
+}
+
+rule decompose_mcphase2_to_parity_phase {
+    match { MCPhase[2](theta) 0 1 2 }
+    rewrite {
+        Phase(theta/4) 0,
+        Phase(theta/4) 1,
+        CX 0 1, Phase(-theta/4) 1, CX 0 1,
+        Phase(theta/4) 2,
+        CX 0 2, Phase(-theta/4) 2, CX 0 2,
+        CX 1 2, Phase(-theta/4) 2, CX 1 2,
+        CX 0 2, CX 1 2, Phase(theta/4) 2, CX 1 2, CX 0 2
+    }
+}
+
+rule decompose_mcswap1_to_ccx {
+    match { MCSWAP[1] 0 1 2 }
+    rewrite { CCX 0 1 2, CCX 0 2 1, CCX 0 1 2 }
+}
+
+rule decompose_mcrzz1_to_ccx_crz {
+    match { MCRZZ[1](theta) 0 1 2 }
+    rewrite { CCX 0 1 2, CRZ(theta) 0 2, CCX 0 1 2 }
+}
+
+rule decompose_mcrxx1_to_ccx_crz {
+    match { MCRXX[1](theta) 0 1 2 }
+    rewrite { H 1, H 2, CCX 0 1 2, CRZ(theta) 0 2, CCX 0 1 2, H 1, H 2 }
+}
+
+rule decompose_mcryy1_to_ccx_crz {
+    match { MCRYY[1](theta) 0 1 2 }
+    rewrite { RX(π/2) 1, RX(π/2) 2, CCX 0 1 2, CRZ(theta) 0 2, CCX 0 1 2, RX(-π/2) 1, RX(-π/2) 2 }
+}
+
+rule decompose_mcrzx1_to_ccx_crz {
+    match { MCRZX[1](theta) 0 1 2 }
+    rewrite { H 2, CCX 0 1 2, CRZ(theta) 0 2, CCX 0 1 2, H 2 }
+}
+
+rule decompose_mcx3_to_parity_phase {
+    match { MCX[3] 0 1 2 3 }
+    rewrite {
+        H 3,
+        RZ(π/8) 0,
+        RZ(π/8) 1,
+        CX 0 1, RZ(-π/8) 1, CX 0 1,
+        RZ(π/8) 2,
+        CX 0 2, RZ(-π/8) 2, CX 0 2,
+        CX 1 2, RZ(-π/8) 2, CX 1 2,
+        CX 0 2, CX 1 2, RZ(π/8) 2, CX 1 2, CX 0 2,
+        RZ(π/8) 3,
+        CX 0 3, RZ(-π/8) 3, CX 0 3,
+        CX 1 3, RZ(-π/8) 3, CX 1 3,
+        CX 0 3, CX 1 3, RZ(π/8) 3, CX 1 3, CX 0 3,
+        CX 2 3, RZ(-π/8) 3, CX 2 3,
+        CX 0 3, CX 2 3, RZ(π/8) 3, CX 2 3, CX 0 3,
+        CX 1 3, CX 2 3, RZ(π/8) 3, CX 2 3, CX 1 3,
+        CX 0 3, CX 1 3, CX 2 3, RZ(-π/8) 3, CX 2 3, CX 1 3, CX 0 3,
+        H 3
+    }
+}

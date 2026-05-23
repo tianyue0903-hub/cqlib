@@ -1,0 +1,275 @@
+// QCIS-native gate decomposition rules.
+//
+// Target gate set: {I, X2P, X2M, Y2P, Y2M, XY2P, XY2M, CZ, RZ, GPhase}
+//
+// These rules provide direct decomposition paths to QCIS native gates,
+// which are the native instruction set of the China Telecom Quantum
+// computing platform. QCIS is the platform's primary gate format.
+
+// 1. Single-qubit non-parametric gates → QCIS native
+
+// H → RZ + X2P + RZ
+rule qcis_h_to_x2p {
+    match { H 0 }
+    rewrite { RZ(π/2) 0, X2P 0, RZ(π/2) 0, GPhase(π/2) }
+}
+
+// H → RZ(π) + Y2P
+rule qcis_h_to_y2p {
+    match { H 0 }
+    rewrite { RZ(π) 0, Y2P 0, GPhase(π/2) }
+}
+
+// X → X2P + X2P
+rule qcis_x_to_x2p {
+    match { X 0 }
+    rewrite { X2P 0, X2P 0, GPhase(π/2) }
+}
+
+// X → X2M + X2M
+rule qcis_x_to_x2m {
+    match { X 0 }
+    rewrite { X2M 0, X2M 0, GPhase(-π/2) }
+}
+
+// Y → Y2P + Y2P
+rule qcis_y_to_y2p {
+    match { Y 0 }
+    rewrite { Y2P 0, Y2P 0, GPhase(π/2) }
+}
+
+// Y → Y2M + Y2M
+rule qcis_y_to_y2m {
+    match { Y 0 }
+    rewrite { Y2M 0, Y2M 0, GPhase(-π/2) }
+}
+
+// Z → RZ(π)
+rule qcis_z_to_rz {
+    match { Z 0 }
+    rewrite { RZ(π) 0, GPhase(π/2) }
+}
+
+// S → RZ(π/2)
+rule qcis_s_to_rz {
+    match { S 0 }
+    rewrite { RZ(π/2) 0, GPhase(π/4) }
+}
+
+// SDG → RZ(-π/2)
+rule qcis_sdg_to_rz {
+    match { SDG 0 }
+    rewrite { RZ(-π/2) 0, GPhase(-π/4) }
+}
+
+// T → RZ(π/4)
+rule qcis_t_to_rz {
+    match { T 0 }
+    rewrite { RZ(π/4) 0, GPhase(π/8) }
+}
+
+// TDG → RZ(-π/4)
+rule qcis_tdg_to_rz {
+    match { TDG 0 }
+    rewrite { RZ(-π/4) 0, GPhase(-π/8) }
+}
+
+// Phase(θ) → RZ(θ)
+rule qcis_phase_to_rz {
+    match { Phase(theta) 0 }
+    rewrite { RZ(theta) 0, GPhase(theta/2) }
+}
+
+// 2. Single-qubit parametric rotations → QCIS native
+
+// RX(θ) → RZ + Y2P + RZ + Y2M (via Y basis)
+rule qcis_rx_to_y2p_rz {
+    match { RX(theta) 0 }
+    rewrite { Y2M 0, RZ(theta) 0, Y2P 0 }
+}
+
+// RY(θ) → RZ + X2P + RZ + X2M + RZ (via X basis)
+rule qcis_ry_to_x2p_rz {
+    match { RY(theta) 0 }
+    rewrite { X2P 0, RZ(theta) 0, X2M 0 }
+}
+
+// RX(θ) → RZ + XY2P(0) + RZ + XY2M(0) + RZ
+rule qcis_rx_to_xy2p {
+    match { RX(theta) 0 }
+    rewrite { XY2M(π/2) 0, RZ(theta) 0, XY2P(π/2) 0 }
+}
+
+// RY(θ) → XY2P(π/2) + RZ + XY2M(π/2)
+rule qcis_ry_to_xy2p {
+    match { RY(theta) 0 }
+    rewrite { XY2P(0) 0, RZ(theta) 0, XY2M(0) 0 }
+}
+
+// RXY(θ,φ) → RZ + XY2P(0) + RZ + XY2M(0) + RZ (general 1Q decomposition)
+rule qcis_rxy_to_xy2p_rz {
+    match { RXY(theta, phi) 0 }
+    rewrite { RZ(-phi) 0, XY2M(π/2) 0, RZ(theta) 0, XY2P(π/2) 0, RZ(phi) 0 }
+}
+
+// U(θ,φ,λ) → RZ + XY2P(0) + RZ + XY2M(0) + RZ (general U gate)
+rule qcis_u_to_xy2p_rz {
+    match { U(theta, phi, lambda) 0 }
+    rewrite { RZ(lambda) 0, XY2P(0) 0, RZ(theta) 0, XY2M(0) 0, RZ(phi) 0, GPhase((phi + lambda) / 2) }
+}
+
+// XY(φ) → XY2P(φ) + XY2P(φ)
+rule qcis_xy_to_xy2p {
+    match { XY(phi) 0 }
+    rewrite { XY2P(phi) 0, XY2P(phi) 0 }
+}
+
+// 3. Two-qubit gates → QCIS native (CZ + single-qubit)
+
+// CX → CZ + H (H expanded to X2P-based QCIS form)
+rule qcis_cx_to_cz_x2p {
+    match { CX 0 1 }
+    rewrite { RZ(π/2) 1, X2P 1, RZ(π/2) 1, CZ 0 1, RZ(π/2) 1, X2P 1, RZ(π/2) 1, GPhase(π) }
+}
+
+// CY → CZ + single-qubit QCIS gates
+rule qcis_cy_to_cz {
+    match { CY 0 1 }
+    rewrite { RZ(-π/2) 1, RZ(π/2) 1, X2P 1, RZ(π/2) 1, CZ 0 1, RZ(π/2) 1, X2P 1, RZ(π/2) 1, RZ(π/2) 1, GPhase(π) }
+}
+
+// SWAP → CZ + single-qubit QCIS gates
+rule qcis_swap_to_cz {
+    match { SWAP 0 1 }
+    rewrite { RZ(π) 1, Y2P 1, CZ 0 1, RZ(π) 0, Y2P 0, RZ(π) 1, Y2P 1, CZ 0 1, RZ(π) 0, Y2P 0, RZ(π) 1, Y2P 1, CZ 0 1, RZ(π) 1, Y2P 1, GPhase(3π) }
+}
+
+// 4. Two-qubit parameterized gates → QCIS native
+
+// RZZ(θ) → CZ + RZ + single-qubit QCIS gates
+rule qcis_rzz_to_cz {
+    match { RZZ(theta) 0 1 }
+    rewrite { RZ(π) 1, Y2P 1, CZ 0 1, RZ(π) 1, Y2P 1, RZ(theta) 1, RZ(π) 1, Y2P 1, CZ 0 1, RZ(π) 1, Y2P 1, GPhase(2π) }
+}
+
+// RXX(θ) → CZ + RZ + single-qubit QCIS gates
+rule qcis_rxx_to_cz {
+    match { RXX(theta) 0 1 }
+    rewrite { RZ(π) 0, Y2P 0, CZ 0 1, RZ(π) 1, Y2P 1, RZ(theta) 1, RZ(π) 1, Y2P 1, CZ 0 1, RZ(π) 0, Y2P 0, GPhase(2π) }
+}
+
+// RYY(θ) → CZ + RZ + single-qubit QCIS gates
+rule qcis_ryy_to_cz {
+    match { RYY(theta) 0 1 }
+    rewrite { X2P 0, X2P 1, RZ(π) 1, Y2P 1, CZ 0 1, RZ(π) 1, Y2P 1, RZ(theta) 1, RZ(π) 1, Y2P 1, CZ 0 1, RZ(π) 1, Y2P 1, X2M 1, X2M 0, GPhase(2π) }
+}
+
+// RZX(θ) → CZ + RZ + single-qubit QCIS gates
+rule qcis_rzx_to_cz {
+    match { RZX(theta) 0 1 }
+    rewrite { CZ 0 1, RZ(π) 1, Y2P 1, RZ(theta) 1, RZ(π) 1, Y2P 1, CZ 0 1, GPhase(π) }
+}
+
+// CRZ(θ) → CZ + RZ + single-qubit QCIS gates
+rule qcis_crz_to_cz {
+    match { CRZ(theta) 0 1 }
+    rewrite { RZ(π) 1, Y2P 1, CZ 0 1, RZ(π) 1, Y2P 1, RZ(-theta/2) 1, RZ(π) 1, Y2P 1, CZ 0 1, RZ(π) 1, Y2P 1, RZ(theta/2) 1, GPhase(2π) }
+}
+
+// CRX(θ) → CZ + RZ + single-qubit QCIS gates
+rule qcis_crx_to_cz {
+    match { CRX(theta) 0 1 }
+    rewrite { CZ 0 1, RZ(π) 1, Y2P 1, RZ(-theta/2) 1, RZ(π) 1, Y2P 1, CZ 0 1, RZ(π) 1, Y2P 1, RZ(theta/2) 1, RZ(π) 1, Y2P 1, GPhase(2π) }
+}
+
+// CRY(θ) → CZ + RZ + single-qubit QCIS gates
+rule qcis_cry_to_cz {
+    match { CRY(theta) 0 1 }
+    rewrite { RZ(π) 1, Y2P 1, CZ 0 1, RZ(π) 1, Y2P 1, X2P 1, RZ(-theta/2) 1, X2M 1, RZ(π) 1, Y2P 1, CZ 0 1, RZ(π) 1, Y2P 1, X2P 1, RZ(theta/2) 1, X2M 1, GPhase(2π) }
+}
+
+// FSIM(θ, φ) → QCIS native gates via RXX/RYY/RZZ expansion
+rule qcis_fsim_to_cz {
+    match { FSIM(theta, phi) 0 1 }
+    rewrite { RZ(π) 0, Y2P 0, CZ 0 1, RZ(π) 1, Y2P 1, RZ(theta) 1, RZ(π) 1, Y2P 1, CZ 0 1, RZ(π) 0, Y2P 0, X2P 0, X2P 1, RZ(π) 1, Y2P 1, CZ 0 1, RZ(π) 1, Y2P 1, RZ(theta) 1, RZ(π) 1, Y2P 1, CZ 0 1, RZ(π) 1, Y2P 1, X2M 1, X2M 0, GPhase(-phi/4), RZ(-phi/2) 0, RZ(-phi/2) 1, RZ(π) 1, Y2P 1, CZ 0 1, RZ(π) 1, Y2P 1, RZ(phi/2) 1, RZ(π) 1, Y2P 1, CZ 0 1, RZ(π) 1, Y2P 1, GPhase(6π) }
+}
+
+// CCX → CZ + RZ + single-qubit QCIS gates
+rule qcis_ccx_to_cz {
+    match { CCX 0 1 2 }
+    rewrite { RZ(π) 2, Y2P 2, RZ(π) 2, Y2P 2, CZ 1 2, RZ(π) 2, Y2P 2, RZ(-π/4) 2, RZ(π) 2, Y2P 2, CZ 0 2, RZ(π) 2, Y2P 2, RZ(π/4) 2, RZ(π) 2, Y2P 2, CZ 1 2, RZ(π) 2, Y2P 2, RZ(-π/4) 2, RZ(π) 2, Y2P 2, CZ 0 2, RZ(π) 2, Y2P 2, RZ(π/4) 1, RZ(π/4) 2, RZ(π) 2, Y2P 2, RZ(π) 1, Y2P 1, CZ 0 1, RZ(π) 1, Y2P 1, RZ(π/4) 0, RZ(-π/4) 1, RZ(π) 1, Y2P 1, CZ 0 1, RZ(π) 1, Y2P 1, GPhase(53π/8) }
+}
+
+// 5. QCIS native gate interconversion
+
+// X2P → RZ + Y2P + RZ
+rule qcis_x2p_to_y2p {
+    match { X2P 0 }
+    rewrite { RZ(π/2) 0, Y2P 0, RZ(-π/2) 0 }
+}
+
+// Y2P → RZ + X2P + RZ
+rule qcis_y2p_to_x2p {
+    match { Y2P 0 }
+    rewrite { RZ(-π/2) 0, X2P 0, RZ(π/2) 0 }
+}
+
+// X2M → RZ + Y2M + RZ
+rule qcis_x2m_to_y2m {
+    match { X2M 0 }
+    rewrite { RZ(π/2) 0, Y2M 0, RZ(-π/2) 0 }
+}
+
+// Y2M → RZ + X2M + RZ
+rule qcis_y2m_to_x2m {
+    match { Y2M 0 }
+    rewrite { RZ(-π/2) 0, X2M 0, RZ(π/2) 0 }
+}
+
+// X2P → XY2P(0)
+rule qcis_x2p_to_xy2p {
+    match { X2P 0 }
+    rewrite { XY2P(0) 0 }
+}
+
+// X2M → XY2M(0)
+rule qcis_x2m_to_xy2m {
+    match { X2M 0 }
+    rewrite { XY2M(0) 0 }
+}
+
+// Y2P → XY2P(π/2)
+rule qcis_y2p_to_xy2p {
+    match { Y2P 0 }
+    rewrite { XY2P(π/2) 0 }
+}
+
+// Y2M → XY2M(π/2)
+rule qcis_y2m_to_xy2m {
+    match { Y2M 0 }
+    rewrite { XY2M(π/2) 0 }
+}
+
+// XY2P(φ) → RZ + X2P + RZ
+rule qcis_xy2p_to_x2p {
+    match { XY2P(phi) 0 }
+    rewrite { RZ(-phi) 0, X2P 0, RZ(phi) 0 }
+}
+
+// XY2M(φ) → RZ + X2M + RZ
+rule qcis_xy2m_to_x2m {
+    match { XY2M(phi) 0 }
+    rewrite { RZ(-phi) 0, X2M 0, RZ(phi) 0 }
+}
+
+// XY2P(φ) → RZ + Y2P + RZ
+rule qcis_xy2p_to_y2p {
+    match { XY2P(phi) 0 }
+    rewrite { RZ(-phi + π/2) 0, Y2P 0, RZ(phi - π/2) 0 }
+}
+
+// XY2M(φ) → RZ + Y2M + RZ
+rule qcis_xy2m_to_y2m {
+    match { XY2M(phi) 0 }
+    rewrite { RZ(-phi + π/2) 0, Y2M 0, RZ(phi - π/2) 0 }
+}

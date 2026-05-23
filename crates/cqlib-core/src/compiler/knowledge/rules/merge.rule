@@ -1,0 +1,250 @@
+rule merge_rx {
+    match { RX(a) 0, RX(b) 0 }
+    rewrite { RX(a + b) 0 }
+}
+
+rule merge_ry {
+    match {
+        RY(a) 0,
+        RY(b) 0
+    }
+
+    rewrite {
+        RY(a + b) 0
+    }
+}
+
+rule merge_rz {
+    match {
+        RZ(a) 0,
+        RZ(b) 0
+    }
+
+    rewrite {
+        RZ(a + b) 0
+    }
+}
+
+rule merge_phase {
+    match {
+        Phase(a) 0,
+        Phase(b) 0
+    }
+
+    rewrite {
+        Phase(a + b) 0
+    }
+}
+
+rule merge_rxx {
+    match {
+        RXX(a) 0 1,
+        RXX(b) 0 1
+    }
+
+    rewrite {
+        RXX(a + b) 0 1
+    }
+}
+
+rule merge_ryy {
+    match {
+        RYY(a) 0 1,
+        RYY(b) 0 1
+    }
+
+    rewrite {
+        RYY(a + b) 0 1
+    }
+}
+
+rule merge_rzz {
+    match {
+        RZZ(a) 0 1,
+        RZZ(b) 0 1
+    }
+
+    rewrite {
+        RZZ(a + b) 0 1
+    }
+}
+
+rule merge_rzx {
+    match {
+        RZX(a) 0 1,
+        RZX(b) 0 1
+    }
+
+    rewrite {
+        RZX(a + b) 0 1
+    }
+}
+
+rule merge_crx {
+    match {
+        CRX(a) 0 1,
+        CRX(b) 0 1
+    }
+
+    rewrite {
+        CRX(a + b) 0 1
+    }
+}
+
+rule merge_cry {
+    match {
+        CRY(a) 0 1,
+        CRY(b) 0 1
+    }
+
+    rewrite {
+        CRY(a + b) 0 1
+    }
+}
+
+rule merge_crz {
+    match {
+        CRZ(a) 0 1,
+        CRZ(b) 0 1
+    }
+
+    rewrite {
+        CRZ(a + b) 0 1
+    }
+}
+
+rule merge_gphase {
+    match {
+        GPhase(a),
+        GPhase(b)
+    }
+
+    rewrite {
+        GPhase(a + b)
+    }
+}
+
+rule merge_s_to_z {
+    match {
+        S 0,
+        S 0
+    }
+
+    rewrite {
+        Z 0
+    }
+}
+
+rule merge_sdg_to_z {
+    match {
+        SDG 0,
+        SDG 0
+    }
+
+    rewrite {
+        Z 0
+    }
+}
+
+rule merge_t_to_s {
+    match {
+        T 0,
+        T 0
+    }
+
+    rewrite {
+        S 0
+    }
+}
+
+rule merge_tdg_to_sdg {
+    match {
+        TDG 0,
+        TDG 0
+    }
+
+    rewrite {
+        SDG 0
+    }
+}
+
+rule merge_x2p_to_x {
+    match {
+        X2P 0,
+        X2P 0
+    }
+
+    rewrite {
+        X 0,
+        GPhase(-π/2)
+    }
+}
+
+rule merge_x2m_to_x {
+    match {
+        X2M 0,
+        X2M 0
+    }
+
+    rewrite {
+        X 0,
+        GPhase(π/2)
+    }
+}
+
+rule merge_y2p_to_y {
+    match {
+        Y2P 0,
+        Y2P 0
+    }
+
+    rewrite {
+        Y 0,
+        GPhase(-π/2)
+    }
+}
+
+rule merge_y2m_to_y {
+    match {
+        Y2M 0,
+        Y2M 0
+    }
+
+    rewrite {
+        Y 0,
+        GPhase(π/2)
+    }
+}
+
+rule merge_rxy {
+    match {
+        RXY(a, phi) 0,
+        RXY(b, phi) 0
+    }
+
+    rewrite {
+        RXY(a + b, phi) 0
+    }
+}
+
+rule merge_xy2p {
+    match {
+        XY2P(a) 0,
+        XY2P(a) 0
+    }
+
+    rewrite {
+        XY(a) 0
+    }
+}
+
+rule merge_xy2m {
+    match {
+        XY2M(a) 0,
+        XY2M(a) 0
+    }
+
+    rewrite {
+        XY(π + a) 0
+    }
+}

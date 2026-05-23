@@ -1,0 +1,133 @@
+// Single-qubit parameterized decomposition rules.
+//
+// These rules own RX/RY/RZ interconversion, XY-plane rotations, and U decompositions.
+
+rule decompose_rxy_to_rz_rx {
+    match { RXY(theta, phi) 0 }
+    rewrite { RZ(-phi) 0, RX(theta) 0, RZ(phi) 0 }
+}
+
+rule decompose_rxy_to_rz_ry {
+    match { RXY(theta, phi) 0 }
+    rewrite { RZ(π/2 - phi) 0, RY(theta) 0, RZ(phi - π/2) 0 }
+}
+
+rule decompose_xy_to_rxy {
+    match { XY(phi) 0 }
+    rewrite { RXY(π, phi) 0 }
+}
+
+rule decompose_xy_to_rz_rx {
+    match { XY(phi) 0 }
+    rewrite { RZ(-phi) 0, RX(π) 0, RZ(phi) 0 }
+}
+
+rule decompose_xy_to_rz_ry {
+    match { XY(phi) 0 }
+    rewrite { RZ(π/2 - phi) 0, RY(π) 0, RZ(phi - π/2) 0 }
+}
+
+rule decompose_xy2p_to_rxy {
+    match { XY2P(phi) 0 }
+    rewrite { RXY(π/2, phi) 0 }
+}
+
+rule decompose_xy2p_to_rz_rx {
+    match { XY2P(phi) 0 }
+    rewrite { RZ(-phi) 0, RX(π/2) 0, RZ(phi) 0 }
+}
+
+rule decompose_xy2p_to_rz_ry {
+    match { XY2P(phi) 0 }
+    rewrite { RZ(π/2 - phi) 0, RY(π/2) 0, RZ(phi - π/2) 0 }
+}
+
+rule decompose_xy2m_to_rxy {
+    match { XY2M(phi) 0 }
+    rewrite { RXY(-π/2, phi) 0 }
+}
+
+rule decompose_xy2m_to_rz_rx {
+    match { XY2M(phi) 0 }
+    rewrite { RZ(-phi) 0, RX(-π/2) 0, RZ(phi) 0 }
+}
+
+rule decompose_xy2m_to_rz_ry {
+    match { XY2M(phi) 0 }
+    rewrite { RZ(π/2 - phi) 0, RY(-π/2) 0, RZ(phi - π/2) 0 }
+}
+
+rule decompose_rx_to_ry {
+    match { RX(theta) 0 }
+    rewrite { RZ(π/2) 0, RY(theta) 0, RZ(-π/2) 0 }
+}
+
+rule decompose_ry_to_rx {
+    match { RY(theta) 0 }
+    rewrite { RZ(-π/2) 0, RX(theta) 0, RZ(π/2) 0 }
+}
+
+rule decompose_rx_to_rz {
+    match { RX(theta) 0 }
+    rewrite { RY(-π/2) 0, RZ(theta) 0, RY(π/2) 0 }
+}
+
+rule decompose_rz_to_rx {
+    match { RZ(theta) 0 }
+    rewrite { RY(π/2) 0, RX(theta) 0, RY(-π/2) 0 }
+}
+
+rule decompose_ry_to_rz {
+    match { RY(theta) 0 }
+    rewrite { RX(π/2) 0, RZ(theta) 0, RX(-π/2) 0 }
+}
+
+rule decompose_rz_to_ry {
+    match { RZ(theta) 0 }
+    rewrite { RX(-π/2) 0, RY(theta) 0, RX(π/2) 0 }
+}
+
+rule decompose_rx_to_h_rz {
+    match { RX(theta) 0 }
+    rewrite { H 0, RZ(theta) 0, H 0 }
+}
+
+rule decompose_ry_to_h_rz {
+    match { RY(theta) 0 }
+    rewrite { RZ(-π/2) 0, H 0, RZ(theta) 0, H 0, RZ(π/2) 0 }
+}
+
+rule decompose_rz_to_h_rx {
+    match { RZ(theta) 0 }
+    rewrite { H 0, RX(theta) 0, H 0 }
+}
+
+rule decompose_u_to_zyz {
+    match { U(theta, phi, lambda) 0 }
+    rewrite { RZ(lambda) 0, RY(theta) 0, RZ(phi) 0, GPhase((phi + lambda) / 2) }
+}
+
+rule decompose_u_to_zxz {
+    match { U(theta, phi, lambda) 0 }
+    rewrite { RZ(lambda - π/2) 0, RX(theta) 0, RZ(phi + π/2) 0, GPhase((phi + lambda) / 2) }
+}
+
+rule decompose_u_to_rxy_rz {
+    match { U(theta, phi, lambda) 0 }
+    rewrite { RZ(lambda - π/2) 0, RXY(theta, 0) 0, RZ(phi + π/2) 0, GPhase((phi + lambda) / 2) }
+}
+
+rule decompose_u_to_xy2p_rz {
+    match { U(theta, phi, lambda) 0 }
+    rewrite { RZ(lambda) 0, X2P 0, RZ(theta) 0, X2M 0, RZ(phi) 0, GPhase((phi + lambda) / 2) }
+}
+
+rule decompose_u_to_y2p_rz {
+    match { U(theta, phi, lambda) 0 }
+    rewrite { RZ(lambda - π/2) 0, Y2M 0, RZ(theta) 0, Y2P 0, RZ(phi + π/2) 0, GPhase((phi + lambda) / 2) }
+}
+
+rule decompose_u_to_xy_basis {
+    match { U(theta, phi, lambda) 0 }
+    rewrite { RZ(lambda) 0, XY2P(0) 0, RZ(theta) 0, XY2M(0) 0, RZ(phi) 0, GPhase((phi + lambda) / 2) }
+}

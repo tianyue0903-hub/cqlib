@@ -1,0 +1,83 @@
+// Always-safe normalization rules expressible in the rule DSL.
+//
+// Numeric angle canonicalization and special-angle folding belong to the
+// canonicalizer's standard-gate normalization policy because they require
+// tolerance-aware arithmetic and, for 2π rotations, explicit global-phase
+// preservation.
+
+rule normalize_i {
+    match { I 0 }
+    rewrite {}
+}
+
+rule normalize_gphase_zero {
+    match { GPhase(a) }
+    require { a == 0 mod 2*π }
+    rewrite {}
+}
+
+rule normalize_phase_zero {
+    match { Phase(a) 0 }
+    require { a == 0 mod 2*π }
+    rewrite {}
+}
+
+rule normalize_rx_zero {
+    match { RX(a) 0 }
+    require { a == 0 mod 4*π }
+    rewrite {}
+}
+
+rule normalize_ry_zero {
+    match { RY(a) 0 }
+    require { a == 0 mod 4*π }
+    rewrite {}
+}
+
+rule normalize_rz_zero {
+    match { RZ(a) 0 }
+    require { a == 0 mod 4*π }
+    rewrite {}
+}
+
+rule normalize_rxx_zero {
+    match { RXX(a) 0 1 }
+    require { a == 0 mod 4*π }
+    rewrite {}
+}
+
+rule normalize_ryy_zero {
+    match { RYY(a) 0 1 }
+    require { a == 0 mod 4*π }
+    rewrite {}
+}
+
+rule normalize_rzz_zero {
+    match { RZZ(a) 0 1 }
+    require { a == 0 mod 4*π }
+    rewrite {}
+}
+
+rule normalize_rzx_zero {
+    match { RZX(a) 0 1 }
+    require { a == 0 mod 4*π }
+    rewrite {}
+}
+
+rule normalize_rxy_zero {
+    match { RXY(a, phi) 0 }
+    require { a == 0 mod 4*π }
+    rewrite {}
+}
+
+rule normalize_u_zero {
+    match { U(a, b, c) 0 }
+    require { a == 0 mod 4*π, b == 0 mod 2*π, c == 0 mod 2*π }
+    rewrite {}
+}
+
+rule normalize_fsim_zero {
+    match { FSIM(a, b) 0 1 }
+    require { a == 0 mod 2*π, b == 0 mod 2*π }
+    rewrite {}
+}

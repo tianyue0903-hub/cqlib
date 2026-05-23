@@ -1,0 +1,30 @@
+// Toffoli decomposition rules.
+//
+// These rules own exact CCX lowering paths.
+
+rule decompose_ccx_to_cx {
+    match { CCX 0 1 2 }
+    rewrite { H 2, CX 1 2, TDG 2, CX 0 2, T 2, CX 1 2, TDG 2, CX 0 2, T 1, T 2, H 2, CX 0 1 }
+}
+
+rule decompose_ccx_to_cz {
+    match { CCX 0 1 2 }
+    rewrite {
+        CZ 1 2,
+        H 2, TDG 2, H 2,
+        CZ 0 2,
+        H 2, T 2, H 2,
+        CZ 1 2,
+        H 2, TDG 2, H 2,
+        CZ 0 2,
+        H 2,
+        T 1, T 2,
+        H 2, H 1,
+        CZ 0 1,
+        H 1,
+        T 0, TDG 1,
+        H 1,
+        CZ 0 1,
+        H 1
+    }
+}
