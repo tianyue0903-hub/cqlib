@@ -13,6 +13,7 @@
 pub mod analysis;
 pub mod api;
 pub mod artifact;
+pub mod commutation;
 pub mod context;
 pub mod error;
 pub mod knowledge;

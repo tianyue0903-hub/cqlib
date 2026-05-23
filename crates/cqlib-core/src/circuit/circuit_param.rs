@@ -92,11 +92,30 @@ impl From<Parameter> for ParameterValue {
     }
 }
 
+impl From<&Parameter> for ParameterValue {
+    fn from(para: &Parameter) -> Self {
+        if let Ok(p) = para.evaluate(&None) {
+            Self::Fixed(p)
+        } else {
+            Self::Param(para.clone())
+        }
+    }
+}
+
 impl From<ParameterValue> for Parameter {
     fn from(para: ParameterValue) -> Parameter {
         match para {
             ParameterValue::Param(p) => p,
             ParameterValue::Fixed(f) => Parameter::from(f),
+        }
+    }
+}
+
+impl From<&ParameterValue> for Parameter {
+    fn from(para: &ParameterValue) -> Parameter {
+        match para {
+            ParameterValue::Param(p) => p.clone(),
+            ParameterValue::Fixed(f) => Parameter::from(*f),
         }
     }
 }

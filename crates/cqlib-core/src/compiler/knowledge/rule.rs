@@ -20,6 +20,8 @@ use crate::circuit::{Instruction, MCGate, Parameter, ParameterValue, StandardGat
 use smallvec::SmallVec;
 use std::collections::{BTreeSet, HashSet};
 
+const RULE_ITEM_PARAMETER_TOLERANCE: f64 = 1e-12;
+
 /// One gate-like item in a rule match or rewrite block.
 #[derive(Debug, Clone)]
 pub struct RuleItem {
@@ -116,6 +118,26 @@ impl RuleItem {
         }
 
         Ok(())
+    }
+
+    /// Returns whether this item describes the same instruction, qubit labels,
+    /// and provably equivalent parameter expressions as another rule item.
+    pub fn equivalent_to(&self, other: &Self) -> bool {
+        let lhs_params = self.params.as_deref().unwrap_or(&[]);
+        let rhs_params = other.params.as_deref().unwrap_or(&[]);
+        let instructions_match = match (&self.instruction, &other.instruction) {
+            (Instruction::Standard(lhs), Instruction::Standard(rhs)) => lhs == rhs,
+            (Instruction::McGate(lhs), Instruction::McGate(rhs)) => lhs == rhs,
+            _ => false,
+        };
+
+        instructions_match
+            && self.qubits == other.qubits
+            && lhs_params.len() == rhs_params.len()
+            && lhs_params.iter().zip(rhs_params).all(|(lhs, rhs)| {
+                let lhs: Parameter = lhs.into();
+                lhs.provably_equal(&rhs.into(), RULE_ITEM_PARAMETER_TOLERANCE)
+            })
     }
 }
 

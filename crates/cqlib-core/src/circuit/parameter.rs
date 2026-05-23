@@ -310,7 +310,11 @@ impl Parameter {
     /// assert!(syms.contains("φ"));
     /// ```
     pub fn get_symbols(&self) -> HashSet<String> {
-        self.expr.variables()
+        let mut symbols = self.expr.variables();
+        symbols.remove("π");
+        symbols.remove("pi");
+        symbols.remove("e");
+        symbols
     }
 
     /// Returns a new parameter representing the absolute value `|x|`.
@@ -455,6 +459,81 @@ impl Parameter {
         Self {
             expr: self.expr.substitute(symbol, &p.expr),
         }
+    }
+
+    /// Returns the symbol name if this parameter is exactly one free symbol.
+    ///
+    /// This is intentionally conservative: expressions containing one symbol
+    /// are accepted only when they are structurally equal to that symbol after
+    /// optional simplification.
+    pub fn as_symbol(&self) -> Option<String> {
+        let symbols = self.get_symbols();
+        if symbols.len() != 1 {
+            return None;
+        }
+
+        let symbol = symbols.into_iter().next()?;
+        let direct = Self::symbol(&symbol);
+        if self == &direct {
+            return Some(symbol);
+        }
+
+        self.simplify()
+            .ok()
+            .filter(|simplified| simplified == &direct)
+            .map(|_| symbol)
+    }
+
+    /// Substitutes every bound symbol in this expression and simplifies when possible.
+    pub fn substitute_many(&self, bindings: &HashMap<String, Parameter>) -> Self {
+        let mut substituted = self.clone();
+        for (symbol, value) in bindings {
+            substituted = substituted.replace(symbol, value.clone());
+        }
+        substituted.simplify().unwrap_or(substituted)
+    }
+
+    /// Returns whether two parameters are provably equal within `tolerance`.
+    ///
+    /// This is a conservative symbolic check.  It accepts structural equality
+    /// after simplification and concrete numeric equality, but it does not try
+    /// to prove arbitrary symbolic identities.
+    pub fn provably_equal(&self, other: &Self, tolerance: f64) -> bool {
+        let lhs = self.simplify().unwrap_or_else(|_| self.clone());
+        let rhs = other.simplify().unwrap_or_else(|_| other.clone());
+        if lhs == rhs {
+            return true;
+        }
+
+        match (lhs.evaluate(&None), rhs.evaluate(&None)) {
+            (Ok(lhs), Ok(rhs)) => (lhs - rhs).abs() <= tolerance,
+            _ => false,
+        }
+    }
+
+    /// Returns whether two parameters are provably equal modulo `modulus`.
+    ///
+    /// Numeric modulo checks are used only when the expression difference and
+    /// modulus can both be evaluated without extra bindings.
+    pub fn provably_equal_modulo(&self, other: &Self, modulus: &Self, tolerance: f64) -> bool {
+        let raw_diff = self.clone() - other.clone();
+        let diff = raw_diff.simplify().unwrap_or(raw_diff);
+        if diff.provably_equal(&Self::from(0.0), tolerance) {
+            return true;
+        }
+
+        let Ok(diff_value) = diff.evaluate(&None) else {
+            return false;
+        };
+        let Ok(modulus_value) = modulus.evaluate(&None) else {
+            return false;
+        };
+        if modulus_value.abs() <= tolerance {
+            return false;
+        }
+
+        let ratio = diff_value / modulus_value;
+        (ratio - ratio.round()).abs() <= tolerance
     }
 
     /// Returns `true` if this parameter is a constant (has no free variables).

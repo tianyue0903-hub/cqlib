@@ -434,33 +434,38 @@ pub fn circuit_to_symbolic_matrix(
                 }
             }
             Instruction::UnitaryGate(u_gate) => {
-                if params.iter().any(|param| !param.is_constant()) {
-                    if let Some(sub_circuit) = u_gate.circuit().as_ref() {
+                let reversed_bits: SmallVec<[usize; 3]> = bits.iter().copied().rev().collect();
+                if let Some(unitary_matrix) = u_gate.symbolic_matrix() {
+                    if let Some(concrete_params) = constant_params(&params)? {
+                        let gate_matrix = u_gate.matrix_for_params(&concrete_params)?;
+                        push_numeric_gate(
+                            &mut matrix,
+                            &mut numeric_run,
+                            gate_matrix.as_ref(),
+                            &reversed_bits,
+                            &full_bits,
+                        )?;
+                    } else {
                         flush_numeric_run(&mut matrix, &mut numeric_run, &full_bits)?;
-                        let matrix = matrix.get_or_insert_with(|| symbolic_eye(dim));
-                        let symbols = sub_circuit.circuit().symbols();
-                        let expected = symbols.len();
+                        let matrix_params = u_gate
+                            .matrix_params()
+                            .ok_or(CircuitError::SymbolicParameterError)?;
+                        let expected = matrix_params.len();
                         let actual = params.len();
                         if actual != expected {
                             return Err(CircuitError::ParameterCountMismatch { expected, actual });
                         }
-                        let replacements: HashMap<String, Parameter> = symbols
+                        let replacements: HashMap<String, Parameter> = matrix_params
                             .iter()
                             .cloned()
                             .zip(params.iter().cloned())
                             .collect();
-                        let sub_matrix = sub_circuit.symbolic_matrix()?;
                         let sub_matrix =
-                            substitute_symbolic_matrix((*sub_matrix).clone(), &replacements)?;
-                        apply_gate_to_matrix(matrix, &sub_matrix, &bits)?;
-                    } else {
-                        flush_numeric_run(&mut matrix, &mut numeric_run, &full_bits)?;
-                        return Err(CircuitError::SymbolicParameterError);
+                            substitute_symbolic_matrix(unitary_matrix.clone(), &replacements)?;
+                        let matrix = matrix.get_or_insert_with(|| symbolic_eye(dim));
+                        apply_gate_to_matrix(matrix, &sub_matrix, &reversed_bits)?;
                     }
-                } else if u_gate.circuit().is_some()
-                    && u_gate.matrix().is_none()
-                    && !u_gate.has_parameterized_matrix()
-                {
+                } else if u_gate.circuit().is_some() && u_gate.matrix().is_none() {
                     if let Some(numeric_params) = constant_params(&params)? {
                         let gate_matrix = u_gate.matrix_for_params(&numeric_params)?;
                         push_numeric_gate(
@@ -493,34 +498,29 @@ pub fn circuit_to_symbolic_matrix(
                             substitute_symbolic_matrix((*sub_matrix).clone(), &replacements)?;
                         apply_gate_to_matrix(matrix, &sub_matrix, &bits)?;
                     }
+                } else if let Some(concrete_params) = constant_params(&params)? {
+                    let gate_matrix = u_gate.matrix_for_params(&concrete_params)?;
+                    push_numeric_gate(
+                        &mut matrix,
+                        &mut numeric_run,
+                        gate_matrix.as_ref(),
+                        &reversed_bits,
+                        &full_bits,
+                    )?;
                 } else {
-                    let reversed_bits: SmallVec<[usize; 3]> = bits.iter().copied().rev().collect();
-                    if let Some(concrete_params) = constant_params(&params)? {
-                        let gate_matrix = u_gate.matrix_for_params(&concrete_params)?;
-                        push_numeric_gate(
-                            &mut matrix,
-                            &mut numeric_run,
-                            gate_matrix.as_ref(),
-                            &reversed_bits,
-                            &full_bits,
-                        )?;
-                    } else {
-                        flush_numeric_run(&mut matrix, &mut numeric_run, &full_bits)?;
-                        let concrete_params: Vec<f64> = params
-                            .iter()
-                            .map(|param| {
-                                param
-                                    .evaluate(&None)
-                                    .map_err(|_| CircuitError::SymbolicParameterError)
-                            })
-                            .collect::<Result<_, _>>()?;
-                        let gate_matrix = u_gate.matrix_for_params(&concrete_params)?;
-                        // UnitaryGate matrices follow the standard gate-local Big-Endian convention,
-                        // so we reverse bits to align with the system's Little-Endian layout.
-                        let sub_matrix = symbolic_matrix_from_numeric(gate_matrix.as_ref());
-                        let matrix = matrix.get_or_insert_with(|| symbolic_eye(dim));
-                        apply_gate_to_matrix(matrix, &sub_matrix, &reversed_bits)?;
-                    }
+                    flush_numeric_run(&mut matrix, &mut numeric_run, &full_bits)?;
+                    let concrete_params: Vec<f64> = params
+                        .iter()
+                        .map(|param| {
+                            param
+                                .evaluate(&None)
+                                .map_err(|_| CircuitError::SymbolicParameterError)
+                        })
+                        .collect::<Result<_, _>>()?;
+                    let gate_matrix = u_gate.matrix_for_params(&concrete_params)?;
+                    let sub_matrix = symbolic_matrix_from_numeric(gate_matrix.as_ref());
+                    let matrix = matrix.get_or_insert_with(|| symbolic_eye(dim));
+                    apply_gate_to_matrix(matrix, &sub_matrix, &reversed_bits)?;
                 }
             }
             Instruction::CircuitGate(circuit_gate) => {

@@ -169,7 +169,7 @@ pub fn circuit_to_matrix(
             Instruction::UnitaryGate(u_gate) => {
                 if u_gate.circuit().is_some()
                     && u_gate.matrix().is_none()
-                    && !u_gate.has_parameterized_matrix()
+                    && u_gate.symbolic_matrix().is_none()
                 {
                     let gate_matrix = u_gate.matrix_for_params(params.as_slice())?;
                     // Sub-circuit matrices are already built in the system's Little-Endian basis,

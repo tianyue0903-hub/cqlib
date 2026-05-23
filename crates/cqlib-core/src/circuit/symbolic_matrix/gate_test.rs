@@ -41,6 +41,10 @@ fn assert_standard_gate_matches(gate: StandardGate, params: &[f64]) {
     assert_matrix_approx_eq(&evaluated, expected.as_ref(), 1e-10);
 }
 
+fn symbolic_phase_matrix(symbol: &str) -> SymbolicMatrix {
+    standard_gate_symbolic_matrix(StandardGate::Phase, &[Parameter::symbol(symbol)]).unwrap()
+}
+
 #[test]
 fn test_fixed_standard_gate_matches_numeric_matrix() {
     let symbolic = standard_gate_symbolic_matrix(StandardGate::H, &[]).unwrap();
@@ -929,11 +933,9 @@ fn test_symbolic_unitary_gate_circuit_definition() {
 }
 
 #[test]
-fn test_symbolic_parameterized_unitary_numeric_factory_with_fixed_param() {
+fn test_symbolic_parameterized_unitary_symbolic_matrix_with_fixed_param() {
     let gate = UnitaryGate::new("CustomPhase", 1, 1)
-        .with_parameterized_matrix(|params| {
-            crate::circuit::gate::gate_matrix::phase_gate(params[0])
-        })
+        .with_symbolic_matrix(["theta"], symbolic_phase_matrix("theta"))
         .unwrap();
     let mut circuit = Circuit::new(1);
     circuit
@@ -952,11 +954,9 @@ fn test_symbolic_parameterized_unitary_numeric_factory_with_fixed_param() {
 }
 
 #[test]
-fn test_symbolic_parameterized_unitary_numeric_factory_rejects_unbound_symbol() {
+fn test_symbolic_parameterized_unitary_symbolic_matrix_preserves_unbound_symbol() {
     let gate = UnitaryGate::new("CustomPhase", 1, 1)
-        .with_parameterized_matrix(|params| {
-            crate::circuit::gate::gate_matrix::phase_gate(params[0])
-        })
+        .with_symbolic_matrix(["theta"], symbolic_phase_matrix("theta"))
         .unwrap();
     let mut circuit = Circuit::new(1);
     circuit
@@ -967,10 +967,13 @@ fn test_symbolic_parameterized_unitary_numeric_factory_rejects_unbound_symbol() 
         )
         .unwrap();
 
-    assert!(matches!(
-        circuit_to_symbolic_matrix(&circuit, None),
-        Err(CircuitError::SymbolicParameterError)
-    ));
+    let symbolic = circuit_to_symbolic_matrix(&circuit, None).unwrap();
+    let mut bindings = HashMap::new();
+    bindings.insert("theta", PI / 7.0);
+    let evaluated = evaluate_symbolic_matrix(&symbolic, &Some(bindings)).unwrap();
+    let expected = crate::circuit::gate::gate_matrix::phase_gate(PI / 7.0);
+
+    assert_matrix_approx_eq(&evaluated, &expected, 1e-12);
 }
 
 #[test]
@@ -999,12 +1002,11 @@ fn test_symbolic_parameterized_unitary_circuit_definition_preserves_symbol() {
 }
 
 #[test]
-fn test_symbolic_unitary_prefers_circuit_for_symbolic_params_even_with_matrix() {
+fn test_symbolic_unitary_explicit_symbolic_matrix_precedes_circuit() {
     let mut inner = Circuit::new(1);
     inner.rx(Qubit::new(0), Parameter::symbol("theta")).unwrap();
-    let identity = Array2::eye(2);
     let gate = UnitaryGate::new("CircuitBackedRX", 1, 1)
-        .with_parameterized_matrix(move |_| identity.clone())
+        .with_symbolic_matrix(["theta"], symbolic_eye(2))
         .unwrap()
         .with_circuit(Arc::new(FrozenCircuit::new(inner)))
         .unwrap();
@@ -1022,7 +1024,7 @@ fn test_symbolic_unitary_prefers_circuit_for_symbolic_params_even_with_matrix() 
     let mut bindings = HashMap::new();
     bindings.insert("phi", PI / 5.0);
     let evaluated = evaluate_symbolic_matrix(&symbolic, &Some(bindings)).unwrap();
-    let expected = crate::circuit::gate::gate_matrix::rx_gate(PI / 5.0);
+    let expected = Array2::eye(2).mapv(|v| Complex64::new(v, 0.0));
 
     assert_matrix_approx_eq(&evaluated, &expected, 1e-12);
 }

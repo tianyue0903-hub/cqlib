@@ -31,7 +31,7 @@
 //!   and references to the circuit's global parameter table (interning).
 
 use crate::circuit::bit::Qubit;
-use crate::circuit::circuit_param::CircuitParam;
+use crate::circuit::circuit_param::{CircuitParam, ParameterValue};
 use crate::circuit::error::CircuitError;
 use crate::circuit::gate::instruction::Instruction;
 use alloc::borrow::Cow;
@@ -98,4 +98,16 @@ impl Operation {
             .matrix(&ps)
             .ok_or(CircuitError::NoMatrixRepresentation)
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct ValueOperation {
+    /// The abstract instruction definition (what to do).
+    pub instruction: Instruction,
+    /// The specific qubits this operation applies to (where to do it).
+    pub qubits: SmallVec<[Qubit; 3]>,
+    /// The concrete or symbolic parameters for this operation (how to do it).
+    pub params: SmallVec<[ParameterValue; 1]>,
+    /// Optional metadata label.
+    pub label: Option<Box<str>>,
 }

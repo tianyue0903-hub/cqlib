@@ -55,7 +55,7 @@ use crate::circuit::gate::control_flow::ConditionView;
 use crate::circuit::gate::{
     ControlFlow, Directive, IfElseGate, Instruction, StandardGate, UnitaryGate,
 };
-use crate::circuit::operation::Operation;
+use crate::circuit::operation::{Operation, ValueOperation};
 use crate::circuit::parameter::Parameter;
 use indexmap::IndexSet;
 use ndarray::Array2;
@@ -622,8 +622,6 @@ impl Circuit {
         )
     }
 
-    // --- Two-Qubit Gates ---
-
     /// Appends a Controlled-NOT (CX or CNOT) gate.
     ///
     /// Flips the `target` qubit if and only if the `control` qubit is $|1\rangle$.
@@ -746,8 +744,6 @@ impl Circuit {
         )
     }
 
-    // --- Controlled Rotations ---
-
     /// Appends a Controlled-RX gate (CRX).
     ///
     /// Performs an X-rotation on the target if the control is $|1\rangle$.
@@ -800,8 +796,6 @@ impl Circuit {
             None,
         )
     }
-
-    // --- Multi-Controlled Gates ---
 
     /// Appends a Toffoli gate (CCX).
     ///
@@ -1929,6 +1923,26 @@ impl Circuit {
         };
 
         Ok(())
+    }
+
+    pub fn index(&self, i: usize) -> ValueOperation {
+        let v = &self.data[i];
+        let ps = v
+            .params
+            .iter()
+            .map(|p| match p {
+                CircuitParam::Index(idx) => {
+                    ParameterValue::Param(self.parameters[*idx as usize].clone())
+                }
+                CircuitParam::Fixed(v) => ParameterValue::Fixed(*v),
+            })
+            .collect();
+        ValueOperation {
+            instruction: v.instruction.clone(),
+            qubits: v.qubits.clone(),
+            params: ps,
+            label: v.label.clone(),
+        }
     }
 
     pub(crate) fn from_parts(

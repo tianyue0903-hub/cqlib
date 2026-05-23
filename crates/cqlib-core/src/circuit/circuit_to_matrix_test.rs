@@ -20,6 +20,7 @@ use crate::circuit::circuit_param::ParameterValue;
 use crate::circuit::error::CircuitError;
 use crate::circuit::gate::{ConditionView, FrozenCircuit, Instruction, StandardGate, UnitaryGate};
 use crate::circuit::parameter::Parameter;
+use crate::circuit::symbolic_matrix::{SymbolicMatrix, standard_gate_symbolic_matrix};
 use crate::circuit::{Operation, Qubit};
 use ndarray::array;
 use num_complex::Complex64;
@@ -86,6 +87,14 @@ fn eye(n: usize) -> Array2<Complex64> {
 /// Create complex number from real and imaginary parts
 fn c(re: f64, im: f64) -> Complex64 {
     Complex64::new(re, im)
+}
+
+fn symbolic_rx_matrix(symbol: &str) -> SymbolicMatrix {
+    standard_gate_symbolic_matrix(StandardGate::RX, &[Parameter::symbol(symbol)]).unwrap()
+}
+
+fn symbolic_phase_matrix(symbol: &str) -> SymbolicMatrix {
+    standard_gate_symbolic_matrix(StandardGate::Phase, &[Parameter::symbol(symbol)]).unwrap()
 }
 
 #[test]
@@ -763,7 +772,7 @@ fn test_unitary_gate_with_circuit_fallback() {
 #[test]
 fn test_parameterized_unitary_gate_matches_standard_rx() {
     let u_gate = UnitaryGate::new("CustomRX", 1, 1)
-        .with_parameterized_matrix(|params| crate::circuit::gate::gate_matrix::rx_gate(params[0]))
+        .with_symbolic_matrix(["theta"], symbolic_rx_matrix("theta"))
         .unwrap();
 
     let mut circuit = Circuit::new(1);
@@ -783,9 +792,7 @@ fn test_parameterized_unitary_gate_matches_standard_rx() {
 #[test]
 fn test_parameterized_unitary_gate_reuses_definition_with_different_params() {
     let gate = UnitaryGate::new("CustomPhase", 1, 1)
-        .with_parameterized_matrix(|params| {
-            crate::circuit::gate::gate_matrix::phase_gate(params[0])
-        })
+        .with_symbolic_matrix(["theta"], symbolic_phase_matrix("theta"))
         .unwrap();
 
     let mut circuit = Circuit::new(1);
@@ -808,9 +815,7 @@ fn test_parameterized_unitary_gate_reuses_definition_with_different_params() {
 #[test]
 fn test_parameterized_unitary_gate_symbolic_requires_binding() {
     let gate = UnitaryGate::new("CustomPhase", 1, 1)
-        .with_parameterized_matrix(|params| {
-            crate::circuit::gate::gate_matrix::phase_gate(params[0])
-        })
+        .with_symbolic_matrix(["theta"], symbolic_phase_matrix("theta"))
         .unwrap();
     let mut circuit = Circuit::new(1);
     circuit
@@ -837,9 +842,7 @@ fn test_parameterized_unitary_gate_symbolic_requires_binding() {
 #[test]
 fn test_parameterized_unitary_gate_rejects_non_finite_param() {
     let gate = UnitaryGate::new("CustomPhase", 1, 1)
-        .with_parameterized_matrix(|params| {
-            crate::circuit::gate::gate_matrix::phase_gate(params[0])
-        })
+        .with_symbolic_matrix(["theta"], symbolic_phase_matrix("theta"))
         .unwrap();
     let mut circuit = Circuit::new(1);
     circuit
@@ -859,9 +862,7 @@ fn test_parameterized_unitary_gate_rejects_non_finite_param() {
 #[test]
 fn test_controlled_parameterized_unitary_gate_matrix() {
     let gate = UnitaryGate::new("CustomPhase", 1, 1)
-        .with_parameterized_matrix(|params| {
-            crate::circuit::gate::gate_matrix::phase_gate(params[0])
-        })
+        .with_symbolic_matrix(["theta"], symbolic_phase_matrix("theta"))
         .unwrap();
     let mut circuit = Circuit::new(2);
     circuit
