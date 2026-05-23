@@ -12,7 +12,7 @@
 
 use super::config::RewriteConfig;
 use super::matcher::{
-    CompiledRuleSet, is_rewrite_safe_operation, resolve_operation_param, select_rewrites,
+    CompiledRuleSet, RewriteInstructionKey, resolve_operation_param, select_rewrites,
 };
 use crate::circuit::{
     Circuit, CircuitParam, ConditionView, ControlFlow, Directive, IfElseGate, Instruction, MCGate,
@@ -47,9 +47,9 @@ fn is_rewrite_safe_accepts_standard_gates() {
         label: None,
     };
 
-    assert!(is_rewrite_safe_operation(&h));
-    assert!(is_rewrite_safe_operation(&x));
-    assert!(is_rewrite_safe_operation(&rz));
+    assert!(RewriteInstructionKey::from_instruction(&h.instruction).is_some());
+    assert!(RewriteInstructionKey::from_instruction(&x.instruction).is_some());
+    assert!(RewriteInstructionKey::from_instruction(&rz.instruction).is_some());
 }
 
 #[test]
@@ -61,7 +61,7 @@ fn is_rewrite_safe_accepts_mc_gate() {
         label: None,
     };
 
-    assert!(is_rewrite_safe_operation(&mc_gate));
+    assert!(RewriteInstructionKey::from_instruction(&mc_gate.instruction).is_some());
 }
 
 #[test]
@@ -101,11 +101,11 @@ fn is_rewrite_safe_rejects_non_gate_like_operations() {
         label: None,
     };
 
-    assert!(!is_rewrite_safe_operation(&barrier));
-    assert!(!is_rewrite_safe_operation(&measure));
-    assert!(!is_rewrite_safe_operation(&reset));
-    assert!(!is_rewrite_safe_operation(&delay));
-    assert!(!is_rewrite_safe_operation(&if_else));
+    assert!(RewriteInstructionKey::from_instruction(&barrier.instruction).is_none());
+    assert!(RewriteInstructionKey::from_instruction(&measure.instruction).is_none());
+    assert!(RewriteInstructionKey::from_instruction(&reset.instruction).is_none());
+    assert!(RewriteInstructionKey::from_instruction(&delay.instruction).is_none());
+    assert!(RewriteInstructionKey::from_instruction(&if_else.instruction).is_none());
 }
 
 // ---------------------------------------------------------------------------
@@ -272,14 +272,17 @@ fn target_filter_allows_mc_gate_decomposition_only_when_rewrite_is_target_native
 
     let rejected = RewriteConfig::lowering()
         .with_enabled_kinds(vec![RuleKind::Decompose])
-        .with_target_gates(vec![StandardGate::H])
+        .with_target_instructions(vec![Instruction::Standard(StandardGate::H)])
         .with_max_rounds(1);
     let selected = select_rewrites(&circuit, circuit.operations(), &rules, &rejected).unwrap();
     assert!(selected.is_empty());
 
     let accepted = RewriteConfig::lowering()
         .with_enabled_kinds(vec![RuleKind::Decompose])
-        .with_target_gates(vec![StandardGate::H, StandardGate::CCX])
+        .with_target_instructions(vec![
+            Instruction::Standard(StandardGate::H),
+            Instruction::Standard(StandardGate::CCX),
+        ])
         .with_max_rounds(1);
     let selected = select_rewrites(&circuit, circuit.operations(), &rules, &accepted).unwrap();
     assert_eq!(selected.patches.len(), 1);
@@ -394,6 +397,33 @@ fn select_rewrites_no_match_for_independent_qubits() {
     let config = RewriteConfig::new();
 
     let selected = select_rewrites(&circuit, operations, &rules, &config).unwrap();
+    assert!(selected.is_empty());
+}
+
+#[test]
+fn non_adjacent_match_checks_skipped_ops_against_future_matches() {
+    let rule = Rule::new(
+        "unsafe_non_adjacent_three_op_cancel",
+        vec![
+            RuleItem::standard(StandardGate::H, &[0], vec![]),
+            RuleItem::standard(StandardGate::Z, &[1], vec![]),
+            RuleItem::standard(StandardGate::X, &[1], vec![]),
+        ],
+        vec![],
+    );
+    let rules = compiled_rules_from(vec![rule], RuleKind::Cancel);
+    let config = RewriteConfig::new()
+        .with_enabled_kinds(vec![RuleKind::Cancel])
+        .with_max_window_ops(4);
+
+    let mut circuit = Circuit::new(2);
+    circuit.h(Qubit::new(1)).unwrap();
+    circuit.z(Qubit::new(0)).unwrap();
+    circuit.z(Qubit::new(0)).unwrap();
+    circuit.x(Qubit::new(0)).unwrap();
+
+    let selected = select_rewrites(&circuit, circuit.operations(), &rules, &config).unwrap();
+
     assert!(selected.is_empty());
 }
 

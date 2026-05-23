@@ -482,7 +482,7 @@ fn drops_gphase_replacements_inside_control_flow_body() {
 }
 
 #[test]
-fn keeps_original_gphase_inside_control_flow_body() {
+fn drops_original_gphase_inside_control_flow_body() {
     let mut circuit = Circuit::new(2);
     let body = vec![Operation {
         instruction: Instruction::Standard(StandardGate::GPhase),
@@ -497,21 +497,12 @@ fn keeps_original_gphase_inside_control_flow_body() {
 
     let outcome = KnowledgeRewriter::production().run(&mut ctx).unwrap();
 
-    assert!(!outcome.changed);
+    assert!(outcome.changed);
     let phase = ctx.circuit().global_phase().evaluate(&None).unwrap();
     assert!(phase.abs() < 1e-12);
     match &ctx.circuit().operations()[0].instruction {
         Instruction::ControlFlowGate(crate::circuit::ControlFlow::IfElse(gate)) => {
-            let body = gate.true_body();
-            assert_eq!(body.len(), 1);
-            assert!(matches!(
-                body[0].instruction,
-                Instruction::Standard(StandardGate::GPhase)
-            ));
-            assert!(matches!(
-                body[0].params.as_slice(),
-                [CircuitParam::Fixed(value)] if (*value - 0.25).abs() < 1e-12
-            ));
+            assert!(gate.true_body().is_empty());
         }
         other => panic!("expected if_else, got {other:?}"),
     }
@@ -1286,7 +1277,7 @@ fn target_instructions_reject_non_gate_like_instruction() {
 }
 
 #[test]
-fn target_gates_do_not_invent_reverse_rules() {
+fn target_instructions_do_not_invent_reverse_rules() {
     let mut circuit = Circuit::new(1);
     circuit.rz(Qubit::new(0), -0.3).unwrap();
     circuit.rx(Qubit::new(0), 0.7).unwrap();
@@ -1295,7 +1286,7 @@ fn target_gates_do_not_invent_reverse_rules() {
 
     let rewriter = KnowledgeRewriter::new(
         RewriteConfig::new()
-            .with_target_gates(vec![StandardGate::RXY])
+            .with_target_instructions(vec![Instruction::Standard(StandardGate::RXY)])
             .with_max_rounds(2),
     );
     let outcome = rewriter.run(&mut ctx).unwrap();
@@ -1318,14 +1309,17 @@ fn target_gates_do_not_invent_reverse_rules() {
 }
 
 #[test]
-fn target_gates_lower_cx_to_h_cz_h_when_cz_is_native() {
+fn target_instructions_lower_cx_to_h_cz_h_when_cz_is_native() {
     let mut circuit = Circuit::new(2);
     circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
     let mut ctx = CompilerContext::new(circuit);
 
     let rewriter = KnowledgeRewriter::new(
         RewriteConfig::lowering()
-            .with_target_gates(vec![StandardGate::H, StandardGate::CZ])
+            .with_target_instructions(vec![
+                Instruction::Standard(StandardGate::H),
+                Instruction::Standard(StandardGate::CZ),
+            ])
             .with_max_rounds(4),
     );
     let outcome = rewriter.run(&mut ctx).unwrap();
@@ -1354,6 +1348,73 @@ fn target_gates_lower_cx_to_h_cz_h_when_cz_is_native() {
 }
 
 #[test]
+fn target_instructions_allow_lowerable_intermediate_without_treating_it_as_physical() {
+    let mut circuit = Circuit::new(3);
+    circuit
+        .append(
+            Instruction::McGate(Box::new(MCGate::new(2, StandardGate::X))),
+            [Qubit::new(0), Qubit::new(1), Qubit::new(2)],
+            std::iter::empty::<crate::circuit::ParameterValue>(),
+            None,
+        )
+        .unwrap();
+    let mut ctx = CompilerContext::new(circuit);
+
+    let rewriter = KnowledgeRewriter::new(
+        RewriteConfig::lowering()
+            .with_enabled_kinds(vec![RuleKind::Decompose])
+            .with_target_instructions(vec![
+                Instruction::Standard(StandardGate::H),
+                Instruction::Standard(StandardGate::CX),
+                Instruction::Standard(StandardGate::T),
+                Instruction::Standard(StandardGate::TDG),
+            ])
+            .with_max_rounds(4),
+    );
+    let outcome = rewriter.run(&mut ctx).unwrap();
+
+    assert!(outcome.changed);
+    assert!(ctx.circuit().operations().iter().all(|operation| matches!(
+        operation.instruction,
+        Instruction::Standard(
+            StandardGate::H | StandardGate::CX | StandardGate::T | StandardGate::TDG
+        )
+    )));
+}
+
+#[test]
+fn lowering_target_instructions_reject_unfinished_intermediate() {
+    let mut circuit = Circuit::new(3);
+    circuit
+        .append(
+            Instruction::McGate(Box::new(MCGate::new(2, StandardGate::X))),
+            [Qubit::new(0), Qubit::new(1), Qubit::new(2)],
+            std::iter::empty::<crate::circuit::ParameterValue>(),
+            None,
+        )
+        .unwrap();
+    let mut ctx = CompilerContext::new(circuit);
+
+    let err = KnowledgeRewriter::new(
+        RewriteConfig::lowering()
+            .with_enabled_kinds(vec![RuleKind::Decompose])
+            .with_target_instructions(vec![
+                Instruction::Standard(StandardGate::H),
+                Instruction::Standard(StandardGate::CX),
+                Instruction::Standard(StandardGate::T),
+                Instruction::Standard(StandardGate::TDG),
+            ])
+            .with_max_rounds(1),
+    )
+    .run(&mut ctx)
+    .unwrap_err();
+
+    let message = err.to_string();
+    assert!(message.contains("target instruction basis not satisfied"));
+    assert!(message.contains("CCX"));
+}
+
+#[test]
 fn numeric_matrix_is_preserved_when_lowering_cx_to_cz_basis() {
     let mut circuit = Circuit::new(2);
     circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
@@ -1363,7 +1424,10 @@ fn numeric_matrix_is_preserved_when_lowering_cx_to_cz_basis() {
         circuit,
         KnowledgeRewriter::new(
             RewriteConfig::lowering()
-                .with_target_gates(vec![StandardGate::H, StandardGate::CZ])
+                .with_target_instructions(vec![
+                    Instruction::Standard(StandardGate::H),
+                    Instruction::Standard(StandardGate::CZ),
+                ])
                 .with_max_rounds(4),
         ),
     );
@@ -1373,14 +1437,17 @@ fn numeric_matrix_is_preserved_when_lowering_cx_to_cz_basis() {
 }
 
 #[test]
-fn target_gate_mode_allows_more_ops_when_unsupported_ops_decrease() {
+fn target_instruction_mode_allows_more_ops_when_unsupported_ops_decrease() {
     let mut circuit = Circuit::new(1);
     circuit.h(Qubit::new(0)).unwrap();
     let mut ctx = CompilerContext::new(circuit);
 
     let rewriter = KnowledgeRewriter::new(
         RewriteConfig::lowering()
-            .with_target_gates(vec![StandardGate::RZ, StandardGate::RX])
+            .with_target_instructions(vec![
+                Instruction::Standard(StandardGate::RZ),
+                Instruction::Standard(StandardGate::RX),
+            ])
             .with_max_rounds(1),
     );
     let outcome = rewriter.run(&mut ctx).unwrap();
@@ -1395,14 +1462,18 @@ fn target_gate_mode_allows_more_ops_when_unsupported_ops_decrease() {
 }
 
 #[test]
-fn target_gate_mode_rejects_more_ops_when_unsupported_ops_do_not_decrease() {
+fn target_instruction_mode_rejects_more_ops_when_unsupported_ops_do_not_decrease() {
     let mut circuit = Circuit::new(1);
     circuit.h(Qubit::new(0)).unwrap();
     let mut ctx = CompilerContext::new(circuit);
 
     let rewriter = KnowledgeRewriter::new(
         RewriteConfig::lowering()
-            .with_target_gates(vec![StandardGate::H, StandardGate::RZ, StandardGate::RX])
+            .with_target_instructions(vec![
+                Instruction::Standard(StandardGate::H),
+                Instruction::Standard(StandardGate::RZ),
+                Instruction::Standard(StandardGate::RX),
+            ])
             .with_max_rounds(1),
     );
     let outcome = rewriter.run(&mut ctx).unwrap();
@@ -1417,7 +1488,7 @@ fn target_gate_mode_rejects_more_ops_when_unsupported_ops_do_not_decrease() {
 }
 
 #[test]
-fn target_gates_require_explicit_rules_for_compression() {
+fn target_instructions_require_explicit_rules_for_compression() {
     let mut circuit = Circuit::new(2);
     circuit.h(Qubit::new(1)).unwrap();
     circuit.cz(Qubit::new(0), Qubit::new(1)).unwrap();
@@ -1426,7 +1497,11 @@ fn target_gates_require_explicit_rules_for_compression() {
 
     let rewriter = KnowledgeRewriter::new(
         RewriteConfig::new()
-            .with_target_gates(vec![StandardGate::H, StandardGate::CZ, StandardGate::CX])
+            .with_target_instructions(vec![
+                Instruction::Standard(StandardGate::H),
+                Instruction::Standard(StandardGate::CZ),
+                Instruction::Standard(StandardGate::CX),
+            ])
             .with_max_rounds(2),
     );
     let outcome = rewriter.run(&mut ctx).unwrap();
@@ -1463,16 +1538,16 @@ fn default_production_does_not_compress_h_cz_h_without_explicit_rule() {
 }
 
 #[test]
-fn empty_target_gate_set_is_invalid() {
+fn empty_target_instruction_basis_is_invalid() {
     let mut circuit = Circuit::new(1);
     circuit.h(Qubit::new(0)).unwrap();
     let mut ctx = CompilerContext::new(circuit);
 
-    let err = KnowledgeRewriter::new(RewriteConfig::new().with_target_gates(Vec::new()))
+    let err = KnowledgeRewriter::new(RewriteConfig::new().with_target_instructions(Vec::new()))
         .run(&mut ctx)
         .unwrap_err();
 
-    assert!(err.to_string().contains("target gate set"));
+    assert!(err.to_string().contains("target instruction basis"));
 }
 
 #[test]

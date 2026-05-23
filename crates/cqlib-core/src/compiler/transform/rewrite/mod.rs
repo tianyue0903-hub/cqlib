@@ -22,17 +22,16 @@
 //!
 //! The default [`production`](KnowledgeRewriter::production) profile is a
 //! conservative logical optimizer: it only accepts rewrites that strictly reduce
-//! the local cost. When [`RewriteConfig::with_target_gates`] or
-//! [`RewriteConfig::with_target_instructions`] is configured, the same matcher
-//! becomes target-basis aware. In that mode rules are filtered so replacement
-//! instructions stay inside the requested target basis, and local cost first
-//! minimizes the number of non-target operations before comparing normal logical
-//! cost terms.
+//! the local cost. When [`RewriteConfig::with_target_instructions`] is
+//! configured, the same matcher becomes target-basis aware. In that mode rules
+//! are filtered so replacement instructions stay inside the requested target
+//! basis or a lowerable intermediate basis, and local cost first minimizes the
+//! number of non-target operations before comparing normal logical cost terms.
 //!
 //! Target-gate rewrite is intentionally an explicit configuration knob in this
 //! module. It does not infer native gates from a device or attach itself to a
 //! target workflow; callers that want target lowering pass the desired standard
-//! gate set or gate-like instruction set through [`RewriteConfig`].
+//! gate-like instruction set through [`RewriteConfig`].
 //!
 //! # Processing pipeline
 //!
@@ -41,7 +40,8 @@
 //! 1. **Splits** the top-level operation list (and, when enabled, control-flow
 //!    bodies) into contiguous blocks of rewrite-safe operations. Opaque or
 //!    non-unitary operations (barriers, measurements, delays, control-flow gates)
-//!    act as block boundaries and are emitted unchanged.
+//!    act as block boundaries; control-flow bodies may still be rewritten
+//!    recursively.
 //! 2. **Compiles** knowledge-base rewrite rules into a first-instruction index and
 //!    extracts `A; B -> B; A` commute rules into a read-only commutation oracle.
 //!    Reverse rewrites are never generated automatically; if both directions
@@ -49,16 +49,17 @@
 //! 3. **Filters and matches** candidate rules. In target-basis mode, a rule's
 //!    match instructions must appear in the current block and its replacement
 //!    instructions must be standard gates or multi-controlled gate wrappers in
-//!    the configured target basis. Replacement `GPhase` is allowed implicitly
-//!    because top-level replacements are folded into circuit global phase and
-//!    control-flow-body replacements are discarded.
+//!    the configured target basis or a lowerable intermediate basis. Replacement
+//!    `GPhase` is allowed implicitly because the rewriter handles phase through
+//!    the emission context rather than as an ordinary replacement operation.
 //!    [`Commute`](crate::compiler::knowledge::library::RuleKind::Commute) rules
 //!    do not emit standalone swap patches; they only let the matcher cross an
 //!    intervening operation when the oracle can prove the skipped operation
 //!    commutes with the matched and replacement operations.
-//! 4. **Selects** a non-overlapping set of rewrite patches sorted by local cost
-//!    improvement. In [`Optimize`](RewriteMode::Optimize) mode every accepted
-//!    rewrite must strictly reduce the
+//! 4. **Selects** a non-overlapping set of rewrite patches with a greedy
+//!    heuristic that prefers the lowest replacement local cost. In
+//!    [`Optimize`](RewriteMode::Optimize) mode every accepted rewrite must
+//!    strictly reduce the
 //!    [`LocalRewriteCost`](config::LocalRewriteCost); in
 //!    [`Lowering`](RewriteMode::Lowering) mode decomposition rules are also
 //!    allowed, but target-basis mode still rejects rewrites that increase the
@@ -66,10 +67,9 @@
 //! 5. **Rebuilds** the circuit from the selected patches, interleaving replaced
 //!    and unchanged operations. Replacement `GPhase` gates at the top level are
 //!    folded into the circuit's global phase rather than emitted as explicit
-//!    operations. Replacement `GPhase` gates produced inside control-flow bodies
-//!    are dropped because the current circuit IR has no branch-local global
-//!    phase field; explicit source `GPhase` operations already present in those
-//!    bodies are preserved unchanged.
+//!    operations. Control-flow-body `GPhase` operations are dropped, whether they
+//!    came from the source body or a replacement, because the current circuit IR
+//!    has no branch-local global phase field.
 //! 6. **Iterates** until the circuit stabilizes or the configured
 //!    [`max_rounds`](RewriteConfig::max_rounds) limit is reached.
 //!
@@ -77,9 +77,10 @@
 //!
 //! | File | Responsibility |
 //! |------|----------------|
-//! | `config` | Stable user-facing configuration ([`RewriteConfig`]), rewrite mode, target gate set, symbolic policy, and the local cost model |
+//! | `config` | Stable user-facing configuration ([`RewriteConfig`]), rewrite mode, target instruction basis, and the local cost model |
+//! | `target` | Physical target-basis parsing, lowerable-intermediate discovery, and final lowering validation |
 //! | `matcher` | Rule compilation, target-aware filtering, commute-oracle construction, dependency-aware sequence matching, and greedy non-overlapping patch selection |
-//! | `rewriter` | [`Transformer`](crate::compiler::transform::Transformer) entry point, fixpoint loop, circuit rebuild, and GPhase folding |
+//! | `rewriter` | [`Transformer`](crate::compiler::transform::Transformer) entry point, fixpoint loop, circuit rebuild, and phase handling |
 //!
 //! # Examples
 //!
@@ -112,8 +113,8 @@
 //! ## Lowering mode
 //!
 //! In [`Lowering`](RewriteMode::Lowering) mode the rewriter is allowed to apply
-//! decomposition rules. Supplying a target gate set keeps decomposition directed
-//! toward that basis:
+//! decomposition rules. Supplying a target instruction basis keeps
+//! decomposition directed toward that basis:
 //!
 //! ```rust
 //! use cqlib_core::circuit::{Circuit, Instruction, Qubit, StandardGate};
@@ -125,7 +126,10 @@
 //! circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
 //!
 //! let config = RewriteConfig::lowering()
-//!     .with_target_gates(vec![StandardGate::H, StandardGate::CZ])
+//!     .with_target_instructions(vec![
+//!         Instruction::Standard(StandardGate::H),
+//!         Instruction::Standard(StandardGate::CZ),
+//!     ])
 //!     .with_max_rounds(4);
 //!
 //! let mut ctx = CompilerContext::new(circuit);
@@ -140,37 +144,13 @@
 //! )));
 //! ```
 //!
-//! ## Target-gate compression
+//! ## Target-basis filtering
 //!
-//! Target-gate mode can also pick a shorter supported representation when both
-//! the source and target gates are available. For example, a CZ expression of a
-//! CNOT is compressed back to `CX` when `CX` is in the target gate set:
-//!
-//! ```rust
-//! use cqlib_core::circuit::{Circuit, Instruction, Qubit, StandardGate};
-//! use cqlib_core::compiler::CompilerContext;
-//! use cqlib_core::compiler::transform::rewrite::{KnowledgeRewriter, RewriteConfig};
-//! use cqlib_core::compiler::transform::Transformer;
-//!
-//! let mut circuit = Circuit::new(2);
-//! circuit.h(Qubit::new(1)).unwrap();
-//! circuit.cz(Qubit::new(0), Qubit::new(1)).unwrap();
-//! circuit.h(Qubit::new(1)).unwrap();
-//!
-//! let config = RewriteConfig::new()
-//!     .with_target_gates(vec![StandardGate::H, StandardGate::CX]);
-//!
-//! let mut ctx = CompilerContext::new(circuit);
-//! let outcome = KnowledgeRewriter::new(config).run(&mut ctx).unwrap();
-//!
-//! assert!(outcome.changed);
-//! let operations = ctx.circuit().operations();
-//! assert_eq!(operations.len(), 1);
-//! assert!(matches!(
-//!     operations[0].instruction,
-//!     Instruction::Standard(StandardGate::CX)
-//! ));
-//! ```
+//! Target-basis mode filters and scores rules that already exist in the
+//! knowledge library. It never generates reverse rewrites automatically. For
+//! example, a circuit containing `H; CZ; H` is rewritten to `CX` only if the
+//! knowledge files contain an explicit rule whose match side is that
+//! three-operation pattern.
 //!
 //! ## Custom configuration
 //!
@@ -194,8 +174,9 @@
 mod config;
 mod matcher;
 mod rewriter;
+mod target;
 
-pub use config::{RewriteConfig, RewriteMode, RewriteSymbolicPolicy};
+pub use config::{RewriteConfig, RewriteMode};
 pub use rewriter::{KnowledgeRewriteStats, KnowledgeRewriter};
 
 #[cfg(test)]

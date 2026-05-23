@@ -21,20 +21,24 @@
 //! instantiated replacement.
 
 use crate::circuit::{
-    Circuit, CircuitParam, Instruction, MCGate, Operation, Parameter, ParameterValue, Qubit,
-    StandardGate,
+    Circuit, CircuitParam, Instruction, Operation, Parameter, ParameterValue, Qubit,
 };
+use crate::compiler::commutation::{CommutationChecker, CommutationConfig};
 use crate::compiler::error::CompilerError;
 use crate::compiler::knowledge::library::{RuleKind, RuleLibrary};
-use crate::compiler::knowledge::rule::{Condition, Rule, RuleItem};
-use crate::compiler::transform::rewrite::config::{
-    GPhaseCost, LocalRewriteCost, RewriteConfig, TargetInstruction,
+pub(crate) use crate::compiler::knowledge::matcher::KnowledgeInstructionKey as RewriteInstructionKey;
+use crate::compiler::knowledge::matcher::{
+    ConcreteOperationView, MatchBindings, conditions_hold as knowledge_conditions_hold,
+    instantiate_target as knowledge_instantiate_target,
+    match_rule_item as knowledge_match_rule_item,
 };
+use crate::compiler::knowledge::rule::{Rule, RuleItem};
+use crate::compiler::transform::rewrite::config::{GPhaseCost, LocalRewriteCost, RewriteConfig};
 use smallvec::SmallVec;
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 
-const PARAMETER_TOLERANCE: f64 = 1e-12;
+use super::target::TargetContext;
 
 /// A rewrite rule prepared for repeated matching.
 ///
@@ -54,8 +58,6 @@ pub(crate) struct CompiledRule {
     static_cost_delta: isize,
     /// Match-side instruction key for each source rule item.
     source_keys: SmallVec<[RewriteInstructionKey; 8]>,
-    /// Rewrite-side instruction key for each replacement rule item.
-    target_keys: SmallVec<[RewriteInstructionKey; 8]>,
     /// Distinct rewrite-safe instructions appearing in the match side.
     match_keys: SmallVec<[RewriteInstructionKey; 4]>,
     /// Distinct rewrite-safe instructions appearing in the rewrite side.
@@ -67,35 +69,21 @@ pub(crate) struct CompiledRule {
 /// Compiled rule collection with a first-instruction candidate index.
 ///
 /// `first_key_map` keeps candidate lookup cheap for each anchor operation.
-/// Commutation rules are not applied as ordinary rewrite patches; they are
-/// extracted into [`CommutationOracle`] and used only to justify skipped
-/// operations during non-adjacent matching.
+/// Commutation rules are not applied as ordinary rewrite patches; the compiled
+/// checker is used only to justify skipped operations during non-adjacent
+/// matching.
 pub(crate) struct CompiledRuleSet {
     rules: Vec<CompiledRule>,
     first_key_map: HashMap<RewriteInstructionKey, SmallVec<[usize; 8]>>,
-    commutation: CommutationOracle,
+    commutation: CommutationChecker,
 }
 
-/// Instruction subset understood by knowledge rewrite rules.
-///
-/// Keeping a compact key separate from [`Instruction`] avoids spreading
-/// `Standard`/`McGate` branching through the matcher hot paths while still
-/// rejecting non-unitary and opaque instructions at block boundaries.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-enum RewriteInstructionKey {
-    Standard(StandardGate),
-    McGate(MCGate),
-}
-
-impl RewriteInstructionKey {
-    /// Builds a rewrite key for instructions that may participate in local rules.
-    fn from_instruction(instruction: &Instruction) -> Option<Self> {
-        match instruction {
-            Instruction::Standard(gate) => Some(Self::Standard(*gate)),
-            Instruction::McGate(gate) => Some(Self::McGate(gate.as_ref().clone())),
-            _ => None,
-        }
-    }
+/// Read-only rule summary used by target-basis lowerability analysis.
+pub(super) struct LowerableRuleView<'a> {
+    pub(super) kind: RuleKind,
+    pub(super) source_keys: &'a [RewriteInstructionKey],
+    pub(super) rewrite_keys: &'a [RewriteInstructionKey],
+    pub(super) has_conditions: bool,
 }
 
 /// One operation emitted by a rewrite target.
@@ -137,52 +125,12 @@ impl SelectedRewrites {
     }
 }
 
-/// Mutable bindings accumulated while matching one rule instance.
-///
-/// Qubits are tracked in both directions to guarantee a one-to-one mapping from
-/// rule-local labels to concrete circuit qubits.  Parameter bindings map rule
-/// symbols such as `theta` to concrete circuit parameters.
-#[derive(Clone, Default)]
-struct MatchState {
-    qubits: HashMap<u32, Qubit>,
-    reverse_qubits: HashMap<Qubit, u32>,
-    params: HashMap<String, Parameter>,
-}
-
 /// Candidate patch plus before/after cost used by greedy selection.
 #[derive(Clone)]
 struct CandidatePatch {
     patch: RewritePatch,
     before: LocalRewriteCost,
     after: LocalRewriteCost,
-}
-
-/// Read-only commutation prover derived from `RuleKind::Commute` rules.
-///
-/// The oracle has two built-in proofs: disjoint operations commute, and any
-/// `GPhase` commutes.  All other same-qubit proofs must be represented as
-/// explicit two-operation swap rules in the knowledge base.
-#[derive(Clone, Default)]
-struct CommutationOracle {
-    patterns: Vec<CommutationPattern>,
-}
-
-/// One `A; B -> B; A` rule normalized as an ordered commutation pattern.
-#[derive(Clone)]
-struct CommutationPattern {
-    lhs: RuleItem,
-    lhs_key: RewriteInstructionKey,
-    rhs: RuleItem,
-    rhs_key: RewriteInstructionKey,
-}
-
-/// Borrowed operation view used by the commutation matcher.
-#[derive(Clone, Copy)]
-struct ConcreteOperation<'a> {
-    instruction: &'a Instruction,
-    key: &'a RewriteInstructionKey,
-    qubits: &'a [Qubit],
-    params: &'a [Parameter],
 }
 
 /// Preprocessed view of one contiguous rewrite-safe operation block.
@@ -259,49 +207,6 @@ impl<'a> BlockContext<'a> {
     }
 }
 
-/// Preprocessed target-basis configuration for one rewrite selection pass.
-struct TargetContext {
-    keys: HashSet<RewriteInstructionKey>,
-}
-
-impl TargetContext {
-    /// Builds target-basis lookup from user configuration.
-    fn from_config(config: &RewriteConfig) -> Result<Option<Self>, CompilerError> {
-        let Some(target_instructions) = config.target_instructions() else {
-            return Ok(None);
-        };
-        if target_instructions.is_empty() {
-            return Err(CompilerError::InvalidContextState(
-                "rewrite target gate set must not be empty".to_string(),
-            ));
-        }
-
-        let mut keys = HashSet::with_capacity(target_instructions.len());
-        for instruction in target_instructions {
-            match instruction {
-                TargetInstruction::Standard(gate) => {
-                    keys.insert(RewriteInstructionKey::Standard(*gate));
-                }
-                TargetInstruction::McGate(gate) => {
-                    keys.insert(RewriteInstructionKey::McGate(gate.clone()));
-                }
-                TargetInstruction::Unsupported(description) => {
-                    return Err(CompilerError::InvalidContextState(format!(
-                        "unsupported rewrite target instruction {description}"
-                    )));
-                }
-            }
-        }
-
-        Ok(Some(Self { keys }))
-    }
-}
-
-/// Validates target-basis configuration before the transform starts.
-pub(crate) fn validate_target_instructions(config: &RewriteConfig) -> Result<(), CompilerError> {
-    TargetContext::from_config(config).map(|_| ())
-}
-
 impl CompiledRuleSet {
     /// Compiles a rule library into matcher data structures.
     ///
@@ -312,7 +217,7 @@ impl CompiledRuleSet {
         let mut first_key_map: HashMap<RewriteInstructionKey, SmallVec<[usize; 8]>> =
             HashMap::new();
         let kind_by_id = build_kind_index(library);
-        let commutation = CommutationOracle::from_library(library, &kind_by_id);
+        let commutation = CommutationChecker::from_library(library, rewrite_commutation_config());
 
         for (index, rule) in library.rules().iter().cloned().enumerate() {
             let kind = kind_by_id.get(&index).copied().unwrap_or(RuleKind::Other);
@@ -338,102 +243,26 @@ impl CompiledRuleSet {
     fn get(&self, index: usize) -> &CompiledRule {
         &self.rules[index]
     }
+
+    pub(super) fn lowerable_rule_views(&self) -> impl Iterator<Item = LowerableRuleView<'_>> {
+        self.rules.iter().map(|rule| LowerableRuleView {
+            kind: rule.kind,
+            source_keys: &rule.source_keys,
+            rewrite_keys: &rule.rewrite_keys,
+            has_conditions: rule
+                .rule
+                .conditions
+                .as_ref()
+                .is_some_and(|conditions| !conditions.is_empty()),
+        })
+    }
 }
 
-impl CommutationOracle {
-    /// Extracts commutation patterns from commute-kind library rules.
-    fn from_library(library: &RuleLibrary, kind_by_id: &HashMap<usize, RuleKind>) -> Self {
-        let mut patterns = Vec::new();
-        for (index, rule) in library.rules().iter().enumerate() {
-            if kind_by_id.get(&index).copied() != Some(RuleKind::Commute) {
-                continue;
-            }
-            if let Some(pattern) = commutation_pattern_from_rule(rule) {
-                patterns.push(pattern);
-            }
-        }
-        Self { patterns }
-    }
-
-    /// Returns whether two block operations commute.
-    fn operations_commute(
-        &self,
-        block: &BlockContext<'_>,
-        lhs_position: usize,
-        rhs_position: usize,
-    ) -> Result<bool, CompilerError> {
-        let lhs = block.operation(lhs_position);
-        let rhs = block.operation(rhs_position);
-        self.concrete_operations_commute(
-            ConcreteOperation {
-                instruction: &lhs.instruction,
-                key: block.key(lhs_position),
-                qubits: &lhs.qubits,
-                params: block.params(lhs_position),
-            },
-            ConcreteOperation {
-                instruction: &rhs.instruction,
-                key: block.key(rhs_position),
-                qubits: &rhs.qubits,
-                params: block.params(rhs_position),
-            },
-        )
-    }
-
-    /// Returns whether a source operation commutes with an instantiated replacement.
-    fn operation_commutes_with_replacement(
-        &self,
-        block: &BlockContext<'_>,
-        operation_position: usize,
-        replacement: &ReplacementItem,
-    ) -> Result<bool, CompilerError> {
-        let operation = block.operation(operation_position);
-        let replacement_params = replacement
-            .params
-            .iter()
-            .map(|value| match value {
-                ParameterValue::Fixed(value) => Parameter::from(*value),
-                ParameterValue::Param(parameter) => parameter.clone(),
-            })
-            .collect::<SmallVec<[_; 3]>>();
-        self.concrete_operations_commute(
-            ConcreteOperation {
-                instruction: &operation.instruction,
-                key: block.key(operation_position),
-                qubits: &operation.qubits,
-                params: block.params(operation_position),
-            },
-            ConcreteOperation {
-                instruction: &replacement.instruction,
-                key: &replacement.key,
-                qubits: &replacement.qubits,
-                params: &replacement_params,
-            },
-        )
-    }
-
-    /// Proves commutation for two concrete operations.
-    fn concrete_operations_commute(
-        &self,
-        lhs: ConcreteOperation<'_>,
-        rhs: ConcreteOperation<'_>,
-    ) -> Result<bool, CompilerError> {
-        if matches!(lhs.instruction, Instruction::Standard(StandardGate::GPhase))
-            || matches!(rhs.instruction, Instruction::Standard(StandardGate::GPhase))
-            || !lhs.qubits.iter().any(|qubit| rhs.qubits.contains(qubit))
-        {
-            return Ok(true);
-        }
-
-        for pattern in &self.patterns {
-            if commutation_pattern_matches(pattern, lhs, rhs)?
-                || commutation_pattern_matches(pattern, rhs, lhs)?
-            {
-                return Ok(true);
-            }
-        }
-
-        Ok(false)
+fn rewrite_commutation_config() -> CommutationConfig {
+    CommutationConfig {
+        enable_rule_oracle: true,
+        enable_matrix_fallback: false,
+        max_matrix_qubits: 0,
     }
 }
 
@@ -461,7 +290,6 @@ fn push_compiled_rule(
     }
     let qubit_count = rule_qubits.len();
     let mut source_keys = SmallVec::<[RewriteInstructionKey; 8]>::new();
-    let mut target_keys = SmallVec::<[RewriteInstructionKey; 8]>::new();
     let mut match_keys = SmallVec::<[RewriteInstructionKey; 4]>::new();
     let mut rewrite_keys = SmallVec::<[RewriteInstructionKey; 4]>::new();
     for item in &rule.operations {
@@ -486,7 +314,6 @@ fn push_compiled_rule(
         if !rewrite_keys.contains(&key) {
             rewrite_keys.push(key.clone());
         }
-        target_keys.push(key);
     }
     first_key_map
         .entry(source_keys[0].clone())
@@ -499,7 +326,6 @@ fn push_compiled_rule(
         qubit_count,
         static_cost_delta: rewrite_len as isize - match_len as isize,
         source_keys,
-        target_keys,
         match_keys,
         rewrite_keys,
         rule,
@@ -507,29 +333,30 @@ fn push_compiled_rule(
     Ok(())
 }
 
-/// Returns whether an operation may participate in local rewrite matching.
-///
-/// Standard gates and knowledge-base multi-control gate wrappers are safe.
-/// Directives, delays, measurement, reset, opaque unitary/circuit gates, and
-/// control-flow gates are handled by the rewriter as block boundaries.
-pub(crate) fn is_rewrite_safe_operation(operation: &Operation) -> bool {
-    RewriteInstructionKey::from_instruction(&operation.instruction).is_some()
-}
-
 /// Selects a non-overlapping set of rewrite patches for one operation block.
 ///
 /// Candidate generation is independent for every anchor position.  After
-/// matching, candidates are sorted by local replacement cost and selected
-/// greedily while rejecting any candidate whose matched source positions overlap
-/// a previously selected patch.
+/// matching, candidates are sorted by local replacement cost, not by maximum
+/// before/after improvement, and selected greedily while rejecting any candidate
+/// whose matched source positions overlap a previously selected patch.
+#[cfg(test)]
 pub(crate) fn select_rewrites(
     circuit: &Circuit,
     operations: &[Operation],
     rules: &CompiledRuleSet,
     config: &RewriteConfig,
 ) -> Result<SelectedRewrites, CompilerError> {
-    let target_context = TargetContext::from_config(config)?;
-    let target_context = target_context.as_ref();
+    let target_context = TargetContext::from_config(config, rules)?;
+    select_rewrites_in_context(circuit, operations, rules, config, target_context.as_ref())
+}
+
+pub(super) fn select_rewrites_in_context(
+    circuit: &Circuit,
+    operations: &[Operation],
+    rules: &CompiledRuleSet,
+    config: &RewriteConfig,
+    target_context: Option<&TargetContext>,
+) -> Result<SelectedRewrites, CompilerError> {
     let block = BlockContext::new(circuit, operations)?;
     let mut candidates = Vec::new();
 
@@ -560,8 +387,9 @@ pub(crate) fn select_rewrites(
         }
     }
 
-    // Prefer candidates that produce the lowest local cost, then choose stable
-    // deterministic tie-breakers so repeated runs produce identical patches.
+    // Prefer candidates that produce the lowest replacement local cost, then
+    // choose stable deterministic tie-breakers so repeated runs produce
+    // identical patches.
     candidates.sort_by(|lhs, rhs| {
         lhs.after
             .cmp(&rhs.after)
@@ -622,119 +450,6 @@ fn build_kind_index(library: &RuleLibrary) -> HashMap<usize, RuleKind> {
     index
 }
 
-/// Extracts a two-operation `A; B -> B; A` commute pattern from a rule.
-///
-/// Conditional commute rules are ignored because the current oracle is a simple
-/// structural prover used on hot matching paths.
-fn commutation_pattern_from_rule(rule: &Rule) -> Option<CommutationPattern> {
-    if rule.operations.len() != 2
-        || rule.target.len() != 2
-        || rule
-            .conditions
-            .as_ref()
-            .is_some_and(|conditions| !conditions.is_empty())
-    {
-        return None;
-    }
-
-    if !rule_items_equivalent(&rule.operations[0], &rule.target[1])
-        || !rule_items_equivalent(&rule.operations[1], &rule.target[0])
-    {
-        return None;
-    }
-
-    let lhs_key = RewriteInstructionKey::from_instruction(&rule.operations[0].instruction)?;
-    let rhs_key = RewriteInstructionKey::from_instruction(&rule.operations[1].instruction)?;
-
-    Some(CommutationPattern {
-        lhs: rule.operations[0].clone(),
-        lhs_key,
-        rhs: rule.operations[1].clone(),
-        rhs_key,
-    })
-}
-
-/// Returns whether a concrete operation pair matches a commutation pattern.
-fn commutation_pattern_matches(
-    pattern: &CommutationPattern,
-    lhs: ConcreteOperation<'_>,
-    rhs: ConcreteOperation<'_>,
-) -> Result<bool, CompilerError> {
-    let mut state = MatchState::default();
-    Ok(
-        match_rule_item(&pattern.lhs, &pattern.lhs_key, lhs, &mut state)?
-            && match_rule_item(&pattern.rhs, &pattern.rhs_key, rhs, &mut state)?,
-    )
-}
-
-/// Matches one rule item against a concrete operation and updates bindings.
-fn match_rule_item(
-    item: &RuleItem,
-    item_key: &RewriteInstructionKey,
-    concrete: ConcreteOperation<'_>,
-    state: &mut MatchState,
-) -> Result<bool, CompilerError> {
-    if concrete.key != item_key {
-        return Ok(false);
-    }
-    if concrete.qubits.len() != item.qubits.len() {
-        return Ok(false);
-    }
-
-    for (&rule_qubit, &actual_qubit) in item.qubits.iter().zip(concrete.qubits) {
-        if let Some(bound) = state.qubits.get(&rule_qubit) {
-            if *bound != actual_qubit {
-                return Ok(false);
-            }
-        } else if let Some(other_rule_qubit) = state.reverse_qubits.get(&actual_qubit) {
-            if *other_rule_qubit != rule_qubit {
-                return Ok(false);
-            }
-        } else {
-            state.qubits.insert(rule_qubit, actual_qubit);
-            state.reverse_qubits.insert(actual_qubit, rule_qubit);
-        }
-    }
-
-    let rule_params = item.params.as_deref().unwrap_or(&[]);
-    if concrete.params.len() != rule_params.len() {
-        return Ok(false);
-    }
-    for (rule_param, actual) in rule_params.iter().zip(concrete.params) {
-        if !match_parameter(rule_param, actual, &mut state.params)? {
-            return Ok(false);
-        }
-    }
-
-    Ok(true)
-}
-
-/// Returns whether two rule items are structurally equivalent.
-fn rule_items_equivalent(lhs: &RuleItem, rhs: &RuleItem) -> bool {
-    let lhs_params = lhs.params.as_deref().unwrap_or(&[]);
-    let rhs_params = rhs.params.as_deref().unwrap_or(&[]);
-    let Some(lhs_key) = RewriteInstructionKey::from_instruction(&lhs.instruction) else {
-        return false;
-    };
-    let Some(rhs_key) = RewriteInstructionKey::from_instruction(&rhs.instruction) else {
-        return false;
-    };
-    lhs_key == rhs_key
-        && lhs.qubits == rhs.qubits
-        && lhs_params.len() == rhs_params.len()
-        && lhs_params.iter().zip(rhs_params).all(|(lhs, rhs)| {
-            let lhs = match lhs {
-                ParameterValue::Fixed(value) => Parameter::from(*value),
-                ParameterValue::Param(parameter) => parameter.clone(),
-            };
-            let rhs = match rhs {
-                ParameterValue::Fixed(value) => Parameter::from(*value),
-                ParameterValue::Param(parameter) => parameter.clone(),
-            };
-            parameters_equivalent(&lhs, &rhs)
-        })
-}
-
 /// Applies cheap rule filters that do not require pattern matching.
 fn rule_passes_static_filters(
     rule: &CompiledRule,
@@ -752,9 +467,9 @@ fn rule_passes_static_filters(
 /// Applies target-basis filtering for a compiled rule.
 ///
 /// Match instructions must be present in the current block.  Rewrite
-/// instructions must be target-native standard or multi-controlled gates, except
-/// replacement `GPhase` which is allowed implicitly because it is not emitted as
-/// an ordinary top-level operation.
+/// instructions may be physical targets or lowerable intermediates, except
+/// replacement `GPhase` which is allowed implicitly because sequence emission
+/// handles it as phase metadata or discards it in control-flow bodies.
 fn rule_passes_target_filter(
     rule: &CompiledRule,
     target_context: Option<&TargetContext>,
@@ -767,10 +482,10 @@ fn rule_passes_target_filter(
     rule.match_keys
         .iter()
         .all(|key| block.instruction_set.contains(key))
-        && rule.rewrite_keys.iter().all(|key| match key {
-            RewriteInstructionKey::Standard(StandardGate::GPhase) => true,
-            _ => target_context.keys.contains(key),
-        })
+        && rule
+            .rewrite_keys
+            .iter()
+            .all(|key| target_context.allows_rewrite_key(key))
 }
 
 /// Attempts to match one compiled rule at one anchor position.
@@ -783,12 +498,12 @@ fn try_match_rule(
     block: &BlockContext<'_>,
     anchor: usize,
     compiled: &CompiledRule,
-    commutation: &CommutationOracle,
+    commutation: &CommutationChecker,
     config: &RewriteConfig,
     target_context: Option<&TargetContext>,
 ) -> Result<Option<CandidatePatch>, CompilerError> {
     let rule = &compiled.rule;
-    let mut state = MatchState::default();
+    let mut bindings = MatchBindings::new();
 
     // Step 1: bind the first rule item to the anchor operation.
     if !match_item(
@@ -796,7 +511,7 @@ fn try_match_rule(
         anchor,
         &rule.operations[0],
         &compiled.source_keys[0],
-        &mut state,
+        &mut bindings,
         config,
     )? {
         return Ok(None);
@@ -827,17 +542,17 @@ fn try_match_rule(
                 continue;
             }
 
-            let mut next_state = state.clone();
-            if match_item(block, position, item, item_key, &mut next_state, config)? {
-                found = Some((position, next_state));
+            let mut next_bindings = bindings.clone();
+            if match_item(block, position, item, item_key, &mut next_bindings, config)? {
+                found = Some((position, next_bindings));
                 break;
             }
         }
 
-        let Some((position, next_state)) = found else {
+        let Some((position, next_bindings)) = found else {
             return Ok(None);
         };
-        state = next_state;
+        bindings = next_bindings;
         skipped_positions.extend(cursor..position);
         matched_positions.push(position);
         cursor = position + 1;
@@ -845,20 +560,41 @@ fn try_match_rule(
 
     // Step 4: apply symbolic/numeric rule conditions after all parameters have
     // been bound by the structural match.
-    if !conditions_hold(rule.conditions.as_deref(), &state.params)? {
+    if !knowledge_conditions_hold(rule.conditions.as_deref(), &bindings) {
         return Ok(None);
     }
 
-    // Step 5: instantiate the rewrite target using the matched qubit and
+    // Step 5: each skipped operation is emitted after the replacement, so it must
+    // commute with every later matched source operation that it crosses.
+    if !skipped_sources_commute_with_future_matches(
+        block,
+        &skipped_positions,
+        &matched_positions,
+        commutation,
+        config,
+    ) {
+        return Ok(None);
+    }
+
+    // Step 6: instantiate the rewrite target using the matched qubit and
     // parameter bindings.
-    let replacements = instantiate_target(&rule.target, &compiled.target_keys, &state)?;
-    // Step 6: replacements must also commute with skipped operations; otherwise
+    let replacements = knowledge_instantiate_target(&rule.target, &bindings)
+        .map_err(|error| CompilerError::InvariantViolation(error.to_string()))?
+        .into_iter()
+        .map(|item| ReplacementItem {
+            instruction: item.instruction,
+            qubits: item.qubits,
+            params: item.params,
+            key: item.key,
+        })
+        .collect::<Vec<_>>();
+    // Step 7: replacements must also commute with skipped operations; otherwise
     // emitting them at the first matched position would change behavior.
     if !replacements_commute_with_skipped(block, &skipped_positions, &replacements, commutation)? {
         return Ok(None);
     }
 
-    // Step 7: accept only rewrites permitted by the configured local cost model.
+    // Step 8: accept only rewrites permitted by the configured local cost model.
     let before = cost_for_operation_positions(block, &matched_positions, target_context);
     let after = cost_for_replacements(&replacements, target_context);
     if !config.allows_rewrite(compiled.kind, before, after) {
@@ -889,7 +625,7 @@ fn can_skip_between(
     skipped: Range<usize>,
     matched_positions: &[usize],
     candidate_position: usize,
-    commutation: &CommutationOracle,
+    commutation: &CommutationChecker,
     config: &RewriteConfig,
 ) -> Result<bool, CompilerError> {
     if skipped.is_empty() {
@@ -916,11 +652,11 @@ fn can_skip_between(
             return Ok(false);
         }
         for &matched_position in matched_positions {
-            if !commutation.operations_commute(block, skipped_position, matched_position)? {
+            if !operations_commute(block, skipped_position, matched_position, commutation) {
                 return Ok(false);
             }
         }
-        if !commutation.operations_commute(block, skipped_position, candidate_position)? {
+        if !operations_commute(block, skipped_position, candidate_position, commutation) {
             return Ok(false);
         }
     }
@@ -928,12 +664,48 @@ fn can_skip_between(
     Ok(true)
 }
 
+/// Rechecks skipped source operations against future matched source operations.
+///
+/// Incremental matching only proves that a skipped operation can reach the next
+/// matched item.  For patterns with three or more operations, the same skipped
+/// operation may later need to cross additional matched items before the whole
+/// source block can be replaced at `first_position`.
+fn skipped_sources_commute_with_future_matches(
+    block: &BlockContext<'_>,
+    skipped_positions: &[usize],
+    matched_positions: &[usize],
+    commutation: &CommutationChecker,
+    config: &RewriteConfig,
+) -> bool {
+    for &skipped_position in skipped_positions {
+        let skipped_operation = block.operation(skipped_position);
+        for &matched_position in matched_positions {
+            if matched_position <= skipped_position
+                || !skipped_operation
+                    .qubits
+                    .iter()
+                    .any(|qubit| block.operation(matched_position).qubits.contains(qubit))
+            {
+                continue;
+            }
+            if config.skips_labeled_ops() && skipped_operation.label.is_some() {
+                return false;
+            }
+            if !operations_commute(block, skipped_position, matched_position, commutation) {
+                return false;
+            }
+        }
+    }
+
+    true
+}
+
 /// Returns whether instantiated replacements may be emitted before skipped ops.
 fn replacements_commute_with_skipped(
     block: &BlockContext<'_>,
     skipped_positions: &[usize],
     replacements: &[ReplacementItem],
-    commutation: &CommutationOracle,
+    commutation: &CommutationChecker,
 ) -> Result<bool, CompilerError> {
     if skipped_positions.is_empty() || replacements.is_empty() {
         return Ok(true);
@@ -948,17 +720,68 @@ fn replacements_commute_with_skipped(
             {
                 continue;
             }
-            if !commutation.operation_commutes_with_replacement(
+            if !operation_commutes_with_replacement(
                 block,
                 skipped_position,
                 replacement,
-            )? {
+                commutation,
+            ) {
                 return Ok(false);
             }
         }
     }
 
     Ok(true)
+}
+
+/// Returns whether two block operations commute exactly.
+fn operations_commute(
+    block: &BlockContext<'_>,
+    lhs_position: usize,
+    rhs_position: usize,
+    commutation: &CommutationChecker,
+) -> bool {
+    let lhs = block.operation(lhs_position);
+    let rhs = block.operation(rhs_position);
+    commutation
+        .check(
+            &lhs.instruction,
+            &lhs.qubits,
+            block.params(lhs_position),
+            &rhs.instruction,
+            &rhs.qubits,
+            block.params(rhs_position),
+        )
+        .is_some_and(|result| result.is_exact())
+}
+
+/// Returns whether a source operation commutes exactly with a replacement.
+fn operation_commutes_with_replacement(
+    block: &BlockContext<'_>,
+    operation_position: usize,
+    replacement: &ReplacementItem,
+    commutation: &CommutationChecker,
+) -> bool {
+    let operation = block.operation(operation_position);
+    let replacement_params = replacement
+        .params
+        .iter()
+        .map(|value| match value {
+            ParameterValue::Fixed(value) => Parameter::from(*value),
+            ParameterValue::Param(parameter) => parameter.clone(),
+        })
+        .collect::<SmallVec<[_; 3]>>();
+
+    commutation
+        .check(
+            &operation.instruction,
+            &operation.qubits,
+            block.params(operation_position),
+            &replacement.instruction,
+            &replacement.qubits,
+            &replacement_params,
+        )
+        .is_some_and(|result| result.is_exact())
 }
 
 /// Matches one rule item against one operation and updates match bindings.
@@ -971,158 +794,27 @@ fn match_item(
     position: usize,
     item: &RuleItem,
     item_key: &RewriteInstructionKey,
-    state: &mut MatchState,
+    bindings: &mut MatchBindings,
     config: &RewriteConfig,
 ) -> Result<bool, CompilerError> {
     let operation = block.operation(position);
     if config.skips_labeled_ops() && operation.label.is_some() {
         return Ok(false);
     }
-    match_rule_item(
+    if block.key(position) != item_key {
+        return Ok(false);
+    }
+
+    knowledge_match_rule_item(
         item,
-        item_key,
-        ConcreteOperation {
+        ConcreteOperationView {
             instruction: &operation.instruction,
-            key: block.key(position),
             qubits: &operation.qubits,
             params: block.params(position),
         },
-        state,
+        bindings,
     )
-}
-
-/// Matches one rule parameter pattern against one concrete operation parameter.
-///
-/// A bare symbol binds to the actual parameter.  A non-bare expression can only
-/// match after all referenced symbols have already been bound.
-fn match_parameter(
-    rule_param: &ParameterValue,
-    actual: &Parameter,
-    bindings: &mut HashMap<String, Parameter>,
-) -> Result<bool, CompilerError> {
-    match rule_param {
-        ParameterValue::Fixed(value) => Ok(parameters_equivalent(&Parameter::from(*value), actual)),
-        ParameterValue::Param(pattern) => {
-            if let Some(symbol) = single_symbol(pattern) {
-                if let Some(bound) = bindings.get(&symbol) {
-                    return Ok(parameters_equivalent(bound, actual));
-                }
-                bindings.insert(symbol, actual.clone());
-                return Ok(true);
-            }
-
-            let substituted = substitute_bindings(pattern, bindings);
-            if substituted.get_symbols().is_empty() {
-                return Ok(parameters_equivalent(&substituted, actual));
-            }
-
-            Ok(false)
-        }
-    }
-}
-
-/// Returns a symbol name when a parameter is exactly one symbolic variable.
-fn single_symbol(parameter: &Parameter) -> Option<String> {
-    let symbols = parameter.get_symbols();
-    if symbols.len() != 1 {
-        return None;
-    }
-    let symbol = symbols.into_iter().next()?;
-    let direct = Parameter::symbol(&symbol);
-    if parameter == &direct {
-        return Some(symbol);
-    }
-    parameter
-        .simplify()
-        .ok()
-        .filter(|simplified| simplified == &direct)
-        .map(|_| symbol)
-}
-
-/// Evaluates all rule conditions under the current parameter bindings.
-///
-/// Conditions are conjunctive.  `Eq` uses exact simplified expression equality
-/// or concrete numeric equality within tolerance; `EqMod` additionally accepts
-/// numeric integer multiples of the modulus.
-fn conditions_hold(
-    conditions: Option<&[Condition]>,
-    bindings: &HashMap<String, Parameter>,
-) -> Result<bool, CompilerError> {
-    for condition in conditions.unwrap_or(&[]) {
-        let holds = match condition {
-            Condition::Eq(lhs, rhs) => {
-                let lhs = substitute_bindings(lhs, bindings);
-                let rhs = substitute_bindings(rhs, bindings);
-                parameters_equivalent(&lhs, &rhs)
-            }
-            Condition::EqMod(lhs, rhs, modulus) => {
-                let lhs = substitute_bindings(lhs, bindings);
-                let rhs = substitute_bindings(rhs, bindings);
-                let modulus = substitute_bindings(modulus, bindings);
-                equivalent_modulo(&lhs, &rhs, &modulus)
-            }
-        };
-        if !holds {
-            return Ok(false);
-        }
-    }
-    Ok(true)
-}
-
-/// Instantiates a rule rewrite target into concrete replacement operations.
-fn instantiate_target(
-    target: &[RuleItem],
-    target_keys: &[RewriteInstructionKey],
-    state: &MatchState,
-) -> Result<Vec<ReplacementItem>, CompilerError> {
-    let mut replacements = Vec::with_capacity(target.len());
-
-    for (item, key) in target.iter().zip(target_keys) {
-        let qubits = item
-            .qubits
-            .iter()
-            .map(|rule_qubit| {
-                state.qubits.get(rule_qubit).copied().ok_or_else(|| {
-                    CompilerError::InvariantViolation(format!(
-                        "rewrite target referenced unbound qubit {rule_qubit}"
-                    ))
-                })
-            })
-            .collect::<Result<SmallVec<[_; 3]>, _>>()?;
-        let params = item
-            .params
-            .as_deref()
-            .unwrap_or(&[])
-            .iter()
-            .map(|value| {
-                let parameter = match value {
-                    ParameterValue::Fixed(value) => Parameter::from(*value),
-                    ParameterValue::Param(parameter) => {
-                        substitute_bindings(parameter, &state.params)
-                    }
-                };
-                ParameterValue::from(parameter)
-            })
-            .collect::<SmallVec<[_; 3]>>();
-
-        replacements.push(ReplacementItem {
-            instruction: item.instruction.clone(),
-            qubits,
-            params,
-            key: key.clone(),
-        });
-    }
-
-    Ok(replacements)
-}
-
-/// Replaces every bound symbol in a parameter expression and simplifies it.
-fn substitute_bindings(parameter: &Parameter, bindings: &HashMap<String, Parameter>) -> Parameter {
-    let mut substituted = parameter.clone();
-    for (symbol, value) in bindings {
-        substituted = substituted.replace(symbol, value.clone());
-    }
-    substituted.simplify().unwrap_or(substituted)
+    .map_err(|error| CompilerError::InvariantViolation(error.to_string()))
 }
 
 /// Resolves a circuit operation parameter into a concrete parameter expression.
@@ -1143,41 +835,6 @@ pub(crate) fn resolve_operation_param(
                 ))
             }),
     }
-}
-
-/// Returns whether two parameters are provably equivalent for rewrite purposes.
-fn parameters_equivalent(lhs: &Parameter, rhs: &Parameter) -> bool {
-    let lhs = lhs.simplify().unwrap_or_else(|_| lhs.clone());
-    let rhs = rhs.simplify().unwrap_or_else(|_| rhs.clone());
-    if lhs == rhs {
-        return true;
-    }
-
-    match (lhs.evaluate(&None), rhs.evaluate(&None)) {
-        (Ok(lhs), Ok(rhs)) => (lhs - rhs).abs() <= PARAMETER_TOLERANCE,
-        _ => false,
-    }
-}
-
-/// Returns whether two parameters are equivalent modulo a third parameter.
-fn equivalent_modulo(lhs: &Parameter, rhs: &Parameter, modulus: &Parameter) -> bool {
-    let diff = (lhs - rhs).simplify().unwrap_or_else(|_| lhs - rhs);
-    if parameters_equivalent(&diff, &Parameter::from(0.0)) {
-        return true;
-    }
-
-    let Ok(diff_value) = diff.evaluate(&None) else {
-        return false;
-    };
-    let Ok(modulus_value) = modulus.evaluate(&None) else {
-        return false;
-    };
-    if modulus_value.abs() <= PARAMETER_TOLERANCE {
-        return false;
-    }
-
-    let ratio = diff_value / modulus_value;
-    (ratio - ratio.round()).abs() <= PARAMETER_TOLERANCE
 }
 
 /// Computes local cost for matched source operation positions.
@@ -1237,7 +894,7 @@ fn add_instruction_cost(
     target_context: Option<&TargetContext>,
 ) {
     let target_supported = match target_context {
-        Some(target_context) => target_context.keys.contains(key),
+        Some(target_context) => target_context.physically_supports(key),
         None => true,
     };
     let standard_gate = match key {
@@ -1252,6 +909,11 @@ fn add_instruction_cost(
         gphase_cost,
     );
     if counted {
+        if let Some(target_context) = target_context {
+            cost.lowering_distance = cost
+                .lowering_distance
+                .saturating_add(target_context.lowering_distance(key));
+        }
         update_depth_estimate(cost, depths, qubits);
     }
 }

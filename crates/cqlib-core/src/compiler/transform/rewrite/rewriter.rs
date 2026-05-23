@@ -33,9 +33,10 @@ use std::collections::{HashMap, HashSet};
 
 use super::config::RewriteConfig;
 use super::matcher::{
-    CompiledRuleSet, ReplacementItem, RewritePatch, is_rewrite_safe_operation,
-    resolve_operation_param, select_rewrites, validate_target_instructions,
+    CompiledRuleSet, ReplacementItem, RewriteInstructionKey, RewritePatch, resolve_operation_param,
+    select_rewrites_in_context,
 };
+use super::target::{TargetContext, validate_final_target};
 
 /// Aggregate statistics produced by one knowledge rewrite run.
 ///
@@ -65,6 +66,7 @@ impl KnowledgeRewriteStats {
 struct RoundStats {
     rules_applied: usize,
     changed_sequences: usize,
+    branch_local_phases_discarded: usize,
 }
 
 /// Result of applying one rewrite round to a circuit.
@@ -122,8 +124,6 @@ impl Transformer for KnowledgeRewriter {
                 "rewrite max_rounds must be greater than zero".to_string(),
             ));
         }
-        validate_target_instructions(&self.config)?;
-
         // Load and compile the knowledge library once per transform run.  The
         // compiled form owns the hot lookup structures used by all rounds.
         let library =
@@ -132,39 +132,62 @@ impl Transformer for KnowledgeRewriter {
                 reason: err.to_string(),
             })?;
         let rules = CompiledRuleSet::from_library(library)?;
+        // Compute lowerable intermediates once.  This also validates target
+        // configuration for empty circuits that never enter the matcher.
+        let target_context = TargetContext::from_config(&self.config, &rules)?;
 
         let mut current = ctx.circuit().clone();
         let mut aggregate = KnowledgeRewriteStats::default();
         let mut stabilized = false;
+        let mut changed = false;
+        let mut branch_local_phases_discarded = 0usize;
 
         // Repeatedly rebuild from the previous circuit until no rules apply.
         for round in 1..=self.config.max_rounds() {
             aggregate.rounds_executed = round;
-            let result = run_round(&current, &rules, &self.config)?;
+            let result = run_round(&current, &rules, &self.config, target_context.as_ref())?;
             if !result.changed {
                 stabilized = true;
                 break;
             }
+            changed = true;
+            branch_local_phases_discarded += result.stats.branch_local_phases_discarded;
             aggregate.merge_round(&result.stats);
             current = result.circuit;
         }
 
-        // No applied rules means the compiler context remains unchanged.
-        if aggregate.rules_applied == 0 {
+        // Target-aware optimization is opportunistic.  Explicit lowering is not:
+        // if a physical target basis was requested, the final circuit must satisfy it.
+        validate_final_target(&current, &self.config, self.descriptor().name)?;
+
+        // No applied rules or control-flow phase drops means the compiler context
+        // remains unchanged.
+        if !changed {
             return Ok(TransformOutcome::unchanged());
         }
 
         *ctx.circuit_mut() = current;
+        let note = if branch_local_phases_discarded == 0 {
+            format!(
+                "rewrite: applied {} knowledge rules across {} changed sequences in {} rounds",
+                aggregate.rules_applied, aggregate.changed_sequences, aggregate.rounds_executed
+            )
+        } else {
+            format!(
+                "rewrite: applied {} knowledge rules across {} changed sequences in {} rounds; discarded {} branch-local GPhase operations",
+                aggregate.rules_applied,
+                aggregate.changed_sequences,
+                aggregate.rounds_executed,
+                branch_local_phases_discarded
+            )
+        };
         let mut outcome = TransformOutcome::changed()
             .with_changes(
                 ContextChangeSet::circuit_changed()
                     .with_cfg_structure_changed(true)
                     .with_parameter_table_changed(true),
             )
-            .with_note(format!(
-                "rewrite: applied {} knowledge rules across {} changed sequences in {} rounds",
-                aggregate.rules_applied, aggregate.changed_sequences, aggregate.rounds_executed
-            ));
+            .with_note(note);
 
         // A changed final round without a following stable round means the
         // configured iteration bound was reached before proving convergence.
@@ -188,6 +211,7 @@ fn run_round(
     circuit: &Circuit,
     rules: &CompiledRuleSet,
     config: &RewriteConfig,
+    target_context: Option<&TargetContext>,
 ) -> Result<RoundResult, CompilerError> {
     let qubits: IndexSet<_> = circuit.qubits().into_iter().collect();
     let mut rebuilt = Circuit::from_parts(
@@ -208,6 +232,7 @@ fn run_round(
         &mut rebuilt,
         rules,
         config,
+        target_context,
         SequenceTarget::TopLevel {
             phase_delta: &mut phase_delta,
         },
@@ -222,7 +247,7 @@ fn run_round(
 
     Ok(RoundResult {
         circuit: rebuilt,
-        changed: stats.rules_applied > 0,
+        changed: stats.rules_applied > 0 || stats.branch_local_phases_discarded > 0,
         stats,
     })
 }
@@ -239,6 +264,12 @@ enum SequenceTarget<'a> {
     ControlFlowBody { output: &'a mut Vec<Operation> },
 }
 
+impl SequenceTarget<'_> {
+    fn discards_branch_local_phase(&self) -> bool {
+        matches!(self, Self::ControlFlowBody { .. })
+    }
+}
+
 /// Rewrites one operation sequence into the selected output target.
 ///
 /// A sequence is split into maximal contiguous blocks of rewrite-safe
@@ -250,18 +281,21 @@ fn apply_sequence(
     rebuilt: &mut Circuit,
     rules: &CompiledRuleSet,
     config: &RewriteConfig,
+    target_context: Option<&TargetContext>,
     mut target: SequenceTarget<'_>,
     stats: &mut RoundStats,
 ) -> Result<(), CompilerError> {
     let mut cursor = 0;
     while cursor < operations.len() {
-        // Non-standard operations are hard boundaries for local rewrite blocks.
-        if !is_rewrite_safe_operation(&operations[cursor]) {
+        // Operations outside the rewrite-safe gate-like subset are hard
+        // boundaries for local rewrite blocks.
+        if RewriteInstructionKey::from_instruction(&operations[cursor].instruction).is_none() {
             emit_original_operation(
                 source,
                 &operations[cursor],
                 rebuilt,
                 config,
+                target_context,
                 &mut target,
                 rules,
                 stats,
@@ -273,11 +307,13 @@ fn apply_sequence(
         // Gather one maximal rewrite-safe block and let the matcher choose
         // non-overlapping rewrites inside that block.
         let block_start = cursor;
-        while cursor < operations.len() && is_rewrite_safe_operation(&operations[cursor]) {
+        while cursor < operations.len()
+            && RewriteInstructionKey::from_instruction(&operations[cursor].instruction).is_some()
+        {
             cursor += 1;
         }
         let block = &operations[block_start..cursor];
-        let selected = select_rewrites(source, block, rules, config)?;
+        let selected = select_rewrites_in_context(source, block, rules, config, target_context)?;
         if selected.is_empty() {
             for operation in block {
                 emit_original_operation(
@@ -285,6 +321,7 @@ fn apply_sequence(
                     operation,
                     rebuilt,
                     config,
+                    target_context,
                     &mut target,
                     rules,
                     stats,
@@ -325,7 +362,7 @@ fn emit_rewritten_block(
         if let Some(patch) = patches_by_start.remove(&position) {
             stats.rules_applied += 1;
             for replacement in &patch.replacements {
-                emit_replacement(rebuilt, replacement, target)?;
+                emit_replacement(rebuilt, replacement, target, stats)?;
             }
         }
 
@@ -337,6 +374,7 @@ fn emit_rewritten_block(
             source,
             rebuilt,
             target,
+            stats,
             operation.instruction.clone(),
             operation.qubits.clone(),
             operation.params.as_slice(),
@@ -357,6 +395,7 @@ fn emit_original_operation(
     operation: &Operation,
     rebuilt: &mut Circuit,
     config: &RewriteConfig,
+    target_context: Option<&TargetContext>,
     target: &mut SequenceTarget<'_>,
     rules: &CompiledRuleSet,
     stats: &mut RoundStats,
@@ -366,6 +405,7 @@ fn emit_original_operation(
             source,
             rebuilt,
             target,
+            stats,
             operation.instruction.clone(),
             operation.qubits.clone(),
             operation.params.as_slice(),
@@ -382,6 +422,7 @@ fn emit_original_operation(
                 rebuilt,
                 rules,
                 config,
+                target_context,
                 SequenceTarget::ControlFlowBody {
                     output: &mut true_body,
                 },
@@ -398,6 +439,7 @@ fn emit_original_operation(
                         rebuilt,
                         rules,
                         config,
+                        target_context,
                         SequenceTarget::ControlFlowBody {
                             output: &mut rewritten,
                         },
@@ -419,6 +461,7 @@ fn emit_original_operation(
                 rebuilt,
                 rules,
                 config,
+                target_context,
                 SequenceTarget::ControlFlowBody { output: &mut body },
                 stats,
             )?;
@@ -436,6 +479,7 @@ fn emit_original_operation(
             source,
             rebuilt,
             target,
+            stats,
             instruction,
             qubits,
             operation.params.as_slice(),
@@ -446,6 +490,7 @@ fn emit_original_operation(
             source,
             rebuilt,
             target,
+            stats,
             operation.instruction.clone(),
             operation.qubits.clone(),
             operation.params.as_slice(),
@@ -500,16 +545,24 @@ fn control_flow_operation_qubits(instruction: &Instruction) -> SmallVec<[Qubit; 
 ///
 /// Top-level emission resolves parameter indices against the source circuit and
 /// interns parameters in the rebuilt circuit through `Circuit::append`.
-/// Control-flow body emission preserves the body operation representation.
+/// Control-flow body emission preserves the body operation representation except
+/// for `GPhase`, which is discarded because the IR has no branch-local global
+/// phase field.
 fn emit_operation_parts(
     source: &Circuit,
     rebuilt: &mut Circuit,
     target: &mut SequenceTarget<'_>,
+    stats: &mut RoundStats,
     instruction: Instruction,
     qubits: SmallVec<[crate::circuit::Qubit; 3]>,
     params: &[CircuitParam],
     label: Option<Box<str>>,
 ) -> Result<(), CompilerError> {
+    if target.discards_branch_local_phase() && is_gphase_instruction(&instruction) {
+        stats.branch_local_phases_discarded += 1;
+        return Ok(());
+    }
+
     match target {
         SequenceTarget::TopLevel { .. } => {
             let param_values = params
@@ -531,25 +584,23 @@ fn emit_operation_parts(
 
 /// Emits one instantiated replacement operation.
 ///
-/// Replacement `GPhase` has special policy: at top level it is accumulated into
-/// circuit global phase metadata, while inside control-flow bodies it is dropped
-/// because the current IR has no branch-local global phase storage.
+/// Replacement `GPhase` follows the same phase policy as source `GPhase`: at top
+/// level it is accumulated into circuit global phase metadata, while inside
+/// control-flow bodies it is dropped.
 fn emit_replacement(
     rebuilt: &mut Circuit,
     replacement: &ReplacementItem,
     target: &mut SequenceTarget<'_>,
+    stats: &mut RoundStats,
 ) -> Result<(), CompilerError> {
-    if matches!(
-        replacement.instruction,
-        Instruction::Standard(StandardGate::GPhase)
-    ) {
-        let phase = replacement.params.first().ok_or_else(|| {
-            CompilerError::InvariantViolation(
-                "GPhase replacement must contain one parameter".to_string(),
-            )
-        })?;
+    if is_gphase_instruction(&replacement.instruction) {
         match target {
             SequenceTarget::TopLevel { phase_delta } => {
+                let phase = replacement.params.first().ok_or_else(|| {
+                    CompilerError::InvariantViolation(
+                        "GPhase replacement must contain one parameter".to_string(),
+                    )
+                })?;
                 let phase = match phase {
                     ParameterValue::Fixed(value) => Parameter::from(*value),
                     ParameterValue::Param(parameter) => parameter.clone(),
@@ -557,7 +608,10 @@ fn emit_replacement(
                 **phase_delta = &**phase_delta + &phase;
                 return Ok(());
             }
-            SequenceTarget::ControlFlowBody { .. } => return Ok(()),
+            SequenceTarget::ControlFlowBody { .. } => {
+                stats.branch_local_phases_discarded += 1;
+                return Ok(());
+            }
         }
     }
 
@@ -593,4 +647,8 @@ fn emit_replacement(
     }
 
     Ok(())
+}
+
+fn is_gphase_instruction(instruction: &Instruction) -> bool {
+    matches!(instruction, Instruction::Standard(StandardGate::GPhase))
 }
