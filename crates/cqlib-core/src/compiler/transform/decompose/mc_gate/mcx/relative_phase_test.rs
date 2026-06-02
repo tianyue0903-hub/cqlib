@@ -11,7 +11,7 @@
 // that they have been altered from the originals.
 
 use super::relative_phase::emit_relative_phase_toffoli;
-use super::utils::EPSILON;
+use super::test_utils::EPSILON;
 use crate::circuit::{
     Circuit, Instruction, Qubit, StandardGate, circuit_to_matrix, operation::ValueOperation,
 };

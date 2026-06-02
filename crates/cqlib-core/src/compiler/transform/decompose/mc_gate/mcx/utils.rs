@@ -13,16 +13,8 @@
 //! Shared helpers for compositional MCX synthesis.
 
 use super::DECOMPOSE_MCX_NAME;
-use crate::circuit::Qubit;
 use crate::circuit::operation::ValueOperation;
 use crate::compiler::error::CompilerError;
-use crate::compiler::transform::decompose::mc_gate::mcx::relative_phase::emit_relative_phase_toffoli;
-use crate::qis::Statevector;
-#[cfg(test)]
-use crate::util::test_utils::assert_value_operations_equal;
-use num_complex::Complex64;
-
-pub const EPSILON: f64 = 1e-10;
 
 /// Returns the inverse of a parameter-free operation sequence.
 ///
@@ -76,48 +68,4 @@ pub(super) fn invert_parameter_free_operations(
     }
 
     Ok(inverse_operations)
-}
-
-#[cfg(test)]
-pub fn selected_basis_states(total_width: usize) -> Vec<usize> {
-    let mask = (1_usize << total_width) - 1;
-    let alternating_low = (0..total_width)
-        .filter(|index| index % 2 == 0)
-        .fold(0_usize, |state, index| state | (1_usize << index));
-    let mut states = vec![
-        0,
-        1,
-        1_usize << (total_width - 1),
-        mask,
-        alternating_low,
-        mask ^ alternating_low,
-    ];
-    states.sort_unstable();
-    states.dedup();
-    states
-}
-
-#[cfg(test)]
-pub fn single_nonzero_statevector_output(statevector: &Statevector) -> (usize, Complex64) {
-    let outputs: Vec<_> = statevector
-        .data()
-        .iter()
-        .copied()
-        .enumerate()
-        .filter(|(_, amplitude)| amplitude.norm() >= EPSILON)
-        .collect();
-    assert_eq!(outputs.len(), 1, "statevector has outputs {outputs:?}");
-    outputs[0]
-}
-
-#[cfg(test)]
-pub fn assert_rccx_expansion(
-    operations: &[ValueOperation],
-    first_control: Qubit,
-    second_control: Qubit,
-    target: Qubit,
-) {
-    let mut expected = vec![];
-    emit_relative_phase_toffoli(&mut expected, first_control, second_control, target).unwrap();
-    assert_value_operations_equal(operations, &expected);
 }

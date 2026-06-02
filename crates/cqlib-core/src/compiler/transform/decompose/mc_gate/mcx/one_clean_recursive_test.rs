@@ -13,7 +13,8 @@
 use super::{
     decompose_mcx_1_clean_b95, decompose_mcx_small,
     dirty_v_chain::{decompose_mcx_n_dirty, decompose_relative_phase_mcx_n_dirty},
-    utils::{EPSILON, invert_parameter_free_operations, single_nonzero_statevector_output},
+    test_utils::{EPSILON, single_nonzero_statevector_output},
+    utils::invert_parameter_free_operations,
 };
 use crate::circuit::{
     Directive, Instruction, ParameterValue, Qubit, StandardGate, circuit_to_matrix,

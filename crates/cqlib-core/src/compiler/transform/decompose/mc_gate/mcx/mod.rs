@@ -30,7 +30,7 @@
 //! - Maslov, *Advantages of using relative-phase Toffoli gates with an
 //!   application to multiple control Toffoli optimization*, Phys. Rev. A 93,
 //!   022311 (2016), [arXiv:1508.03273](https://arxiv.org/abs/1508.03273).
-//! - Iten et al., *Quantum Circuits for Isometries*, Phys. Rev. A 93, 032318
+//! - Item et al., *Quantum Circuits for Isometries*, Phys. Rev. A 93, 032318
 //!   (2016), [arXiv:1501.06911](https://arxiv.org/abs/1501.06911).
 //! - Barenco et al., *Elementary gates for quantum computation*, Phys. Rev. A
 //!   52, 3457 (1995),
@@ -59,6 +59,9 @@ mod one_clean_recursive;
 mod relative_phase;
 mod trivial;
 mod utils;
+
+#[cfg(test)]
+mod test_utils;
 
 #[cfg(test)]
 mod clean_v_chain_test;

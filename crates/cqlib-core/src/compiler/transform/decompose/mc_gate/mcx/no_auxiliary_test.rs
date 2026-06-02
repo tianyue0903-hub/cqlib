@@ -16,7 +16,7 @@ use super::{
         Hp24Path, IncrementDirection, emit_increment_n_dirty, emit_increment_one_dirty,
         emit_increment_two_dirty, emit_relative_mcx_with_internal_dirty_qubits, select_hp24_path,
     },
-    utils::{EPSILON, selected_basis_states},
+    test_utils::{EPSILON, selected_basis_states},
 };
 use crate::circuit::{Instruction, ParameterValue, Qubit, StandardGate, operation::ValueOperation};
 use crate::compiler::error::CompilerError;

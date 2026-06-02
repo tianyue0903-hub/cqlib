@@ -15,7 +15,7 @@ use super::{
     decompose_mcx_1_clean_kg24, decompose_mcx_1_dirty, decompose_mcx_2_clean,
     decompose_mcx_2_dirty, decompose_mcx_small,
     relative_phase::emit_relative_phase_toffoli,
-    utils::{EPSILON, selected_basis_states},
+    test_utils::{EPSILON, selected_basis_states},
 };
 use crate::circuit::{
     Instruction, Qubit, StandardGate, circuit_to_matrix, operation::ValueOperation,

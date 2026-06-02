@@ -588,9 +588,7 @@ impl AstToCircuit {
         }
 
         // Convert to CircuitGate
-        let frozen = FrozenCircuit {
-            circuit: gate_circuit,
-        };
+        let frozen = FrozenCircuit::new(gate_circuit);
         CircuitGate::new(name, frozen).map_err(|e| QasmParseError::ConversionError(e.to_string()))
     }
 

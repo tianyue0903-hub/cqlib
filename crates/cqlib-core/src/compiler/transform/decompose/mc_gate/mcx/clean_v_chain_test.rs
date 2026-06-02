@@ -12,11 +12,12 @@
 
 use super::{
     decompose_mcx_n_clean, decompose_mcx_small,
-    utils::{EPSILON, selected_basis_states, single_nonzero_statevector_output},
+    test_utils::{
+        EPSILON, assert_rccx_expansion, selected_basis_states, single_nonzero_statevector_output,
+    },
 };
 use crate::circuit::{Qubit, StandardGate, circuit_to_matrix};
 use crate::compiler::error::CompilerError;
-use crate::compiler::transform::decompose::mc_gate::mcx::utils::assert_rccx_expansion;
 use crate::qis::Statevector;
 use crate::util::test_utils::{
     assert_standard_operation, assert_value_operations_equal, circuit_from_value_operations,

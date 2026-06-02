@@ -13,7 +13,7 @@
 use super::{
     decompose_mcx_n_dirty, decompose_mcx_small,
     dirty_v_chain::decompose_relative_phase_mcx_n_dirty,
-    utils::{
+    test_utils::{
         EPSILON, assert_rccx_expansion, selected_basis_states, single_nonzero_statevector_output,
     },
 };
