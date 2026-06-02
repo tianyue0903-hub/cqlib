@@ -160,7 +160,7 @@ enum TwoQubitFamily {
 /// arity validation, identity, same-application, and disjoint-support facts.
 /// Returning `None` keeps the result conservative and allows rule or matrix
 /// fallbacks to run.
-pub(super) fn algebraic_commutation(
+pub fn algebraic_commutation(
     lhs_inst: &Instruction,
     lhs_qubits: &[Qubit],
     lhs_params: &[Parameter],

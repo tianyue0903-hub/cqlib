@@ -134,7 +134,7 @@ impl CommutationChecker {
     }
 
     /// Builds a checker using commutation rules from an already loaded library.
-    pub(crate) fn from_library(library: &RuleLibrary, config: CommutationConfig) -> Self {
+    pub fn from_library(library: &RuleLibrary, config: CommutationConfig) -> Self {
         let rules = if config.enable_rule_oracle {
             Some(RuleCommutationOracle::from_library(library))
         } else {

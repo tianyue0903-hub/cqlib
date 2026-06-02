@@ -53,6 +53,8 @@ pub use checker::{
     Commutation, CommutationChecker, CommutationConfig, CommutationResult, check_commutation,
 };
 
+pub use algebra::algebraic_commutation;
+
 #[cfg(test)]
 #[path = "./commutation_test.rs"]
 mod commutation_test;
