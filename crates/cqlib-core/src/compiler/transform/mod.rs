@@ -12,18 +12,14 @@
 
 pub mod canonicalize;
 pub mod decompose;
-pub mod descriptor;
-pub mod layout;
-pub mod postprocess;
-pub mod resynthesis;
 pub mod rewrite;
-pub mod routing;
-pub mod schedule;
 pub mod transformer;
 
-// pub use canonicalize::{CanonicalRuleId, CanonicalizeConfig, Canonicalizer};
-pub use descriptor::TransformDescriptor;
-pub use transformer::{
-    CompositeTransformer, TransformOutcome, TransformStatsChange, TransformStatsSnapshot,
-    Transformer,
+pub use canonicalize::{
+    CanonicalizeConfig, CanonicalizeResult, Canonicalizer, canonicalize_circuit,
 };
+pub use rewrite::{
+    KnowledgeRewriteResult, KnowledgeRewriteStats, KnowledgeRewriter, RewriteConfig, RewriteMode,
+    rewrite_circuit,
+};
+pub use transformer::{TransformResult, Transformer};

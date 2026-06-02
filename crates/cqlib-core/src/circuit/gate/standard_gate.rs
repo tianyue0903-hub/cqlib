@@ -111,7 +111,12 @@ pub enum StandardGate {
     // --- Global/Relative Phase ---
     /// Phase shift gate $P(\lambda)$.
     Phase,
-    /// Global phase gate (physically undetectable, but mathematically relevant).
+    /// Zero-qubit global phase marker.
+    ///
+    /// `GPhase` is not applied to any qubit. Whole-circuit global phase should
+    /// normally be represented by [`crate::circuit::Circuit::global_phase`];
+    /// `GPhase` operations are mainly useful as import or intermediate IR
+    /// markers, including body-local phase inside control-flow operations.
     GPhase,
 
     // --- Controlled Gates ---
