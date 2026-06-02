@@ -42,13 +42,12 @@
 //! ```
 
 use crate::circuit::{Instruction, Parameter, Qubit, StandardGate};
+use crate::compiler::PARAMETER_EQ_TOLERANCE;
 use crate::compiler::commutation::algebra::algebraic_commutation;
 use crate::compiler::commutation::matrix::matrix_commutation;
 use crate::compiler::commutation::rules::RuleCommutationOracle;
 use crate::compiler::knowledge::library::RuleLibrary;
 use std::sync::OnceLock;
-
-const PARAMETER_TOLERANCE: f64 = 1e-12;
 
 /// Proven relationship between two commuting operations.
 ///
@@ -319,5 +318,5 @@ fn same_application(
         && lhs_params
             .iter()
             .zip(rhs_params)
-            .all(|(lhs, rhs)| lhs.provably_equal(rhs, PARAMETER_TOLERANCE))
+            .all(|(lhs, rhs)| lhs.provably_equal(rhs, PARAMETER_EQ_TOLERANCE))
 }

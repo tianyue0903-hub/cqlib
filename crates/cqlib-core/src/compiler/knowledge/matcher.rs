@@ -20,11 +20,10 @@
 //! comparison, or patch selection.
 
 use crate::circuit::{Instruction, MCGate, Parameter, ParameterValue, Qubit, StandardGate};
+use crate::compiler::PARAMETER_EQ_TOLERANCE;
 use crate::compiler::knowledge::rule::{Condition, Rule, RuleItem};
 use smallvec::SmallVec;
 use std::collections::HashMap;
-
-const PARAMETER_TOLERANCE: f64 = 1e-12;
 
 /// Instruction subset supported by knowledge-rule structural matching.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -165,13 +164,13 @@ pub fn conditions_hold(conditions: Option<&[Condition]>, bindings: &MatchBinding
                 Condition::Eq(lhs, rhs) => {
                     let lhs = lhs.substitute_many(&bindings.params);
                     let rhs = rhs.substitute_many(&bindings.params);
-                    lhs.provably_equal(&rhs, PARAMETER_TOLERANCE)
+                    lhs.provably_equal(&rhs, PARAMETER_EQ_TOLERANCE)
                 }
                 Condition::EqMod(lhs, rhs, modulus) => {
                     let lhs = lhs.substitute_many(&bindings.params);
                     let rhs = rhs.substitute_many(&bindings.params);
                     let modulus = modulus.substitute_many(&bindings.params);
-                    lhs.provably_equal_modulo(&rhs, &modulus, PARAMETER_TOLERANCE)
+                    lhs.provably_equal_modulo(&rhs, &modulus, PARAMETER_EQ_TOLERANCE)
                 }
             }
     })
@@ -290,12 +289,12 @@ fn match_parameter(
 ) -> bool {
     match rule_param {
         ParameterValue::Fixed(value) => {
-            Parameter::from(*value).provably_equal(actual, PARAMETER_TOLERANCE)
+            Parameter::from(*value).provably_equal(actual, PARAMETER_EQ_TOLERANCE)
         }
         ParameterValue::Param(pattern) => {
             if let Some(symbol) = pattern.as_symbol() {
                 if let Some(bound) = bindings.params.get(&symbol) {
-                    return bound.provably_equal(actual, PARAMETER_TOLERANCE);
+                    return bound.provably_equal(actual, PARAMETER_EQ_TOLERANCE);
                 }
                 bindings.params.insert(symbol, actual.clone());
                 return true;
@@ -303,7 +302,7 @@ fn match_parameter(
 
             let substituted = pattern.substitute_many(&bindings.params);
             substituted.get_symbols().is_empty()
-                && substituted.provably_equal(actual, PARAMETER_TOLERANCE)
+                && substituted.provably_equal(actual, PARAMETER_EQ_TOLERANCE)
         }
     }
 }

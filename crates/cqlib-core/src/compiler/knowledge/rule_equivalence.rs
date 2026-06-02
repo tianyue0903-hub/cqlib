@@ -25,6 +25,7 @@ use crate::circuit::symbolic_matrix::{
 };
 use crate::circuit::{Circuit, Instruction, Parameter, ParameterValue, Qubit, StandardGate};
 use crate::compiler::knowledge::rule::{Condition, Rule, RuleItem};
+use crate::compiler::{NUMERIC_ZERO_TOLERANCE, UNIT_PHASE_NORM_TOLERANCE};
 use ndarray::parallel::prelude::*;
 use num_complex::Complex64;
 use rand::Rng;
@@ -32,6 +33,7 @@ use smallvec::SmallVec;
 use std::collections::HashMap;
 
 const DETERMINISTIC_NUMERIC_TOLERANCE: f64 = 1e-12;
+const RULE_CONDITION_TOLERANCE: f64 = 1e-8;
 
 /// Result of verifying a rule via symbolic matrix comparison.
 #[derive(Debug)]
@@ -242,14 +244,11 @@ fn max_diff_up_to_global_phase(
     lhs: &ndarray::Array2<Complex64>,
     rhs: &ndarray::Array2<Complex64>,
 ) -> f64 {
-    const ZERO_EPS: f64 = 1e-14;
-    const PHASE_EPS: f64 = 1e-8;
-
     let mut phase_ratio = None;
 
     for (&l, &r) in lhs.iter().zip(rhs.iter()) {
-        let l_zero = l.norm() <= ZERO_EPS;
-        let r_zero = r.norm() <= ZERO_EPS;
+        let l_zero = l.norm() <= NUMERIC_ZERO_TOLERANCE;
+        let r_zero = r.norm() <= NUMERIC_ZERO_TOLERANCE;
 
         if l_zero != r_zero {
             return max_diff_strict(lhs, rhs);
@@ -259,7 +258,7 @@ fn max_diff_up_to_global_phase(
             let ratio = r / l;
             let ratio_norm = ratio.norm();
 
-            if !ratio_norm.is_finite() || (ratio_norm - 1.0).abs() > PHASE_EPS {
+            if !ratio_norm.is_finite() || (ratio_norm - 1.0).abs() > UNIT_PHASE_NORM_TOLERANCE {
                 return max_diff_strict(lhs, rhs);
             }
 
@@ -319,7 +318,7 @@ fn generate_satisfying_bindings(
                 Condition::Eq(a, b) => {
                     if let (Ok(va), Ok(vb)) = (a.evaluate(&bindings_ref), b.evaluate(&bindings_ref))
                     {
-                        (va - vb).abs() < 1e-8
+                        (va - vb).abs() < RULE_CONDITION_TOLERANCE
                     } else {
                         false
                     }
@@ -330,11 +329,12 @@ fn generate_satisfying_bindings(
                         b.evaluate(&bindings_ref),
                         m.evaluate(&bindings_ref),
                     ) {
-                        if vm.abs() < 1e-14 {
+                        if vm.abs() < NUMERIC_ZERO_TOLERANCE {
                             false
                         } else {
                             let remainder = (va - vb) % vm;
-                            remainder.abs() < 1e-8 || (vm - remainder).abs() < 1e-8
+                            remainder.abs() < RULE_CONDITION_TOLERANCE
+                                || (vm - remainder).abs() < RULE_CONDITION_TOLERANCE
                         }
                     } else {
                         false
@@ -365,7 +365,7 @@ fn adjust_binding_for_condition(
         Condition::EqMod(lhs, rhs, modulus) => {
             if let Ok(mod_val) = modulus.evaluate(&Some(
                 bindings.iter().map(|(k, &v)| (k.as_str(), v)).collect(),
-            )) && mod_val.abs() > 1e-14
+            )) && mod_val.abs() > NUMERIC_ZERO_TOLERANCE
             {
                 adjust_for_equality(bindings, lhs, rhs, Some(mod_val), symbols);
             }
@@ -441,7 +441,7 @@ fn try_adjust_symbol(
     };
 
     let coeff = expr_one - expr_zero;
-    if coeff.abs() < 1e-14 {
+    if coeff.abs() < NUMERIC_ZERO_TOLERANCE {
         return false;
     }
 

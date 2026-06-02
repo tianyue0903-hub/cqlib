@@ -23,13 +23,12 @@
 
 use crate::circuit::{Instruction, Parameter, Qubit};
 use crate::compiler::commutation::checker::{Commutation, CommutationResult};
+use crate::compiler::{NUMERIC_ZERO_TOLERANCE, UNIT_PHASE_NORM_TOLERANCE};
 use ndarray::Array2;
 use num_complex::Complex64;
 use std::borrow::Cow;
 
 const MATRIX_TOLERANCE: f64 = 1e-10;
-const ZERO_TOLERANCE: f64 = 1e-14;
-const PHASE_TOLERANCE: f64 = 1e-8;
 
 /// Attempts matrix-based commutation on the union support of two operations.
 ///
@@ -195,8 +194,8 @@ fn phase_between(lhs: &Array2<Complex64>, rhs: &Array2<Complex64>) -> Option<f64
 
     let mut ratio = None;
     for (&lhs_value, &rhs_value) in lhs.iter().zip(rhs.iter()) {
-        let lhs_zero = lhs_value.norm() <= ZERO_TOLERANCE;
-        let rhs_zero = rhs_value.norm() <= ZERO_TOLERANCE;
+        let lhs_zero = lhs_value.norm() <= NUMERIC_ZERO_TOLERANCE;
+        let rhs_zero = rhs_value.norm() <= NUMERIC_ZERO_TOLERANCE;
         if lhs_zero != rhs_zero {
             return None;
         }
@@ -206,7 +205,7 @@ fn phase_between(lhs: &Array2<Complex64>, rhs: &Array2<Complex64>) -> Option<f64
 
         let candidate = lhs_value / rhs_value;
         let norm = candidate.norm();
-        if !norm.is_finite() || (norm - 1.0).abs() > PHASE_TOLERANCE {
+        if !norm.is_finite() || (norm - 1.0).abs() > UNIT_PHASE_NORM_TOLERANCE {
             return None;
         }
         ratio = Some(candidate);

@@ -17,10 +17,9 @@
 //! numerical comparison are validation strategies rather than rule structure.
 
 use crate::circuit::{Instruction, MCGate, Parameter, ParameterValue, StandardGate};
+use crate::compiler::PARAMETER_EQ_TOLERANCE;
 use smallvec::SmallVec;
 use std::collections::{BTreeSet, HashSet};
-
-const RULE_ITEM_PARAMETER_TOLERANCE: f64 = 1e-12;
 
 /// One gate-like item in a rule match or rewrite block.
 #[derive(Debug, Clone)]
@@ -136,7 +135,7 @@ impl RuleItem {
             && lhs_params.len() == rhs_params.len()
             && lhs_params.iter().zip(rhs_params).all(|(lhs, rhs)| {
                 let lhs: Parameter = lhs.into();
-                lhs.provably_equal(&rhs.into(), RULE_ITEM_PARAMETER_TOLERANCE)
+                lhs.provably_equal(&rhs.into(), PARAMETER_EQ_TOLERANCE)
             })
     }
 }

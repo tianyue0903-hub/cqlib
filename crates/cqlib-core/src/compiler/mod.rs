@@ -18,6 +18,15 @@ pub mod resource;
 pub mod transform;
 pub mod workflow;
 
+/// Tolerance for proving equality between compiler parameter expressions.
+pub(crate) const PARAMETER_EQ_TOLERANCE: f64 = 1e-12;
+
+/// Tolerance for treating a scalar as numerically zero.
+pub(crate) const NUMERIC_ZERO_TOLERANCE: f64 = 1e-14;
+
+/// Tolerance for checking whether a candidate phase ratio has unit norm.
+pub(crate) const UNIT_PHASE_NORM_TOLERANCE: f64 = 1e-8;
+
 pub use commutation::{
     Commutation, CommutationChecker, CommutationConfig, CommutationResult, algebraic_commutation,
     check_commutation,

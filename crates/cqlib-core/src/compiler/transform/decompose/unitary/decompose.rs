@@ -48,6 +48,7 @@ use smallvec::{SmallVec, smallvec};
 use std::borrow::Cow;
 
 const SYNTHESIS_NAME: &str = "decompose.unitary";
+const ANGLE_EPS: f64 = 1e-12;
 const PHASE_EPS: f64 = 1e-12;
 
 /// Configuration for circuit-level matrix-backed `UnitaryGate` synthesis.
@@ -271,7 +272,7 @@ impl<'a> UnitaryDecomposer<'a> {
                         }
                     })?;
                 let mut operations = Vec::new();
-                if theta.abs() > PHASE_EPS || phi.abs() > PHASE_EPS || lambda.abs() > PHASE_EPS {
+                if theta.abs() > ANGLE_EPS || phi.abs() > ANGLE_EPS || lambda.abs() > ANGLE_EPS {
                     operations.push(Operation {
                         instruction: Instruction::Standard(StandardGate::U),
                         qubits: operation.qubits.clone(),

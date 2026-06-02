@@ -46,11 +46,11 @@
 //! ```
 
 use crate::circuit::{Instruction, MCGate, Parameter, Qubit, StandardGate};
+use crate::compiler::PARAMETER_EQ_TOLERANCE;
 use crate::compiler::commutation::checker::{Commutation, CommutationResult};
 use smallvec::{SmallVec, smallvec};
 use std::f64::consts::{FRAC_PI_2, PI};
 
-const PARAMETER_TOLERANCE: f64 = 1e-12;
 const TWO_PI: f64 = 2.0 * PI;
 const FOUR_PI: f64 = 4.0 * PI;
 
@@ -773,7 +773,7 @@ fn axis_relation(lhs: &Axis, rhs: &Axis) -> AxisRelation {
             }
         }
         (Axis::Planar(lhs), Axis::Planar(rhs)) => {
-            if lhs.provably_equal_modulo(rhs, &Parameter::from(PI), PARAMETER_TOLERANCE) {
+            if lhs.provably_equal_modulo(rhs, &Parameter::from(PI), PARAMETER_EQ_TOLERANCE) {
                 return AxisRelation::Same;
             }
 
@@ -781,7 +781,7 @@ fn axis_relation(lhs: &Axis, rhs: &Axis) -> AxisRelation {
             if lhs.provably_equal_modulo(
                 &rhs_plus_half_pi,
                 &Parameter::from(PI),
-                PARAMETER_TOLERANCE,
+                PARAMETER_EQ_TOLERANCE,
             ) {
                 return AxisRelation::Orthogonal;
             }
@@ -796,6 +796,6 @@ fn angle_eq_mod(angle: &Parameter, expected: f64, modulus: f64) -> bool {
     angle.provably_equal_modulo(
         &Parameter::from(expected),
         &Parameter::from(modulus),
-        PARAMETER_TOLERANCE,
+        PARAMETER_EQ_TOLERANCE,
     )
 }

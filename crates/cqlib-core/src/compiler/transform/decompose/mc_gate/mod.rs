@@ -34,12 +34,12 @@
 //! │  (RX/RY/RZ/      │  CX · MC-RZ(controls,        │  RZZ      → CX · MC-RZ · CX
 //! │   CRX/CRY/CRZ)   │      second) · CX            │
 //! ├──────────────────┴──────────────────────────────┤
-//! │                    mc_su2                        │  MC-SU(2) = Vale et al. 2024
+//! │                    mc_su2                       │  MC-SU(2) = Vale et al. 2024
 //! ├─────────────────────────────────────────────────┤
-//! │              pauli (X/Y/Z/CX/CY/CZ/CCX)          │  Y = SDG·MCX·S
+//! │              pauli (X/Y/Z/CX/CY/CZ/CCX)         │  Y = SDG·MCX·S
 //! │                                                 │  Z =  H ·MCX·H
 //! ├─────────────────────────────────────────────────┤
-//! │                     mcx                          │  Multi-controlled X (Toffoli)
+//! │                     mcx                         │  Multi-controlled X (Toffoli)
 //! └─────────────────────────────────────────────────┘
 //! ```
 //!
@@ -86,7 +86,22 @@
 //! | `decompose_rotation_no_aux` | No ancilla |
 //! | `decompose_rotation_n_clean` | Clean ancilla |
 //!
-//! ## 4. Pauli — Multi-controlled Pauli gates
+//! ## 4. QCIS — Multi-controlled QCIS half rotations
+//!
+//! Synthesizes `X2P`, `X2M`, `Y2P`, `Y2M`, `XY2P`, and `XY2M`. Fixed-axis
+//! gates delegate directly to [`rotation`]. XY-plane gates wrap the central
+//! multi-controlled `RX` with unconditional target-basis changes:
+//!
+//! ```text
+//! MC-XY2±(phi) = RZ(-phi) · MC-RX(±π/2) · RZ(phi)
+//! ```
+//!
+//! | Function | Variant |
+//! |---|---|
+//! | `decompose_qcis_no_aux` | No ancilla |
+//! | `decompose_qcis_n_clean` | Clean ancilla |
+//!
+//! ## 5. Pauli — Multi-controlled Pauli gates
 //!
 //! Synthesizes `X`, `Y`, `Z` and their controlled forms `CX`, `CY`, `CZ`,
 //! `CCX` by conjugating exact MCX decompositions with single-qubit basis
@@ -101,7 +116,7 @@
 //! `decompose_pauli_no_aux`, `decompose_pauli_n_clean`,
 //! `decompose_pauli_1_clean_b95`, etc.).
 //!
-//! ## 5. RZZ — Multi-controlled RZZ
+//! ## 6. RZZ — Multi-controlled RZZ
 //!
 //! The canonical building block for two-qubit Pauli interaction rotations:
 //!
@@ -117,7 +132,7 @@
 //! | `decompose_mc_rzz_no_aux` | No ancilla |
 //! | `decompose_mc_rzz_n_clean` | Clean ancilla (delegated to MCRZ) |
 //!
-//! ## 6. Pauli Rotation — Multi-controlled two-qubit Pauli rotations
+//! ## 7. Pauli Rotation — Multi-controlled two-qubit Pauli rotations
 //!
 //! Reduces `RXX`, `RYY`, `RZZ`, and `RZX` to [`rzz`] via basis changes:
 //!
@@ -133,7 +148,7 @@
 //! | `decompose_pauli_rotation_no_aux` | No ancilla |
 //! | `decompose_pauli_rotation_n_clean` | Clean ancilla |
 //!
-//! ## 7. Phase — Multi-controlled phase gates
+//! ## 8. Phase — Multi-controlled phase gates
 //!
 //! Synthesizes `S`, `SDG`, `T`, `TDG`, and parameterized `Phase` using a
 //! recursive projector decomposition. The key identity:
@@ -151,7 +166,7 @@
 //! | `decompose_phase_no_aux` | No ancilla |
 //! | `decompose_phase_n_clean` | Clean ancilla |
 //!
-//! ## 8. Unitary — Multi-controlled U(θ, φ, λ)
+//! ## 9. Unitary — Multi-controlled U(θ, φ, λ)
 //!
 //! The most general single-qubit unitary:
 //!
@@ -187,40 +202,35 @@ pub mod mcx;
 pub mod pauli;
 pub mod pauli_rotation;
 pub mod phase;
+pub mod qcis;
 pub mod rotation;
 pub mod rzz;
 pub mod unitary;
 
-// ── mc_su2 ──
 pub use mc_su2::{Su2RotationAxis, decompose_mc_su2_n_clean, decompose_mc_su2_no_aux};
 
-// ── mcx ──
 pub use mcx::{
     decompose_mcx_1_clean_b95, decompose_mcx_1_clean_kg24, decompose_mcx_1_dirty,
     decompose_mcx_2_clean, decompose_mcx_2_dirty, decompose_mcx_n_clean, decompose_mcx_n_dirty,
     decompose_mcx_no_aux, decompose_mcx_small,
 };
 
-// ── rotation ──
 pub use rotation::{decompose_rotation_n_clean, decompose_rotation_no_aux};
 
-// ── pauli ──
 pub use pauli::{
     decompose_pauli_1_clean_b95, decompose_pauli_1_clean_kg24, decompose_pauli_1_dirty,
     decompose_pauli_2_clean, decompose_pauli_2_dirty, decompose_pauli_n_clean,
     decompose_pauli_n_dirty, decompose_pauli_no_aux, decompose_pauli_small,
 };
 
-// ── pauli_rotation ──
 pub use pauli_rotation::{decompose_pauli_rotation_n_clean, decompose_pauli_rotation_no_aux};
 
-// ── phase ──
 pub use phase::{decompose_phase_n_clean, decompose_phase_no_aux};
 
-// ── rzz ──
+pub use qcis::{decompose_qcis_n_clean, decompose_qcis_no_aux};
+
 pub use rzz::{decompose_mc_rzz_n_clean, decompose_mc_rzz_no_aux};
 
-// ── unitary ──
 pub use unitary::{decompose_unitary_n_clean, decompose_unitary_no_aux};
 
 #[cfg(test)]
@@ -229,6 +239,8 @@ mod pauli_rotation_test;
 mod pauli_test;
 #[cfg(test)]
 mod phase_test;
+#[cfg(test)]
+mod qcis_test;
 #[cfg(test)]
 mod rotation_test;
 #[cfg(test)]

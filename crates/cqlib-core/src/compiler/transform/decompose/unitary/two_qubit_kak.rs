@@ -279,7 +279,7 @@ pub(super) fn kak_decompose(matrix: &Array2<Complex64>) -> Result<KakDecompositi
 }
 
 fn validate_weyl_chamber(a: f64, b: f64, c: f64) -> Result<(), CompilerError> {
-    let eps = 1e-8;
+    let eps = UNITARY_EPS;
     if a < -eps || b < -eps {
         return Err(kak_failed(format!(
             "Weyl chamber violation: a={a}, b={b} must be non-negative"
@@ -306,7 +306,7 @@ fn validate_weyl_chamber(a: f64, b: f64, c: f64) -> Result<(), CompilerError> {
 }
 
 fn validate_local_su2(decomp: &KakDecomposition) -> Result<(), CompilerError> {
-    let eps = 1e-8;
+    let eps = UNITARY_EPS;
     for (name, m) in [
         ("K1l", &decomp.k1l),
         ("K1r", &decomp.k1r),
@@ -356,6 +356,7 @@ fn validate_input(matrix: &Array2<Complex64>) -> Result<(), CompilerError> {
             )));
         }
     }
+    validate_unitary_4x4("input matrix", matrix, UNITARY_EPS)?;
     Ok(())
 }
 

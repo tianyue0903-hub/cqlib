@@ -43,6 +43,7 @@ use smallvec::smallvec;
 use std::f64::consts::{FRAC_1_SQRT_2, FRAC_PI_4, PI};
 
 const ANGLE_EPS: f64 = 1e-12;
+const FIDELITY_IMPROVEMENT_EPS: f64 = 1e-12;
 
 /// Output basis used for two-qubit unitary synthesis.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -337,7 +338,7 @@ impl CxBasisData {
         let mut best_fidelity = (4.0 + traces[0].norm_sqr()) / 20.0;
         for (index, trace) in traces.iter().enumerate().skip(1) {
             let fidelity = (4.0 + trace.norm_sqr()) / 20.0;
-            if fidelity > best_fidelity + 1e-12 {
+            if fidelity > best_fidelity + FIDELITY_IMPROVEMENT_EPS {
                 best_index = index;
                 best_fidelity = fidelity;
             }

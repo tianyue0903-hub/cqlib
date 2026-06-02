@@ -39,12 +39,11 @@
 //! ```
 
 use crate::circuit::{Instruction, Parameter, ParameterValue, Qubit};
+use crate::compiler::PARAMETER_EQ_TOLERANCE;
 use crate::compiler::commutation::checker::{Commutation, CommutationResult};
 use crate::compiler::knowledge::library::{RuleKind, RuleLibrary};
 use crate::compiler::knowledge::rule::{Condition, Rule, RuleItem};
 use std::collections::HashMap;
-
-const PARAMETER_TOLERANCE: f64 = 1e-12;
 
 /// Compiled commutation rules loaded from the compiler knowledge library.
 #[derive(Debug, Clone, Default)]
@@ -219,12 +218,12 @@ fn match_parameter(
 ) -> bool {
     match rule_param {
         ParameterValue::Fixed(value) => {
-            Parameter::from(*value).provably_equal(actual, PARAMETER_TOLERANCE)
+            Parameter::from(*value).provably_equal(actual, PARAMETER_EQ_TOLERANCE)
         }
         ParameterValue::Param(pattern) => {
             if let Some(symbol) = pattern.as_symbol() {
                 if let Some(bound) = bindings.get(&symbol) {
-                    return bound.provably_equal(actual, PARAMETER_TOLERANCE);
+                    return bound.provably_equal(actual, PARAMETER_EQ_TOLERANCE);
                 }
                 bindings.insert(symbol, actual.clone());
                 return true;
@@ -232,7 +231,7 @@ fn match_parameter(
 
             let substituted = pattern.substitute_many(bindings);
             substituted.get_symbols().is_empty()
-                && substituted.provably_equal(actual, PARAMETER_TOLERANCE)
+                && substituted.provably_equal(actual, PARAMETER_EQ_TOLERANCE)
         }
     }
 }
@@ -243,13 +242,13 @@ fn conditions_hold(conditions: &[Condition], bindings: &HashMap<String, Paramete
         Condition::Eq(lhs, rhs) => {
             let lhs = lhs.substitute_many(bindings);
             let rhs = rhs.substitute_many(bindings);
-            lhs.provably_equal(&rhs, PARAMETER_TOLERANCE)
+            lhs.provably_equal(&rhs, PARAMETER_EQ_TOLERANCE)
         }
         Condition::EqMod(lhs, rhs, modulus) => {
             let lhs = lhs.substitute_many(bindings);
             let rhs = rhs.substitute_many(bindings);
             let modulus = modulus.substitute_many(bindings);
-            lhs.provably_equal_modulo(&rhs, &modulus, PARAMETER_TOLERANCE)
+            lhs.provably_equal_modulo(&rhs, &modulus, PARAMETER_EQ_TOLERANCE)
         }
     })
 }
