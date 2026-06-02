@@ -25,7 +25,9 @@
 //!
 //! ```text
 //! ┌─────────────────────────────────────────────────┐
-//! │                    unitary                       │  U(θ,φ,λ) = phase + Z-Y-Z Euler
+//! │ hadamard       swap              fsim           │  H    = phase + Z-Y rotations
+//! │                                  unitary        │  SWAP = generalized Fredkin
+//! │                                                 │  FSIM = XX + YY + phase + Z
 //! ├─────────────────────────────────────────────────┤
 //! │       phase                pauli_rotation       │  Phase  = recursive projector
 //! │   (S/SDG/T/TDG/Phase)   (RXX/RYY/RZZ/RZX)       │  R{XX,YY,ZX} = basis-change · RZZ
@@ -88,13 +90,23 @@
 //!
 //! ## 4. QCIS — Multi-controlled QCIS half rotations
 //!
-//! Synthesizes `X2P`, `X2M`, `Y2P`, `Y2M`, `XY2P`, and `XY2M`. Fixed-axis
-//! gates delegate directly to [`rotation`]. XY-plane gates wrap the central
-//! multi-controlled `RX` with unconditional target-basis changes:
+//! Synthesizes `X2P`, `X2M`, `Y2P`, `Y2M`, `XY2P`, and `XY2M`. Inputs with
+//! no controls emit the original standard gate directly. Controlled
+//! fixed-axis gates delegate to [`rotation`], while controlled XY-plane gates
+//! wrap the central multi-controlled `RX` with unconditional target-basis
+//! changes:
 //!
 //! ```text
-//! MC-XY2±(phi) = RZ(-phi) · MC-RX(±π/2) · RZ(phi)
+//! MC-X2P       = MC-RX( π/2)
+//! MC-X2M       = MC-RX(-π/2)
+//! MC-Y2P       = MC-RY( π/2)
+//! MC-Y2M       = MC-RY(-π/2)
+//! MC-XY2P(phi) = RZ(-phi) · MC-RX( π/2) · RZ(phi)
+//! MC-XY2M(phi) = RZ(-phi) · MC-RX(-π/2) · RZ(phi)
 //! ```
+//!
+//! Only the central rotation receives the caller-provided controls. The
+//! flanking `RZ` gates are unconditional basis changes on the target.
 //!
 //! | Function | Variant |
 //! |---|---|
@@ -183,6 +195,58 @@
 //! | `decompose_unitary_no_aux` | No ancilla |
 //! | `decompose_unitary_n_clean` | Clean ancilla |
 //!
+//! ## 10. Hadamard — Multi-controlled H
+//!
+//! Hadamard is not special-unitary: `det(H) = -1`. Its scalar phase must be
+//! preserved explicitly after controls are added:
+//!
+//! ```text
+//! H = exp(iπ/2) · RY(π/2) · RZ(π)
+//! ```
+//!
+//! The decomposition emits the resulting conditional phase before delegating
+//! the two multi-controlled rotations to [`rotation`].
+//!
+//! | Function | Variant |
+//! |---|---|
+//! | `decompose_hadamard_no_aux` | No ancilla |
+//! | `decompose_hadamard_n_clean` | Clean ancilla |
+//!
+//! ## 11. SWAP — Multi-controlled SWAP
+//!
+//! The no-ancilla decomposition uses the generalized Fredkin construction:
+//!
+//! ```text
+//! MC-SWAP(C; a,b) = MCX(C+a; b) · MCX(C+b; a) · MCX(C+a; b)
+//! ```
+//!
+//! The clean-ancilla variant computes the conjunction of all controls into a
+//! clean accumulator, applies one Fredkin gate as three `CCX` operations, and
+//! uncomputes the accumulator.
+//!
+//! | Function | Variant |
+//! |---|---|
+//! | `decompose_swap_no_aux` | No ancilla |
+//! | `decompose_swap_n_clean` | Clean accumulator |
+//!
+//! ## 12. FSIM — Multi-controlled fermionic simulation gate
+//!
+//! FSIM is lowered symbolically to the existing interaction, phase, and
+//! rotation primitives:
+//!
+//! ```text
+//! MC-FSIM(C; θ,φ; a,b)
+//!   = MC-RXX(C; θ; a,b)
+//!     MC-RYY(C; θ; a,b)
+//!     MC-Phase(C; -φ/2; a)
+//!     MC-RZ(C+a; -φ; b)
+//! ```
+//!
+//! | Function | Variant |
+//! |---|---|
+//! | `decompose_fsim_no_aux` | No ancilla |
+//! | `decompose_fsim_n_clean` | Clean ancilla |
+//!
 //! # Ancilla contracts
 //!
 //! Every decomposition that consumes ancillary qubits declares its contract
@@ -197,6 +261,8 @@
 //! targets. Duplicate-qubit errors are returned as
 //! [`CompilerError::TransformFailed`].
 
+pub mod fsim;
+pub mod hadamard;
 pub mod mc_su2;
 pub mod mcx;
 pub mod pauli;
@@ -205,7 +271,12 @@ pub mod phase;
 pub mod qcis;
 pub mod rotation;
 pub mod rzz;
+pub mod swap;
 pub mod unitary;
+
+pub use fsim::{decompose_fsim_n_clean, decompose_fsim_no_aux};
+
+pub use hadamard::{decompose_hadamard_n_clean, decompose_hadamard_no_aux};
 
 pub use mc_su2::{Su2RotationAxis, decompose_mc_su2_n_clean, decompose_mc_su2_no_aux};
 
@@ -231,8 +302,14 @@ pub use qcis::{decompose_qcis_n_clean, decompose_qcis_no_aux};
 
 pub use rzz::{decompose_mc_rzz_n_clean, decompose_mc_rzz_no_aux};
 
+pub use swap::{decompose_swap_n_clean, decompose_swap_no_aux};
+
 pub use unitary::{decompose_unitary_n_clean, decompose_unitary_no_aux};
 
+#[cfg(test)]
+mod fsim_test;
+#[cfg(test)]
+mod hadamard_test;
 #[cfg(test)]
 mod pauli_rotation_test;
 #[cfg(test)]
@@ -245,5 +322,7 @@ mod qcis_test;
 mod rotation_test;
 #[cfg(test)]
 mod rzz_test;
+#[cfg(test)]
+mod swap_test;
 #[cfg(test)]
 mod unitary_test;
