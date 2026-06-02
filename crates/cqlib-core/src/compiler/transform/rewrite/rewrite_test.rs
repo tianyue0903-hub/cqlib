@@ -10,1563 +10,674 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
-use super::{KnowledgeRewriter, RewriteConfig, RewriteMode};
-use crate::circuit::symbolic_matrix::{circuit_to_symbolic_matrix, evaluate_symbolic_matrix};
+use super::{KnowledgeRewriter, RewriteConfig};
 use crate::circuit::{
-    Circuit, CircuitParam, ConditionView, Directive, Instruction, MCGate, Operation, Parameter,
-    Qubit, StandardGate, circuit_to_matrix,
+    Circuit, CircuitParam, ConditionView, ControlFlow, Directive, Instruction, MCGate, Operation,
+    Parameter, Qubit, StandardGate,
 };
-use crate::compiler::context::CompilerContext;
+use crate::compiler::CompilerError;
 use crate::compiler::knowledge::library::RuleKind;
-use crate::compiler::transform::Transformer;
-use indexmap::IndexSet;
-use ndarray::Array2;
-use num_complex::Complex64;
-use smallvec::{SmallVec, smallvec};
-use std::collections::{HashMap, HashSet};
+use smallvec::smallvec;
 
-const MATRIX_ASSERT_EPS: f64 = 1e-10;
-
-fn standard_operation(
-    gate: StandardGate,
-    qubits: &[Qubit],
-    params: SmallVec<[CircuitParam; 1]>,
-) -> Operation {
-    Operation {
-        instruction: Instruction::Standard(gate),
-        qubits: SmallVec::from_slice(qubits),
-        params,
-        label: None,
-    }
-}
-
-fn rewrite_circuit(circuit: Circuit, rewriter: KnowledgeRewriter) -> (Circuit, bool) {
-    let mut ctx = CompilerContext::new(circuit);
-    let outcome = rewriter.run(&mut ctx).unwrap();
-    (ctx.circuit().clone(), outcome.changed)
-}
-
-fn assert_matrix_approx_eq(lhs: &Array2<Complex64>, rhs: &Array2<Complex64>) {
-    assert_eq!(lhs.shape(), rhs.shape());
-    for ((row, col), lhs_value) in lhs.indexed_iter() {
-        let rhs_value = rhs[[row, col]];
-        let delta = (*lhs_value - rhs_value).norm();
-        assert!(
-            delta <= MATRIX_ASSERT_EPS,
-            "matrix mismatch at ({row}, {col}): lhs={lhs_value:?}, rhs={rhs_value:?}, delta={delta}"
-        );
-    }
-}
-
-fn assert_numeric_matrix_preserved(before: &Circuit, after: &Circuit) {
-    let before_matrix = circuit_to_matrix(before, None).unwrap();
-    let after_matrix = circuit_to_matrix(after, None).unwrap();
-    assert_matrix_approx_eq(&before_matrix, &after_matrix);
-}
-
-fn assert_symbolic_matrix_preserved_for_bindings<'a>(
-    before: &Circuit,
-    after: &Circuit,
-    bindings: &[HashMap<&'a str, f64>],
-) {
-    let before_matrix = circuit_to_symbolic_matrix(before, None).unwrap();
-    let after_matrix = circuit_to_symbolic_matrix(after, None).unwrap();
-    for binding in bindings {
-        let before_evaluated =
-            evaluate_symbolic_matrix(&before_matrix, &Some(binding.clone())).unwrap();
-        let after_evaluated =
-            evaluate_symbolic_matrix(&after_matrix, &Some(binding.clone())).unwrap();
-        assert_matrix_approx_eq(&before_evaluated, &after_evaluated);
-    }
+fn standard_ops(circuit: &Circuit) -> Vec<StandardGate> {
+    circuit
+        .operations()
+        .iter()
+        .filter_map(|operation| match operation.instruction {
+            Instruction::Standard(gate) => Some(gate),
+            _ => None,
+        })
+        .collect()
 }
 
 #[test]
 fn cancels_adjacent_self_inverse_gates() {
+    let q0 = Qubit::new(0);
     let mut circuit = Circuit::new(1);
-    circuit.h(Qubit::new(0)).unwrap();
-    circuit.h(Qubit::new(0)).unwrap();
-    let mut ctx = CompilerContext::new(circuit);
+    circuit.h(q0).unwrap();
+    circuit.h(q0).unwrap();
 
-    let outcome = KnowledgeRewriter::production().run(&mut ctx).unwrap();
+    let result = KnowledgeRewriter::production().run(&circuit).unwrap();
 
-    assert!(outcome.changed);
-    assert!(ctx.circuit().operations().is_empty());
+    assert!(result.changed);
+    assert!(result.circuit.operations().is_empty());
+    assert!(result.stats.reached_fixpoint);
 }
 
 #[test]
-fn matches_across_disjoint_operations() {
+fn cancels_across_commuting_disjoint_operation() {
+    let q0 = Qubit::new(0);
+    let q1 = Qubit::new(1);
     let mut circuit = Circuit::new(2);
-    circuit.h(Qubit::new(0)).unwrap();
-    circuit.x(Qubit::new(1)).unwrap();
-    circuit.h(Qubit::new(0)).unwrap();
-    let mut ctx = CompilerContext::new(circuit);
+    circuit.h(q0).unwrap();
+    circuit.x(q1).unwrap();
+    circuit.h(q0).unwrap();
 
-    KnowledgeRewriter::production().run(&mut ctx).unwrap();
+    let config = RewriteConfig::production().with_enabled_kinds(vec![RuleKind::Cancel]);
+    let result = KnowledgeRewriter::new(config).run(&circuit).unwrap();
 
-    let operations = ctx.circuit().operations();
-    assert_eq!(operations.len(), 1);
-    assert!(matches!(
-        operations[0].instruction,
-        Instruction::Standard(StandardGate::X)
-    ));
-    assert_eq!(operations[0].qubits.as_slice(), &[Qubit::new(1)]);
+    assert!(result.changed);
+    assert_eq!(standard_ops(&result.circuit), vec![StandardGate::X]);
+    assert_eq!(result.circuit.operations()[0].qubits.as_slice(), &[q1]);
 }
 
 #[test]
-fn applies_multiple_non_overlapping_rewrites_in_one_round() {
-    let mut circuit = Circuit::new(2);
-    circuit.h(Qubit::new(0)).unwrap();
-    circuit.x(Qubit::new(1)).unwrap();
-    circuit.h(Qubit::new(0)).unwrap();
-    circuit.x(Qubit::new(1)).unwrap();
-    let mut ctx = CompilerContext::new(circuit);
-
-    let outcome = KnowledgeRewriter::new(
-        RewriteConfig::new()
-            .with_enabled_kinds(vec![RuleKind::Cancel])
-            .with_max_rounds(1),
-    )
-    .run(&mut ctx)
-    .unwrap();
-
-    assert!(outcome.changed);
-    assert!(ctx.circuit().operations().is_empty());
-}
-
-#[test]
-fn does_not_cross_dependent_operations() {
+fn does_not_cancel_across_non_commuting_operation() {
+    let q0 = Qubit::new(0);
     let mut circuit = Circuit::new(1);
-    circuit.h(Qubit::new(0)).unwrap();
-    circuit.x(Qubit::new(0)).unwrap();
-    circuit.h(Qubit::new(0)).unwrap();
-    let mut ctx = CompilerContext::new(circuit);
+    circuit.h(q0).unwrap();
+    circuit.x(q0).unwrap();
+    circuit.h(q0).unwrap();
 
-    let rewriter =
-        KnowledgeRewriter::new(RewriteConfig::new().with_enabled_kinds(vec![RuleKind::Cancel]));
-    let outcome = rewriter.run(&mut ctx).unwrap();
+    let config = RewriteConfig::production().with_enabled_kinds(vec![RuleKind::Cancel]);
+    let result = KnowledgeRewriter::new(config).run(&circuit).unwrap();
 
-    assert!(!outcome.changed);
-    assert_eq!(ctx.circuit().operations().len(), 3);
-}
-
-#[test]
-fn max_pattern_len_bounds_rule_search() {
-    let mut circuit = Circuit::new(1);
-    circuit.h(Qubit::new(0)).unwrap();
-    circuit.h(Qubit::new(0)).unwrap();
-    let mut ctx = CompilerContext::new(circuit);
-
-    let rewriter = KnowledgeRewriter::new(
-        RewriteConfig::new()
-            .with_enabled_kinds(vec![RuleKind::Cancel])
-            .with_max_pattern_len(1),
+    assert!(!result.changed);
+    assert_eq!(
+        standard_ops(&result.circuit),
+        vec![StandardGate::H, StandardGate::X, StandardGate::H]
     );
-    let outcome = rewriter.run(&mut ctx).unwrap();
-
-    assert!(!outcome.changed);
-    assert_eq!(ctx.circuit().operations().len(), 2);
 }
 
 #[test]
-fn zero_max_rounds_is_invalid() {
-    let mut circuit = Circuit::new(1);
-    circuit.h(Qubit::new(0)).unwrap();
-    circuit.h(Qubit::new(0)).unwrap();
-    let mut ctx = CompilerContext::new(circuit);
-
-    let err = KnowledgeRewriter::new(RewriteConfig::new().with_max_rounds(0))
-        .run(&mut ctx)
-        .unwrap_err();
-
-    assert!(err.to_string().contains("max_rounds"));
-}
-
-#[test]
-fn skips_labeled_operations_by_default() {
+fn protects_labeled_operations_by_default() {
+    let q0 = Qubit::new(0);
     let mut circuit = Circuit::new(1);
     circuit
         .append(
-            StandardGate::H.into(),
-            [Qubit::new(0)],
+            Instruction::Standard(StandardGate::H),
+            [q0],
             std::iter::empty(),
             Some("keep"),
         )
         .unwrap();
-    circuit.h(Qubit::new(0)).unwrap();
-    let mut ctx = CompilerContext::new(circuit);
+    circuit.h(q0).unwrap();
 
-    let outcome = KnowledgeRewriter::production().run(&mut ctx).unwrap();
+    let result = KnowledgeRewriter::production().run(&circuit).unwrap();
 
-    assert!(!outcome.changed);
-    assert_eq!(ctx.circuit().operations().len(), 2);
+    assert!(!result.changed);
+    assert_eq!(
+        standard_ops(&result.circuit),
+        vec![StandardGate::H, StandardGate::H]
+    );
 }
 
 #[test]
-fn rewrites_labeled_operations_when_configured() {
-    let mut circuit = Circuit::new(1);
+fn does_not_cross_labeled_skipped_operation() {
+    let q0 = Qubit::new(0);
+    let q1 = Qubit::new(1);
+    let mut circuit = Circuit::new(2);
+    circuit.h(q0).unwrap();
     circuit
         .append(
-            StandardGate::H.into(),
-            [Qubit::new(0)],
+            Instruction::Standard(StandardGate::X),
+            [q1],
             std::iter::empty(),
-            Some("rewrite"),
+            Some("skip"),
         )
         .unwrap();
-    circuit.h(Qubit::new(0)).unwrap();
-    let mut ctx = CompilerContext::new(circuit);
+    circuit.h(q0).unwrap();
 
-    let outcome = KnowledgeRewriter::new(
-        RewriteConfig::new()
-            .skip_labeled_ops(false)
-            .with_enabled_kinds(vec![RuleKind::Cancel]),
-    )
-    .run(&mut ctx)
-    .unwrap();
+    let config = RewriteConfig::production().with_enabled_kinds(vec![RuleKind::Cancel]);
+    let result = KnowledgeRewriter::new(config).run(&circuit).unwrap();
 
-    assert!(outcome.changed);
-    assert!(ctx.circuit().operations().is_empty());
+    assert!(!result.changed);
+    assert_eq!(
+        standard_ops(&result.circuit),
+        vec![StandardGate::H, StandardGate::X, StandardGate::H]
+    );
 }
 
 #[test]
-fn merges_numeric_rotations() {
+fn barrier_splits_rewrite_blocks() {
+    let q0 = Qubit::new(0);
     let mut circuit = Circuit::new(1);
-    circuit.rz(Qubit::new(0), 0.25).unwrap();
-    circuit.rz(Qubit::new(0), 0.5).unwrap();
-    let mut ctx = CompilerContext::new(circuit);
+    circuit.h(q0).unwrap();
+    circuit.barrier(vec![q0]).unwrap();
+    circuit.h(q0).unwrap();
 
-    KnowledgeRewriter::production().run(&mut ctx).unwrap();
+    let config = RewriteConfig::production().with_enabled_kinds(vec![RuleKind::Cancel]);
+    let result = KnowledgeRewriter::new(config).run(&circuit).unwrap();
 
-    let operations = ctx.circuit().operations();
-    assert_eq!(operations.len(), 1);
+    assert!(!result.changed);
+    assert_eq!(result.circuit.operations().len(), 3);
     assert!(matches!(
-        operations[0].instruction,
-        Instruction::Standard(StandardGate::RZ)
-    ));
-    assert!(
-        matches!(operations[0].params[0], crate::circuit::CircuitParam::Fixed(v) if (v - 0.75).abs() < 1e-12)
-    );
-}
-
-#[test]
-fn production_merges_same_axis_rotations_across_rounds() {
-    let theta = Parameter::symbol("theta");
-    let mut circuit = Circuit::new(1);
-    circuit.rx(Qubit::new(0), theta.clone()).unwrap();
-    circuit.rx(Qubit::new(0), 1.0).unwrap();
-    circuit
-        .rx(Qubit::new(0), Parameter::from(0.0) - theta)
-        .unwrap();
-    let mut ctx = CompilerContext::new(circuit);
-
-    let outcome = KnowledgeRewriter::production().run(&mut ctx).unwrap();
-
-    assert!(outcome.changed);
-    let operations = ctx.circuit().operations();
-    assert_eq!(operations.len(), 1);
-    assert!(matches!(
-        operations[0].instruction,
-        Instruction::Standard(StandardGate::RX)
-    ));
-    assert!(
-        matches!(operations[0].params[0], crate::circuit::CircuitParam::Fixed(v) if (v - 1.0).abs() < 1e-12)
-    );
-}
-
-#[test]
-fn symbolic_matrix_is_preserved_when_merging_symbolic_rotations() {
-    let theta = Parameter::symbol("theta");
-    let phi = Parameter::symbol("phi");
-    let mut circuit = Circuit::new(1);
-    circuit.rz(Qubit::new(0), theta).unwrap();
-    circuit.rz(Qubit::new(0), phi).unwrap();
-    let original = circuit.clone();
-
-    let (rewritten, changed) = rewrite_circuit(circuit, KnowledgeRewriter::production());
-
-    assert!(changed);
-    assert_eq!(rewritten.operations().len(), 1);
-    assert!(matches!(
-        rewritten.operations()[0].instruction,
-        Instruction::Standard(StandardGate::RZ)
-    ));
-    assert_symbolic_matrix_preserved_for_bindings(
-        &original,
-        &rewritten,
-        &[
-            HashMap::from([("theta", 0.125), ("phi", -0.375)]),
-            HashMap::from([("theta", 1.25), ("phi", 0.5)]),
-        ],
-    );
-}
-
-#[test]
-fn symbolic_matrix_is_preserved_when_cancelling_symbolic_rotations() {
-    let theta = Parameter::symbol("theta");
-    let mut circuit = Circuit::new(1);
-    circuit.rz(Qubit::new(0), theta.clone()).unwrap();
-    circuit
-        .rz(Qubit::new(0), Parameter::from(0.0) - theta)
-        .unwrap();
-    let original = circuit.clone();
-
-    let (rewritten, changed) = rewrite_circuit(
-        circuit,
-        KnowledgeRewriter::new(RewriteConfig::new().with_enabled_kinds(vec![RuleKind::Cancel])),
-    );
-
-    assert!(changed);
-    assert!(rewritten.operations().is_empty());
-    assert_symbolic_matrix_preserved_for_bindings(
-        &original,
-        &rewritten,
-        &[
-            HashMap::from([("theta", -0.5)]),
-            HashMap::from([("theta", 2.0)]),
-        ],
-    );
-}
-
-#[test]
-fn folds_top_level_gphase_replacements_into_global_phase() {
-    let mut circuit = Circuit::new(1);
-    circuit.x2p(Qubit::new(0)).unwrap();
-    circuit.x2p(Qubit::new(0)).unwrap();
-    let mut ctx = CompilerContext::new(circuit);
-
-    KnowledgeRewriter::production().run(&mut ctx).unwrap();
-
-    let operations = ctx.circuit().operations();
-    assert_eq!(operations.len(), 1);
-    assert!(matches!(
-        operations[0].instruction,
-        Instruction::Standard(StandardGate::X)
-    ));
-    let phase = ctx.circuit().global_phase().evaluate(&None).unwrap();
-    assert!((phase + std::f64::consts::FRAC_PI_2).abs() < 1e-12);
-}
-
-#[test]
-fn numeric_matrix_is_preserved_when_folding_top_level_gphase_replacement() {
-    let mut circuit = Circuit::new(1);
-    circuit.x2p(Qubit::new(0)).unwrap();
-    circuit.x2p(Qubit::new(0)).unwrap();
-    let original = circuit.clone();
-
-    let (rewritten, changed) = rewrite_circuit(circuit, KnowledgeRewriter::production());
-
-    assert!(changed);
-    assert_numeric_matrix_preserved(&original, &rewritten);
-}
-
-#[test]
-fn removes_zero_gphase_operation() {
-    let mut circuit = Circuit::new(1);
-    circuit
-        .append(
-            StandardGate::GPhase.into(),
-            std::iter::empty::<Qubit>(),
-            [0.0.into()],
-            None,
-        )
-        .unwrap();
-    let mut ctx = CompilerContext::new(circuit);
-
-    let outcome = KnowledgeRewriter::production().run(&mut ctx).unwrap();
-
-    assert!(outcome.changed);
-    assert!(ctx.circuit().operations().is_empty());
-    let phase = ctx.circuit().global_phase().evaluate(&None).unwrap();
-    assert!(phase.abs() < 1e-12);
-}
-
-#[test]
-fn merges_top_level_gphase_operations_into_global_phase() {
-    let mut circuit = Circuit::new(1);
-    circuit
-        .append(
-            StandardGate::GPhase.into(),
-            std::iter::empty::<Qubit>(),
-            [0.25.into()],
-            None,
-        )
-        .unwrap();
-    circuit
-        .append(
-            StandardGate::GPhase.into(),
-            std::iter::empty::<Qubit>(),
-            [0.5.into()],
-            None,
-        )
-        .unwrap();
-    let mut ctx = CompilerContext::new(circuit);
-
-    let outcome = KnowledgeRewriter::production().run(&mut ctx).unwrap();
-
-    assert!(outcome.changed);
-    assert!(ctx.circuit().operations().is_empty());
-    let phase = ctx.circuit().global_phase().evaluate(&None).unwrap();
-    assert!((phase - 0.75).abs() < 1e-12);
-}
-
-#[test]
-fn rewrites_control_flow_bodies_without_lifting_phase() {
-    let mut circuit = Circuit::new(2);
-    let body = vec![
-        Operation {
-            instruction: Instruction::Standard(StandardGate::H),
-            qubits: smallvec![Qubit::new(1)],
-            params: smallvec![],
-            label: None,
-        },
-        Operation {
-            instruction: Instruction::Standard(StandardGate::H),
-            qubits: smallvec![Qubit::new(1)],
-            params: smallvec![],
-            label: None,
-        },
-    ];
-    circuit
-        .if_else(ConditionView::new(Qubit::new(0), 1), body, None)
-        .unwrap();
-    let mut ctx = CompilerContext::new(circuit);
-
-    KnowledgeRewriter::production().run(&mut ctx).unwrap();
-
-    match &ctx.circuit().operations()[0].instruction {
-        Instruction::ControlFlowGate(crate::circuit::ControlFlow::IfElse(gate)) => {
-            assert!(gate.true_body().is_empty());
-        }
-        other => panic!("expected if_else, got {other:?}"),
-    }
-}
-
-#[test]
-fn drops_gphase_replacements_inside_control_flow_body() {
-    let mut circuit = Circuit::new(2);
-    let body = vec![
-        Operation {
-            instruction: Instruction::Standard(StandardGate::X2P),
-            qubits: smallvec![Qubit::new(1)],
-            params: smallvec![],
-            label: None,
-        },
-        Operation {
-            instruction: Instruction::Standard(StandardGate::X2P),
-            qubits: smallvec![Qubit::new(1)],
-            params: smallvec![],
-            label: None,
-        },
-    ];
-    circuit
-        .if_else(ConditionView::new(Qubit::new(0), 1), body, None)
-        .unwrap();
-    let mut ctx = CompilerContext::new(circuit);
-
-    let outcome = KnowledgeRewriter::production().run(&mut ctx).unwrap();
-
-    assert!(outcome.changed);
-    let phase = ctx.circuit().global_phase().evaluate(&None).unwrap();
-    assert!(phase.abs() < 1e-12);
-
-    match &ctx.circuit().operations()[0].instruction {
-        Instruction::ControlFlowGate(crate::circuit::ControlFlow::IfElse(gate)) => {
-            let body = gate.true_body();
-            assert_eq!(body.len(), 1);
-            assert!(matches!(
-                body[0].instruction,
-                Instruction::Standard(StandardGate::X)
-            ));
-        }
-        other => panic!("expected if_else, got {other:?}"),
-    }
-}
-
-#[test]
-fn drops_original_gphase_inside_control_flow_body() {
-    let mut circuit = Circuit::new(2);
-    let body = vec![Operation {
-        instruction: Instruction::Standard(StandardGate::GPhase),
-        qubits: smallvec![],
-        params: smallvec![CircuitParam::Fixed(0.25)],
-        label: None,
-    }];
-    circuit
-        .if_else(ConditionView::new(Qubit::new(0), 1), body, None)
-        .unwrap();
-    let mut ctx = CompilerContext::new(circuit);
-
-    let outcome = KnowledgeRewriter::production().run(&mut ctx).unwrap();
-
-    assert!(outcome.changed);
-    let phase = ctx.circuit().global_phase().evaluate(&None).unwrap();
-    assert!(phase.abs() < 1e-12);
-    match &ctx.circuit().operations()[0].instruction {
-        Instruction::ControlFlowGate(crate::circuit::ControlFlow::IfElse(gate)) => {
-            assert!(gate.true_body().is_empty());
-        }
-        other => panic!("expected if_else, got {other:?}"),
-    }
-}
-
-#[test]
-fn control_flow_rewrite_interns_new_symbolic_parameters_in_parent_table() {
-    let theta = Parameter::symbol("theta");
-    let phi = Parameter::symbol("phi");
-    let mut circuit = Circuit::new(2);
-    let (theta_index, _) = circuit.add_parameter(theta.clone());
-    let (phi_index, _) = circuit.add_parameter(phi.clone());
-    let body = vec![
-        Operation {
-            instruction: Instruction::Standard(StandardGate::RZ),
-            qubits: smallvec![Qubit::new(1)],
-            params: smallvec![CircuitParam::Index(theta_index as u32)],
-            label: None,
-        },
-        Operation {
-            instruction: Instruction::Standard(StandardGate::RZ),
-            qubits: smallvec![Qubit::new(1)],
-            params: smallvec![CircuitParam::Index(phi_index as u32)],
-            label: None,
-        },
-    ];
-    circuit
-        .if_else(ConditionView::new(Qubit::new(0), 1), body, None)
-        .unwrap();
-    let mut ctx = CompilerContext::new(circuit);
-
-    let outcome = KnowledgeRewriter::production().run(&mut ctx).unwrap();
-
-    assert!(outcome.changed);
-    match &ctx.circuit().operations()[0].instruction {
-        Instruction::ControlFlowGate(crate::circuit::ControlFlow::IfElse(gate)) => {
-            let body = gate.true_body();
-            assert_eq!(body.len(), 1);
-            assert!(matches!(
-                body[0].instruction,
-                Instruction::Standard(StandardGate::RZ)
-            ));
-            let [CircuitParam::Index(index)] = body[0].params.as_slice() else {
-                panic!("expected merged symbolic parameter index");
-            };
-            let merged = ctx
-                .circuit()
-                .parameters()
-                .get_index(*index as usize)
-                .unwrap()
-                .clone()
-                .simplify()
-                .unwrap();
-            assert_eq!(
-                merged.get_symbols(),
-                HashSet::from(["theta".to_string(), "phi".to_string()])
-            );
-            let bindings = Some(HashMap::from([("theta", 0.25), ("phi", 0.5)]));
-            let value = merged.evaluate(&bindings).unwrap();
-            assert!((value - 0.75).abs() < 1e-12);
-        }
-        other => panic!("expected if_else, got {other:?}"),
-    }
-}
-
-#[test]
-fn rewrites_if_else_false_body() {
-    let mut circuit = Circuit::new(2);
-    let true_body = vec![standard_operation(
-        StandardGate::X,
-        &[Qubit::new(1)],
-        smallvec![],
-    )];
-    let false_body = vec![
-        standard_operation(StandardGate::H, &[Qubit::new(1)], smallvec![]),
-        standard_operation(StandardGate::H, &[Qubit::new(1)], smallvec![]),
-    ];
-    circuit
-        .if_else(
-            ConditionView::new(Qubit::new(0), 1),
-            true_body,
-            Some(false_body),
-        )
-        .unwrap();
-    let mut ctx = CompilerContext::new(circuit);
-
-    let outcome = KnowledgeRewriter::production().run(&mut ctx).unwrap();
-
-    assert!(outcome.changed);
-    match &ctx.circuit().operations()[0].instruction {
-        Instruction::ControlFlowGate(crate::circuit::ControlFlow::IfElse(gate)) => {
-            assert_eq!(gate.true_body().len(), 1);
-            assert!(matches!(
-                gate.true_body()[0].instruction,
-                Instruction::Standard(StandardGate::X)
-            ));
-            assert!(gate.false_body().unwrap().is_empty());
-        }
-        other => panic!("expected if_else, got {other:?}"),
-    }
-}
-
-#[test]
-fn rewriting_empty_if_else_body_recomputes_operation_qubits() {
-    let mut circuit = Circuit::new(2);
-    let true_body = vec![
-        standard_operation(StandardGate::H, &[Qubit::new(1)], smallvec![]),
-        standard_operation(StandardGate::H, &[Qubit::new(1)], smallvec![]),
-    ];
-    circuit
-        .if_else(ConditionView::new(Qubit::new(0), 1), true_body, None)
-        .unwrap();
-    let mut ctx = CompilerContext::new(circuit);
-
-    let outcome = KnowledgeRewriter::production().run(&mut ctx).unwrap();
-
-    assert!(outcome.changed);
-    let operations = ctx.circuit().operations();
-    assert_eq!(operations.len(), 1);
-    match &operations[0].instruction {
-        Instruction::ControlFlowGate(crate::circuit::ControlFlow::IfElse(gate)) => {
-            assert!(gate.true_body().is_empty());
-        }
-        other => panic!("expected if_else, got {other:?}"),
-    }
-    assert_eq!(operations[0].qubits.as_slice(), &[Qubit::new(0)]);
-
-    let usage = crate::compiler::analysis::QubitUsage::from_circuit(ctx.circuit());
-    assert_eq!(usage.total_qubits_touched(), 1);
-    assert!(usage.get(Qubit::new(1)).is_none());
-}
-
-#[test]
-fn rewriting_empty_if_else_false_body_recomputes_operation_qubits() {
-    let mut circuit = Circuit::new(2);
-    let false_body = vec![
-        standard_operation(StandardGate::H, &[Qubit::new(1)], smallvec![]),
-        standard_operation(StandardGate::H, &[Qubit::new(1)], smallvec![]),
-    ];
-    circuit
-        .if_else(
-            ConditionView::new(Qubit::new(0), 1),
-            Vec::new(),
-            Some(false_body),
-        )
-        .unwrap();
-    let mut ctx = CompilerContext::new(circuit);
-
-    let outcome = KnowledgeRewriter::production().run(&mut ctx).unwrap();
-
-    assert!(outcome.changed);
-    let operations = ctx.circuit().operations();
-    assert_eq!(operations.len(), 1);
-    match &operations[0].instruction {
-        Instruction::ControlFlowGate(crate::circuit::ControlFlow::IfElse(gate)) => {
-            assert!(gate.true_body().is_empty());
-            assert!(gate.false_body().unwrap().is_empty());
-        }
-        other => panic!("expected if_else, got {other:?}"),
-    }
-    assert_eq!(operations[0].qubits.as_slice(), &[Qubit::new(0)]);
-
-    let usage = crate::compiler::analysis::QubitUsage::from_circuit(ctx.circuit());
-    assert_eq!(usage.total_qubits_touched(), 1);
-    assert!(usage.get(Qubit::new(1)).is_none());
-}
-
-#[test]
-fn rewrites_while_loop_body() {
-    let mut circuit = Circuit::new(2);
-    let body = vec![
-        standard_operation(StandardGate::H, &[Qubit::new(1)], smallvec![]),
-        standard_operation(StandardGate::H, &[Qubit::new(1)], smallvec![]),
-    ];
-    circuit
-        .while_loop(ConditionView::new(Qubit::new(0), 1), body)
-        .unwrap();
-    let mut ctx = CompilerContext::new(circuit);
-
-    let outcome = KnowledgeRewriter::production().run(&mut ctx).unwrap();
-
-    assert!(outcome.changed);
-    match &ctx.circuit().operations()[0].instruction {
-        Instruction::ControlFlowGate(crate::circuit::ControlFlow::WhileLoop(gate)) => {
-            assert!(gate.body().is_empty());
-        }
-        other => panic!("expected while_loop, got {other:?}"),
-    }
-}
-
-#[test]
-fn rewriting_empty_while_loop_body_recomputes_operation_qubits() {
-    let mut circuit = Circuit::new(2);
-    let body = vec![
-        standard_operation(StandardGate::H, &[Qubit::new(1)], smallvec![]),
-        standard_operation(StandardGate::H, &[Qubit::new(1)], smallvec![]),
-    ];
-    circuit
-        .while_loop(ConditionView::new(Qubit::new(0), 1), body)
-        .unwrap();
-    let mut ctx = CompilerContext::new(circuit);
-
-    let outcome = KnowledgeRewriter::production().run(&mut ctx).unwrap();
-
-    assert!(outcome.changed);
-    let operations = ctx.circuit().operations();
-    assert_eq!(operations.len(), 1);
-    match &operations[0].instruction {
-        Instruction::ControlFlowGate(crate::circuit::ControlFlow::WhileLoop(gate)) => {
-            assert!(gate.body().is_empty());
-        }
-        other => panic!("expected while_loop, got {other:?}"),
-    }
-    assert_eq!(operations[0].qubits.as_slice(), &[Qubit::new(0)]);
-
-    let usage = crate::compiler::analysis::QubitUsage::from_circuit(ctx.circuit());
-    assert_eq!(usage.total_qubits_touched(), 1);
-    assert!(usage.get(Qubit::new(1)).is_none());
-}
-
-#[test]
-fn does_not_rewrite_false_or_while_body_when_recurse_disabled() {
-    let mut circuit = Circuit::new(2);
-    let false_body = vec![
-        standard_operation(StandardGate::H, &[Qubit::new(1)], smallvec![]),
-        standard_operation(StandardGate::H, &[Qubit::new(1)], smallvec![]),
-    ];
-    circuit
-        .if_else(
-            ConditionView::new(Qubit::new(0), 1),
-            Vec::new(),
-            Some(false_body),
-        )
-        .unwrap();
-    let while_body = vec![
-        standard_operation(StandardGate::H, &[Qubit::new(1)], smallvec![]),
-        standard_operation(StandardGate::H, &[Qubit::new(1)], smallvec![]),
-    ];
-    circuit
-        .while_loop(ConditionView::new(Qubit::new(0), 1), while_body)
-        .unwrap();
-    let mut ctx = CompilerContext::new(circuit);
-
-    let outcome = KnowledgeRewriter::new(RewriteConfig::new().recurse_control_flow(false))
-        .run(&mut ctx)
-        .unwrap();
-
-    assert!(!outcome.changed);
-    match &ctx.circuit().operations()[0].instruction {
-        Instruction::ControlFlowGate(crate::circuit::ControlFlow::IfElse(gate)) => {
-            assert_eq!(gate.false_body().unwrap().len(), 2);
-        }
-        other => panic!("expected if_else, got {other:?}"),
-    }
-    match &ctx.circuit().operations()[1].instruction {
-        Instruction::ControlFlowGate(crate::circuit::ControlFlow::WhileLoop(gate)) => {
-            assert_eq!(gate.body().len(), 2);
-        }
-        other => panic!("expected while_loop, got {other:?}"),
-    }
-}
-
-#[test]
-fn invalid_parameter_index_returns_error() {
-    let mut qubits = IndexSet::new();
-    qubits.insert(Qubit::new(0));
-    let circuit = Circuit::from_parts(
-        qubits,
-        IndexSet::new(),
-        IndexSet::new(),
-        vec![standard_operation(
-            StandardGate::RZ,
-            &[Qubit::new(0)],
-            smallvec![CircuitParam::Index(0)],
-        )],
-        CircuitParam::Fixed(0.0),
-    );
-    let mut ctx = CompilerContext::new(circuit);
-
-    let err = KnowledgeRewriter::production().run(&mut ctx).unwrap_err();
-
-    assert!(
-        err.to_string()
-            .contains("invalid rewrite parameter index 0")
-    );
-}
-
-#[test]
-fn while_loop_gphase_replacement_is_dropped_by_policy() {
-    let mut circuit = Circuit::new(2);
-    let body = vec![
-        standard_operation(StandardGate::X2P, &[Qubit::new(1)], smallvec![]),
-        standard_operation(StandardGate::X2P, &[Qubit::new(1)], smallvec![]),
-    ];
-    circuit
-        .while_loop(ConditionView::new(Qubit::new(0), 1), body)
-        .unwrap();
-    let mut ctx = CompilerContext::new(circuit);
-
-    let outcome = KnowledgeRewriter::production().run(&mut ctx).unwrap();
-
-    assert!(outcome.changed);
-    let phase = ctx.circuit().global_phase().evaluate(&None).unwrap();
-    assert!(phase.abs() < 1e-12);
-    match &ctx.circuit().operations()[0].instruction {
-        Instruction::ControlFlowGate(crate::circuit::ControlFlow::WhileLoop(gate)) => {
-            let body = gate.body();
-            assert_eq!(body.len(), 1);
-            assert!(matches!(
-                body[0].instruction,
-                Instruction::Standard(StandardGate::X)
-            ));
-        }
-        other => panic!("expected while_loop, got {other:?}"),
-    }
-}
-
-#[test]
-fn does_not_rewrite_across_barrier() {
-    let mut circuit = Circuit::new(1);
-    circuit.h(Qubit::new(0)).unwrap();
-    circuit.barrier(vec![Qubit::new(0)]).unwrap();
-    circuit.h(Qubit::new(0)).unwrap();
-    let mut ctx = CompilerContext::new(circuit);
-
-    let outcome = KnowledgeRewriter::production().run(&mut ctx).unwrap();
-
-    assert!(!outcome.changed);
-    let operations = ctx.circuit().operations();
-    assert_eq!(operations.len(), 3);
-    assert!(matches!(
-        operations[1].instruction,
+        result.circuit.operations()[1].instruction,
         Instruction::Directive(Directive::Barrier)
     ));
 }
 
 #[test]
-fn does_not_rewrite_across_measure() {
+fn merges_numeric_rotations() {
+    let q0 = Qubit::new(0);
     let mut circuit = Circuit::new(1);
-    circuit.h(Qubit::new(0)).unwrap();
-    circuit.measure(Qubit::new(0)).unwrap();
-    circuit.h(Qubit::new(0)).unwrap();
-    let mut ctx = CompilerContext::new(circuit);
+    circuit.rz(q0, 0.25).unwrap();
+    circuit.rz(q0, 0.5).unwrap();
 
-    let outcome = KnowledgeRewriter::production().run(&mut ctx).unwrap();
+    let config = RewriteConfig::production().with_enabled_kinds(vec![RuleKind::Merge]);
+    let result = KnowledgeRewriter::new(config).run(&circuit).unwrap();
 
-    assert!(!outcome.changed);
-    let operations = ctx.circuit().operations();
-    assert_eq!(operations.len(), 3);
+    assert!(result.changed);
+    assert_eq!(standard_ops(&result.circuit), vec![StandardGate::RZ]);
     assert!(matches!(
-        operations[1].instruction,
-        Instruction::Directive(Directive::Measure)
+        result.circuit.operations()[0].params[0],
+        CircuitParam::Fixed(value) if (value - 0.75).abs() < 1e-12
     ));
 }
 
 #[test]
-fn does_not_rewrite_across_reset() {
-    let mut circuit = Circuit::new(1);
-    circuit.h(Qubit::new(0)).unwrap();
-    circuit.reset(Qubit::new(0)).unwrap();
-    circuit.h(Qubit::new(0)).unwrap();
-    let mut ctx = CompilerContext::new(circuit);
-
-    let outcome = KnowledgeRewriter::production().run(&mut ctx).unwrap();
-
-    assert!(!outcome.changed);
-    let operations = ctx.circuit().operations();
-    assert_eq!(operations.len(), 3);
-    assert!(matches!(
-        operations[1].instruction,
-        Instruction::Directive(Directive::Reset)
-    ));
-}
-
-#[test]
-fn does_not_rewrite_across_delay() {
-    let mut circuit = Circuit::new(1);
-    circuit.h(Qubit::new(0)).unwrap();
-    circuit.delay(Qubit::new(0), 10.0.into()).unwrap();
-    circuit.h(Qubit::new(0)).unwrap();
-    let mut ctx = CompilerContext::new(circuit);
-
-    let outcome = KnowledgeRewriter::production().run(&mut ctx).unwrap();
-
-    assert!(!outcome.changed);
-    let operations = ctx.circuit().operations();
-    assert_eq!(operations.len(), 3);
-    assert!(matches!(operations[1].instruction, Instruction::Delay));
-}
-
-#[test]
-fn recurse_control_flow_can_be_disabled() {
-    let mut circuit = Circuit::new(2);
-    let body = vec![
-        Operation {
-            instruction: Instruction::Standard(StandardGate::H),
-            qubits: smallvec![Qubit::new(1)],
-            params: smallvec![],
-            label: None,
-        },
-        Operation {
-            instruction: Instruction::Standard(StandardGate::H),
-            qubits: smallvec![Qubit::new(1)],
-            params: smallvec![],
-            label: None,
-        },
-    ];
-    circuit
-        .if_else(ConditionView::new(Qubit::new(0), 1), body, None)
-        .unwrap();
-    let mut ctx = CompilerContext::new(circuit);
-
-    let outcome = KnowledgeRewriter::new(RewriteConfig::new().recurse_control_flow(false))
-        .run(&mut ctx)
-        .unwrap();
-
-    assert!(!outcome.changed);
-    match &ctx.circuit().operations()[0].instruction {
-        Instruction::ControlFlowGate(crate::circuit::ControlFlow::IfElse(gate)) => {
-            assert_eq!(gate.true_body().len(), 2);
-        }
-        other => panic!("expected if_else, got {other:?}"),
-    }
-}
-
-#[test]
-fn applies_numeric_eqmod_condition() {
-    let mut circuit = Circuit::new(1);
-    circuit
-        .rz(Qubit::new(0), 3.0 * std::f64::consts::PI)
-        .unwrap();
-    circuit
-        .rz(Qubit::new(0), 3.0 * std::f64::consts::PI)
-        .unwrap();
-    let mut ctx = CompilerContext::new(circuit);
-
-    let outcome = KnowledgeRewriter::production().run(&mut ctx).unwrap();
-
-    assert!(outcome.changed);
-    assert!(ctx.circuit().operations().is_empty());
-    let phase = ctx.circuit().global_phase().evaluate(&None).unwrap();
-    assert!((phase - std::f64::consts::PI).abs() < 1e-12);
-}
-
-#[test]
-fn applies_symbolic_condition_when_provable() {
+fn merges_symbolic_rotations() {
+    let q0 = Qubit::new(0);
     let theta = Parameter::symbol("theta");
     let mut circuit = Circuit::new(1);
-    circuit.rx(Qubit::new(0), theta.clone()).unwrap();
-    circuit
-        .rx(Qubit::new(0), Parameter::from(0.0) - theta)
-        .unwrap();
-    let mut ctx = CompilerContext::new(circuit);
+    circuit.rz(q0, theta.clone()).unwrap();
+    circuit.rz(q0, 0.5).unwrap();
 
-    let rewriter =
-        KnowledgeRewriter::new(RewriteConfig::new().with_enabled_kinds(vec![RuleKind::Cancel]));
-    let outcome = rewriter.run(&mut ctx).unwrap();
+    let config = RewriteConfig::production().with_enabled_kinds(vec![RuleKind::Merge]);
+    let result = KnowledgeRewriter::new(config).run(&circuit).unwrap();
 
-    assert!(outcome.changed);
-    assert!(ctx.circuit().operations().is_empty());
+    assert!(result.changed);
+    assert_eq!(standard_ops(&result.circuit), vec![StandardGate::RZ]);
+    let merged = operation_param(&result.circuit, &result.circuit.operations()[0].params[0]);
+    let expected = theta + Parameter::from(0.5);
+    assert!(merged.provably_equal(&expected, 1e-12));
 }
 
 #[test]
-fn leaves_unproved_symbolic_conditions_unchanged() {
-    let theta = Parameter::symbol("theta");
-    let phi = Parameter::symbol("phi");
+fn merges_rz_across_same_qubit_commuting_s_gate() {
+    let q0 = Qubit::new(0);
     let mut circuit = Circuit::new(1);
-    circuit.rx(Qubit::new(0), theta).unwrap();
-    circuit.rx(Qubit::new(0), phi).unwrap();
-    let mut ctx = CompilerContext::new(circuit);
+    circuit.rz(q0, 0.25).unwrap();
+    circuit.s(q0).unwrap();
+    circuit.rz(q0, 0.5).unwrap();
 
-    let rewriter =
-        KnowledgeRewriter::new(RewriteConfig::new().with_enabled_kinds(vec![RuleKind::Cancel]));
-    let outcome = rewriter.run(&mut ctx).unwrap();
+    let config = RewriteConfig::production().with_enabled_kinds(vec![RuleKind::Merge]);
+    let result = KnowledgeRewriter::new(config).run(&circuit).unwrap();
 
-    assert!(!outcome.changed);
-    assert_eq!(ctx.circuit().operations().len(), 2);
-}
-
-#[test]
-fn commute_rules_are_not_applied_as_ordinary_rewrites() {
-    let mut circuit = Circuit::new(1);
-    circuit.rz(Qubit::new(0), 0.25).unwrap();
-    circuit.s(Qubit::new(0)).unwrap();
-    let mut ctx = CompilerContext::new(circuit);
-
-    let rewriter =
-        KnowledgeRewriter::new(RewriteConfig::new().with_enabled_kinds(vec![RuleKind::Commute]));
-    let outcome = rewriter.run(&mut ctx).unwrap();
-
-    assert!(!outcome.changed);
-    let operations = ctx.circuit().operations();
-    assert!(matches!(
-        operations[0].instruction,
-        Instruction::Standard(StandardGate::RZ)
-    ));
-    assert!(matches!(
-        operations[1].instruction,
-        Instruction::Standard(StandardGate::S)
-    ));
-}
-
-#[test]
-fn uses_commute_rules_to_merge_across_commuting_gate() {
-    let mut circuit = Circuit::new(1);
-    circuit.rz(Qubit::new(0), 0.25).unwrap();
-    circuit.s(Qubit::new(0)).unwrap();
-    circuit.rz(Qubit::new(0), 0.5).unwrap();
-    let mut ctx = CompilerContext::new(circuit);
-
-    let outcome = KnowledgeRewriter::production().run(&mut ctx).unwrap();
-
-    assert!(outcome.changed);
-    let operations = ctx.circuit().operations();
-    assert_eq!(operations.len(), 2);
-    assert!(matches!(
-        operations[0].instruction,
-        Instruction::Standard(StandardGate::RZ)
-    ));
-    assert!(
-        matches!(operations[0].params[0], CircuitParam::Fixed(value) if (value - 0.75).abs() < 1e-12)
-    );
-    assert!(matches!(
-        operations[1].instruction,
-        Instruction::Standard(StandardGate::S)
-    ));
-}
-
-#[test]
-fn decompose_rules_require_lowering_mode() {
-    let mut circuit = Circuit::new(1);
-    circuit.h(Qubit::new(0)).unwrap();
-    let mut ctx = CompilerContext::new(circuit);
-
-    let rewriter =
-        KnowledgeRewriter::new(RewriteConfig::new().with_enabled_kinds(vec![RuleKind::Decompose]));
-    let outcome = rewriter.run(&mut ctx).unwrap();
-
-    assert!(!outcome.changed);
-    assert_eq!(ctx.circuit().operations().len(), 1);
-    assert!(matches!(
-        ctx.circuit().operations()[0].instruction,
-        Instruction::Standard(StandardGate::H)
-    ));
-}
-
-#[test]
-fn lowering_mode_applies_decomposition_rules() {
-    let mut circuit = Circuit::new(1);
-    circuit.h(Qubit::new(0)).unwrap();
-    let mut ctx = CompilerContext::new(circuit);
-
-    let rewriter = KnowledgeRewriter::new(
-        RewriteConfig::new()
-            .with_mode(RewriteMode::Lowering)
-            .with_enabled_kinds(vec![RuleKind::Decompose])
-            .with_max_rounds(1),
-    );
-    let outcome = rewriter.run(&mut ctx).unwrap();
-
-    assert!(outcome.changed);
-    assert!(ctx.circuit().operations().iter().all(|operation| !matches!(
-        operation.instruction,
-        Instruction::Standard(StandardGate::H)
-    )));
-}
-
-#[test]
-fn lowering_mode_lowers_top_level_mc_gate() {
-    let mut circuit = Circuit::new(2);
-    circuit
-        .append(
-            Instruction::McGate(Box::new(MCGate::new(1, StandardGate::X))),
-            [Qubit::new(0), Qubit::new(1)],
-            std::iter::empty::<crate::circuit::ParameterValue>(),
-            None,
-        )
-        .unwrap();
-    let mut ctx = CompilerContext::new(circuit);
-
-    let rewriter = KnowledgeRewriter::new(
-        RewriteConfig::lowering()
-            .with_enabled_kinds(vec![RuleKind::Decompose])
-            .with_max_rounds(1),
-    );
-    let outcome = rewriter.run(&mut ctx).unwrap();
-
-    assert!(outcome.changed);
-    let operations = ctx.circuit().operations();
-    assert_eq!(operations.len(), 1);
-    assert!(matches!(
-        operations[0].instruction,
-        Instruction::Standard(StandardGate::CX)
-    ));
+    assert!(result.changed);
     assert_eq!(
-        operations[0].qubits.as_slice(),
-        &[Qubit::new(0), Qubit::new(1)]
+        standard_ops(&result.circuit),
+        vec![StandardGate::RZ, StandardGate::S]
     );
-}
-
-#[test]
-fn lowering_mode_lowers_mc_gate_inside_control_flow_body() {
-    let mut circuit = Circuit::new(3);
-    let body = vec![Operation {
-        instruction: Instruction::McGate(Box::new(MCGate::new(1, StandardGate::X))),
-        qubits: smallvec![Qubit::new(1), Qubit::new(2)],
-        params: smallvec![],
-        label: None,
-    }];
-    circuit
-        .if_else(ConditionView::new(Qubit::new(0), 1), body, None)
-        .unwrap();
-    let mut ctx = CompilerContext::new(circuit);
-
-    let rewriter = KnowledgeRewriter::new(
-        RewriteConfig::lowering()
-            .with_enabled_kinds(vec![RuleKind::Decompose])
-            .with_max_rounds(1),
-    );
-    let outcome = rewriter.run(&mut ctx).unwrap();
-
-    assert!(outcome.changed);
-    match &ctx.circuit().operations()[0].instruction {
-        Instruction::ControlFlowGate(crate::circuit::ControlFlow::IfElse(gate)) => {
-            assert_eq!(gate.true_body().len(), 1);
-            assert!(matches!(
-                gate.true_body()[0].instruction,
-                Instruction::Standard(StandardGate::CX)
-            ));
-            assert_eq!(
-                gate.true_body()[0].qubits.as_slice(),
-                &[Qubit::new(1), Qubit::new(2)]
-            );
-        }
-        other => panic!("expected if_else, got {other:?}"),
-    }
-}
-
-#[test]
-fn lowering_mode_skips_labeled_mc_gate_by_default() {
-    let mut circuit = Circuit::new(2);
-    circuit
-        .append(
-            Instruction::McGate(Box::new(MCGate::new(1, StandardGate::X))),
-            [Qubit::new(0), Qubit::new(1)],
-            std::iter::empty::<crate::circuit::ParameterValue>(),
-            Some("keep"),
-        )
-        .unwrap();
-    let mut ctx = CompilerContext::new(circuit);
-
-    let rewriter = KnowledgeRewriter::new(
-        RewriteConfig::lowering()
-            .with_enabled_kinds(vec![RuleKind::Decompose])
-            .with_max_rounds(1),
-    );
-    let outcome = rewriter.run(&mut ctx).unwrap();
-
-    assert!(!outcome.changed);
     assert!(matches!(
-        ctx.circuit().operations()[0].instruction,
-        Instruction::McGate(_)
+        result.circuit.operations()[0].params[0],
+        CircuitParam::Fixed(value) if (value - 0.75).abs() < 1e-12
     ));
 }
 
 #[test]
-fn target_instructions_keep_native_mc_gate_unchanged() {
-    let native_mcx = MCGate::new(1, StandardGate::X);
-    let mut circuit = Circuit::new(2);
-    circuit
-        .append(
-            Instruction::McGate(Box::new(native_mcx.clone())),
-            [Qubit::new(0), Qubit::new(1)],
-            std::iter::empty::<crate::circuit::ParameterValue>(),
-            None,
-        )
-        .unwrap();
-    let mut ctx = CompilerContext::new(circuit);
-
-    let rewriter = KnowledgeRewriter::new(
-        RewriteConfig::lowering()
-            .with_enabled_kinds(vec![RuleKind::Decompose])
-            .with_target_instructions(vec![Instruction::McGate(Box::new(native_mcx.clone()))])
-            .with_max_rounds(1),
-    );
-    let outcome = rewriter.run(&mut ctx).unwrap();
-
-    assert!(!outcome.changed);
-    match &ctx.circuit().operations()[0].instruction {
-        Instruction::McGate(gate) => assert_eq!(gate.as_ref(), &native_mcx),
-        other => panic!("expected native mc gate, got {other:?}"),
-    }
-}
-
-#[test]
-fn target_instructions_lower_mc_gate_when_standard_target_is_native() {
-    let mut circuit = Circuit::new(2);
-    circuit
-        .append(
-            Instruction::McGate(Box::new(MCGate::new(1, StandardGate::X))),
-            [Qubit::new(0), Qubit::new(1)],
-            std::iter::empty::<crate::circuit::ParameterValue>(),
-            None,
-        )
-        .unwrap();
-    let mut ctx = CompilerContext::new(circuit);
-
-    let rewriter = KnowledgeRewriter::new(
-        RewriteConfig::lowering()
-            .with_enabled_kinds(vec![RuleKind::Decompose])
-            .with_target_instructions(vec![Instruction::Standard(StandardGate::CX)])
-            .with_max_rounds(1),
-    );
-    let outcome = rewriter.run(&mut ctx).unwrap();
-
-    assert!(outcome.changed);
-    assert!(matches!(
-        ctx.circuit().operations()[0].instruction,
-        Instruction::Standard(StandardGate::CX)
-    ));
-}
-
-#[test]
-fn target_instructions_reject_cost_neutral_mc_lowering_when_both_forms_are_native() {
-    let native_mcx = MCGate::new(1, StandardGate::X);
-    let mut circuit = Circuit::new(2);
-    circuit
-        .append(
-            Instruction::McGate(Box::new(native_mcx.clone())),
-            [Qubit::new(0), Qubit::new(1)],
-            std::iter::empty::<crate::circuit::ParameterValue>(),
-            None,
-        )
-        .unwrap();
-    let mut ctx = CompilerContext::new(circuit);
-
-    let rewriter = KnowledgeRewriter::new(
-        RewriteConfig::lowering()
-            .with_enabled_kinds(vec![RuleKind::Decompose])
-            .with_target_instructions(vec![
-                Instruction::McGate(Box::new(native_mcx.clone())),
-                Instruction::Standard(StandardGate::CX),
-            ])
-            .with_max_rounds(1),
-    );
-    let outcome = rewriter.run(&mut ctx).unwrap();
-
-    assert!(!outcome.changed);
-    match &ctx.circuit().operations()[0].instruction {
-        Instruction::McGate(gate) => assert_eq!(gate.as_ref(), &native_mcx),
-        other => panic!("expected native mc gate, got {other:?}"),
-    }
-}
-
-#[test]
-fn target_instructions_reject_non_gate_like_instruction() {
+fn merges_rz_across_same_qubit_commuting_phase_gate() {
+    let q0 = Qubit::new(0);
     let mut circuit = Circuit::new(1);
-    circuit.h(Qubit::new(0)).unwrap();
-    let mut ctx = CompilerContext::new(circuit);
+    circuit.rz(q0, 0.25).unwrap();
+    circuit.phase(q0, 0.125).unwrap();
+    circuit.rz(q0, 0.5).unwrap();
 
-    let err = KnowledgeRewriter::new(
-        RewriteConfig::new()
-            .with_target_instructions(vec![Instruction::Directive(Directive::Barrier)]),
-    )
-    .run(&mut ctx)
-    .unwrap_err();
+    let config = RewriteConfig::production().with_enabled_kinds(vec![RuleKind::Merge]);
+    let result = KnowledgeRewriter::new(config).run(&circuit).unwrap();
 
-    assert!(
-        err.to_string()
-            .contains("unsupported rewrite target instruction")
-    );
-}
-
-#[test]
-fn target_instructions_do_not_invent_reverse_rules() {
-    let mut circuit = Circuit::new(1);
-    circuit.rz(Qubit::new(0), -0.3).unwrap();
-    circuit.rx(Qubit::new(0), 0.7).unwrap();
-    circuit.rz(Qubit::new(0), 0.3).unwrap();
-    let mut ctx = CompilerContext::new(circuit);
-
-    let rewriter = KnowledgeRewriter::new(
-        RewriteConfig::new()
-            .with_target_instructions(vec![Instruction::Standard(StandardGate::RXY)])
-            .with_max_rounds(2),
-    );
-    let outcome = rewriter.run(&mut ctx).unwrap();
-
-    assert!(!outcome.changed);
-    let operations = ctx.circuit().operations();
-    assert_eq!(operations.len(), 3);
-    assert!(matches!(
-        operations[0].instruction,
-        Instruction::Standard(StandardGate::RZ)
-    ));
-    assert!(matches!(
-        operations[1].instruction,
-        Instruction::Standard(StandardGate::RX)
-    ));
-    assert!(matches!(
-        operations[2].instruction,
-        Instruction::Standard(StandardGate::RZ)
-    ));
-}
-
-#[test]
-fn target_instructions_lower_cx_to_h_cz_h_when_cz_is_native() {
-    let mut circuit = Circuit::new(2);
-    circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
-    let mut ctx = CompilerContext::new(circuit);
-
-    let rewriter = KnowledgeRewriter::new(
-        RewriteConfig::lowering()
-            .with_target_instructions(vec![
-                Instruction::Standard(StandardGate::H),
-                Instruction::Standard(StandardGate::CZ),
-            ])
-            .with_max_rounds(4),
-    );
-    let outcome = rewriter.run(&mut ctx).unwrap();
-
-    assert!(outcome.changed);
-    let operations = ctx.circuit().operations();
-    assert_eq!(operations.len(), 3);
-    assert!(matches!(
-        operations[0].instruction,
-        Instruction::Standard(StandardGate::H)
-    ));
-    assert!(matches!(
-        operations[1].instruction,
-        Instruction::Standard(StandardGate::CZ)
-    ));
-    assert!(matches!(
-        operations[2].instruction,
-        Instruction::Standard(StandardGate::H)
-    ));
-    assert_eq!(operations[0].qubits.as_slice(), &[Qubit::new(1)]);
+    assert!(result.changed);
     assert_eq!(
-        operations[1].qubits.as_slice(),
-        &[Qubit::new(0), Qubit::new(1)]
+        standard_ops(&result.circuit),
+        vec![StandardGate::RZ, StandardGate::Phase]
     );
-    assert_eq!(operations[2].qubits.as_slice(), &[Qubit::new(1)]);
+    assert!(matches!(
+        result.circuit.operations()[0].params[0],
+        CircuitParam::Fixed(value) if (value - 0.75).abs() < 1e-12
+    ));
+    assert!(matches!(
+        result.circuit.operations()[1].params[0],
+        CircuitParam::Fixed(value) if (value - 0.125).abs() < 1e-12
+    ));
 }
 
 #[test]
-fn target_instructions_allow_lowerable_intermediate_without_treating_it_as_physical() {
+fn cancels_z_across_same_qubit_commuting_s_gate() {
+    let q0 = Qubit::new(0);
+    let mut circuit = Circuit::new(1);
+    circuit.z(q0).unwrap();
+    circuit.s(q0).unwrap();
+    circuit.z(q0).unwrap();
+
+    let config = RewriteConfig::production().with_enabled_kinds(vec![RuleKind::Cancel]);
+    let result = KnowledgeRewriter::new(config).run(&circuit).unwrap();
+
+    assert!(result.changed);
+    assert_eq!(standard_ops(&result.circuit), vec![StandardGate::S]);
+}
+
+#[test]
+fn does_not_merge_rz_across_non_commuting_h_gate() {
+    let q0 = Qubit::new(0);
+    let mut circuit = Circuit::new(1);
+    circuit.rz(q0, 0.25).unwrap();
+    circuit.h(q0).unwrap();
+    circuit.rz(q0, 0.5).unwrap();
+
+    let config = RewriteConfig::production().with_enabled_kinds(vec![RuleKind::Merge]);
+    let result = KnowledgeRewriter::new(config).run(&circuit).unwrap();
+
+    assert!(!result.changed);
+    assert_eq!(
+        standard_ops(&result.circuit),
+        vec![StandardGate::RZ, StandardGate::H, StandardGate::RZ]
+    );
+}
+
+#[test]
+fn does_not_cancel_x_across_non_commuting_z_gate() {
+    let q0 = Qubit::new(0);
+    let mut circuit = Circuit::new(1);
+    circuit.x(q0).unwrap();
+    circuit.z(q0).unwrap();
+    circuit.x(q0).unwrap();
+
+    let config = RewriteConfig::production().with_enabled_kinds(vec![RuleKind::Cancel]);
+    let result = KnowledgeRewriter::new(config).run(&circuit).unwrap();
+
+    assert!(!result.changed);
+    assert_eq!(
+        standard_ops(&result.circuit),
+        vec![StandardGate::X, StandardGate::Z, StandardGate::X]
+    );
+}
+
+#[test]
+fn commuting_match_respects_max_window_ops() {
+    let q0 = Qubit::new(0);
+    let mut circuit = Circuit::new(1);
+    circuit.rz(q0, 0.25).unwrap();
+    circuit.s(q0).unwrap();
+    circuit.t(q0).unwrap();
+    circuit.rz(q0, 0.5).unwrap();
+
+    let tight_config = RewriteConfig::production()
+        .with_enabled_kinds(vec![RuleKind::Merge])
+        .with_max_window_ops(1);
+    let tight_result = KnowledgeRewriter::new(tight_config).run(&circuit).unwrap();
+
+    assert!(!tight_result.changed);
+    assert_eq!(
+        standard_ops(&tight_result.circuit),
+        vec![
+            StandardGate::RZ,
+            StandardGate::S,
+            StandardGate::T,
+            StandardGate::RZ
+        ]
+    );
+
+    let wide_config = RewriteConfig::production()
+        .with_enabled_kinds(vec![RuleKind::Merge])
+        .with_max_window_ops(4);
+    let wide_result = KnowledgeRewriter::new(wide_config).run(&circuit).unwrap();
+
+    assert!(wide_result.changed);
+    assert_eq!(
+        standard_ops(&wide_result.circuit),
+        vec![StandardGate::RZ, StandardGate::S, StandardGate::T]
+    );
+    assert!(matches!(
+        wide_result.circuit.operations()[0].params[0],
+        CircuitParam::Fixed(value) if (value - 0.75).abs() < 1e-12
+    ));
+}
+
+#[test]
+fn folds_top_level_gphase_into_circuit_global_phase() {
+    let mut circuit = Circuit::new(1);
+    circuit
+        .append(
+            Instruction::Standard(StandardGate::GPhase),
+            std::iter::empty::<Qubit>(),
+            [Parameter::from(0.25).into()],
+            None,
+        )
+        .unwrap();
+
+    let result = KnowledgeRewriter::production().run(&circuit).unwrap();
+
+    assert!(result.changed);
+    assert!(result.circuit.operations().is_empty());
+    assert!(
+        result
+            .circuit
+            .global_phase()
+            .provably_equal(&Parameter::from(0.25), 1e-12)
+    );
+}
+
+#[test]
+fn lowers_to_explicit_target_basis() {
+    let q0 = Qubit::new(0);
+    let q1 = Qubit::new(1);
+    let mut circuit = Circuit::new(2);
+    circuit.cx(q0, q1).unwrap();
+
+    let config = RewriteConfig::lowering()
+        .with_target_instructions(vec![
+            Instruction::Standard(StandardGate::H),
+            Instruction::Standard(StandardGate::CZ),
+        ])
+        .unwrap();
+    let result = KnowledgeRewriter::new(config).run(&circuit).unwrap();
+
+    assert!(result.changed);
+    assert_eq!(
+        standard_ops(&result.circuit),
+        vec![StandardGate::H, StandardGate::CZ, StandardGate::H]
+    );
+    assert_eq!(result.circuit.operations()[0].qubits.as_slice(), &[q1]);
+    assert_eq!(result.circuit.operations()[1].qubits.as_slice(), &[q0, q1]);
+    assert_eq!(result.circuit.operations()[2].qubits.as_slice(), &[q1]);
+}
+
+#[test]
+fn one_round_limit_stops_before_second_step_lowering() {
+    let q0 = Qubit::new(0);
+    let q1 = Qubit::new(1);
+    let q2 = Qubit::new(2);
     let mut circuit = Circuit::new(3);
     circuit
         .append(
             Instruction::McGate(Box::new(MCGate::new(2, StandardGate::X))),
-            [Qubit::new(0), Qubit::new(1), Qubit::new(2)],
+            [q0, q1, q2],
             std::iter::empty::<crate::circuit::ParameterValue>(),
             None,
         )
         .unwrap();
-    let mut ctx = CompilerContext::new(circuit);
 
-    let rewriter = KnowledgeRewriter::new(
-        RewriteConfig::lowering()
-            .with_enabled_kinds(vec![RuleKind::Decompose])
-            .with_target_instructions(vec![
-                Instruction::Standard(StandardGate::H),
-                Instruction::Standard(StandardGate::CX),
-                Instruction::Standard(StandardGate::T),
-                Instruction::Standard(StandardGate::TDG),
-            ])
-            .with_max_rounds(4),
+    let config = RewriteConfig::lowering()
+        .with_enabled_kinds(vec![RuleKind::Decompose])
+        .with_max_rounds(1);
+    let result = KnowledgeRewriter::new(config).run(&circuit).unwrap();
+
+    assert!(result.changed);
+    assert_eq!(standard_ops(&result.circuit), vec![StandardGate::CCX]);
+    assert!(matches!(
+        result.circuit.operations()[0].instruction,
+        Instruction::Standard(StandardGate::CCX)
+    ));
+}
+
+#[test]
+fn two_rounds_continue_chain_beyond_first_replacement() {
+    let q0 = Qubit::new(0);
+    let q1 = Qubit::new(1);
+    let q2 = Qubit::new(2);
+    let mut circuit = Circuit::new(3);
+    circuit
+        .append(
+            Instruction::McGate(Box::new(MCGate::new(2, StandardGate::X))),
+            [q0, q1, q2],
+            std::iter::empty::<crate::circuit::ParameterValue>(),
+            None,
+        )
+        .unwrap();
+
+    let config = RewriteConfig::lowering()
+        .with_enabled_kinds(vec![RuleKind::Decompose])
+        .with_max_rounds(2);
+    let result = KnowledgeRewriter::new(config).run(&circuit).unwrap();
+
+    assert!(result.changed);
+    assert!(result.circuit.operations().iter().all(|operation| {
+        !matches!(
+            operation.instruction,
+            Instruction::McGate(_) | Instruction::Standard(StandardGate::CCX)
+        )
+    }));
+    assert_eq!(
+        standard_ops(&result.circuit),
+        vec![
+            StandardGate::H,
+            StandardGate::CX,
+            StandardGate::TDG,
+            StandardGate::CX,
+            StandardGate::T,
+            StandardGate::CX,
+            StandardGate::TDG,
+            StandardGate::CX,
+            StandardGate::T,
+            StandardGate::T,
+            StandardGate::H,
+            StandardGate::CX
+        ]
     );
-    let outcome = rewriter.run(&mut ctx).unwrap();
+}
 
-    assert!(outcome.changed);
-    assert!(ctx.circuit().operations().iter().all(|operation| matches!(
+#[test]
+fn lowering_reaches_target_basis_through_multiple_steps() {
+    let q0 = Qubit::new(0);
+    let q1 = Qubit::new(1);
+    let q2 = Qubit::new(2);
+    let mut circuit = Circuit::new(3);
+    circuit
+        .append(
+            Instruction::McGate(Box::new(MCGate::new(2, StandardGate::X))),
+            [q0, q1, q2],
+            std::iter::empty::<crate::circuit::ParameterValue>(),
+            None,
+        )
+        .unwrap();
+
+    let config = RewriteConfig::lowering()
+        .with_enabled_kinds(vec![RuleKind::Decompose])
+        .with_target_instructions(vec![
+            Instruction::Standard(StandardGate::H),
+            Instruction::Standard(StandardGate::CX),
+            Instruction::Standard(StandardGate::T),
+            Instruction::Standard(StandardGate::TDG),
+        ])
+        .unwrap()
+        .with_max_rounds(4);
+    let result = KnowledgeRewriter::new(config).run(&circuit).unwrap();
+
+    assert!(result.changed);
+    assert!(result.circuit.operations().iter().all(|operation| matches!(
         operation.instruction,
         Instruction::Standard(
             StandardGate::H | StandardGate::CX | StandardGate::T | StandardGate::TDG
         )
     )));
+    assert!(result.stats.rules_applied >= 2);
+    assert!(result.stats.rounds_executed >= 3);
 }
 
 #[test]
-fn lowering_target_instructions_reject_unfinished_intermediate() {
-    let mut circuit = Circuit::new(3);
-    circuit
-        .append(
-            Instruction::McGate(Box::new(MCGate::new(2, StandardGate::X))),
-            [Qubit::new(0), Qubit::new(1), Qubit::new(2)],
-            std::iter::empty::<crate::circuit::ParameterValue>(),
-            None,
-        )
+fn lowering_fails_when_target_basis_cannot_be_satisfied() {
+    let q0 = Qubit::new(0);
+    let mut circuit = Circuit::new(1);
+    circuit.h(q0).unwrap();
+
+    let config = RewriteConfig::lowering()
+        .with_target_instructions(vec![Instruction::Standard(StandardGate::CZ)])
         .unwrap();
-    let mut ctx = CompilerContext::new(circuit);
+    let err = KnowledgeRewriter::new(config).run(&circuit).unwrap_err();
 
-    let err = KnowledgeRewriter::new(
-        RewriteConfig::lowering()
-            .with_enabled_kinds(vec![RuleKind::Decompose])
-            .with_target_instructions(vec![
-                Instruction::Standard(StandardGate::H),
-                Instruction::Standard(StandardGate::CX),
-                Instruction::Standard(StandardGate::T),
-                Instruction::Standard(StandardGate::TDG),
-            ])
-            .with_max_rounds(1),
-    )
-    .run(&mut ctx)
-    .unwrap_err();
-
-    let message = err.to_string();
-    assert!(message.contains("target instruction basis not satisfied"));
-    assert!(message.contains("CCX"));
+    assert!(matches!(err, CompilerError::InvalidInput(_)));
 }
 
 #[test]
-fn numeric_matrix_is_preserved_when_lowering_cx_to_cz_basis() {
+fn optimize_mode_does_not_apply_decomposition_rules() {
+    let q0 = Qubit::new(0);
+    let q1 = Qubit::new(1);
     let mut circuit = Circuit::new(2);
-    circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
-    let original = circuit.clone();
+    circuit.cx(q0, q1).unwrap();
 
-    let (rewritten, changed) = rewrite_circuit(
-        circuit,
-        KnowledgeRewriter::new(
-            RewriteConfig::lowering()
-                .with_target_instructions(vec![
-                    Instruction::Standard(StandardGate::H),
-                    Instruction::Standard(StandardGate::CZ),
-                ])
-                .with_max_rounds(4),
-        ),
-    );
+    let config = RewriteConfig::production().with_enabled_kinds(vec![RuleKind::Decompose]);
+    let result = KnowledgeRewriter::new(config).run(&circuit).unwrap();
 
-    assert!(changed);
-    assert_numeric_matrix_preserved(&original, &rewritten);
+    assert!(!result.changed);
+    assert_eq!(standard_ops(&result.circuit), vec![StandardGate::CX]);
 }
 
 #[test]
-fn target_instruction_mode_allows_more_ops_when_unsupported_ops_decrease() {
-    let mut circuit = Circuit::new(1);
-    circuit.h(Qubit::new(0)).unwrap();
-    let mut ctx = CompilerContext::new(circuit);
-
-    let rewriter = KnowledgeRewriter::new(
-        RewriteConfig::lowering()
-            .with_target_instructions(vec![
-                Instruction::Standard(StandardGate::RZ),
-                Instruction::Standard(StandardGate::RX),
-            ])
-            .with_max_rounds(1),
-    );
-    let outcome = rewriter.run(&mut ctx).unwrap();
-
-    assert!(outcome.changed);
-    let operations = ctx.circuit().operations();
-    assert_eq!(operations.len(), 3);
-    assert!(operations.iter().all(|operation| matches!(
-        operation.instruction,
-        Instruction::Standard(StandardGate::RZ | StandardGate::RX)
-    )));
-}
-
-#[test]
-fn target_instruction_mode_rejects_more_ops_when_unsupported_ops_do_not_decrease() {
-    let mut circuit = Circuit::new(1);
-    circuit.h(Qubit::new(0)).unwrap();
-    let mut ctx = CompilerContext::new(circuit);
-
-    let rewriter = KnowledgeRewriter::new(
-        RewriteConfig::lowering()
-            .with_target_instructions(vec![
-                Instruction::Standard(StandardGate::H),
-                Instruction::Standard(StandardGate::RZ),
-                Instruction::Standard(StandardGate::RX),
-            ])
-            .with_max_rounds(1),
-    );
-    let outcome = rewriter.run(&mut ctx).unwrap();
-
-    assert!(!outcome.changed);
-    let operations = ctx.circuit().operations();
-    assert_eq!(operations.len(), 1);
-    assert!(matches!(
-        operations[0].instruction,
-        Instruction::Standard(StandardGate::H)
-    ));
-}
-
-#[test]
-fn target_instructions_require_explicit_rules_for_compression() {
-    let mut circuit = Circuit::new(2);
-    circuit.h(Qubit::new(1)).unwrap();
-    circuit.cz(Qubit::new(0), Qubit::new(1)).unwrap();
-    circuit.h(Qubit::new(1)).unwrap();
-    let mut ctx = CompilerContext::new(circuit);
-
-    let rewriter = KnowledgeRewriter::new(
-        RewriteConfig::new()
-            .with_target_instructions(vec![
-                Instruction::Standard(StandardGate::H),
-                Instruction::Standard(StandardGate::CZ),
-                Instruction::Standard(StandardGate::CX),
-            ])
-            .with_max_rounds(2),
-    );
-    let outcome = rewriter.run(&mut ctx).unwrap();
-
-    assert!(!outcome.changed);
-    let operations = ctx.circuit().operations();
-    assert_eq!(operations.len(), 3);
-    assert!(matches!(
-        operations[0].instruction,
-        Instruction::Standard(StandardGate::H)
-    ));
-    assert!(matches!(
-        operations[1].instruction,
-        Instruction::Standard(StandardGate::CZ)
-    ));
-    assert!(matches!(
-        operations[2].instruction,
-        Instruction::Standard(StandardGate::H)
-    ));
-}
-
-#[test]
-fn default_production_does_not_compress_h_cz_h_without_explicit_rule() {
-    let mut circuit = Circuit::new(2);
-    circuit.h(Qubit::new(1)).unwrap();
-    circuit.cz(Qubit::new(0), Qubit::new(1)).unwrap();
-    circuit.h(Qubit::new(1)).unwrap();
-    let mut ctx = CompilerContext::new(circuit);
-
-    let outcome = KnowledgeRewriter::production().run(&mut ctx).unwrap();
-
-    assert!(!outcome.changed);
-    assert_eq!(ctx.circuit().operations().len(), 3);
-}
-
-#[test]
-fn empty_target_instruction_basis_is_invalid() {
-    let mut circuit = Circuit::new(1);
-    circuit.h(Qubit::new(0)).unwrap();
-    let mut ctx = CompilerContext::new(circuit);
-
-    let err = KnowledgeRewriter::new(RewriteConfig::new().with_target_instructions(Vec::new()))
-        .run(&mut ctx)
+fn rejects_invalid_target_basis_configuration() {
+    let err = RewriteConfig::lowering()
+        .with_target_instructions(vec![Instruction::Delay])
         .unwrap_err();
 
-    assert!(err.to_string().contains("target instruction basis"));
+    assert!(matches!(err, CompilerError::InvalidInput(_)));
 }
 
 #[test]
-fn round_limit_reports_diagnostic_when_not_stable() {
-    let mut circuit = Circuit::new(1);
-    circuit.x2p(Qubit::new(0)).unwrap();
-    circuit.x2p(Qubit::new(0)).unwrap();
-    circuit.x(Qubit::new(0)).unwrap();
-    let mut ctx = CompilerContext::new(circuit);
+fn rejects_zero_round_limit() {
+    let circuit = Circuit::new(1);
+    let err = KnowledgeRewriter::new(RewriteConfig::production().with_max_rounds(0))
+        .run(&circuit)
+        .unwrap_err();
 
-    let outcome = KnowledgeRewriter::new(RewriteConfig::new().with_max_rounds(1))
-        .run(&mut ctx)
+    assert!(matches!(err, CompilerError::InvalidInput(_)));
+}
+
+#[test]
+fn preserves_control_flow_body_local_global_phase() {
+    let q0 = Qubit::new(0);
+    let q1 = Qubit::new(1);
+    let mut circuit = Circuit::new(2);
+    let body = vec![
+        Operation {
+            instruction: Instruction::Standard(StandardGate::H),
+            qubits: smallvec![q1],
+            params: smallvec![],
+            label: None,
+        },
+        Operation {
+            instruction: Instruction::Standard(StandardGate::Y),
+            qubits: smallvec![q1],
+            params: smallvec![],
+            label: None,
+        },
+        Operation {
+            instruction: Instruction::Standard(StandardGate::H),
+            qubits: smallvec![q1],
+            params: smallvec![],
+            label: None,
+        },
+    ];
+    circuit
+        .if_else(ConditionView::new(q0, 1), body, None)
         .unwrap();
 
-    assert!(outcome.changed);
-    assert!(
-        outcome
-            .diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.code == "compiler.rewrite.round_limit_reached")
-    );
+    let result = KnowledgeRewriter::production().run(&circuit).unwrap();
+
+    assert!(result.changed);
+    let Instruction::ControlFlowGate(ControlFlow::IfElse(gate)) =
+        &result.circuit.operations()[0].instruction
+    else {
+        panic!("expected if-else operation");
+    };
+    assert_eq!(gate.true_body().len(), 2);
+    assert!(matches!(
+        gate.true_body()[0].instruction,
+        Instruction::Standard(StandardGate::GPhase)
+    ));
+    assert!(matches!(
+        gate.true_body()[1].instruction,
+        Instruction::Standard(StandardGate::Y)
+    ));
+}
+
+#[test]
+fn rewrites_false_branch_and_while_body() {
+    let q0 = Qubit::new(0);
+    let q1 = Qubit::new(1);
+    let cancel_body = vec![
+        Operation {
+            instruction: Instruction::Standard(StandardGate::H),
+            qubits: smallvec![q1],
+            params: smallvec![],
+            label: None,
+        },
+        Operation {
+            instruction: Instruction::Standard(StandardGate::H),
+            qubits: smallvec![q1],
+            params: smallvec![],
+            label: None,
+        },
+    ];
+
+    let mut if_circuit = Circuit::new(2);
+    if_circuit
+        .if_else(
+            ConditionView::new(q0, 1),
+            vec![Operation {
+                instruction: Instruction::Standard(StandardGate::X),
+                qubits: smallvec![q1],
+                params: smallvec![],
+                label: None,
+            }],
+            Some(cancel_body.clone()),
+        )
+        .unwrap();
+    let if_result = KnowledgeRewriter::production().run(&if_circuit).unwrap();
+    let Instruction::ControlFlowGate(ControlFlow::IfElse(if_gate)) =
+        &if_result.circuit.operations()[0].instruction
+    else {
+        panic!("expected if-else operation");
+    };
+    assert_eq!(if_gate.true_body().len(), 1);
+    assert_eq!(if_gate.false_body().unwrap().len(), 0);
+
+    let mut while_circuit = Circuit::new(2);
+    while_circuit
+        .while_loop(ConditionView::new(q0, 1), cancel_body)
+        .unwrap();
+    let while_result = KnowledgeRewriter::production().run(&while_circuit).unwrap();
+    let Instruction::ControlFlowGate(ControlFlow::WhileLoop(while_gate)) =
+        &while_result.circuit.operations()[0].instruction
+    else {
+        panic!("expected while-loop operation");
+    };
+    assert!(while_gate.body().is_empty());
+}
+
+#[test]
+fn rewrites_control_flow_body_with_valid_rebuilt_parameter_table() {
+    let q0 = Qubit::new(0);
+    let q1 = Qubit::new(1);
+    let theta = Parameter::symbol("theta");
+    let mut circuit = Circuit::new(2);
+    let (theta_index, _) = circuit.add_parameter(theta.clone());
+    let body = vec![
+        Operation {
+            instruction: Instruction::Standard(StandardGate::RZ),
+            qubits: smallvec![q1],
+            params: smallvec![CircuitParam::Index(theta_index as u32)],
+            label: None,
+        },
+        Operation {
+            instruction: Instruction::Standard(StandardGate::RZ),
+            qubits: smallvec![q1],
+            params: smallvec![CircuitParam::Fixed(0.5)],
+            label: None,
+        },
+    ];
+    circuit
+        .if_else(ConditionView::new(q0, 1), body, None)
+        .unwrap();
+
+    let config = RewriteConfig::production().with_enabled_kinds(vec![RuleKind::Merge]);
+    let result = KnowledgeRewriter::new(config).run(&circuit).unwrap();
+    let Instruction::ControlFlowGate(ControlFlow::IfElse(gate)) =
+        &result.circuit.operations()[0].instruction
+    else {
+        panic!("expected if-else operation");
+    };
+    assert_eq!(gate.true_body().len(), 1);
+    let body_param = &gate.true_body()[0].params[0];
+    let merged = operation_param(&result.circuit, body_param);
+    assert!(merged.provably_equal(&(theta + Parameter::from(0.5)), 1e-12));
+}
+
+fn operation_param(circuit: &Circuit, param: &CircuitParam) -> Parameter {
+    match param {
+        CircuitParam::Fixed(value) => Parameter::from(*value),
+        CircuitParam::Index(index) => circuit
+            .parameters()
+            .get_index(*index as usize)
+            .cloned()
+            .expect("parameter index should exist in rebuilt circuit"),
+    }
 }

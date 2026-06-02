@@ -10,73 +10,23 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
-//! Target-basis policy for knowledge rewrite.
-//!
-//! The central invariant is that `physical_keys` are the user's requested final
-//! basis, while `lowerable_ranks` are only a search aid.  Lowerable instructions
-//! may appear on an intermediate RHS, but they must never be counted as final
-//! target support.
+//! Target-basis policy for knowledge-based rewrite.
 
 use crate::circuit::{Circuit, ControlFlow, Instruction, Operation, StandardGate};
 use crate::compiler::error::CompilerError;
 use crate::compiler::knowledge::library::RuleKind;
+use crate::compiler::knowledge::matcher::KnowledgeInstructionKey as RewriteInstructionKey;
 use crate::compiler::transform::rewrite::config::{RewriteConfig, RewriteMode, TargetInstruction};
+use crate::compiler::transform::rewrite::matcher::CompiledRuleSet;
 use std::collections::{HashMap, HashSet};
-
-use super::matcher::{CompiledRuleSet, RewriteInstructionKey};
 
 const NON_LOWERABLE_DISTANCE: usize = 1_000_000;
 const MAX_FINAL_TARGET_EXAMPLES: usize = 3;
 
 /// Target-basis lookup used by matcher filtering and local cost.
 pub(super) struct TargetContext {
-    physical: PhysicalTargetBasis,
+    physical_keys: HashSet<RewriteInstructionKey>,
     lowerable_ranks: HashMap<RewriteInstructionKey, usize>,
-}
-
-/// User-requested final instruction basis.
-///
-/// This type deliberately has no lowerable state.  Any check using it is asking
-/// whether an operation may remain in the finished circuit, not whether a rule
-/// may pass through it while searching.
-pub(super) struct PhysicalTargetBasis {
-    keys: HashSet<RewriteInstructionKey>,
-}
-
-impl PhysicalTargetBasis {
-    pub(super) fn from_config(config: &RewriteConfig) -> Result<Option<Self>, CompilerError> {
-        let Some(target_instructions) = config.target_instructions() else {
-            return Ok(None);
-        };
-        if target_instructions.is_empty() {
-            return Err(CompilerError::InvalidContextState(
-                "rewrite target instruction basis must not be empty".to_string(),
-            ));
-        }
-
-        let mut keys = HashSet::with_capacity(target_instructions.len());
-        for instruction in target_instructions {
-            match instruction {
-                TargetInstruction::Standard(gate) => {
-                    keys.insert(RewriteInstructionKey::Standard(*gate));
-                }
-                TargetInstruction::McGate(gate) => {
-                    keys.insert(RewriteInstructionKey::McGate(gate.clone()));
-                }
-                TargetInstruction::Unsupported(description) => {
-                    return Err(CompilerError::InvalidContextState(format!(
-                        "unsupported rewrite target instruction {description}"
-                    )));
-                }
-            }
-        }
-
-        Ok(Some(Self { keys }))
-    }
-
-    fn supports(&self, key: &RewriteInstructionKey) -> bool {
-        self.keys.contains(key)
-    }
 }
 
 impl TargetContext {
@@ -84,12 +34,11 @@ impl TargetContext {
         config: &RewriteConfig,
         rules: &CompiledRuleSet,
     ) -> Result<Option<Self>, CompilerError> {
-        let Some(physical) = PhysicalTargetBasis::from_config(config)? else {
+        let Some(physical_keys) = physical_keys_from_config(config)? else {
             return Ok(None);
         };
 
-        let mut lowerable_ranks = physical
-            .keys
+        let mut lowerable_ranks = physical_keys
             .iter()
             .cloned()
             .map(|key| (key, 0))
@@ -97,18 +46,18 @@ impl TargetContext {
 
         loop {
             let mut changed = false;
-            for rule in rules.lowerable_rule_views() {
-                if rule.kind == RuleKind::Commute
-                    || !config.allows_kind(rule.kind)
-                    || rule.source_keys.len() != 1
-                    || rule.has_conditions
+            for (kind, source_keys, rewrite_keys, has_conditions) in rules.lowerable_rules() {
+                if kind == RuleKind::Commute
+                    || !config.allows_kind(kind)
+                    || source_keys.len() != 1
+                    || has_conditions
                 {
                     continue;
                 }
 
                 let mut max_rewrite_rank = 0usize;
                 let mut rewrite_is_lowerable = true;
-                for key in rule.rewrite_keys {
+                for key in rewrite_keys {
                     if matches!(key, RewriteInstructionKey::Standard(StandardGate::GPhase)) {
                         continue;
                     }
@@ -124,7 +73,7 @@ impl TargetContext {
                 }
 
                 let candidate_rank = max_rewrite_rank.saturating_add(1);
-                let source_key = rule.source_keys[0].clone();
+                let source_key = source_keys[0].clone();
                 match lowerable_ranks.get_mut(&source_key) {
                     Some(existing_rank) if candidate_rank < *existing_rank => {
                         *existing_rank = candidate_rank;
@@ -137,13 +86,14 @@ impl TargetContext {
                     }
                 }
             }
+
             if !changed {
                 break;
             }
         }
 
         Ok(Some(Self {
-            physical,
+            physical_keys,
             lowerable_ranks,
         }))
     }
@@ -154,7 +104,7 @@ impl TargetContext {
     }
 
     pub(super) fn physically_supports(&self, key: &RewriteInstructionKey) -> bool {
-        self.physical.supports(key)
+        self.physical_keys.contains(key)
     }
 
     pub(super) fn lowering_distance(&self, key: &RewriteInstructionKey) -> usize {
@@ -171,26 +121,25 @@ impl TargetContext {
 pub(super) fn validate_final_target(
     circuit: &Circuit,
     config: &RewriteConfig,
-    transform_name: &'static str,
 ) -> Result<(), CompilerError> {
     if config.mode() != RewriteMode::Lowering || config.target_instructions().is_none() {
         return Ok(());
     }
 
-    let Some(physical_target) = PhysicalTargetBasis::from_config(config)? else {
+    let Some(physical_keys) = physical_keys_from_config(config)? else {
         return Ok(());
     };
 
     let mut scan = FinalTargetScan::default();
     scan_operations(
         circuit.operations(),
-        &physical_target,
+        &physical_keys,
         config.recurses_control_flow(),
         &mut scan,
     );
 
     if scan.control_flow_ops > 0 {
-        return Err(CompilerError::InvalidContextState(
+        return Err(CompilerError::InvalidInput(
             "rewrite cannot prove final target instruction basis while recurse_control_flow is disabled and control-flow operations are present".to_string(),
         ));
     }
@@ -205,10 +154,7 @@ pub(super) fn validate_final_target(
     if !scan.examples.is_empty() {
         reason.push_str(&format!(" (examples: {})", scan.examples.join(", ")));
     }
-    Err(CompilerError::TransformFailed {
-        name: transform_name,
-        reason,
-    })
+    Err(CompilerError::InvalidInput(reason))
 }
 
 #[derive(Default)]
@@ -220,7 +166,7 @@ struct FinalTargetScan {
 
 fn scan_operations(
     operations: &[Operation],
-    physical_target: &PhysicalTargetBasis,
+    physical_keys: &HashSet<RewriteInstructionKey>,
     recurse_control_flow: bool,
     scan: &mut FinalTargetScan,
 ) {
@@ -229,7 +175,7 @@ fn scan_operations(
             Instruction::Standard(_) | Instruction::McGate(_) => {
                 let key = RewriteInstructionKey::from_instruction(&operation.instruction)
                     .expect("standard and multi-controlled gates are rewrite instruction keys");
-                if !physical_target.supports(&key) {
+                if !physical_keys.contains(&key) {
                     scan.add_unsupported(&operation.instruction);
                 }
             }
@@ -242,26 +188,21 @@ fn scan_operations(
                         ControlFlow::IfElse(gate) => {
                             scan_operations(
                                 gate.true_body(),
-                                physical_target,
+                                physical_keys,
                                 recurse_control_flow,
                                 scan,
                             );
                             if let Some(false_body) = gate.false_body() {
                                 scan_operations(
                                     false_body,
-                                    physical_target,
+                                    physical_keys,
                                     recurse_control_flow,
                                     scan,
                                 );
                             }
                         }
                         ControlFlow::WhileLoop(gate) => {
-                            scan_operations(
-                                gate.body(),
-                                physical_target,
-                                recurse_control_flow,
-                                scan,
-                            );
+                            scan_operations(gate.body(), physical_keys, recurse_control_flow, scan);
                         }
                     }
                 } else {
@@ -271,6 +212,33 @@ fn scan_operations(
             Instruction::Directive(_) | Instruction::Delay => {}
         }
     }
+}
+
+fn physical_keys_from_config(
+    config: &RewriteConfig,
+) -> Result<Option<HashSet<RewriteInstructionKey>>, CompilerError> {
+    let Some(target_instructions) = config.target_instructions() else {
+        return Ok(None);
+    };
+    if target_instructions.is_empty() {
+        return Err(CompilerError::InvalidInput(
+            "rewrite target instruction basis must not be empty".to_string(),
+        ));
+    }
+
+    let mut keys = HashSet::with_capacity(target_instructions.len());
+    for instruction in target_instructions {
+        match instruction {
+            TargetInstruction::Standard(gate) => {
+                keys.insert(RewriteInstructionKey::Standard(*gate));
+            }
+            TargetInstruction::McGate(gate) => {
+                keys.insert(RewriteInstructionKey::McGate(gate.clone()));
+            }
+        }
+    }
+
+    Ok(Some(keys))
 }
 
 impl FinalTargetScan {

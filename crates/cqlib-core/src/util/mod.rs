@@ -13,3 +13,9 @@
 //! Internal utility types shared across cqlib-core.
 
 pub mod aligned;
+pub mod matrix;
+pub mod operation;
+pub mod qubit;
+
+#[cfg(test)]
+pub mod test_utils;

@@ -10,110 +10,34 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
-//! Single-operation canonicalization utilities.
-//!
-//! This module provides helpers for:
-//! - resolving `CircuitParam` references into semantic `Parameter` values
-//! - detecting and dropping trivial no-ops
-//! - canonicalizing barrier qubit lists (sorting and deduplication)
-//! - comparing and merging barrier scopes and labels
-//!
-//! These helpers are used by both the top-level linear scan (`linear.rs`) and
-//! the control-flow body rebuild path so that canonicalization behavior stays
-//! identical regardless of where an operation appears in the circuit.
+//! Operation-level canonicalization helpers.
 
 use crate::circuit::{
-    Circuit, CircuitParam, Directive, Instruction, Operation, Parameter, ParameterValue,
-    StandardGate,
+    ControlFlow, Directive, Instruction, Operation, Parameter, Qubit, StandardGate,
 };
-use crate::compiler::error::CompilerError;
+use crate::compiler::CompilerError;
 use smallvec::SmallVec;
+use std::collections::BTreeSet;
 
 use super::config::CanonicalizeConfig;
+use super::params::parameter_is_exact_zero;
 
-/// Resolves an operation-local parameter reference into the semantic
-/// `Parameter` value it denotes.
-///
-/// This keeps structural canonicalization honest about the distinction between:
-/// - `Circuit.parameters`: the circuit-wide parameter pool
-/// - `Operation.params`: compact `CircuitParam` references into that pool
-pub(crate) fn resolve_operation_param(
-    circuit: &Circuit,
-    param: &CircuitParam,
-) -> Result<Parameter, CompilerError> {
-    match param {
-        CircuitParam::Fixed(value) => Ok(Parameter::from(*value)),
-        CircuitParam::Index(index) => circuit
-            .parameters()
-            .get_index(*index as usize)
-            .cloned()
-            .ok_or_else(|| {
-                CompilerError::InvalidContextState(format!(
-                    "invalid control-flow body parameter index {}",
-                    index
-                ))
-            }),
-    }
-}
-
-/// Resolves a `CircuitParam` into a `ParameterValue` for use in a
-/// `PendingOperation`.
-pub(crate) fn resolve_parameter_value(
-    circuit: &Circuit,
-    param: &CircuitParam,
-) -> Result<ParameterValue, CompilerError> {
-    match param {
-        CircuitParam::Fixed(value) => Ok(ParameterValue::Fixed(*value)),
-        CircuitParam::Index(_) => Ok(resolve_operation_param(circuit, param)?.into()),
-    }
-}
-
-/// Returns the first resolved parameter of an operation, if any.
-pub(crate) fn operation_first_param(
-    circuit: &Circuit,
-    operation: &Operation,
-) -> Result<Option<Parameter>, CompilerError> {
-    operation
-        .params
-        .first()
-        .map(|param| resolve_operation_param(circuit, param))
-        .transpose()
-}
-
-/// Determines whether an operation is a trivial no-op that can be dropped.
-///
-/// Hard-coded rules (kept as `match` arms because the set is small and stable):
-/// - Unlabeled `I` gate — exactly identity.
-/// - Unlabeled `Delay(0)` — zero-duration delay has no effect.
-/// - Unlabeled `RX/RY/RZ/Phase/RXX/RYY/RZZ/RZX(0)` — rotation by zero is identity.
-/// - Unlabeled barrier with an empty qubit set — conveys no synchronization info.
-///
-/// Labeled operations are retained even when they are quantum-semantic no-ops
-/// because operation labels are user-visible metadata.
-pub(crate) fn should_drop_operation(
-    circuit: &Circuit,
-    operation: &Operation,
+pub(super) fn is_strict_noop(
     instruction: &Instruction,
-    qubits: &[crate::circuit::Qubit],
-    config: &CanonicalizeConfig,
+    params: &[Parameter],
+    qubits: &[Qubit],
 ) -> Result<bool, CompilerError> {
-    if !config.drops_trivial_noops() {
-        return Ok(false);
-    }
-
-    if operation.label.is_some() {
-        return Ok(false);
-    }
-
-    if is_barrier_instruction(instruction) && qubits.is_empty() {
-        return Ok(true);
-    }
-
     Ok(match instruction {
         Instruction::Standard(StandardGate::I) => true,
-        Instruction::Delay => {
-            operation_first_param(circuit, operation)?.is_some_and(|param| param.is_zero())
-        }
+        Instruction::Standard(StandardGate::GPhase) => match params.first() {
+            Some(param) => parameter_is_exact_zero(param)?,
+            None => false,
+        },
+        Instruction::Directive(Directive::Barrier) => qubits.is_empty(),
+        Instruction::Delay => match params.first() {
+            Some(param) => parameter_is_exact_zero(param)?,
+            None => false,
+        },
         Instruction::Standard(
             StandardGate::RX
             | StandardGate::RY
@@ -122,61 +46,106 @@ pub(crate) fn should_drop_operation(
             | StandardGate::RXX
             | StandardGate::RYY
             | StandardGate::RZZ
-            | StandardGate::RZX,
-        ) => operation_first_param(circuit, operation)?.is_some_and(|param| param.is_zero()),
+            | StandardGate::RZX
+            | StandardGate::CRX
+            | StandardGate::CRY
+            | StandardGate::CRZ,
+        ) => match params.first() {
+            Some(param) => parameter_is_exact_zero(param)?,
+            None => false,
+        },
+        Instruction::Standard(StandardGate::RXY) => match params.first() {
+            Some(param) => parameter_is_exact_zero(param)?,
+            None => false,
+        },
+        Instruction::Standard(StandardGate::FSIM) => {
+            params.len() == 2
+                && parameter_is_exact_zero(&params[0])?
+                && parameter_is_exact_zero(&params[1])?
+        }
+        Instruction::Standard(StandardGate::U) => {
+            params.len() == 3
+                && parameter_is_exact_zero(&params[0])?
+                && parameter_is_exact_zero(&params[1])?
+                && parameter_is_exact_zero(&params[2])?
+        }
         _ => false,
     })
 }
 
-/// Returns `true` if the instruction is a barrier directive.
-pub(crate) fn is_barrier_instruction(instruction: &Instruction) -> bool {
-    matches!(instruction, Instruction::Directive(Directive::Barrier))
-}
-
-/// Sorts and deduplicates the qubit list for barrier instructions.
-///
-/// Non-barrier instructions are returned unchanged.
-pub(crate) fn canonicalize_barrier_qubits(
+pub(super) fn canonicalize_operation_qubits(
     instruction: &Instruction,
-    qubits: &SmallVec<[crate::circuit::Qubit; 3]>,
-) -> SmallVec<[crate::circuit::Qubit; 3]> {
-    if !is_barrier_instruction(instruction) {
+    qubits: &SmallVec<[Qubit; 3]>,
+    config: &CanonicalizeConfig,
+) -> SmallVec<[Qubit; 3]> {
+    if !config.canonicalizes_barriers()
+        || !matches!(instruction, Instruction::Directive(Directive::Barrier))
+    {
         return qubits.clone();
     }
 
-    let mut qubits = qubits.clone();
-    qubits.sort_unstable_by_key(|qubit| qubit.id());
-    qubits.dedup();
-    qubits
+    // Barrier scopes are sets for canonicalization purposes. Sorting by the
+    // stable qubit id gives deterministic output independent of construction
+    // order, and deduplication removes redundant synchronization operands.
+    let mut out = qubits.clone();
+    out.sort_unstable_by_key(|qubit| qubit.id());
+    out.dedup();
+    out
 }
 
-/// Relationship between two barrier qubit sets for merge decisions.
+pub(super) fn push_operation(
+    out: &mut Vec<Operation>,
+    mut operation: Operation,
+    config: &CanonicalizeConfig,
+) {
+    if !config.canonicalizes_barriers()
+        || !matches!(
+            operation.instruction,
+            Instruction::Directive(Directive::Barrier)
+        )
+    {
+        out.push(operation);
+        return;
+    }
+
+    operation.label = None;
+    if let Some(last) = out.last_mut() {
+        if matches!(last.instruction, Instruction::Directive(Directive::Barrier)) {
+            // Adjacent barriers are a single synchronization boundary whenever
+            // one scope covers the other. Partial overlap is deliberately not
+            // merged because neither barrier fully subsumes the other.
+            match barrier_relation(&last.qubits, &operation.qubits) {
+                BarrierRelation::Equal | BarrierRelation::LeftSuperset => {
+                    last.label = None;
+                    return;
+                }
+                BarrierRelation::RightSuperset => {
+                    *last = operation;
+                    last.label = None;
+                    return;
+                }
+                BarrierRelation::DisjointOrOverlap => {}
+            }
+        }
+    }
+    out.push(operation);
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum BarrierRelation {
+pub(super) enum BarrierRelation {
     Equal,
     LeftSuperset,
     RightSuperset,
     DisjointOrOverlap,
 }
 
-/// Compares two sorted barrier qubit scopes to decide mergeability.
-///
-/// Returns:
-/// - `Equal` — identical sets.
-/// - `LeftSuperset` — `lhs` strictly contains `rhs`.
-/// - `RightSuperset` — `rhs` strictly contains `lhs`.
-/// - `DisjointOrOverlap` — neither is a superset of the other.
-pub(crate) fn compare_barrier_scope(
-    lhs: &[crate::circuit::Qubit],
-    rhs: &[crate::circuit::Qubit],
-) -> BarrierRelation {
+pub(super) fn barrier_relation(lhs: &[Qubit], rhs: &[Qubit]) -> BarrierRelation {
     if lhs == rhs {
         return BarrierRelation::Equal;
     }
 
     let lhs_contains_rhs = rhs.iter().all(|qubit| lhs.contains(qubit));
     let rhs_contains_lhs = lhs.iter().all(|qubit| rhs.contains(qubit));
-
     match (lhs_contains_rhs, rhs_contains_lhs) {
         (true, false) => BarrierRelation::LeftSuperset,
         (false, true) => BarrierRelation::RightSuperset,
@@ -184,41 +153,54 @@ pub(crate) fn compare_barrier_scope(
     }
 }
 
-/// Merges two operation labels, preserving uniqueness and original order.
-///
-/// Labels are split on `" | "`, deduplicated while keeping the first-seen
-/// order, and re-joined with the same separator. This prevents duplicate
-/// metadata when two barriers are collapsed into one.
-pub(crate) fn merge_operation_labels(
-    primary: Option<Box<str>>,
-    absorbed: Option<Box<str>>,
-) -> Option<Box<str>> {
-    match (primary, absorbed) {
-        (None, None) => None,
-        (Some(label), None) | (None, Some(label)) => Some(label),
-        (Some(primary), Some(absorbed)) => {
-            if primary == absorbed {
-                return Some(primary);
+pub(super) fn canonical_control_flow_qubits_for_operation(
+    instruction: &Instruction,
+    circuit_qubits: &[Qubit],
+) -> SmallVec<[Qubit; 3]> {
+    let mut required = BTreeSet::new();
+    match instruction {
+        Instruction::ControlFlowGate(ControlFlow::IfElse(gate)) => {
+            required.insert(gate.condition().qubit);
+            collect_body_qubits(gate.true_body(), &mut required);
+            if let Some(false_body) = gate.false_body() {
+                collect_body_qubits(false_body, &mut required);
             }
-
-            let mut merged = Vec::new();
-            for part in split_merged_label(&primary) {
-                if !merged.iter().any(|existing| *existing == part) {
-                    merged.push(part.to_string());
-                }
-            }
-            for part in split_merged_label(&absorbed) {
-                if !merged.iter().any(|existing| *existing == part) {
-                    merged.push(part.to_string());
-                }
-            }
-
-            Some(merged.join(" | ").into_boxed_str())
         }
+        Instruction::ControlFlowGate(ControlFlow::WhileLoop(gate)) => {
+            required.insert(gate.condition().qubit);
+            collect_body_qubits(gate.body(), &mut required);
+        }
+        _ => {}
     }
+
+    // Preserve the parent circuit's qubit order rather than the order in which
+    // nested body operations happen to mention qubits. This makes the outer
+    // control-flow operation stable after body cleanup.
+    circuit_qubits
+        .iter()
+        .copied()
+        .filter(|qubit| required.contains(qubit))
+        .collect()
 }
 
-/// Splits a merged label into its constituent parts.
-fn split_merged_label(label: &str) -> impl Iterator<Item = &str> {
-    label.split(" | ")
+fn collect_body_qubits(operations: &[Operation], out: &mut BTreeSet<Qubit>) {
+    for operation in operations {
+        for &qubit in &operation.qubits {
+            out.insert(qubit);
+        }
+        match &operation.instruction {
+            Instruction::ControlFlowGate(ControlFlow::IfElse(gate)) => {
+                out.insert(gate.condition().qubit);
+                collect_body_qubits(gate.true_body(), out);
+                if let Some(false_body) = gate.false_body() {
+                    collect_body_qubits(false_body, out);
+                }
+            }
+            Instruction::ControlFlowGate(ControlFlow::WhileLoop(gate)) => {
+                out.insert(gate.condition().qubit);
+                collect_body_qubits(gate.body(), out);
+            }
+            _ => {}
+        }
+    }
 }

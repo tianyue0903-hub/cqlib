@@ -10,29 +10,18 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
-pub mod analysis;
-pub mod api;
-pub mod artifact;
 pub mod commutation;
-pub mod context;
+pub mod compile;
 pub mod error;
 pub mod knowledge;
+pub mod resource;
 pub mod transform;
-pub mod verify;
 pub mod workflow;
 
-pub use analysis::AnalysisStore;
-pub use api::{CompileOptions, CompilePreset, compile};
-pub use artifact::{
-    ArtifactMetadata, CompileArtifact, CompileDiagnostic, CompileStatus, CompileSummary,
-    CompileTrace, DiagnosticSeverity,
+pub use commutation::{
+    Commutation, CommutationChecker, CommutationConfig, CommutationResult, algebraic_commutation,
+    check_commutation,
 };
-pub use context::{CompilerContext, ContextChangeSet, ContextMetadata, VerificationConfig};
+pub use compile::{CompileConfig, CompileMode, CompileResult, compile};
 pub use error::CompilerError;
-pub use transform::canonicalize::{CanonicalRuleId, CanonicalizeConfig, Canonicalizer};
-pub use transform::resynthesis::{
-    ResynthesisBudget, ResynthesisObjective, ResynthesisProfile, ResynthesisScope, Resynthesizer,
-};
-pub use workflow::{
-    CompilerWorkflow, WorkflowReport, WorkflowStep, WorkflowStepReport, build_workflow,
-};
+pub use workflow::{CompilerWorkflow, WorkflowStepReport};
