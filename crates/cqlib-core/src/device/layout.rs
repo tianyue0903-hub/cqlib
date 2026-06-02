@@ -9,110 +9,102 @@
 // Any modifications or derivative works of this code must retain this
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
+//
+// Modified from the original work.
 
-//! Qubit layout management for quantum circuit routing.
+//! Logical-to-physical qubit layout management for circuit routing.
 //!
-//! This module provides [`Layout`], which maps logical (virtual) qubits to physical
-//! qubits on a quantum device. Layout is essential for circuit routing algorithms
-//! like SABRE that need to track how virtual qubits move across physical hardware.
+//! [`Layout`] tracks where circuit logical qubits are placed on a quantum
+//! device. Physical qubits that do not carry a logical qubit remain vacant and
+//! may be used by routing or by a later compiler step that explicitly activates
+//! an auxiliary logical qubit.
 //!
-//! # Concepts
-//!
-//! - **Logical qubits**: Virtual qubits used in the quantum circuit (Q0, Q1, ...)
-//! - **Physical qubits**: Actual hardware qubits on the device (P100, P101, ...)
-//! - **Ancilla qubits**: Automatically generated auxiliary qubits to fill unused physical qubits
+//! Layout does not allocate auxiliary qubits. Algorithm auxiliary qubits are
+//! logical circuit resources and must be managed by the compiler resource
+//! manager before they are bound to physical qubits.
 //!
 //! # Example
 //!
 //! ```
-//! use cqlib_core::circuit::Qubit;
-//! use cqlib_core::device::Layout;
+//! use cqlib_core::device::{Layout, LogicalQubit, PhysicalQubit};
 //!
-//! // Create a layout with 2 logical qubits mapped to 3 physical qubits
-//! let logical = vec![Qubit::new(0), Qubit::new(1)];
-//! let physical = vec![Qubit::new(100), Qubit::new(101), Qubit::new(102)];
+//! let logical = vec![LogicalQubit::new(0), LogicalQubit::new(1)];
+//! let physical = vec![
+//!     PhysicalQubit::new(100),
+//!     PhysicalQubit::new(101),
+//!     PhysicalQubit::new(102),
+//! ];
 //!
-//! let layout = Layout::new(logical, physical, None).unwrap();
+//! let mut layout = Layout::new(logical, physical, None).unwrap();
+//! assert_eq!(layout.num_vacant_physical(), 1);
 //!
-//! // Query mappings
-//! assert!(layout.get_physical(Qubit::new(0)).is_some());
-//! assert_eq!(layout.num_ancilla(), 1); // 1 ancilla auto-generated
+//! layout
+//!     .bind(LogicalQubit::new(2), PhysicalQubit::new(102))
+//!     .unwrap();
+//! assert_eq!(layout.num_vacant_physical(), 0);
 //! ```
 
-use crate::circuit::Qubit;
 use crate::device::error::LayoutError;
-use std::collections::{HashMap, HashSet};
+use crate::device::{LogicalQubit, PhysicalQubit};
+use std::collections::{BTreeMap, BTreeSet};
 
-/// Maps logical (virtual) qubits to physical qubits on a quantum device.
+/// Maps circuit logical qubits to physical qubits on a quantum device.
 ///
-/// A layout represents the current assignment of virtual qubits to physical hardware.
-/// It is used by routing algorithms to track qubit placement and update mappings
-/// when SWAP gates are inserted.
+/// A layout owns the set of physical qubits available to a placement or
+/// routing step. Every logical qubit present in the layout has exactly one
+/// physical mapping. A physical qubit may be vacant.
 ///
-/// The layout maintains bidirectional mappings:
-/// - `v2p`: virtual qubit → physical qubit
-/// - `p2v`: physical qubit → virtual qubit
-///
-/// # Ancilla Qubit IDs
-///
-/// Ancilla qubits are automatically generated to fill unused physical qubits. They are
-/// assigned IDs starting from `max(logical_qubit_id) + 1`. These IDs may overlap with
-/// physical qubit IDs (e.g., if physical qubits start from 0), but this is safe because
-/// ancilla and physical qubits are used in different contexts (virtual vs physical).
+/// Auxiliary qubit ownership and lifetime are intentionally outside this type.
+/// From the layout perspective, an auxiliary logical qubit behaves like any
+/// other logical qubit after it is explicitly [`Layout::bind`]ed.
 #[derive(Debug, Clone, Default)]
 pub struct Layout {
-    /// Set of logical (virtual) qubits in the circuit.
-    logical_qubits: HashSet<Qubit>,
-    /// Set of ancilla qubits auto-generated to fill unused physical qubits.
-    ancilla_qubits: HashSet<Qubit>,
-    /// Set of physical qubits available on the device.
-    physical_qubits: HashSet<Qubit>,
-    /// Bidirectional mapping: virtual qubit → physical qubit.
-    v2p: HashMap<Qubit, Qubit>,
-    /// Bidirectional mapping: physical qubit → virtual qubit.
-    p2v: HashMap<Qubit, Qubit>,
+    /// Physical qubits available to this layout.
+    physical_qubits: BTreeSet<PhysicalQubit>,
+    /// Mapping from circuit logical qubits to device physical qubits.
+    l2p: BTreeMap<LogicalQubit, PhysicalQubit>,
+    /// Reverse mapping from device physical qubits to circuit logical qubits.
+    p2l: BTreeMap<PhysicalQubit, LogicalQubit>,
 }
 
 impl Layout {
-    /// Creates a new layout mapping logical qubits to physical qubits.
+    /// Creates a layout and maps each supplied logical qubit to a physical qubit.
     ///
-    /// # Arguments
-    ///
-    /// * `logical` - List of logical (virtual) qubits to be mapped
-    /// * `physical` - List of physical qubits available on the device
-    /// * `init_map` - Optional initial mapping from logical to physical qubits
+    /// Entries in `init_map` are applied first. Remaining logical qubits are
+    /// mapped to remaining physical qubits in the order supplied by `logical`
+    /// and `physical`. Extra physical qubits remain vacant.
     ///
     /// # Errors
     ///
     /// Returns [`LayoutError`] if:
-    /// - `logical.len() > physical.len()`
-    /// - `init_map` contains invalid virtual or physical qubits
-    /// - `init_map` maps multiple virtual qubits to the same physical qubit
+    /// - there are more logical qubits than physical qubits;
+    /// - the logical or physical qubit list contains duplicate entries;
+    /// - `init_map` references an undeclared logical or physical qubit;
+    /// - `init_map` maps multiple logical qubits to one physical qubit.
     ///
     /// # Example
     ///
     /// ```
-    /// use cqlib_core::circuit::Qubit;
-    /// use cqlib_core::device::Layout;
-    /// use std::collections::HashMap;
+    /// use cqlib_core::device::{Layout, LogicalQubit, PhysicalQubit};
+    /// use std::collections::BTreeMap;
     ///
-    /// let logical = vec![Qubit::new(0), Qubit::new(1)];
-    /// let physical = vec![Qubit::new(100), Qubit::new(101), Qubit::new(102)];
+    /// let logical = vec![LogicalQubit::new(0), LogicalQubit::new(1)];
+    /// let physical = vec![PhysicalQubit::new(100), PhysicalQubit::new(101)];
     ///
-    /// // With automatic sequential mapping
-    /// let layout = Layout::new(logical.clone(), physical.clone(), None).unwrap();
+    /// let mut init = BTreeMap::new();
+    /// init.insert(LogicalQubit::new(0), PhysicalQubit::new(101));
     ///
-    /// // With custom initial mapping
-    /// let mut init = HashMap::new();
-    /// init.insert(Qubit::new(0), Qubit::new(100));
     /// let layout = Layout::new(logical, physical, Some(init)).unwrap();
+    /// assert_eq!(
+    ///     layout.get_physical(LogicalQubit::new(0)),
+    ///     Some(PhysicalQubit::new(101)),
+    /// );
     /// ```
     pub fn new(
-        logical: Vec<Qubit>,
-        physical: Vec<Qubit>,
-        init_map: Option<HashMap<Qubit, Qubit>>,
+        logical: Vec<LogicalQubit>,
+        physical: Vec<PhysicalQubit>,
+        init_map: Option<BTreeMap<LogicalQubit, PhysicalQubit>>,
     ) -> Result<Self, LayoutError> {
-        // Validate: logical qubits cannot exceed physical qubits
         if logical.len() > physical.len() {
             return Err(LayoutError::TooManyLogicalQubits {
                 logical: logical.len(),
@@ -120,277 +112,212 @@ impl Layout {
             });
         }
 
-        let logical_set: HashSet<_> = logical.iter().copied().collect();
-        let physical_set: HashSet<_> = physical.iter().copied().collect();
-
-        // Validate init_map if provided
-        if let Some(ref map) = init_map {
-            // Check all virtual qubits in init_map are in the logical list
-            for &v in map.keys() {
-                if !logical_set.contains(&v) {
-                    return Err(LayoutError::InvalidVirtualQubit(v));
-                }
+        let mut logical_qubits = BTreeSet::new();
+        for logical in logical.iter().copied() {
+            if !logical_qubits.insert(logical) {
+                return Err(LayoutError::DuplicateLogicalQubit(logical));
             }
-
-            // Check all physical qubits in init_map are in the physical list
-            for &p in map.values() {
-                if !physical_set.contains(&p) {
-                    return Err(LayoutError::InvalidPhysicalQubit(p));
-                }
-            }
-
-            // Check no duplicate physical qubit mappings
-            let mapped_physicals: HashSet<_> = map.values().copied().collect();
-            if mapped_physicals.len() != map.len() {
-                return Err(LayoutError::DuplicatePhysicalMapping);
-            }
-            // Note: InsufficientPhysicalQubits is mathematically impossible here:
-            // - unmapped_logical = L - M
-            // - ancilla = P - L
-            // - remaining_physical = P - M
-            // So: unmapped_logical + ancilla = (L-M) + (P-L) = P-M = remaining_physical
         }
 
-        // Build logical qubit set
-        let mut logical_qubits = HashSet::new();
-        let max_logical_id = logical.iter().map(|q| q.id()).max();
-        for q in &logical {
-            logical_qubits.insert(*q);
+        let mut physical_qubits = BTreeSet::new();
+        for physical in physical.iter().copied() {
+            if !physical_qubits.insert(physical) {
+                return Err(LayoutError::DuplicatePhysicalQubit(physical));
+            }
         }
-
-        // Generate ancilla qubits to fill the gap between logical and physical counts
-        // Ancilla IDs start from max(logical_id) + 1, which may overlap with physical qubit IDs.
-        // This is safe because ancilla and physical qubits are used in different contexts
-        // (virtual qubits as keys in v2p vs physical qubits as keys in p2v).
-        let num_ancilla = physical.len() - logical.len();
-        let mut ancilla_qubits = HashSet::new();
-        let mut ancilla_vec = Vec::new();
-
-        let mut next_id = max_logical_id.map(|id| id + 1).unwrap_or(0);
-        for _ in 0..num_ancilla {
-            let ancilla = Qubit::new(next_id);
-            ancilla_qubits.insert(ancilla);
-            ancilla_vec.push(ancilla);
-            next_id += 1;
-        }
-
-        let physical_qubits: HashSet<Qubit> = physical.iter().copied().collect();
 
         let mut layout = Self {
-            logical_qubits,
-            ancilla_qubits,
             physical_qubits,
-            v2p: HashMap::new(),
-            p2v: HashMap::new(),
+            l2p: BTreeMap::new(),
+            p2l: BTreeMap::new(),
         };
 
-        if let Some(map) = init_map {
-            // Apply initial mapping
-            for (v, p) in map {
-                layout.v2p.insert(v, p);
-                layout.p2v.insert(p, v);
-            }
+        if let Some(init_map) = init_map {
+            for (logical, physical) in init_map {
+                if !logical_qubits.contains(&logical) {
+                    return Err(LayoutError::InvalidLogicalQubit(logical));
+                }
+                if !layout.physical_qubits.contains(&physical) {
+                    return Err(LayoutError::InvalidPhysicalQubit(physical));
+                }
+                if layout.p2l.contains_key(&physical) {
+                    return Err(LayoutError::PhysicalQubitAlreadyOccupied(physical));
+                }
 
-            // Find unmapped physical qubits
-            let mut unmapped_physicals: Vec<Qubit> = physical
-                .into_iter()
-                .filter(|p| !layout.p2v.contains_key(p))
-                .collect();
-
-            // Map remaining logical qubits to unmapped physical qubits
-            let unmapped_logicals: Vec<Qubit> = logical
-                .into_iter()
-                .filter(|l| !layout.v2p.contains_key(l))
-                .collect();
-
-            for v in unmapped_logicals {
-                let p = unmapped_physicals
-                    .pop()
-                    .expect("unmapped_physicals should not be empty (validated above)");
-                layout.v2p.insert(v, p);
-                layout.p2v.insert(p, v);
-            }
-
-            // Map ancilla qubits to remaining physical qubits
-            for v in ancilla_vec {
-                let p = unmapped_physicals
-                    .pop()
-                    .expect("unmapped_physicals should not be empty (validated above)");
-                layout.v2p.insert(v, p);
-                layout.p2v.insert(p, v);
-            }
-
-            debug_assert!(
-                unmapped_physicals.is_empty(),
-                "All physical qubits should be mapped"
-            );
-        } else {
-            // Sequential mapping: logical + ancilla → physical in order
-            let mut all_virtuals = logical;
-            all_virtuals.extend(ancilla_vec);
-
-            for (v, p) in all_virtuals.into_iter().zip(physical.into_iter()) {
-                layout.v2p.insert(v, p);
-                layout.p2v.insert(p, v);
+                layout.l2p.insert(logical, physical);
+                layout.p2l.insert(physical, logical);
             }
         }
 
-        // Consistency checks
-        debug_assert_eq!(layout.v2p.len(), layout.p2v.len());
-        debug_assert_eq!(layout.v2p.len(), layout.physical_qubits.len());
+        let vacant_physical: Vec<_> = physical
+            .into_iter()
+            .filter(|physical| !layout.p2l.contains_key(physical))
+            .collect();
+        let unmapped_logical: Vec<_> = logical
+            .into_iter()
+            .filter(|logical| !layout.l2p.contains_key(logical))
+            .collect();
 
+        for (logical, physical) in unmapped_logical
+            .into_iter()
+            .zip(vacant_physical.into_iter())
+        {
+            debug_assert!(
+                !layout.p2l.contains_key(&physical),
+                "vacant physical qubit became occupied before initial mapping completed"
+            );
+            layout.l2p.insert(logical, physical);
+            layout.p2l.insert(physical, logical);
+        }
+
+        debug_assert_eq!(
+            layout.l2p.len(),
+            logical_qubits.len(),
+            "logical qubit count was validated against physical capacity"
+        );
+        debug_assert_eq!(
+            layout.l2p.len(),
+            layout.p2l.len(),
+            "each logical mapping must have one reverse mapping"
+        );
         Ok(layout)
     }
 
-    /// Returns the number of logical qubits.
+    /// Returns the number of mapped logical qubits.
     pub fn num_logical(&self) -> usize {
-        self.logical_qubits.len()
+        self.l2p.len()
     }
 
-    /// Returns the number of ancilla qubits.
-    pub fn num_ancilla(&self) -> usize {
-        self.ancilla_qubits.len()
-    }
-
-    /// Returns the number of physical qubits.
+    /// Returns the number of physical qubits available to the layout.
     pub fn num_physical(&self) -> usize {
         self.physical_qubits.len()
     }
 
-    /// Returns the physical qubit that a virtual qubit is mapped to.
-    ///
-    /// # Arguments
-    ///
-    /// * `virtual_id` - The virtual qubit to look up
-    ///
-    /// # Returns
-    ///
-    /// `Some(Qubit)` if the virtual qubit is mapped, `None` otherwise.
-    pub fn get_physical(&self, virtual_id: Qubit) -> Option<Qubit> {
-        self.v2p.get(&virtual_id).copied()
+    /// Returns the number of physical qubits that do not carry a logical qubit.
+    pub fn num_vacant_physical(&self) -> usize {
+        self.physical_qubits.len() - self.p2l.len()
     }
 
-    /// Returns the virtual qubit mapped to a physical qubit.
-    ///
-    /// # Arguments
-    ///
-    /// * `physical_id` - The physical qubit to look up
-    ///
-    /// # Returns
-    ///
-    /// `Some(Qubit)` if a virtual qubit is mapped to this physical qubit, `None` otherwise.
-    pub fn get_virtual(&self, physical_id: Qubit) -> Option<Qubit> {
-        self.p2v.get(&physical_id).copied()
+    /// Returns the physical qubit carrying `logical`, if it is bound.
+    pub fn get_physical(&self, logical: LogicalQubit) -> Option<PhysicalQubit> {
+        self.l2p.get(&logical).copied()
     }
 
-    /// Returns an iterator over all logical (virtual) qubits in the layout.
-    pub fn logical_qubits(&self) -> impl Iterator<Item = Qubit> + '_ {
-        self.logical_qubits.iter().copied()
+    /// Returns the logical qubit carried by `physical`, if the position is occupied.
+    pub fn get_logical(&self, physical: PhysicalQubit) -> Option<LogicalQubit> {
+        self.p2l.get(&physical).copied()
     }
 
-    /// Returns an iterator over all ancilla (auxiliary) qubits in the layout.
-    pub fn ancilla_qubits(&self) -> impl Iterator<Item = Qubit> + '_ {
-        self.ancilla_qubits.iter().copied()
+    /// Returns an iterator over mapped logical qubits.
+    pub fn logical_qubits(&self) -> impl Iterator<Item = LogicalQubit> + '_ {
+        self.l2p.keys().copied()
     }
 
-    /// Returns an iterator over all physical qubits available on the device.
-    pub fn physical_qubits(&self) -> impl Iterator<Item = Qubit> + '_ {
+    /// Returns an iterator over physical qubits available to the layout.
+    pub fn physical_qubits(&self) -> impl Iterator<Item = PhysicalQubit> + '_ {
         self.physical_qubits.iter().copied()
     }
 
-    /// Returns the virtual-to-physical qubit mapping.
-    pub fn v2p_map(&self) -> &HashMap<Qubit, Qubit> {
-        &self.v2p
+    /// Returns an iterator over vacant physical qubits.
+    pub fn vacant_physical_qubits(&self) -> impl Iterator<Item = PhysicalQubit> + '_ {
+        self.physical_qubits
+            .iter()
+            .copied()
+            .filter(|physical| !self.p2l.contains_key(physical))
     }
 
-    /// Returns the physical-to-virtual qubit mapping.
-    pub fn p2v_map(&self) -> &HashMap<Qubit, Qubit> {
-        &self.p2v
+    /// Returns whether `physical` belongs to the layout and is vacant.
+    pub fn is_physical_vacant(&self, physical: PhysicalQubit) -> bool {
+        self.physical_qubits.contains(&physical) && !self.p2l.contains_key(&physical)
     }
 
-    /// Swaps the virtual qubits mapped to two physical qubits.
+    /// Returns the logical-to-physical qubit mapping.
+    pub fn l2p_map(&self) -> &BTreeMap<LogicalQubit, PhysicalQubit> {
+        &self.l2p
+    }
+
+    /// Returns the physical-to-logical qubit mapping.
+    pub fn p2l_map(&self) -> &BTreeMap<PhysicalQubit, LogicalQubit> {
+        &self.p2l
+    }
+
+    /// Binds an unmapped logical qubit to a vacant physical qubit.
     ///
-    /// This is the core operation used by routing algorithms (e.g., SABRE) when
-    /// inserting SWAP gates. After a SWAP gate is applied on the hardware,
-    /// the virtual qubits on those physical qubits are exchanged.
-    ///
-    /// # Arguments
-    ///
-    /// * `phys_a` - First physical qubit
-    /// * `phys_b` - Second physical qubit
+    /// This operation may introduce a new logical qubit to the layout. The
+    /// caller is responsible for ensuring that the logical qubit exists in the
+    /// circuit and is registered with the compiler resource manager when
+    /// required.
     ///
     /// # Errors
     ///
-    /// Returns [`LayoutError::InvalidPhysicalQubit`] if either physical qubit is not in the layout.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use cqlib_core::circuit::Qubit;
-    /// use cqlib_core::device::Layout;
-    ///
-    /// let mut layout = Layout::new(
-    ///     vec![Qubit::new(0)],
-    ///     vec![Qubit::new(100), Qubit::new(101)],
-    ///     None,
-    /// ).unwrap();
-    ///
-    /// // Before swap: Q0 is on some physical qubit
-    /// let phys_before = layout.get_physical(Qubit::new(0)).unwrap();
-    ///
-    /// // Perform SWAP on physical qubits 100 and 101
-    /// layout.swap_physical(Qubit::new(100), Qubit::new(101)).unwrap();
-    ///
-    /// // After swap, Q0 is on the other physical qubit
-    /// let phys_after = layout.get_physical(Qubit::new(0)).unwrap();
-    /// assert_ne!(phys_before, phys_after);
-    /// ```
-    pub fn swap_physical(&mut self, phys_a: Qubit, phys_b: Qubit) -> Result<(), LayoutError> {
-        // Early return if swapping the same qubit
-        if phys_a == phys_b {
-            return Ok(());
+    /// Returns [`LayoutError::InvalidPhysicalQubit`] if `physical` does not
+    /// belong to the layout. Returns [`LayoutError::LogicalQubitAlreadyBound`]
+    /// or [`LayoutError::PhysicalQubitAlreadyOccupied`] if either qubit already
+    /// participates in a mapping.
+    pub fn bind(
+        &mut self,
+        logical: LogicalQubit,
+        physical: PhysicalQubit,
+    ) -> Result<(), LayoutError> {
+        if !self.physical_qubits.contains(&physical) {
+            return Err(LayoutError::InvalidPhysicalQubit(physical));
+        }
+        if self.l2p.contains_key(&logical) {
+            return Err(LayoutError::LogicalQubitAlreadyBound(logical));
+        }
+        if self.p2l.contains_key(&physical) {
+            return Err(LayoutError::PhysicalQubitAlreadyOccupied(physical));
         }
 
-        // Verify physical qubits exist in layout
+        self.l2p.insert(logical, physical);
+        self.p2l.insert(physical, logical);
+        Ok(())
+    }
+
+    /// Removes the mapping for `logical` and returns the released physical qubit.
+    pub fn unbind(&mut self, logical: LogicalQubit) -> Result<PhysicalQubit, LayoutError> {
+        let physical = self
+            .l2p
+            .remove(&logical)
+            .ok_or(LayoutError::LogicalQubitNotBound(logical))?;
+        self.p2l.remove(&physical);
+        Ok(physical)
+    }
+
+    /// Swaps the logical qubits carried by two physical qubits.
+    ///
+    /// Either physical qubit may be vacant. Swapping an occupied qubit with a
+    /// vacant qubit moves the logical qubit to the vacant position.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LayoutError::InvalidPhysicalQubit`] if either physical qubit
+    /// does not belong to the layout.
+    pub fn swap_physical(
+        &mut self,
+        phys_a: PhysicalQubit,
+        phys_b: PhysicalQubit,
+    ) -> Result<(), LayoutError> {
         if !self.physical_qubits.contains(&phys_a) {
             return Err(LayoutError::InvalidPhysicalQubit(phys_a));
         }
         if !self.physical_qubits.contains(&phys_b) {
             return Err(LayoutError::InvalidPhysicalQubit(phys_b));
         }
-
-        // Get virtual qubits currently on these physical qubits
-        let virt_a = self.get_virtual(phys_a);
-        let virt_b = self.get_virtual(phys_b);
-
-        // Update v2p mappings
-        if let Some(v_a) = virt_a {
-            self.v2p.insert(v_a, phys_b);
-        }
-        if let Some(v_b) = virt_b {
-            self.v2p.insert(v_b, phys_a);
+        if phys_a == phys_b {
+            return Ok(());
         }
 
-        // Update p2v mappings based on which qubits have virtual mappings
-        match (virt_a, virt_b) {
-            (Some(v_a), Some(v_b)) => {
-                // Both have virtual qubits: swap them
-                self.p2v.insert(phys_a, v_b);
-                self.p2v.insert(phys_b, v_a);
-            }
-            (Some(v_a), None) => {
-                // Only phys_a has virtual qubit: move it to phys_b
-                self.p2v.insert(phys_b, v_a);
-                self.p2v.remove(&phys_a);
-            }
-            (None, Some(v_b)) => {
-                // Only phys_b has virtual qubit: move it to phys_a
-                self.p2v.insert(phys_a, v_b);
-                self.p2v.remove(&phys_b);
-            }
-            (None, None) => {
-                // Neither has virtual qubit: nothing to do
-            }
+        let logical_a = self.p2l.remove(&phys_a);
+        let logical_b = self.p2l.remove(&phys_b);
+
+        if let Some(logical) = logical_a {
+            self.l2p.insert(logical, phys_b);
+            self.p2l.insert(phys_b, logical);
+        }
+        if let Some(logical) = logical_b {
+            self.l2p.insert(logical, phys_a);
+            self.p2l.insert(phys_a, logical);
         }
 
         Ok(())

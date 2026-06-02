@@ -26,16 +26,16 @@
 
 pub mod device_impl;
 pub mod error;
-pub mod instruction_set;
 pub mod layout;
 pub mod noise;
+pub mod qubit;
 pub mod result;
 pub mod topology;
 
 pub use device_impl::{Device, EdgeProp, InstructionProp, QubitProp};
 pub use error::{DeviceError, LayoutError, TopologyError};
-pub use instruction_set::InstructionSet;
 pub use layout::Layout;
 pub use noise::{NoiseModel, OperationKey, ReadoutError, SingleQubitNoise, TwoQubitNoise};
+pub use qubit::{LogicalQubit, PhysicalQubit};
 pub use result::{ExecutionResult, Outcome, Status};
 pub use topology::Topology;

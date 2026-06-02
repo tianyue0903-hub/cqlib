@@ -16,86 +16,64 @@
 //! of a quantum device using a graph structure. Each node represents a qubit
 //! and edges represent the coupling (entanglement capability) between qubits.
 
-use crate::circuit::Qubit;
+use crate::device::PhysicalQubit;
 use crate::device::error::TopologyError;
+use rustworkx_core::petgraph::Direction;
 use rustworkx_core::petgraph::prelude::{NodeIndex, StableDiGraph, StableGraph};
 use rustworkx_core::petgraph::visit::EdgeRef;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Represents the coupling/connectivity of a quantum device.
 ///
 /// # Example
 ///
 /// ```rust
-/// use cqlib_core::circuit::Qubit;
-/// use cqlib_core::device::Topology;
+/// use cqlib_core::device::{PhysicalQubit, Topology};
 ///
-/// let qubits = vec![Qubit::new(0), Qubit::new(1), Qubit::new(2)];
+/// let qubits = vec![PhysicalQubit::new(0), PhysicalQubit::new(1), PhysicalQubit::new(2)];
 /// let couplings = vec![
-///     (Qubit::new(0), Qubit::new(1), "G0".to_string()),
-///     (Qubit::new(1), Qubit::new(2), "G1".to_string()),
+///     (PhysicalQubit::new(0), PhysicalQubit::new(1), "G0".to_string()),
+///     (PhysicalQubit::new(1), PhysicalQubit::new(2), "G1".to_string()),
 /// ];
 ///
 /// let topology = Topology::new(qubits, couplings).unwrap();
 /// assert_eq!(topology.num_qubits(), 3);
-/// assert!(topology.is_connected(Qubit::new(0), Qubit::new(1)));
+/// assert!(topology.supports_directed_coupling(PhysicalQubit::new(0), PhysicalQubit::new(1)));
 /// ```
 #[derive(Debug, Clone)]
 pub struct Topology {
-    /// Mapping from Qubit to NodeIndex in the graph
-    node_indices: HashMap<Qubit, NodeIndex>,
-    /// The underlying graph: nodes are qubits, edges are couplings
-    graph: StableGraph<Qubit, String>,
+    /// Mapping from physical qubits to graph nodes.
+    node_indices: HashMap<PhysicalQubit, NodeIndex>,
+    /// The underlying graph: nodes are physical qubits, edges are couplings.
+    graph: StableGraph<PhysicalQubit, String>,
 }
 
 impl Topology {
     /// Creates a new Topology with given qubits and coupling map.
     pub fn new(
-        qubits: Vec<Qubit>,
-        coupling_map: Vec<(Qubit, Qubit, String)>,
+        qubits: Vec<PhysicalQubit>,
+        coupling_map: Vec<(PhysicalQubit, PhysicalQubit, String)>,
     ) -> Result<Self, TopologyError> {
-        let mut graph = StableDiGraph::<Qubit, String>::new();
-        let mut node_indices = HashMap::new();
-
-        for qubit in qubits {
-            let node_index = graph.add_node(qubit);
-            node_indices.insert(qubit, node_index);
-        }
-
-        for (control, target, name) in coupling_map {
-            if !node_indices.contains_key(&target) {
-                return Err(TopologyError::QubitNotFound(target));
-            }
-            if !node_indices.contains_key(&control) {
-                return Err(TopologyError::QubitNotFound(control));
-            }
-            graph.add_edge(node_indices[&control], node_indices[&target], name.clone());
-        }
-
-        Ok(Self {
-            node_indices,
-            graph,
-        })
+        let mut topology = Self {
+            node_indices: HashMap::new(),
+            graph: StableDiGraph::<PhysicalQubit, String>::new(),
+        };
+        topology.add_qubits(qubits)?;
+        topology.add_couplings(coupling_map)?;
+        Ok(topology)
     }
 
-    pub fn line(qubits: Vec<Qubit>) -> Self {
-        let mut graph = StableDiGraph::<Qubit, String>::new();
-        let mut node_indices = HashMap::new();
-        for qubit in &qubits {
-            node_indices.insert(*qubit, graph.add_node(*qubit));
-        }
-        for qs in qubits.windows(2) {
-            graph.add_edge(node_indices[&qs[0]], node_indices[&qs[1]], "".to_string());
-        }
-
-        Self {
-            node_indices,
-            graph,
-        }
+    /// Creates a directed line topology in the supplied qubit order.
+    pub fn line(qubits: Vec<PhysicalQubit>) -> Result<Self, TopologyError> {
+        let couplings = qubits
+            .windows(2)
+            .map(|qs| (qs[0], qs[1], String::new()))
+            .collect();
+        Self::new(qubits, couplings)
     }
 
     /// Returns a reference to the underlying graph.
-    pub fn graph(&self) -> &StableGraph<Qubit, String> {
+    pub fn graph(&self) -> &StableGraph<PhysicalQubit, String> {
         &self.graph
     }
 
@@ -112,7 +90,7 @@ impl Topology {
     /// Returns all qubits in the topology.
     ///
     /// Returns an iterator. Call `.collect()` to get a Vec if needed.
-    pub fn qubits(&self) -> impl Iterator<Item = Qubit> + '_ {
+    pub fn qubits(&self) -> impl Iterator<Item = PhysicalQubit> + '_ {
         self.graph.node_indices().map(|i| self.graph[i])
     }
 
@@ -122,12 +100,13 @@ impl Topology {
     /// Returns error if any qubit already exists.
     pub fn add_qubits(
         &mut self,
-        qubits: impl IntoIterator<Item = Qubit>,
+        qubits: impl IntoIterator<Item = PhysicalQubit>,
     ) -> Result<(), TopologyError> {
-        let qubits: Vec<Qubit> = qubits.into_iter().collect();
+        let qubits: Vec<PhysicalQubit> = qubits.into_iter().collect();
+        let mut seen = HashSet::with_capacity(qubits.len());
 
         for qubit in &qubits {
-            if self.node_indices.contains_key(qubit) {
+            if self.node_indices.contains_key(qubit) || !seen.insert(*qubit) {
                 return Err(TopologyError::QubitAlreadyExists(*qubit));
             }
         }
@@ -141,14 +120,17 @@ impl Topology {
     /// Adds coupling edges to the topology.
     ///
     /// Accepts any iterable: Vec, array, or iterator.
-    /// Returns error if any qubit doesn't exist.
+    /// Returns error if any qubit doesn't exist, an edge already exists, or a
+    /// self-coupling is requested.
     pub fn add_couplings(
         &mut self,
-        couplings: impl IntoIterator<Item = (Qubit, Qubit, String)>,
+        couplings: impl IntoIterator<Item = (PhysicalQubit, PhysicalQubit, String)>,
     ) -> Result<(), TopologyError> {
-        let couplings: Vec<(Qubit, Qubit, String)> = couplings.into_iter().collect();
+        let couplings: Vec<(PhysicalQubit, PhysicalQubit, String)> =
+            couplings.into_iter().collect();
+        let mut seen = HashSet::with_capacity(couplings.len());
 
-        // First pass: validate all couplings exist
+        // Validate the full request before mutating the graph.
         for (control, target, _) in &couplings {
             if !self.node_indices.contains_key(control) {
                 return Err(TopologyError::QubitNotFound(*control));
@@ -156,8 +138,24 @@ impl Topology {
             if !self.node_indices.contains_key(target) {
                 return Err(TopologyError::QubitNotFound(*target));
             }
+            if control == target {
+                return Err(TopologyError::SelfCoupling { qubit: *control });
+            }
+            if !seen.insert((*control, *target)) {
+                return Err(TopologyError::CouplingAlreadyExists {
+                    control: *control,
+                    target: *target,
+                });
+            }
+            let c_idx = self.node_indices[control];
+            let t_idx = self.node_indices[target];
+            if self.graph.find_edge(c_idx, t_idx).is_some() {
+                return Err(TopologyError::CouplingAlreadyExists {
+                    control: *control,
+                    target: *target,
+                });
+            }
         }
-        // Second pass: add edges
         for (control, target, name) in couplings {
             let c_idx = self.node_indices[&control];
             let t_idx = self.node_indices[&target];
@@ -173,13 +171,17 @@ impl Topology {
     /// Returns error if any qubit doesn't exist.
     pub fn remove_qubits(
         &mut self,
-        qubits: impl IntoIterator<Item = Qubit>,
+        qubits: impl IntoIterator<Item = PhysicalQubit>,
     ) -> Result<(), TopologyError> {
-        let qubits: Vec<Qubit> = qubits.into_iter().collect();
+        let qubits: Vec<PhysicalQubit> = qubits.into_iter().collect();
+        let mut seen = HashSet::with_capacity(qubits.len());
 
         for qubit in &qubits {
             if !self.node_indices.contains_key(qubit) {
                 return Err(TopologyError::QubitNotFound(*qubit));
+            }
+            if !seen.insert(*qubit) {
+                return Err(TopologyError::DuplicateQubitRemoval(*qubit));
             }
         }
         for qubit in qubits {
@@ -197,17 +199,24 @@ impl Topology {
     /// Returns error if qubits don't exist or coupling doesn't exist.
     pub fn remove_couplings(
         &mut self,
-        couplings: impl IntoIterator<Item = (Qubit, Qubit)>,
+        couplings: impl IntoIterator<Item = (PhysicalQubit, PhysicalQubit)>,
     ) -> Result<(), TopologyError> {
         let collected: Vec<_> = couplings.into_iter().collect();
+        let mut seen = HashSet::with_capacity(collected.len());
 
-        // First pass: validate
+        // Validate the full request before mutating the graph.
         for (control, target) in &collected {
             if !self.node_indices.contains_key(control) {
                 return Err(TopologyError::QubitNotFound(*control));
             }
             if !self.node_indices.contains_key(target) {
                 return Err(TopologyError::QubitNotFound(*target));
+            }
+            if !seen.insert((*control, *target)) {
+                return Err(TopologyError::DuplicateCouplingRemoval {
+                    control: *control,
+                    target: *target,
+                });
             }
             let c_idx = self.node_indices[control];
             let t_idx = self.node_indices[target];
@@ -219,7 +228,6 @@ impl Topology {
             }
         }
 
-        // Second pass: remove
         for (control, target) in collected {
             let c_idx = self.node_indices[&control];
             let t_idx = self.node_indices[&target];
@@ -230,32 +238,54 @@ impl Topology {
         Ok(())
     }
 
-    /// Checks if two qubits are connected.
-    pub fn is_connected(&self, control: Qubit, target: Qubit) -> bool {
+    /// Checks whether the directed coupling `control -> target` exists.
+    pub fn supports_directed_coupling(
+        &self,
+        control: PhysicalQubit,
+        target: PhysicalQubit,
+    ) -> bool {
         if let (Some(&c_idx), Some(&t_idx)) = (
             self.node_indices.get(&control),
             self.node_indices.get(&target),
         ) {
-            self.graph.edges(c_idx).any(|e| e.target() == t_idx)
+            self.graph.find_edge(c_idx, t_idx).is_some()
         } else {
             false
         }
     }
 
-    /// Gets the neighbors (coupled qubits) of a given qubit.
+    /// Gets qubits reachable through outgoing couplings from `qubit`.
     ///
     /// Returns an iterator. Call `.collect()` to get a Vec if needed.
-    pub fn neighbors(&self, qubit: Qubit) -> impl Iterator<Item = Qubit> + '_ {
+    pub fn successors(&self, qubit: PhysicalQubit) -> impl Iterator<Item = PhysicalQubit> + '_ {
         self.node_indices
             .get(&qubit)
             .into_iter()
             .flat_map(|&node_idx| self.graph.edges(node_idx).map(|e| self.graph[e.target()]))
     }
 
+    /// Gets qubits with incoming couplings to `qubit`.
+    ///
+    /// Returns an iterator. Call `.collect()` to get a Vec if needed.
+    pub fn predecessors(&self, qubit: PhysicalQubit) -> impl Iterator<Item = PhysicalQubit> + '_ {
+        self.node_indices
+            .get(&qubit)
+            .into_iter()
+            .flat_map(|&node_idx| {
+                self.graph
+                    .edges_directed(node_idx, Direction::Incoming)
+                    .map(|e| self.graph[e.source()])
+            })
+    }
+
     /// Gets the coupling name between two qubits.
     ///
     /// Uses O(1) `find_edge` instead of O(degree) linear scan.
-    pub fn get_coupling_name(&self, control: Qubit, target: Qubit) -> Option<String> {
+    pub fn get_coupling_name(
+        &self,
+        control: PhysicalQubit,
+        target: PhysicalQubit,
+    ) -> Option<String> {
         let c_idx = self.node_indices.get(&control)?;
         let t_idx = self.node_indices.get(&target)?;
         self.graph
@@ -264,14 +294,25 @@ impl Topology {
     }
 
     /// Checks if a qubit exists in the topology.
-    pub fn contains_qubit(&self, qubit: &Qubit) -> bool {
+    pub fn contains_qubit(&self, qubit: &PhysicalQubit) -> bool {
         self.node_indices.contains_key(qubit)
     }
 
-    /// Gets the degree (number of connections) of a qubit.
-    pub fn degree(&self, qubit: &Qubit) -> usize {
+    /// Gets the number of outgoing couplings from a qubit.
+    pub fn out_degree(&self, qubit: &PhysicalQubit) -> usize {
         if let Some(&node_idx) = self.node_indices.get(qubit) {
             self.graph.edges(node_idx).count()
+        } else {
+            0
+        }
+    }
+
+    /// Gets the number of incoming couplings to a qubit.
+    pub fn in_degree(&self, qubit: &PhysicalQubit) -> usize {
+        if let Some(&node_idx) = self.node_indices.get(qubit) {
+            self.graph
+                .edges_directed(node_idx, Direction::Incoming)
+                .count()
         } else {
             0
         }

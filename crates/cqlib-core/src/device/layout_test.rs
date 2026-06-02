@@ -9,36 +9,72 @@
 // Any modifications or derivative works of this code must retain this
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
+//
+// Modified from the original work.
 
 use super::*;
+use std::collections::BTreeMap;
 
 #[test]
-fn test_layout_basic_creation() {
-    let logical = vec![Qubit::new(0), Qubit::new(1)];
-    let physical = vec![Qubit::new(100), Qubit::new(101), Qubit::new(102)];
+fn test_layout_basic_creation_leaves_extra_physical_vacant() {
+    let logical = vec![LogicalQubit::new(0), LogicalQubit::new(1)];
+    let physical = vec![
+        PhysicalQubit::new(100),
+        PhysicalQubit::new(101),
+        PhysicalQubit::new(102),
+    ];
 
     let layout = Layout::new(logical, physical, None).unwrap();
+
     assert_eq!(layout.num_logical(), 2);
-    assert_eq!(layout.num_ancilla(), 1);
     assert_eq!(layout.num_physical(), 3);
+    assert_eq!(layout.num_vacant_physical(), 1);
+    assert_eq!(
+        layout.vacant_physical_qubits().collect::<Vec<_>>(),
+        vec![PhysicalQubit::new(102)]
+    );
 }
 
 #[test]
-fn test_layout_with_init_map() {
-    let logical = vec![Qubit::new(0), Qubit::new(1)];
-    let physical = vec![Qubit::new(100), Qubit::new(101), Qubit::new(102)];
-    let init_map: HashMap<Qubit, Qubit> = [(Qubit::new(0), Qubit::new(100))].into_iter().collect();
+fn test_layout_with_init_map_maps_remaining_logical_in_input_order() {
+    let logical = vec![LogicalQubit::new(0), LogicalQubit::new(1)];
+    let physical = vec![
+        PhysicalQubit::new(100),
+        PhysicalQubit::new(101),
+        PhysicalQubit::new(102),
+    ];
+    let init_map = [(LogicalQubit::new(1), PhysicalQubit::new(102))]
+        .into_iter()
+        .collect::<BTreeMap<_, _>>();
 
     let layout = Layout::new(logical, physical, Some(init_map)).unwrap();
-    assert_eq!(layout.get_physical(Qubit::new(0)), Some(Qubit::new(100)));
+
+    assert_eq!(
+        layout.get_physical(LogicalQubit::new(0)),
+        Some(PhysicalQubit::new(100))
+    );
+    assert_eq!(
+        layout.get_physical(LogicalQubit::new(1)),
+        Some(PhysicalQubit::new(102))
+    );
+    assert_eq!(
+        layout.vacant_physical_qubits().collect::<Vec<_>>(),
+        vec![PhysicalQubit::new(101)]
+    );
 }
 
 #[test]
 fn test_layout_too_many_logical_error() {
-    let logical = vec![Qubit::new(0), Qubit::new(1), Qubit::new(2)];
-    let physical = vec![Qubit::new(100), Qubit::new(101)];
+    let result = Layout::new(
+        vec![
+            LogicalQubit::new(0),
+            LogicalQubit::new(1),
+            LogicalQubit::new(2),
+        ],
+        vec![PhysicalQubit::new(100), PhysicalQubit::new(101)],
+        None,
+    );
 
-    let result = Layout::new(logical, physical, None);
     assert!(matches!(
         result.unwrap_err(),
         LayoutError::TooManyLogicalQubits {
@@ -49,197 +85,248 @@ fn test_layout_too_many_logical_error() {
 }
 
 #[test]
-fn test_layout_invalid_virtual_qubit_error() {
-    let logical = vec![Qubit::new(0)];
-    let physical = vec![Qubit::new(100), Qubit::new(101)];
-    // Qubit 99 is not in logical list
-    let init_map: HashMap<Qubit, Qubit> = [(Qubit::new(99), Qubit::new(100))].into_iter().collect();
+fn test_layout_duplicate_logical_error() {
+    let logical = vec![LogicalQubit::new(0), LogicalQubit::new(0)];
+    let physical = vec![PhysicalQubit::new(100), PhysicalQubit::new(101)];
 
-    let result = Layout::new(logical, physical, Some(init_map));
+    assert!(matches!(
+        Layout::new(logical, physical, None).unwrap_err(),
+        LayoutError::DuplicateLogicalQubit(q) if q == LogicalQubit::new(0)
+    ));
+}
+
+#[test]
+fn test_layout_duplicate_physical_error() {
+    let logical = vec![LogicalQubit::new(0)];
+    let physical = vec![PhysicalQubit::new(100), PhysicalQubit::new(100)];
+
+    assert!(matches!(
+        Layout::new(logical, physical, None).unwrap_err(),
+        LayoutError::DuplicatePhysicalQubit(q) if q == PhysicalQubit::new(100)
+    ));
+}
+
+#[test]
+fn test_layout_invalid_logical_qubit_error() {
+    let init_map = [(LogicalQubit::new(99), PhysicalQubit::new(100))]
+        .into_iter()
+        .collect();
+
+    let result = Layout::new(
+        vec![LogicalQubit::new(0)],
+        vec![PhysicalQubit::new(100), PhysicalQubit::new(101)],
+        Some(init_map),
+    );
+
     assert!(matches!(
         result.unwrap_err(),
-        LayoutError::InvalidVirtualQubit(q) if q == Qubit::new(99)
+        LayoutError::InvalidLogicalQubit(q) if q == LogicalQubit::new(99)
     ));
 }
 
 #[test]
 fn test_layout_invalid_physical_qubit_error() {
-    let logical = vec![Qubit::new(0)];
-    let physical = vec![Qubit::new(100), Qubit::new(101)];
-    // Qubit 999 is not in physical list
-    let init_map: HashMap<Qubit, Qubit> = [(Qubit::new(0), Qubit::new(999))].into_iter().collect();
+    let init_map = [(LogicalQubit::new(0), PhysicalQubit::new(999))]
+        .into_iter()
+        .collect();
 
-    let result = Layout::new(logical, physical, Some(init_map));
+    let result = Layout::new(
+        vec![LogicalQubit::new(0)],
+        vec![PhysicalQubit::new(100), PhysicalQubit::new(101)],
+        Some(init_map),
+    );
+
     assert!(matches!(
         result.unwrap_err(),
-        LayoutError::InvalidPhysicalQubit(q) if q == Qubit::new(999)
+        LayoutError::InvalidPhysicalQubit(q) if q == PhysicalQubit::new(999)
     ));
 }
 
 #[test]
-fn test_layout_duplicate_physical_mapping_error() {
-    let logical = vec![Qubit::new(0), Qubit::new(1)];
-    let physical = vec![Qubit::new(100), Qubit::new(101), Qubit::new(102)];
-    // Both logical qubits mapped to same physical qubit
-    let init_map: HashMap<Qubit, Qubit> = [
-        (Qubit::new(0), Qubit::new(100)),
-        (Qubit::new(1), Qubit::new(100)),
+fn test_layout_init_map_rejects_occupied_physical() {
+    let init_map = [
+        (LogicalQubit::new(0), PhysicalQubit::new(100)),
+        (LogicalQubit::new(1), PhysicalQubit::new(100)),
     ]
     .into_iter()
     .collect();
 
-    let result = Layout::new(logical, physical, Some(init_map));
+    let result = Layout::new(
+        vec![LogicalQubit::new(0), LogicalQubit::new(1)],
+        vec![PhysicalQubit::new(100), PhysicalQubit::new(101)],
+        Some(init_map),
+    );
+
     assert!(matches!(
         result.unwrap_err(),
-        LayoutError::DuplicatePhysicalMapping
+        LayoutError::PhysicalQubitAlreadyOccupied(q) if q == PhysicalQubit::new(100)
     ));
 }
 
 #[test]
-fn test_layout_sequential_mapping() {
-    // Test sequential mapping without init_map
-    let logical = vec![Qubit::new(0), Qubit::new(1), Qubit::new(2)];
-    let physical = vec![
-        Qubit::new(100),
-        Qubit::new(101),
-        Qubit::new(102),
-        Qubit::new(103),
-    ];
+fn test_layout_bind_and_unbind() {
+    let mut layout = Layout::new(
+        vec![LogicalQubit::new(0)],
+        vec![PhysicalQubit::new(100), PhysicalQubit::new(101)],
+        None,
+    )
+    .unwrap();
 
-    let layout = Layout::new(logical, physical, None).unwrap();
+    assert!(layout.is_physical_vacant(PhysicalQubit::new(101)));
+    layout
+        .bind(LogicalQubit::new(1), PhysicalQubit::new(101))
+        .unwrap();
+    assert_eq!(layout.num_logical(), 2);
+    assert_eq!(layout.num_vacant_physical(), 0);
+    assert_eq!(
+        layout.get_logical(PhysicalQubit::new(101)),
+        Some(LogicalQubit::new(1))
+    );
 
-    // 3 logical + 1 ancilla = 4 virtual mapped to 4 physical
-    assert_eq!(layout.num_logical(), 3);
-    assert_eq!(layout.num_ancilla(), 1);
-    assert_eq!(layout.num_physical(), 4);
-
-    // Check sequential mapping: Q0->100, Q1->101, Q2->102, ancilla->103
-    assert_eq!(layout.get_physical(Qubit::new(0)), Some(Qubit::new(100)));
-    assert_eq!(layout.get_physical(Qubit::new(1)), Some(Qubit::new(101)));
-    assert_eq!(layout.get_physical(Qubit::new(2)), Some(Qubit::new(102)));
-    assert_eq!(layout.get_physical(Qubit::new(3)), Some(Qubit::new(103))); // ancilla
-
-    // Check reverse mapping
-    assert_eq!(layout.get_virtual(Qubit::new(100)), Some(Qubit::new(0)));
-    assert_eq!(layout.get_virtual(Qubit::new(101)), Some(Qubit::new(1)));
-    assert_eq!(layout.get_virtual(Qubit::new(102)), Some(Qubit::new(2)));
-    assert_eq!(layout.get_virtual(Qubit::new(103)), Some(Qubit::new(3)));
+    assert_eq!(
+        layout.unbind(LogicalQubit::new(1)).unwrap(),
+        PhysicalQubit::new(101)
+    );
+    assert!(layout.is_physical_vacant(PhysicalQubit::new(101)));
 }
 
 #[test]
-fn test_layout_swap_physical() {
-    let logical = vec![Qubit::new(0), Qubit::new(1)];
-    let physical = vec![Qubit::new(100), Qubit::new(101), Qubit::new(102)];
+fn test_layout_bind_errors() {
+    let mut layout = Layout::new(
+        vec![LogicalQubit::new(0)],
+        vec![PhysicalQubit::new(100), PhysicalQubit::new(101)],
+        None,
+    )
+    .unwrap();
 
-    let mut layout = Layout::new(logical, physical, None).unwrap();
+    assert!(matches!(
+        layout.bind(LogicalQubit::new(0), PhysicalQubit::new(101)),
+        Err(LayoutError::LogicalQubitAlreadyBound(q)) if q == LogicalQubit::new(0)
+    ));
+    assert!(matches!(
+        layout.bind(LogicalQubit::new(1), PhysicalQubit::new(100)),
+        Err(LayoutError::PhysicalQubitAlreadyOccupied(q)) if q == PhysicalQubit::new(100)
+    ));
+    assert!(matches!(
+        layout.bind(LogicalQubit::new(1), PhysicalQubit::new(999)),
+        Err(LayoutError::InvalidPhysicalQubit(q)) if q == PhysicalQubit::new(999)
+    ));
+}
 
-    // Get initial mappings
-    let phys_100_virt = layout.get_virtual(Qubit::new(100));
-    let phys_101_virt = layout.get_virtual(Qubit::new(101));
+#[test]
+fn test_layout_unbind_rejects_unmapped_logical() {
+    let mut layout = Layout::new(
+        vec![LogicalQubit::new(0)],
+        vec![PhysicalQubit::new(100)],
+        None,
+    )
+    .unwrap();
 
-    // Swap physical qubits 100 and 101
+    assert!(matches!(
+        layout.unbind(LogicalQubit::new(99)),
+        Err(LayoutError::LogicalQubitNotBound(q)) if q == LogicalQubit::new(99)
+    ));
+}
+
+#[test]
+fn test_layout_swap_two_occupied_physical() {
+    let mut layout = Layout::new(
+        vec![LogicalQubit::new(0), LogicalQubit::new(1)],
+        vec![PhysicalQubit::new(100), PhysicalQubit::new(101)],
+        None,
+    )
+    .unwrap();
+
     layout
-        .swap_physical(Qubit::new(100), Qubit::new(101))
+        .swap_physical(PhysicalQubit::new(100), PhysicalQubit::new(101))
         .unwrap();
 
-    // After swap, virtual qubits should be exchanged
-    assert_eq!(layout.get_virtual(Qubit::new(100)), phys_101_virt);
-    assert_eq!(layout.get_virtual(Qubit::new(101)), phys_100_virt);
+    assert_eq!(
+        layout.get_physical(LogicalQubit::new(0)),
+        Some(PhysicalQubit::new(101))
+    );
+    assert_eq!(
+        layout.get_physical(LogicalQubit::new(1)),
+        Some(PhysicalQubit::new(100))
+    );
 }
 
 #[test]
-fn test_layout_swap_same_qubit() {
-    let logical = vec![Qubit::new(0)];
-    let physical = vec![Qubit::new(100), Qubit::new(101)];
+fn test_layout_swap_occupied_and_vacant_physical() {
+    let mut layout = Layout::new(
+        vec![LogicalQubit::new(0)],
+        vec![PhysicalQubit::new(100), PhysicalQubit::new(101)],
+        None,
+    )
+    .unwrap();
 
-    let mut layout = Layout::new(logical, physical, None).unwrap();
-
-    // Get initial mapping
-    let original_virt = layout.get_virtual(Qubit::new(100));
-
-    // Swapping with itself should be a no-op
     layout
-        .swap_physical(Qubit::new(100), Qubit::new(100))
+        .swap_physical(PhysicalQubit::new(100), PhysicalQubit::new(101))
         .unwrap();
 
-    // Mapping should be unchanged
-    assert_eq!(layout.get_virtual(Qubit::new(100)), original_virt);
+    assert_eq!(
+        layout.get_physical(LogicalQubit::new(0)),
+        Some(PhysicalQubit::new(101))
+    );
+    assert!(layout.is_physical_vacant(PhysicalQubit::new(100)));
 }
 
 #[test]
-fn test_layout_swap_two_mapped() {
-    // With 1 logical + 1 ancilla = 2 virtual qubits mapped to 2 physical qubits
-    let logical = vec![Qubit::new(0)];
-    let physical = vec![Qubit::new(100), Qubit::new(101)];
+fn test_layout_swap_vacant_physical_is_noop() {
+    let mut layout = Layout::new(
+        vec![LogicalQubit::new(0)],
+        vec![
+            PhysicalQubit::new(100),
+            PhysicalQubit::new(101),
+            PhysicalQubit::new(102),
+        ],
+        None,
+    )
+    .unwrap();
 
-    let mut layout = Layout::new(logical, physical, None).unwrap();
+    layout
+        .swap_physical(PhysicalQubit::new(101), PhysicalQubit::new(102))
+        .unwrap();
+    layout
+        .swap_physical(PhysicalQubit::new(100), PhysicalQubit::new(100))
+        .unwrap();
 
-    // Get initial mappings
-    let phys_a = Qubit::new(100);
-    let phys_b = Qubit::new(101);
-    let virt_a = layout.get_virtual(phys_a);
-    let virt_b = layout.get_virtual(phys_b);
-
-    // Both physical qubits should have virtual qubits (one logical, one ancilla)
-    assert!(virt_a.is_some());
-    assert!(virt_b.is_some());
-
-    // Swap
-    layout.swap_physical(phys_a, phys_b).unwrap();
-
-    // Virtual qubits should be exchanged
-    assert_eq!(layout.get_virtual(phys_a), virt_b);
-    assert_eq!(layout.get_virtual(phys_b), virt_a);
-    // v2p mappings should also be updated
-    if let Some(v_a) = virt_a {
-        assert_eq!(layout.get_physical(v_a), Some(phys_b));
-    }
-    if let Some(v_b) = virt_b {
-        assert_eq!(layout.get_physical(v_b), Some(phys_a));
-    }
+    assert_eq!(
+        layout.get_physical(LogicalQubit::new(0)),
+        Some(PhysicalQubit::new(100))
+    );
 }
 
 #[test]
-fn test_layout_get_physical() {
-    let logical = vec![Qubit::new(0), Qubit::new(1)];
-    let physical = vec![Qubit::new(100), Qubit::new(101), Qubit::new(102)];
+fn test_layout_swap_rejects_invalid_physical() {
+    let mut layout = Layout::new(
+        vec![LogicalQubit::new(0)],
+        vec![PhysicalQubit::new(100)],
+        None,
+    )
+    .unwrap();
 
-    let layout = Layout::new(logical, physical, None).unwrap();
-
-    // Logical qubits should be mapped
-    assert!(layout.get_physical(Qubit::new(0)).is_some());
-    assert!(layout.get_physical(Qubit::new(1)).is_some());
-
-    // Ancilla qubits should also be mapped
-    assert!(layout.get_physical(Qubit::new(2)).is_some()); // ancilla
-
-    // Non-existent qubit should return None
-    assert_eq!(layout.get_physical(Qubit::new(999)), None);
+    assert!(matches!(
+        layout.swap_physical(PhysicalQubit::new(100), PhysicalQubit::new(999)),
+        Err(LayoutError::InvalidPhysicalQubit(q)) if q == PhysicalQubit::new(999)
+    ));
 }
 
 #[test]
-fn test_ancilla_id_generation_no_conflict_with_physical() {
-    // Test scenario where physical qubit IDs might overlap with ancilla IDs
-    // Logical: [0, 1] (max id = 1), so ancilla starts from 2
-    // Physical: [2, 3, 4]
-    // This means ancilla(2) will have same ID as physical(2)
+fn test_layout_vacant_physical_iteration_is_sorted() {
+    let layout = Layout::new(
+        vec![LogicalQubit::new(0)],
+        vec![
+            PhysicalQubit::new(103),
+            PhysicalQubit::new(101),
+            PhysicalQubit::new(102),
+        ],
+        None,
+    )
+    .unwrap();
 
-    let logical = vec![Qubit::new(0), Qubit::new(1)];
-    let physical = vec![Qubit::new(2), Qubit::new(3), Qubit::new(4)];
-
-    let layout = Layout::new(logical, physical, None).unwrap();
-
-    // Verify ancilla was created with ID 2
-    assert!(layout.get_physical(Qubit::new(2)).is_some());
-
-    // The ancilla Qubit(2) maps to physical Qubit(4) (sequential assignment)
-    // Q0 -> P2, Q1 -> P3, Ancilla(2) -> P4
-    assert_eq!(layout.get_physical(Qubit::new(0)), Some(Qubit::new(2)));
-    assert_eq!(layout.get_physical(Qubit::new(1)), Some(Qubit::new(3)));
-    assert_eq!(layout.get_physical(Qubit::new(2)), Some(Qubit::new(4))); // ancilla
-
-    // Verify reverse mapping: physical qubits map to virtual qubits
-    assert_eq!(layout.get_virtual(Qubit::new(2)), Some(Qubit::new(0))); // logical
-    assert_eq!(layout.get_virtual(Qubit::new(3)), Some(Qubit::new(1))); // logical
-    assert_eq!(layout.get_virtual(Qubit::new(4)), Some(Qubit::new(2))); // ancilla
+    assert_eq!(
+        layout.vacant_physical_qubits().collect::<Vec<_>>(),
+        vec![PhysicalQubit::new(101), PhysicalQubit::new(102)]
+    );
 }

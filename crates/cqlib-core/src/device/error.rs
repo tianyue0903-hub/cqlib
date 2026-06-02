@@ -16,15 +16,16 @@
 //! It provides error handling for device topology validation,
 //! layout mapping, and qubit connectivity issues.
 
-use crate::circuit::Qubit;
+use crate::device::{LogicalQubit, PhysicalQubit};
 use std::fmt;
 use thiserror::Error;
 
 #[derive(Error, Debug, Clone, PartialEq, Eq)]
 pub enum DeviceError {
-    InvalidOnlineQubit(Qubit),
-    QubitNotInTopology(Qubit),
-    EdgeNotInTopology(Qubit, Qubit),
+    InvalidOnlineQubit(PhysicalQubit),
+    QubitNotInDevice(PhysicalQubit),
+    QubitNotInTopology(PhysicalQubit),
+    EdgeNotInTopology(PhysicalQubit, PhysicalQubit),
 }
 
 impl fmt::Display for DeviceError {
@@ -36,6 +37,9 @@ impl fmt::Display for DeviceError {
                     "Specified online qubit {} does not exist in the device topology",
                     q
                 )
+            }
+            Self::QubitNotInDevice(q) => {
+                write!(f, "Qubit {} is not registered with the device", q)
             }
             Self::QubitNotInTopology(q) => {
                 write!(f, "Qubit {} is not in the device topology", q)
@@ -56,14 +60,20 @@ impl fmt::Display for DeviceError {
 pub enum LayoutError {
     /// The number of logical qubits exceeds the number of physical qubits.
     TooManyLogicalQubits { logical: usize, physical: usize },
-    /// A virtual qubit in `init_map` is not present in the logical qubit list.
-    InvalidVirtualQubit(Qubit),
-    /// A physical qubit in `init_map` is not present in the physical qubit list.
-    InvalidPhysicalQubit(Qubit),
-    /// Multiple virtual qubits are mapped to the same physical qubit.
-    DuplicatePhysicalMapping,
-    /// The requested qubit was not found in the layout.
-    QubitNotFound(Qubit),
+    /// A logical qubit appears more than once in the logical qubit list.
+    DuplicateLogicalQubit(LogicalQubit),
+    /// A physical qubit appears more than once in the physical qubit list.
+    DuplicatePhysicalQubit(PhysicalQubit),
+    /// A logical qubit in `init_map` is not present in the logical qubit list.
+    InvalidLogicalQubit(LogicalQubit),
+    /// A physical qubit is not available to the layout.
+    InvalidPhysicalQubit(PhysicalQubit),
+    /// Tried to bind a logical qubit that is already mapped.
+    LogicalQubitAlreadyBound(LogicalQubit),
+    /// Tried to bind a physical qubit that already carries a logical qubit.
+    PhysicalQubitAlreadyOccupied(PhysicalQubit),
+    /// Tried to unbind a logical qubit that is not mapped.
+    LogicalQubitNotBound(LogicalQubit),
 }
 
 impl fmt::Display for LayoutError {
@@ -76,16 +86,25 @@ impl fmt::Display for LayoutError {
                     logical, physical
                 )
             }
-            Self::InvalidVirtualQubit(q) => {
-                write!(f, "Virtual qubit {} not in logical qubit list", q)
+            Self::DuplicateLogicalQubit(q) => {
+                write!(f, "Logical qubit {} appears more than once", q)
+            }
+            Self::DuplicatePhysicalQubit(q) => {
+                write!(f, "Physical qubit {} appears more than once", q)
+            }
+            Self::InvalidLogicalQubit(q) => {
+                write!(f, "Logical qubit {} not in logical qubit list", q)
             }
             Self::InvalidPhysicalQubit(q) => {
                 write!(f, "Physical qubit {} not in physical qubit list", q)
             }
-            Self::DuplicatePhysicalMapping => {
-                write!(f, "Multiple virtual qubits mapped to same physical qubit")
+            Self::LogicalQubitAlreadyBound(q) => {
+                write!(f, "Logical qubit {} is already bound", q)
             }
-            Self::QubitNotFound(q) => write!(f, "Qubit {} not found in layout", q),
+            Self::PhysicalQubitAlreadyOccupied(q) => {
+                write!(f, "Physical qubit {} is already occupied", q)
+            }
+            Self::LogicalQubitNotBound(q) => write!(f, "Logical qubit {} is not bound", q),
         }
     }
 }
@@ -94,13 +113,28 @@ impl fmt::Display for LayoutError {
 #[derive(Error, Debug, Clone, PartialEq, Eq)]
 pub enum TopologyError {
     /// Tried to operate on a qubit that doesn't exist in the topology.
-    QubitNotFound(Qubit),
+    QubitNotFound(PhysicalQubit),
     /// Tried to operate on a coupling edge that doesn't exist.
-    CouplingNotFound { control: Qubit, target: Qubit },
+    CouplingNotFound {
+        control: PhysicalQubit,
+        target: PhysicalQubit,
+    },
     /// Tried to add a duplicate qubit.
-    QubitAlreadyExists(Qubit),
+    QubitAlreadyExists(PhysicalQubit),
     /// Tried to add a duplicate coupling.
-    CouplingAlreadyExists { control: Qubit, target: Qubit },
+    CouplingAlreadyExists {
+        control: PhysicalQubit,
+        target: PhysicalQubit,
+    },
+    /// Tried to add a coupling from a qubit to itself.
+    SelfCoupling { qubit: PhysicalQubit },
+    /// Tried to remove the same qubit more than once in one operation.
+    DuplicateQubitRemoval(PhysicalQubit),
+    /// Tried to remove the same coupling more than once in one operation.
+    DuplicateCouplingRemoval {
+        control: PhysicalQubit,
+        target: PhysicalQubit,
+    },
 }
 
 impl fmt::Display for TopologyError {
@@ -113,6 +147,23 @@ impl fmt::Display for TopologyError {
             TopologyError::QubitAlreadyExists(q) => write!(f, "Qubit {:?} already exists", q),
             TopologyError::CouplingAlreadyExists { control, target } => {
                 write!(f, "Coupling ({:?} -> {:?}) already exists", control, target)
+            }
+            TopologyError::SelfCoupling { qubit } => {
+                write!(
+                    f,
+                    "Self coupling ({:?} -> {:?}) is not allowed",
+                    qubit, qubit
+                )
+            }
+            TopologyError::DuplicateQubitRemoval(q) => {
+                write!(f, "Qubit {:?} appears more than once in removal request", q)
+            }
+            TopologyError::DuplicateCouplingRemoval { control, target } => {
+                write!(
+                    f,
+                    "Coupling ({:?} -> {:?}) appears more than once in removal request",
+                    control, target
+                )
             }
         }
     }

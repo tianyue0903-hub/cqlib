@@ -59,8 +59,8 @@ fn test_edge_prop() {
 
 #[test]
 fn test_device_creation_and_defaults() {
-    let q0 = Qubit::new(0);
-    let q1 = Qubit::new(1);
+    let q0 = PhysicalQubit::new(0);
+    let q1 = PhysicalQubit::new(1);
     let topo = Topology::new(vec![q0, q1], vec![(q0, q1, "cx".to_string())]);
 
     let mut device = Device::new(
@@ -98,9 +98,9 @@ fn test_device_creation_and_defaults() {
 
 #[test]
 fn test_device_errors() {
-    let q0 = Qubit::new(0);
-    let q1 = Qubit::new(1);
-    let q2 = Qubit::new(2); // Not in topology
+    let q0 = PhysicalQubit::new(0);
+    let q1 = PhysicalQubit::new(1);
+    let q2 = PhysicalQubit::new(2); // Not in topology
     let topo = Topology::new(vec![q0, q1], vec![(q0, q1, "0-1".to_string())]);
 
     let mut device = Device::new(
@@ -117,4 +117,52 @@ fn test_device_errors() {
     let edge_prop = EdgeProp::new();
     let err = device.add_edge_properties(q1, q0, edge_prop).unwrap_err();
     assert_eq!(err, DeviceError::EdgeNotInTopology(q1, q0));
+}
+
+#[test]
+fn invalid_qubits_must_be_registered_with_device() {
+    let q0 = PhysicalQubit::new(0);
+    let q1 = PhysicalQubit::new(1);
+    let q2 = PhysicalQubit::new(2);
+    let topology = Topology::new(vec![q0, q1], vec![(q0, q1, "CX".to_string())]).unwrap();
+    let device = Device::new("test-device", HashSet::from([q0, q1]), topology).unwrap();
+
+    assert_eq!(
+        device
+            .clone()
+            .with_invalid_qubits(HashSet::from([q2]))
+            .unwrap_err(),
+        DeviceError::QubitNotInDevice(q2)
+    );
+
+    let mut device = device.with_invalid_qubits(HashSet::from([q1])).unwrap();
+    assert_eq!(
+        device.set_invalid_qubits(HashSet::from([q2])).unwrap_err(),
+        DeviceError::QubitNotInDevice(q2)
+    );
+    assert_eq!(device.invalid_qubits().collect::<Vec<_>>(), vec![q1]);
+}
+
+#[test]
+fn usable_qubits_exclude_invalid_qubits_in_stable_order() {
+    let q0 = PhysicalQubit::new(0);
+    let q1 = PhysicalQubit::new(1);
+    let q2 = PhysicalQubit::new(2);
+    let topology = Topology::new(
+        vec![q0, q1, q2],
+        vec![(q0, q1, "CX".to_string()), (q1, q2, "CX".to_string())],
+    )
+    .unwrap();
+    let device = Device::new("test-device", HashSet::from([q2, q0, q1]), topology)
+        .unwrap()
+        .with_invalid_qubits(HashSet::from([q1]))
+        .unwrap();
+
+    assert_eq!(device.qubits().collect::<Vec<_>>(), vec![q0, q1, q2]);
+    assert_eq!(device.invalid_qubits().collect::<Vec<_>>(), vec![q1]);
+    assert_eq!(device.usable_qubits().collect::<Vec<_>>(), vec![q0, q2]);
+    assert!(device.is_usable_qubit(q0));
+    assert!(!device.is_usable_qubit(q1));
+    assert!(!device.is_usable_qubit(PhysicalQubit::new(99)));
+    assert_eq!(device.num_usable_qubits(), 2);
 }

@@ -17,10 +17,10 @@
 //! encapsulate all the physical constraints and fidelity data necessary for noise-aware compilation,
 //! mapping, routing, and circuit scheduling.
 
-use crate::circuit::{Instruction, Qubit};
-use crate::device::DeviceError;
+use crate::circuit::Instruction;
 use crate::device::topology::Topology;
-use std::collections::{HashMap, HashSet};
+use crate::device::{DeviceError, PhysicalQubit};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use time::OffsetDateTime;
 
 /// Represents the physical properties and execution characteristics of a quantum instruction (gate)
@@ -282,12 +282,11 @@ impl Default for EdgeProp {
 ///
 /// ```rust
 /// use std::collections::HashSet;
-/// use cqlib_core::circuit::Qubit;
-/// use cqlib_core::device::{Device, Topology, QubitProp};
+/// use cqlib_core::device::{Device, PhysicalQubit, QubitProp, Topology};
 ///
 /// // Create a 2-qubit topology
-/// let q0 = Qubit::new(0);
-/// let q1 = Qubit::new(1);
+/// let q0 = PhysicalQubit::new(0);
+/// let q1 = PhysicalQubit::new(1);
 /// let topo = Topology::new(vec![q0, q1], vec![(q0, q1, "G1".to_string())]).unwrap();
 ///
 /// // Initialize a device with defaults
@@ -307,10 +306,10 @@ impl Default for EdgeProp {
 #[derive(Debug, Clone)]
 pub struct Device {
     name: String,
-    /// Available (online) qubits.
-    qubits: HashSet<Qubit>,
+    /// Physical qubits registered with the device.
+    qubits: BTreeSet<PhysicalQubit>,
     /// Offline or faulty qubits.
-    invalid_qubits: HashSet<Qubit>,
+    invalid_qubits: BTreeSet<PhysicalQubit>,
     /// Connectivity topology.
     topology: Topology,
     /// Device-wide native gates (fallback when per-qubit gates not specified).
@@ -330,16 +329,16 @@ pub struct Device {
     default_two_qubit_error: Option<f64>,
 
     /// Per-qubit properties (T1, T2, readout error, native gates).
-    qubit_properties: HashMap<Qubit, QubitProp>,
+    qubit_properties: HashMap<PhysicalQubit, QubitProp>,
     /// Per-edge properties (gate fidelities on specific couplings).
-    edge_properties: HashMap<(Qubit, Qubit), EdgeProp>,
+    edge_properties: HashMap<(PhysicalQubit, PhysicalQubit), EdgeProp>,
 }
 
 impl Device {
     /// Creates a new `Device` with the specified name and topology.
     pub fn new(
         name: impl Into<String>,
-        qubits: HashSet<Qubit>,
+        qubits: HashSet<PhysicalQubit>,
         topology: Topology,
     ) -> Result<Self, DeviceError> {
         for q in topology.qubits() {
@@ -350,8 +349,8 @@ impl Device {
 
         Ok(Self {
             name: name.into(),
-            qubits,
-            invalid_qubits: HashSet::new(),
+            qubits: qubits.into_iter().collect(),
+            invalid_qubits: BTreeSet::new(),
             topology,
             native_gates: Vec::new(),
             calibration_time: None,
@@ -365,13 +364,37 @@ impl Device {
         })
     }
 
-    pub fn with_invalid_qubits(mut self, invalid_qubits: HashSet<Qubit>) -> Self {
-        self.invalid_qubits = invalid_qubits;
-        self
+    /// Sets the offline or faulty physical qubits using the builder pattern.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DeviceError::QubitNotInDevice`] if any invalid qubit is not
+    /// registered with the device.
+    pub fn with_invalid_qubits(
+        mut self,
+        invalid_qubits: HashSet<PhysicalQubit>,
+    ) -> Result<Self, DeviceError> {
+        self.set_invalid_qubits(invalid_qubits)?;
+        Ok(self)
     }
 
-    pub fn set_invalid_qubits(&mut self, invalid_qubits: HashSet<Qubit>) {
-        self.invalid_qubits = invalid_qubits;
+    /// Sets the offline or faulty physical qubits.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DeviceError::QubitNotInDevice`] if any invalid qubit is not
+    /// registered with the device. The existing set is preserved on error.
+    pub fn set_invalid_qubits(
+        &mut self,
+        invalid_qubits: HashSet<PhysicalQubit>,
+    ) -> Result<(), DeviceError> {
+        for &qubit in &invalid_qubits {
+            if !self.qubits.contains(&qubit) {
+                return Err(DeviceError::QubitNotInDevice(qubit));
+            }
+        }
+        self.invalid_qubits = invalid_qubits.into_iter().collect();
+        Ok(())
     }
 
     /// Sets the device-wide native gates.
@@ -451,7 +474,7 @@ impl Device {
     /// Returns `DeviceError::QubitNotInTopology` if the qubit is not in the device's topology.
     pub fn add_qubit_properties(
         &mut self,
-        qubit: Qubit,
+        qubit: PhysicalQubit,
         props: QubitProp,
     ) -> Result<(), DeviceError> {
         if !self.qubits.contains(&qubit) || self.invalid_qubits.contains(&qubit) {
@@ -468,11 +491,11 @@ impl Device {
     /// Returns `DeviceError::EdgeNotInTopology` if the edge is not in the device's topology.
     pub fn add_edge_properties(
         &mut self,
-        control: Qubit,
-        target: Qubit,
+        control: PhysicalQubit,
+        target: PhysicalQubit,
         props: EdgeProp,
     ) -> Result<(), DeviceError> {
-        if !self.topology.is_connected(control, target) {
+        if !self.topology.supports_directed_coupling(control, target) {
             return Err(DeviceError::EdgeNotInTopology(control, target));
         }
         self.edge_properties.insert((control, target), props);
@@ -484,14 +507,29 @@ impl Device {
         &self.name
     }
 
-    /// Gets an iterator over the available (online) qubits.
-    pub fn qubits(&self) -> impl Iterator<Item = Qubit> + '_ {
+    /// Gets an iterator over the physical qubits registered with the device.
+    pub fn qubits(&self) -> impl Iterator<Item = PhysicalQubit> + '_ {
         self.qubits.iter().copied()
     }
 
     /// Gets an iterator over the invalid (offline/faulty) qubits.
-    pub fn invalid_qubits(&self) -> impl Iterator<Item = Qubit> + '_ {
+    pub fn invalid_qubits(&self) -> impl Iterator<Item = PhysicalQubit> + '_ {
         self.invalid_qubits.iter().copied()
+    }
+
+    /// Returns whether a physical qubit is registered and not marked invalid.
+    pub fn is_usable_qubit(&self, qubit: PhysicalQubit) -> bool {
+        self.qubits.contains(&qubit) && !self.invalid_qubits.contains(&qubit)
+    }
+
+    /// Gets an iterator over registered physical qubits that are not invalid.
+    pub fn usable_qubits(&self) -> impl Iterator<Item = PhysicalQubit> + '_ {
+        self.qubits.difference(&self.invalid_qubits).copied()
+    }
+
+    /// Returns the number of registered physical qubits that are not invalid.
+    pub fn num_usable_qubits(&self) -> usize {
+        self.qubits.len() - self.invalid_qubits.len()
     }
 
     /// Gets a reference to the device's connectivity topology.
@@ -505,19 +543,23 @@ impl Device {
     }
 
     /// Gets the properties of a specific qubit.
-    pub fn qubit_properties(&self, qubit: Qubit) -> Option<&QubitProp> {
+    pub fn qubit_properties(&self, qubit: PhysicalQubit) -> Option<&QubitProp> {
         self.qubit_properties.get(&qubit)
     }
 
     /// Gets the properties of a specific coupling edge.
-    pub fn edge_properties(&self, control: Qubit, target: Qubit) -> Option<&EdgeProp> {
+    pub fn edge_properties(
+        &self,
+        control: PhysicalQubit,
+        target: PhysicalQubit,
+    ) -> Option<&EdgeProp> {
         self.edge_properties.get(&(control, target))
     }
 
     /// Gets the T1 relaxation time for a qubit (μs).
     ///
     /// Falls back to the default T1 time if not specified for the qubit.
-    pub fn get_t1(&self, qubit: Qubit) -> Option<f64> {
+    pub fn get_t1(&self, qubit: PhysicalQubit) -> Option<f64> {
         self.qubit_properties
             .get(&qubit)
             .and_then(|p| p.t1)
@@ -527,7 +569,7 @@ impl Device {
     /// Gets the T2 dephasing time for a qubit (μs).
     ///
     /// Falls back to the default T2 time if not specified for the qubit.
-    pub fn get_t2(&self, qubit: Qubit) -> Option<f64> {
+    pub fn get_t2(&self, qubit: PhysicalQubit) -> Option<f64> {
         self.qubit_properties
             .get(&qubit)
             .and_then(|p| p.t2)
@@ -537,7 +579,7 @@ impl Device {
     /// Gets the readout error rate for a qubit.
     ///
     /// Falls back to the default readout error if not specified for the qubit.
-    pub fn get_readout_error(&self, qubit: Qubit) -> Option<f64> {
+    pub fn get_readout_error(&self, qubit: PhysicalQubit) -> Option<f64> {
         self.qubit_properties
             .get(&qubit)
             .map(|p| p.readout_error)
