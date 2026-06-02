@@ -20,9 +20,9 @@
 //!   circuit-backed [`UnitaryGate`](crate::circuit::UnitaryGate) operations.
 //! - [`unitary`] synthesizes remaining custom `UnitaryGate` operations from
 //!   fixed numeric matrices. It currently supports one- and two-qubit matrices.
-//! - [`mc_gate`] is the reserved home for algorithmic decomposition of
-//!   multi-controlled gates. Its implementation has not yet been migrated into
-//!   this module tree.
+//! - [`mc_gate`] provides explicit algorithmic synthesis primitives for
+//!   multi-controlled gates. Automatic algorithm selection, ancillary-qubit
+//!   allocation, and circuit rewriting have not yet been integrated.
 //!
 //! These are independent decomposition entry points rather than a complete
 //! compiler pipeline. Target-basis lowering, layout, routing, and scheduling

@@ -12,14 +12,24 @@
 
 //! Multi-controlled gate decomposition.
 //!
-//! This module is reserved for decomposition of
+//! This module provides explicit synthesis primitives for lowering
 //! [`Instruction::McGate`](crate::circuit::Instruction::McGate) operations.
-//! The lowering implementation has not yet been migrated into the current
-//! compiler tree, so this module does not expose an active decomposition entry
-//! point yet.
+//! The primitives do not choose an algorithm, allocate ancillary qubits, or
+//! rewrite a circuit automatically. Those responsibilities belong to the
+//! future multi-controlled-gate decomposition planner.
 
+pub mod mc_su2;
 pub mod mcx;
 pub mod pauli;
+pub mod phase;
+pub mod rotation;
+pub mod unitary;
 
 #[cfg(test)]
 mod pauli_test;
+#[cfg(test)]
+mod phase_test;
+#[cfg(test)]
+mod rotation_test;
+#[cfg(test)]
+mod unitary_test;
