@@ -24,7 +24,7 @@
 //!
 //! ```text
 //! +-------------------------------------------------------------+
-//! |                      CircuitDag                             |
+//! |                      CircuitCFG                             |
 //! |  +-----------------------------------------------------+    |
 //! |  |                StableDiGraph                         |    |
 //! |  |                                                     |    |
@@ -144,8 +144,8 @@
 //! circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
 //!
 //! // Convert to CFG representation
-//! let dag = CircuitCFG::from_circuit(&circuit).unwrap();
-//! assert_eq!(dag.num_blocks(), 1); // Linear circuit has one basic block
+//! let cfg = CircuitCFG::from_circuit(&circuit).unwrap();
+//! assert_eq!(cfg.num_blocks(), 1); // Linear circuit has one basic block
 //! ```
 
 use crate::circuit::circuit_param::CircuitParam;
@@ -156,8 +156,8 @@ use crate::circuit::{ConditionView, Operation, Parameter, Qubit};
 use indexmap::IndexSet;
 use rustworkx_core::petgraph::prelude::{EdgeIndex, NodeIndex, StableDiGraph};
 use rustworkx_core::petgraph::visit::EdgeRef;
-use smallvec::smallvec;
-use std::collections::{HashSet, VecDeque};
+use smallvec::SmallVec;
+use std::collections::{HashMap, HashSet};
 
 /// Edge weights in the control flow graph representing different types of transitions.
 ///
@@ -226,6 +226,7 @@ pub enum Terminator {
     ///
     /// The CFG structure must contain two outgoing edges from this block:
     /// one labeled `FlowEdge::TrueBranch` and one labeled `FlowEdge::FalseBranch`.
+    /// It must also contain a matching [`ControlFlowRegion`] owned by this block.
     Branch(ConditionView),
     /// Unconditional jump to a target basic block.
     ///
@@ -237,6 +238,46 @@ pub enum Terminator {
     /// This terminator has no outgoing edges and represents the end
     /// of the quantum program.
     Return,
+}
+
+/// Explicit structured-control-flow information owned by a branch block.
+///
+/// The region identifies how a conditional branch must be reconstructed and
+/// stores the outer [`Operation`] fields that are not represented by the
+/// contained basic blocks. Basic-block labels are intentionally excluded from
+/// this structure: labels are diagnostic text only.
+#[derive(Debug, Clone)]
+pub enum ControlFlowRegion {
+    /// A structured `if`/`else` region whose branches converge at `merge_block`.
+    IfElse {
+        /// Entry block for the true branch.
+        true_entry: NodeIndex,
+        /// Entry block for the false branch.
+        false_entry: NodeIndex,
+        /// Continuation block reached after either branch.
+        merge_block: NodeIndex,
+        /// Whether the source operation explicitly contained an `else` body.
+        has_else: bool,
+        /// Outer operation qubit list, preserved exactly for round-trip conversion.
+        qubits: SmallVec<[Qubit; 3]>,
+        /// Outer operation parameters, preserved exactly for round-trip conversion.
+        params: SmallVec<[CircuitParam; 1]>,
+        /// Outer operation label, preserved exactly for round-trip conversion.
+        label: Option<Box<str>>,
+    },
+    /// A structured `while` region whose true branch is the loop body.
+    WhileLoop {
+        /// Entry block for the loop body.
+        body_entry: NodeIndex,
+        /// Continuation block reached when the loop condition is false.
+        exit_block: NodeIndex,
+        /// Outer operation qubit list, preserved exactly for round-trip conversion.
+        qubits: SmallVec<[Qubit; 3]>,
+        /// Outer operation parameters, preserved exactly for round-trip conversion.
+        params: SmallVec<[CircuitParam; 1]>,
+        /// Outer operation label, preserved exactly for round-trip conversion.
+        label: Option<Box<str>>,
+    },
 }
 
 /// A basic block in the control flow graph.
@@ -419,7 +460,7 @@ impl Default for BasicBlock {
 
 /// Control Flow Graph (CFG) representation of a quantum circuit.
 ///
-/// `CircuitDag` represents a quantum circuit as a directed graph of basic blocks,
+/// `CircuitCFG` represents a quantum circuit as a directed graph of basic blocks,
 /// enabling efficient analysis and transformation of circuits with classical
 /// control flow (conditionals and loops).
 ///
@@ -427,7 +468,7 @@ impl Default for BasicBlock {
 ///
 /// ```text
 /// +-------------------------------------------------+
-/// |                  CircuitDag                     |
+/// |                  CircuitCFG                     |
 /// |                                                 |
 /// |  Fields:                                        |
 /// |  - qubits: IndexSet<Qubit>                      |
@@ -521,9 +562,9 @@ impl Default for BasicBlock {
 /// circuit.h(Qubit::new(0)).unwrap();
 /// circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
 ///
-/// let dag = CircuitCFG::from_circuit(&circuit).unwrap();
-/// assert_eq!(dag.num_qubits(), 2);
-/// assert_eq!(dag.num_blocks(), 1); // Linear circuit
+/// let cfg = CircuitCFG::from_circuit(&circuit).unwrap();
+/// assert_eq!(cfg.num_qubits(), 2);
+/// assert_eq!(cfg.num_blocks(), 1); // Linear circuit
 /// ```
 pub struct CircuitCFG {
     /// The set of qubits used in the circuit, maintaining deterministic insertion order.
@@ -548,10 +589,18 @@ pub struct CircuitCFG {
     ///
     /// This is where circuit execution begins. `None` indicates an uninitialized CFG.
     pub(crate) entry_block: Option<NodeIndex>,
+
+    /// Structured regions keyed by the block whose terminator branches on the condition.
+    ///
+    /// A `Branch` terminator is complete only when it has an entry here.
+    pub(crate) control_flow_regions: HashMap<NodeIndex, ControlFlowRegion>,
 }
 
 impl CircuitCFG {
-    /// Creates a new empty `CircuitDag` with the specified number of qubits.
+    /// Creates a new incomplete `CircuitCFG` with the specified number of qubits.
+    ///
+    /// Blocks, an entry block, and complete terminators must be supplied before
+    /// this value can be converted to a [`Circuit`].
     ///
     /// # Arguments
     ///
@@ -562,9 +611,9 @@ impl CircuitCFG {
     /// ```rust
     /// use cqlib_core::circuit::CircuitCFG;
     ///
-    /// let dag = CircuitCFG::new(3);
-    /// assert_eq!(dag.num_qubits(), 3);
-    /// assert_eq!(dag.num_blocks(), 0);
+    /// let cfg = CircuitCFG::new(3);
+    /// assert_eq!(cfg.num_qubits(), 3);
+    /// assert_eq!(cfg.num_blocks(), 0);
     /// ```
     pub fn new(num_qubits: usize) -> Self {
         let qubits = (0..num_qubits).map(|i| Qubit::new(i as u32)).collect();
@@ -576,10 +625,11 @@ impl CircuitCFG {
             global_phase: CircuitParam::Fixed(0.0),
             data: StableDiGraph::new(),
             entry_block: None,
+            control_flow_regions: HashMap::new(),
         }
     }
 
-    /// Creates a `CircuitDag` from an existing vector of qubits.
+    /// Creates an incomplete `CircuitCFG` from an existing vector of qubits.
     ///
     /// This is useful when you need to preserve specific qubit identities
     /// rather than creating sequential qubits.
@@ -595,6 +645,7 @@ impl CircuitCFG {
             global_phase: CircuitParam::Fixed(0.0),
             data: StableDiGraph::new(),
             entry_block: None,
+            control_flow_regions: HashMap::new(),
         }
     }
 
@@ -628,6 +679,9 @@ impl CircuitCFG {
         target: NodeIndex,
         flow: FlowEdge,
     ) -> Option<EdgeIndex> {
+        if self.data.node_weight(source).is_none() || self.data.node_weight(target).is_none() {
+            return None;
+        }
         Some(self.data.add_edge(source, target, flow))
     }
 
@@ -643,6 +697,27 @@ impl CircuitCFG {
     /// * `index` - The node index of the entry basic block
     pub fn set_entry_block(&mut self, index: NodeIndex) {
         self.entry_block = Some(index);
+    }
+
+    /// Defines the structured construct represented by a branch block.
+    ///
+    /// A branch block without a region remains an incomplete CFG and is
+    /// rejected by [`Self::validate`] and [`Self::to_circuit`].
+    pub fn set_control_flow_region(&mut self, branch_block: NodeIndex, region: ControlFlowRegion) {
+        self.control_flow_regions.insert(branch_block, region);
+    }
+
+    /// Returns the structured construct represented by a branch block, if any.
+    pub fn control_flow_region(&self, branch_block: NodeIndex) -> Option<&ControlFlowRegion> {
+        self.control_flow_regions.get(&branch_block)
+    }
+
+    /// Returns whether `block` is the header of a structured while-loop region.
+    pub fn is_loop_header(&self, block: NodeIndex) -> bool {
+        matches!(
+            self.control_flow_region(block),
+            Some(ControlFlowRegion::WhileLoop { .. })
+        )
     }
 
     /// Returns an iterator over all basic blocks in the CFG.
@@ -700,7 +775,7 @@ impl CircuitCFG {
     ///
     /// # Returns
     ///
-    /// `Ok(CircuitDag)` on success, or a `CircuitError` if conversion fails.
+    /// `Ok(CircuitCFG)` on success, or a `CircuitError` if conversion fails.
     ///
     /// # Examples
     ///
@@ -710,8 +785,8 @@ impl CircuitCFG {
     /// let mut circuit = Circuit::new(2);
     /// circuit.h(Qubit::new(0)).unwrap();
     ///
-    /// let dag = CircuitCFG::from_circuit(&circuit).unwrap();
-    /// assert_eq!(dag.num_blocks(), 1);
+    /// let cfg = CircuitCFG::from_circuit(&circuit).unwrap();
+    /// assert_eq!(cfg.num_blocks(), 1);
     /// ```
     pub fn from_circuit(circuit: &Circuit) -> Result<Self, CircuitError> {
         let mut dag = Self::from_qubits(circuit.qubits());
@@ -739,6 +814,7 @@ impl CircuitCFG {
         // For empty circuits, just set Return terminator and return
         if circuit.operations().is_empty() {
             dag.data[entry_idx].set_terminator(Terminator::Return);
+            dag.validate()?;
             return Ok(dag);
         }
 
@@ -750,20 +826,163 @@ impl CircuitCFG {
             dag.data[final_block].set_terminator(Terminator::Return);
         }
 
+        dag.validate()?;
         Ok(dag)
     }
 
-    /// Converts a `CircuitDag` back to a nested `Circuit` representation.
+    /// Validates that this CFG represents a complete structured circuit.
     ///
-    /// This function performs the inverse of `from_circuit()`: it traverses
-    /// the CFG and reconstructs the nested AST structure by matching
-    /// control flow patterns (If-Else convergence and While Loop back-edges).
-    pub fn to_circuit(&self) -> Result<Circuit, CircuitError> {
-        let mut ops = Vec::new();
+    /// Validation rejects incomplete terminators, inconsistent edges, branches
+    /// without explicit structured-region information, malformed region
+    /// boundaries, invalid qubit or parameter references, unreachable blocks,
+    /// and non-structured cycles.
+    pub fn validate(&self) -> Result<(), CircuitError> {
+        let entry = self.entry_block.ok_or_else(|| {
+            CircuitError::InvalidControlFlow("CFG does not define an entry block".to_string())
+        })?;
+        self.require_block(entry, "entry block")?;
 
-        if let Some(entry) = self.entry_block {
-            ops = self.parse_subgraph(entry, None)?;
+        self.validate_param(&self.global_phase, "global phase")?;
+
+        for (node, block) in self.blocks() {
+            for (index, operation) in block.operations.iter().enumerate() {
+                self.validate_operation(
+                    operation,
+                    &format!("block {:?} operation {}", node, index),
+                )?;
+                if matches!(operation.instruction, Instruction::ControlFlowGate(_)) {
+                    return Err(CircuitError::InvalidControlFlow(format!(
+                        "block {:?} contains an unexpanded control-flow operation",
+                        node
+                    )));
+                }
+            }
+
+            let terminator = block.terminator.as_ref().ok_or_else(|| {
+                CircuitError::InvalidControlFlow(format!(
+                    "Block '{}' (index {:?}) is missing a terminator",
+                    block.label().unwrap_or("<unlabeled>"),
+                    node
+                ))
+            })?;
+            let outgoing: Vec<_> = self.data.edges(node).collect();
+
+            match terminator {
+                Terminator::Return => {
+                    if !outgoing.is_empty() {
+                        return Err(CircuitError::InvalidControlFlow(format!(
+                            "Block '{}' (index {:?}) has a Return terminator but outgoing edges exist",
+                            block.label().unwrap_or("<unlabeled>"),
+                            node
+                        )));
+                    }
+                }
+                Terminator::Jump(target) => {
+                    self.require_block(*target, "jump target")?;
+                    if outgoing.len() != 1
+                        || !matches!(outgoing[0].weight(), FlowEdge::Unconditional)
+                        || outgoing[0].target() != *target
+                    {
+                        return Err(CircuitError::InvalidControlFlow(format!(
+                            "Block '{}' (index {:?}) has an invalid Jump edge; expected one Unconditional edge to {:?}",
+                            block.label().unwrap_or("<unlabeled>"),
+                            node,
+                            target
+                        )));
+                    }
+                }
+                Terminator::Branch(condition) => {
+                    if !self.qubits.contains(&condition.qubit) {
+                        return Err(CircuitError::InvalidControlFlow(format!(
+                            "Branch condition in block {:?} references unknown qubit {}",
+                            node,
+                            condition.qubit.id()
+                        )));
+                    }
+                    let (true_target, false_target) = self.branch_targets(node, block)?;
+                    let region = self.control_flow_region(node).ok_or_else(|| {
+                        CircuitError::InvalidControlFlow(format!(
+                            "Block '{}' (index {:?}) has a Branch terminator but no structured control-flow region",
+                            block.label().unwrap_or("<unlabeled>"),
+                            node
+                        ))
+                    })?;
+
+                    match region {
+                        ControlFlowRegion::IfElse {
+                            true_entry,
+                            false_entry,
+                            merge_block,
+                            qubits,
+                            params,
+                            ..
+                        } => {
+                            if *true_entry != true_target || *false_entry != false_target {
+                                return Err(CircuitError::InvalidControlFlow(format!(
+                                    "IfElse region at block {:?} does not match its branch edges",
+                                    node
+                                )));
+                            }
+                            self.require_block(*merge_block, "if_else merge block")?;
+                            self.validate_outer_fields(qubits, params, node)?;
+                        }
+                        ControlFlowRegion::WhileLoop {
+                            body_entry,
+                            exit_block,
+                            qubits,
+                            params,
+                            ..
+                        } => {
+                            if *body_entry != true_target || *exit_block != false_target {
+                                return Err(CircuitError::InvalidControlFlow(format!(
+                                    "WhileLoop region at block {:?} does not match its branch edges",
+                                    node
+                                )));
+                            }
+                            self.validate_outer_fields(qubits, params, node)?;
+                        }
+                    }
+                }
+            }
         }
+
+        for region_node in self.control_flow_regions.keys() {
+            self.require_block(*region_node, "structured region owner")?;
+            if !matches!(
+                self.data[*region_node].terminator,
+                Some(Terminator::Branch(_))
+            ) {
+                return Err(CircuitError::InvalidControlFlow(format!(
+                    "structured control-flow region owner {:?} is not a Branch block",
+                    region_node
+                )));
+            }
+        }
+
+        let mut visited = HashSet::new();
+        self.parse_subgraph(entry, None, &mut visited)?;
+        if visited.len() != self.num_blocks() {
+            return Err(CircuitError::InvalidControlFlow(format!(
+                "CFG contains {} unreachable or unconsumed block(s)",
+                self.num_blocks() - visited.len()
+            )));
+        }
+
+        Ok(())
+    }
+
+    /// Converts this CFG back to a nested `Circuit` representation.
+    ///
+    /// The conversion preserves operation metadata and is defined only for a
+    /// complete structured CFG. Labels on basic blocks are never used to infer
+    /// control-flow semantics.
+    pub fn to_circuit(&self) -> Result<Circuit, CircuitError> {
+        self.validate()?;
+        let entry = self
+            .entry_block
+            .expect("validated CFG must have an entry block");
+        let mut visited = HashSet::new();
+        let ops = self.parse_subgraph(entry, None, &mut visited)?;
 
         Ok(Circuit::from_parts(
             self.qubits.clone(),
@@ -778,173 +997,202 @@ impl CircuitCFG {
         &self,
         start_node: NodeIndex,
         stop_node: Option<NodeIndex>,
+        visited: &mut HashSet<NodeIndex>,
     ) -> Result<Vec<Operation>, CircuitError> {
         let mut ops = Vec::new();
         let mut current = Some(start_node);
 
         while let Some(node) = current {
             if Some(node) == stop_node {
-                break;
+                return Ok(ops);
             }
 
-            // Append regular quantum operations from the basic block
+            if !visited.insert(node) {
+                return Err(CircuitError::InvalidControlFlow(format!(
+                    "control flow visits block {:?} more than once outside a structured loop boundary",
+                    node
+                )));
+            }
+
             let block = &self.data[node];
             ops.extend(block.operations.clone());
 
             match &block.terminator {
-                Some(Terminator::Return) | None => {
-                    current = None;
+                Some(Terminator::Return) => {
+                    if stop_node.is_some() {
+                        return Err(CircuitError::InvalidControlFlow(format!(
+                            "structured region terminates at block {:?} before reaching its boundary",
+                            node
+                        )));
+                    }
+                    return Ok(ops);
                 }
                 Some(Terminator::Jump(target)) => {
                     current = Some(*target);
                 }
                 Some(Terminator::Branch(condition)) => {
-                    let mut true_target = None;
-                    let mut false_target = None;
-
-                    for edge in self.data.edges(node) {
-                        match edge.weight() {
-                            FlowEdge::TrueBranch => true_target = Some(edge.target()),
-                            FlowEdge::FalseBranch => false_target = Some(edge.target()),
-                            _ => {}
+                    match self.control_flow_regions.get(&node).ok_or_else(|| {
+                        CircuitError::InvalidControlFlow(format!(
+                            "Branch block {:?} is missing structured-region information",
+                            node
+                        ))
+                    })? {
+                        ControlFlowRegion::WhileLoop {
+                            body_entry,
+                            exit_block,
+                            qubits,
+                            params,
+                            label,
+                        } => {
+                            let body_ops = self.parse_subgraph(*body_entry, Some(node), visited)?;
+                            ops.push(Operation {
+                                instruction: Instruction::ControlFlowGate(ControlFlow::WhileLoop(
+                                    WhileLoopGate::new(*condition, body_ops),
+                                )),
+                                qubits: qubits.clone(),
+                                params: params.clone(),
+                                label: label.clone(),
+                            });
+                            current = Some(*exit_block);
+                        }
+                        ControlFlowRegion::IfElse {
+                            true_entry,
+                            false_entry,
+                            merge_block,
+                            has_else,
+                            qubits,
+                            params,
+                            label,
+                        } => {
+                            let true_ops =
+                                self.parse_subgraph(*true_entry, Some(*merge_block), visited)?;
+                            let false_ops =
+                                self.parse_subgraph(*false_entry, Some(*merge_block), visited)?;
+                            ops.push(Operation {
+                                instruction: Instruction::ControlFlowGate(ControlFlow::IfElse(
+                                    IfElseGate::new(
+                                        *condition,
+                                        true_ops,
+                                        has_else.then_some(false_ops),
+                                    ),
+                                )),
+                                qubits: qubits.clone(),
+                                params: params.clone(),
+                                label: label.clone(),
+                            });
+                            current = Some(*merge_block);
                         }
                     }
-
-                    let true_target = true_target.ok_or_else(|| {
-                        let block_label = block.label().unwrap_or("<unlabeled>");
-                        CircuitError::InvalidControlFlow(format!(
-                            "Block '{}' (index {:?}) has a Branch terminator but is missing a TrueBranch outgoing edge. \
-                             Expected a FlowEdge::TrueBranch edge from this block to the true branch target.",
-                            block_label, node
-                        ))
-                    })?;
-                    let false_target = false_target.ok_or_else(|| {
-                        let block_label = block.label().unwrap_or("<unlabeled>");
-                        CircuitError::InvalidControlFlow(format!(
-                            "Block '{}' (index {:?}) has a Branch terminator but is missing a FalseBranch outgoing edge. \
-                             Expected a FlowEdge::FalseBranch edge from this block to the false branch target.",
-                            block_label, node
-                        ))
-                    })?;
-
-                    // Determine structure type by checking block label
-                    // While loop: cond block label starts with "while_cond_"
-                    // If-Else: cond block label starts with "if_" or other
-                    let is_while = block.label().is_some_and(|l| l.starts_with("while_cond_"));
-
-                    if is_while {
-                        // While Loop: true branch is the loop body with back edge
-                        let body_ops = self.parse_subgraph(true_target, Some(node))?;
-
-                        ops.push(Operation {
-                            instruction: Instruction::ControlFlowGate(ControlFlow::WhileLoop(
-                                WhileLoopGate::new(*condition, body_ops),
-                            )),
-                            qubits: smallvec![],
-                            params: smallvec![],
-                            label: None,
-                        });
-
-                        // Continue with false branch (exit path)
-                        current = Some(false_target);
-                    } else {
-                        // If-Else: find merge point where both branches converge
-                        let merge_node = self.find_merge_node(true_target, false_target);
-
-                        let true_ops = if let Some(merge) = merge_node {
-                            self.parse_subgraph(true_target, Some(merge))?
-                        } else {
-                            self.parse_subgraph(true_target, None)?
-                        };
-
-                        let false_ops = if let Some(merge) = merge_node {
-                            self.parse_subgraph(false_target, Some(merge))?
-                        } else {
-                            self.parse_subgraph(false_target, None)?
-                        };
-
-                        let false_body = if false_ops.is_empty() {
-                            None
-                        } else {
-                            Some(false_ops)
-                        };
-
-                        ops.push(Operation {
-                            instruction: Instruction::ControlFlowGate(ControlFlow::IfElse(
-                                IfElseGate::new(*condition, true_ops, false_body),
-                            )),
-                            qubits: smallvec![],
-                            params: smallvec![],
-                            label: None,
-                        });
-
-                        current = merge_node;
-                    }
                 }
+                None => unreachable!("validation rejects unterminated blocks"),
             }
         }
 
-        Ok(ops)
+        Err(CircuitError::InvalidControlFlow(
+            "structured control-flow traversal ended without a Return terminator".to_string(),
+        ))
     }
 
-    /// Finds the merge node of an if-else structure by label pattern.
-    ///
-    /// If-Else blocks are labeled with patterns like "if_true_0", "if_false_0", "if_merge_0".
-    /// This method finds the merge node by looking for the "if_merge_" label
-    /// that corresponds to the true/false branch labels.
-    fn find_merge_node(
+    fn validate_operation(&self, operation: &Operation, context: &str) -> Result<(), CircuitError> {
+        for qubit in &operation.qubits {
+            if !self.qubits.contains(qubit) {
+                return Err(CircuitError::InvalidControlFlow(format!(
+                    "{} references unknown qubit {}",
+                    context,
+                    qubit.id()
+                )));
+            }
+        }
+        for parameter in &operation.params {
+            self.validate_param(parameter, context)?;
+        }
+        Ok(())
+    }
+
+    fn validate_outer_fields(
         &self,
-        true_branch: NodeIndex,
-        false_branch: NodeIndex,
-    ) -> Option<NodeIndex> {
-        // Extract the index from the true branch label
-        let merge_label_prefix = self.data[true_branch].label().and_then(|label| {
-            // Extract index from "if_true_X" pattern
-            label
-                .strip_prefix("if_true_")
-                .map(|idx| format!("if_merge_{}", idx))
-        });
-
-        if let Some(expected_label) = merge_label_prefix {
-            // Search for the merge block with matching label
-            for node_idx in self.data.node_indices() {
-                if let Some(label) = self.data[node_idx].label() {
-                    if label == expected_label {
-                        return Some(node_idx);
-                    }
-                }
+        qubits: &[Qubit],
+        params: &[CircuitParam],
+        node: NodeIndex,
+    ) -> Result<(), CircuitError> {
+        for qubit in qubits {
+            if !self.qubits.contains(qubit) {
+                return Err(CircuitError::InvalidControlFlow(format!(
+                    "control-flow operation at block {:?} references unknown qubit {}",
+                    node,
+                    qubit.id()
+                )));
             }
         }
+        for param in params {
+            self.validate_param(
+                param,
+                &format!("control-flow operation at block {:?}", node),
+            )?;
+        }
+        Ok(())
+    }
 
-        // Fallback: use graph traversal to find common descendant
-        let mut descendants1 = HashSet::new();
-        let mut stack = vec![true_branch];
-
-        while let Some(n) = stack.pop() {
-            if descendants1.insert(n) {
-                for edge in self.data.edges(n) {
-                    let target = edge.target();
-                    stack.push(target);
-                }
+    fn validate_param(&self, parameter: &CircuitParam, context: &str) -> Result<(), CircuitError> {
+        if let CircuitParam::Index(index) = parameter {
+            if self.parameters.get_index(*index as usize).is_none() {
+                return Err(CircuitError::InvalidControlFlow(format!(
+                    "{} references missing parameter index {}",
+                    context, index
+                )));
             }
         }
+        Ok(())
+    }
 
-        let mut queue = VecDeque::new();
-        let mut visited2 = HashSet::new();
-        queue.push_back(false_branch);
+    fn require_block(&self, node: NodeIndex, context: &str) -> Result<(), CircuitError> {
+        if self.data.node_weight(node).is_none() {
+            return Err(CircuitError::InvalidControlFlow(format!(
+                "{} {:?} does not exist in the CFG",
+                context, node
+            )));
+        }
+        Ok(())
+    }
 
-        while let Some(n) = queue.pop_front() {
-            if descendants1.contains(&n) {
-                return Some(n);
-            }
-            if visited2.insert(n) {
-                for edge in self.data.edges(n) {
-                    queue.push_back(edge.target());
-                }
-            }
+    fn branch_targets(
+        &self,
+        node: NodeIndex,
+        block: &BasicBlock,
+    ) -> Result<(NodeIndex, NodeIndex), CircuitError> {
+        let outgoing: Vec<_> = self.data.edges(node).collect();
+        let true_targets: Vec<_> = outgoing
+            .iter()
+            .filter(|edge| matches!(edge.weight(), FlowEdge::TrueBranch))
+            .map(|edge| edge.target())
+            .collect();
+        let false_targets: Vec<_> = outgoing
+            .iter()
+            .filter(|edge| matches!(edge.weight(), FlowEdge::FalseBranch))
+            .map(|edge| edge.target())
+            .collect();
+        let label = block.label().unwrap_or("<unlabeled>");
+
+        if true_targets.is_empty() {
+            return Err(CircuitError::InvalidControlFlow(format!(
+                "Block '{}' (index {:?}) has a Branch terminator but is missing a TrueBranch outgoing edge",
+                label, node
+            )));
+        }
+        if false_targets.is_empty() {
+            return Err(CircuitError::InvalidControlFlow(format!(
+                "Block '{}' (index {:?}) has a Branch terminator but is missing a FalseBranch outgoing edge",
+                label, node
+            )));
+        }
+        if true_targets.len() != 1 || false_targets.len() != 1 || outgoing.len() != 2 {
+            return Err(CircuitError::InvalidControlFlow(format!(
+                "Block '{}' (index {:?}) must have exactly one TrueBranch edge and one FalseBranch edge",
+                label, node
+            )));
         }
 
-        None
+        Ok((true_targets[0], false_targets[0]))
     }
 }
 
@@ -1065,6 +1313,19 @@ fn process_operations(
                 dag.data[false_exit].set_terminator(Terminator::Jump(merge_block));
                 dag.add_edge(false_exit, merge_block, FlowEdge::Unconditional);
 
+                dag.set_control_flow_region(
+                    current_block,
+                    ControlFlowRegion::IfElse {
+                        true_entry,
+                        false_entry,
+                        merge_block,
+                        has_else: if_else.false_body().is_some(),
+                        qubits: op.qubits.clone(),
+                        params: op.params.clone(),
+                        label: op.label.clone(),
+                    },
+                );
+
                 // 6. Set current block to Merge block for subsequent operations
                 current_block = merge_block;
             }
@@ -1094,6 +1355,17 @@ fn process_operations(
                 let exit_block =
                     dag.add_block(BasicBlock::new().with_label(format!("while_exit_{}", idx)));
                 dag.add_edge(cond_block, exit_block, FlowEdge::FalseBranch);
+
+                dag.set_control_flow_region(
+                    cond_block,
+                    ControlFlowRegion::WhileLoop {
+                        body_entry,
+                        exit_block,
+                        qubits: op.qubits.clone(),
+                        params: op.params.clone(),
+                        label: op.label.clone(),
+                    },
+                );
 
                 // 6. Set current block to Exit block for operations after the loop
                 current_block = exit_block;

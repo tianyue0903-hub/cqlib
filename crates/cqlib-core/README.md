@@ -94,17 +94,3 @@ cqlib-core = { path = "../cqlib-core" }
 | `Parameter` | 符号参数 |
 | `StandardGate` | 标准量子门枚举 |
 | `Instruction` | 统一指令类型 |
-
-### IR 转换
-
-```rust
-// QASM2
-qasm2_load(path: &Path) -> Result<Circuit, Error>
-qasm2_loads(qasm: &str) -> Result<Circuit, Error>
-qasm2_dumps(circuit: &Circuit) -> Result<String, Error>
-
-// QCIS
-qcis_load(path: &Path) -> Result<Circuit, Error>
-qcis_loads(qcis: &str) -> Result<Circuit, Error>
-qcis_dumps(circuit: &Circuit) -> Result<String, Error>
-```

@@ -638,32 +638,42 @@ impl Parameter {
     }
 }
 
-/// Implements `From<$src_type>` for `Parameter` by casting `$src_type` to `$target_type`
-/// and delegating to the corresponding `Expr::from` implementation.
-///
-/// Pattern: `src_type => target_type`, e.g. `f32 => f64`.
-macro_rules! impl_from_num_for_p {
-    ($($src_type:ty => $target_type:ty),* $(,)?) => {
-        $(
-            impl From<$src_type> for Parameter {
-                fn from(val: $src_type) -> Self {
-                    Self {
-                        // Cast to the target numeric type, then use the
-                        // built-in `Expr::from` conversion provided by
-                        // `symb_anafis`.
-                        expr: Expr::from(val as $target_type),
-                    }
-                }
-            }
-        )*
-    };
+impl From<f64> for Parameter {
+    fn from(value: f64) -> Self {
+        if !value.is_finite() {
+            panic!("Parameter numeric literal must be finite, got {value}");
+        }
+        Self {
+            expr: Expr::from(value),
+        }
+    }
 }
 
-impl_from_num_for_p! {
-    f64 => f64,
-    f32 => f64,
-    u32 => f64,
-    i32 => i32,
+impl From<f32> for Parameter {
+    fn from(value: f32) -> Self {
+        if !value.is_finite() {
+            panic!("Parameter numeric literal must be finite, got {value}");
+        }
+        Self {
+            expr: Expr::from(f64::from(value)),
+        }
+    }
+}
+
+impl From<u32> for Parameter {
+    fn from(value: u32) -> Self {
+        Self {
+            expr: Expr::from(f64::from(value)),
+        }
+    }
+}
+
+impl From<i32> for Parameter {
+    fn from(value: i32) -> Self {
+        Self {
+            expr: Expr::from(value),
+        }
+    }
 }
 
 /// Implements the four arithmetic operators between `Parameter` and a primitive numeric
@@ -678,8 +688,7 @@ macro_rules! impl_ops_for_type {
             type Output = Parameter;
             fn add(self, rhs: $t) -> Self::Output {
                 Self {
-                    // 1. `Parameter::from(rhs)` converts the primitive to `Parameter` using
-                    //    the `impl_from_num_for_p!` impls above.
+                    // 1. `Parameter::from(rhs)` converts the primitive to `Parameter`.
                     // 2. `.expr` unwraps the underlying `Expr` node.
                     // 3. `self.expr + ...` invokes `symb_anafis`'s `Add` impl.
                     expr: self.expr + Parameter::from(rhs).expr,

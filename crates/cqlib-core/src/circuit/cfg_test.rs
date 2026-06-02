@@ -14,7 +14,8 @@ use crate::circuit::cfg::{BasicBlock, CircuitCFG, FlowEdge, Terminator};
 use crate::circuit::gate::control_flow::{ConditionView, ControlFlow, IfElseGate, WhileLoopGate};
 use crate::circuit::gate::{Instruction, StandardGate};
 use crate::circuit::operation::Operation;
-use crate::circuit::{Circuit, Qubit};
+use crate::circuit::{Circuit, CircuitParam, Parameter, ParameterValue, Qubit};
+use rustworkx_core::petgraph::prelude::NodeIndex;
 use smallvec::smallvec;
 
 #[test]
@@ -80,6 +81,17 @@ fn test_circuit_dag_add_block() {
 
     assert_eq!(dag.num_blocks(), 1);
     assert_eq!(dag.data[idx].label(), Some("test"));
+}
+
+#[test]
+fn test_add_edge_rejects_unknown_endpoint() {
+    let mut cfg = CircuitCFG::new(1);
+    let entry = cfg.add_block(BasicBlock::new());
+
+    assert!(
+        cfg.add_edge(entry, NodeIndex::new(99), FlowEdge::Unconditional)
+            .is_none()
+    );
 }
 
 #[test]
@@ -588,6 +600,193 @@ fn test_to_circuit_nested_if_in_while() {
     }
 }
 
+#[test]
+fn test_round_trip_preserves_operation_metadata_and_symbolic_phase() {
+    let q0 = Qubit::new(0);
+    let q1 = Qubit::new(1);
+    let theta = Parameter::symbol("theta");
+    let mut original = Circuit::new(2);
+    original.set_global_phase(theta.clone());
+    original
+        .append(
+            Instruction::Standard(StandardGate::RZ),
+            [q0],
+            [ParameterValue::from(theta.clone())],
+            Some("ordinary"),
+        )
+        .unwrap();
+    original
+        .append(
+            Instruction::ControlFlowGate(ControlFlow::IfElse(IfElseGate::new(
+                ConditionView::new(q0, 1),
+                vec![Operation {
+                    instruction: Instruction::Standard(StandardGate::X),
+                    qubits: smallvec![q1],
+                    params: smallvec![],
+                    label: Some("body".into()),
+                }],
+                None,
+            ))),
+            [q1, q0],
+            [ParameterValue::from(theta)],
+            Some("control"),
+        )
+        .unwrap();
+
+    let recovered = CircuitCFG::from_circuit(&original)
+        .unwrap()
+        .to_circuit()
+        .unwrap();
+    assert_eq!(recovered.symbols(), original.symbols());
+    assert_eq!(recovered.parameters().len(), original.parameters().len());
+    assert!(matches!(
+        recovered.global_phase_param(),
+        CircuitParam::Index(_)
+    ));
+
+    let ordinary = &recovered.operations()[0];
+    assert_eq!(ordinary.qubits.as_slice(), &[q0]);
+    assert_eq!(ordinary.label.as_deref(), Some("ordinary"));
+    assert!(matches!(
+        ordinary.params.as_slice(),
+        [CircuitParam::Index(_)]
+    ));
+
+    let control = &recovered.operations()[1];
+    assert_eq!(control.qubits.as_slice(), &[q1, q0]);
+    assert_eq!(control.label.as_deref(), Some("control"));
+    assert!(matches!(
+        control.params.as_slice(),
+        [CircuitParam::Index(_)]
+    ));
+    match &control.instruction {
+        Instruction::ControlFlowGate(ControlFlow::IfElse(gate)) => {
+            assert_eq!(gate.true_body()[0].label.as_deref(), Some("body"));
+        }
+        _ => panic!("Expected IfElse control flow"),
+    }
+}
+
+#[test]
+fn test_round_trip_distinguishes_absent_and_empty_else() {
+    let condition = ConditionView::new(Qubit::new(0), 1);
+
+    let mut absent = Circuit::new(1);
+    absent.if_else(condition, vec![], None).unwrap();
+    let absent = CircuitCFG::from_circuit(&absent)
+        .unwrap()
+        .to_circuit()
+        .unwrap();
+
+    let mut empty = Circuit::new(1);
+    empty.if_else(condition, vec![], Some(vec![])).unwrap();
+    let empty = CircuitCFG::from_circuit(&empty)
+        .unwrap()
+        .to_circuit()
+        .unwrap();
+
+    match &absent.operations()[0].instruction {
+        Instruction::ControlFlowGate(ControlFlow::IfElse(gate)) => {
+            assert!(gate.false_body().is_none());
+        }
+        _ => panic!("Expected IfElse control flow"),
+    }
+    match &empty.operations()[0].instruction {
+        Instruction::ControlFlowGate(ControlFlow::IfElse(gate)) => {
+            assert!(gate.false_body().unwrap().is_empty());
+        }
+        _ => panic!("Expected IfElse control flow"),
+    }
+}
+
+#[test]
+fn test_block_labels_do_not_determine_control_flow_structure() {
+    let q0 = Qubit::new(0);
+    let q1 = Qubit::new(1);
+    let mut original = Circuit::new(2);
+    original
+        .if_else(
+            ConditionView::new(q0, 1),
+            vec![Operation {
+                instruction: Instruction::Standard(StandardGate::X),
+                qubits: smallvec![q1],
+                params: smallvec![],
+                label: None,
+            }],
+            None,
+        )
+        .unwrap();
+    original
+        .while_loop(
+            ConditionView::new(q1, 1),
+            vec![Operation {
+                instruction: Instruction::Standard(StandardGate::Z),
+                qubits: smallvec![q0],
+                params: smallvec![],
+                label: None,
+            }],
+        )
+        .unwrap();
+
+    let mut cfg = CircuitCFG::from_circuit(&original).unwrap();
+    let nodes: Vec<_> = cfg.data.node_indices().collect();
+    for node in nodes {
+        cfg.data[node].label = Some("while_cond_same_label".to_string());
+    }
+
+    let recovered = cfg.to_circuit().unwrap();
+    assert!(matches!(
+        recovered.operations()[0].instruction,
+        Instruction::ControlFlowGate(ControlFlow::IfElse(_))
+    ));
+    assert!(matches!(
+        recovered.operations()[1].instruction,
+        Instruction::ControlFlowGate(ControlFlow::WhileLoop(_))
+    ));
+}
+
+#[test]
+fn test_nested_if_with_duplicate_diagnostic_labels_preserves_continuation() {
+    let q0 = Qubit::new(0);
+    let q1 = Qubit::new(1);
+    let mut original = Circuit::new(2);
+    let nested = Operation {
+        instruction: Instruction::ControlFlowGate(ControlFlow::IfElse(IfElseGate::new(
+            ConditionView::new(q1, 1),
+            vec![],
+            Some(vec![]),
+        ))),
+        qubits: smallvec![q1],
+        params: smallvec![],
+        label: None,
+    };
+    original
+        .if_else(ConditionView::new(q0, 1), vec![nested], Some(vec![]))
+        .unwrap();
+    original.h(q1).unwrap();
+
+    let recovered = CircuitCFG::from_circuit(&original)
+        .unwrap()
+        .to_circuit()
+        .unwrap();
+    assert_eq!(recovered.operations().len(), 2);
+    assert!(matches!(
+        recovered.operations()[1].instruction,
+        Instruction::Standard(StandardGate::H)
+    ));
+    match &recovered.operations()[0].instruction {
+        Instruction::ControlFlowGate(ControlFlow::IfElse(outer)) => {
+            assert_eq!(outer.true_body().len(), 1);
+            assert!(matches!(
+                outer.true_body()[0].instruction,
+                Instruction::ControlFlowGate(ControlFlow::IfElse(_))
+            ));
+            assert!(outer.false_body().unwrap().is_empty());
+        }
+        _ => panic!("Expected outer IfElse control flow"),
+    }
+}
+
 use crate::circuit::CircuitError;
 
 #[test]
@@ -717,4 +916,58 @@ fn test_invalid_dag_unlabeled_block() {
             result
         ),
     }
+}
+
+#[test]
+fn test_invalid_cfg_missing_terminator_is_rejected() {
+    let mut cfg = CircuitCFG::new(1);
+    let entry = cfg.add_block(BasicBlock::new().with_label("entry"));
+    cfg.set_entry_block(entry);
+
+    let error = cfg.to_circuit().unwrap_err();
+    assert!(matches!(error, CircuitError::InvalidControlFlow(_)));
+    assert!(error.to_string().contains("missing a terminator"));
+}
+
+#[test]
+fn test_invalid_cfg_return_with_edge_is_rejected() {
+    let mut cfg = CircuitCFG::new(1);
+    let entry = cfg.add_block(BasicBlock::new().with_label("entry"));
+    let target = cfg.add_block(BasicBlock::new().with_label("target"));
+    cfg.set_entry_block(entry);
+    cfg.data[entry].set_terminator(Terminator::Return);
+    cfg.data[target].set_terminator(Terminator::Return);
+    cfg.add_edge(entry, target, FlowEdge::Unconditional);
+
+    assert!(matches!(
+        cfg.to_circuit(),
+        Err(CircuitError::InvalidControlFlow(_))
+    ));
+}
+
+#[test]
+fn test_invalid_cfg_unstructured_cycle_is_rejected() {
+    let mut cfg = CircuitCFG::new(1);
+    let entry = cfg.add_block(BasicBlock::new().with_label("entry"));
+    cfg.set_entry_block(entry);
+    cfg.data[entry].set_terminator(Terminator::Jump(entry));
+    cfg.add_edge(entry, entry, FlowEdge::Unconditional);
+
+    assert!(matches!(
+        cfg.to_circuit(),
+        Err(CircuitError::InvalidControlFlow(_))
+    ));
+}
+
+#[test]
+fn test_invalid_cfg_unreachable_block_is_rejected() {
+    let mut cfg = CircuitCFG::new(1);
+    let entry = cfg.add_block(BasicBlock::new().with_label("entry"));
+    let unreachable = cfg.add_block(BasicBlock::new().with_label("unreachable"));
+    cfg.set_entry_block(entry);
+    cfg.data[entry].set_terminator(Terminator::Return);
+    cfg.data[unreachable].set_terminator(Terminator::Return);
+
+    let error = cfg.to_circuit().unwrap_err();
+    assert!(error.to_string().contains("unreachable"));
 }

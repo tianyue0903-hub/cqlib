@@ -38,6 +38,42 @@ fn test_p_construction() {
 }
 
 #[test]
+#[should_panic(expected = "Parameter numeric literal must be finite")]
+fn test_p_rejects_f64_nan() {
+    let _ = Parameter::from(f64::NAN);
+}
+
+#[test]
+#[should_panic(expected = "Parameter numeric literal must be finite")]
+fn test_p_rejects_f64_infinity() {
+    let _ = Parameter::from(f64::INFINITY);
+}
+
+#[test]
+#[should_panic(expected = "Parameter numeric literal must be finite")]
+fn test_p_rejects_f64_negative_infinity() {
+    let _ = Parameter::from(f64::NEG_INFINITY);
+}
+
+#[test]
+#[should_panic(expected = "Parameter numeric literal must be finite")]
+fn test_p_rejects_f32_nan() {
+    let _ = Parameter::from(f32::NAN);
+}
+
+#[test]
+#[should_panic(expected = "Parameter numeric literal must be finite")]
+fn test_p_rejects_f32_infinity() {
+    let _ = Parameter::from(f32::INFINITY);
+}
+
+#[test]
+#[should_panic(expected = "Parameter numeric literal must be finite")]
+fn test_p_rejects_f32_negative_infinity() {
+    let _ = Parameter::from(f32::NEG_INFINITY);
+}
+
+#[test]
 fn test_p_constants() {
     let pi = Parameter::pi();
     assert_eq!(pi.to_string(), "π");
