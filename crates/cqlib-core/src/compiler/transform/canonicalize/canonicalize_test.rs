@@ -10,927 +10,65 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
-//! Integration and unit tests for the canonicalize module.
-
-use crate::circuit::gate::{CircuitGate, FrozenCircuit, UnitaryGate};
+use super::{CanonicalizeConfig, Canonicalizer, canonicalize_circuit};
+use crate::circuit::gate::FrozenCircuit;
 use crate::circuit::{
-    Circuit, CircuitParam, ConditionView, ControlFlow, Directive, IfElseGate, Instruction, MCGate,
-    Operation, Parameter, ParameterValue, Qubit, StandardGate, WhileLoopGate,
+    Circuit, CircuitGate, CircuitParam, ConditionView, ControlFlow, Directive, Instruction, MCGate,
+    Operation, Parameter, ParameterValue, Qubit, StandardGate, UnitaryGate, circuit_to_matrix,
 };
-use crate::compiler::artifact::DiagnosticSeverity;
-use crate::compiler::context::{CompilerContext, ContextChangeSet};
-use crate::compiler::error::CompilerError;
+use crate::compiler::CompilerError;
 use crate::compiler::transform::Transformer;
-use crate::compiler::transform::canonicalize::canonicalizer::{
-    FixpointResult, SingleRoundResult, run_to_fixpoint_with,
-};
-use crate::compiler::transform::canonicalize::equivalence::instructions_equivalent;
-use crate::compiler::transform::canonicalize::parameter_phase::{
-    canonicalize_parameter_phase, parameter_phase_changed,
-};
-use crate::compiler::transform::canonicalize::{
-    CanonicalRuleId, CanonicalizeConfig, Canonicalizer,
-};
+use indexmap::IndexSet;
 use ndarray::array;
 use num_complex::Complex64;
-use smallvec::smallvec;
-
-fn param_to_string(circuit: &Circuit, param: CircuitParam) -> String {
-    match param {
-        CircuitParam::Fixed(value) => Parameter::from(value).to_string(),
-        CircuitParam::Index(index) => circuit
-            .parameters()
-            .get_index(index as usize)
-            .unwrap()
-            .to_string(),
-    }
-}
+use smallvec::{SmallVec, smallvec};
 
 #[test]
-fn production_config_enables_all_builtin_behaviors() {
-    let config = CanonicalizeConfig::production();
-
-    assert_eq!(config.round_limit(), 8);
-    assert!(config.recurses_control_flow());
-    assert!(config.normalizes_parameters());
-    assert!(config.canonicalizes_instruction_form());
-    assert!(config.merges_adjacent_barriers());
-    assert!(config.drops_trivial_noops());
-}
-
-#[test]
-fn config_builder_only_changes_requested_fields() {
-    let config = CanonicalizeConfig::new()
-        .with_round_limit(3)
-        .recurse_control_flow(false)
-        .normalize_parameters(false)
-        .canonicalize_instruction_form(false)
-        .merge_adjacent_barriers(false)
-        .drop_trivial_noops(false);
-
-    assert_eq!(config.round_limit(), 3);
-    assert!(!config.recurses_control_flow());
-    assert!(!config.normalizes_parameters());
-    assert!(!config.canonicalizes_instruction_form());
-    assert!(!config.merges_adjacent_barriers());
-    assert!(!config.drops_trivial_noops());
-}
-
-#[test]
-fn canonicalize_parameter_phase_simplifies_symbolic_expressions() {
+fn parameter_table_is_rebuilt_and_unused_params_are_removed() {
     let mut circuit = Circuit::new(1);
+    circuit.add_parameter(Parameter::symbol("unused"));
     let theta = Parameter::symbol("theta");
-    circuit
-        .rz(
-            Qubit::new(0),
-            theta.clone().sin().pow(Parameter::from(2)) + theta.cos().pow(Parameter::from(2)),
-        )
-        .unwrap();
+    circuit.rz(Qubit::new(0), theta.clone() - theta).unwrap();
+    circuit.h(Qubit::new(0)).unwrap();
 
-    let canonical = canonicalize_parameter_phase(&circuit).unwrap();
+    let result = canonicalize_circuit(&circuit).unwrap();
 
-    assert_eq!(
-        param_to_string(&canonical, canonical.operations()[0].params[0].clone()),
-        "1"
-    );
-    assert!(parameter_phase_changed(&circuit, &canonical));
-}
-
-#[test]
-fn canonicalize_parameter_phase_keeps_unbound_symbolic_expression_symbolic() {
-    let mut circuit = Circuit::new(1);
-    let theta = Parameter::symbol("theta");
-    circuit
-        .rz(Qubit::new(0), theta + Parameter::from(1.0))
-        .unwrap();
-
-    let canonical = canonicalize_parameter_phase(&circuit).unwrap();
-
-    assert_eq!(canonical.parameters().len(), 1);
+    assert!(result.changed);
+    assert!(result.circuit.parameters().is_empty());
+    assert_eq!(result.circuit.operations().len(), 1);
     assert!(matches!(
-        canonical.operations()[0].params[0],
-        CircuitParam::Index(0)
-    ));
-    assert_eq!(
-        canonical.parameters().get_index(0).unwrap().to_string(),
-        "1 + theta"
-    );
-}
-
-#[test]
-fn canonicalize_parameter_phase_folds_symbol_free_expression_to_fixed_param() {
-    let mut circuit = Circuit::new(1);
-    circuit
-        .rz(Qubit::new(0), Parameter::from(2.0) + Parameter::from(3.0))
-        .unwrap();
-
-    let canonical = canonicalize_parameter_phase(&circuit).unwrap();
-
-    assert!(canonical.parameters().is_empty());
-    assert!(matches!(
-        canonical.operations()[0].params[0],
-        CircuitParam::Fixed(5.0)
-    ));
-}
-
-#[test]
-fn canonicalize_parameter_phase_folds_evaluable_global_phase() {
-    let mut circuit = Circuit::new(1);
-    let phi = Parameter::symbol("phi");
-    circuit.set_global_phase(
-        phi.clone().sin().pow(Parameter::from(2)) + phi.cos().pow(Parameter::from(2)),
-    );
-
-    let canonical = canonicalize_parameter_phase(&circuit).unwrap();
-
-    assert_eq!(canonical.global_phase().to_string(), "1");
-    assert!(parameter_phase_changed(&circuit, &canonical));
-}
-
-#[test]
-fn parameter_phase_changed_detects_no_difference() {
-    let circuit = Circuit::new(1);
-
-    assert!(!parameter_phase_changed(&circuit, &circuit));
-}
-
-#[test]
-fn canonicalize_parameter_phase_remaps_body_only_symbolic_parameter_in_if_else() {
-    let mut circuit = Circuit::new(2);
-    circuit.add_parameter(Parameter::from(1.0));
-    let theta = Parameter::symbol("theta");
-    let (theta_index, _) = circuit.add_parameter(theta.clone() + Parameter::from(0.0));
-
-    let true_body = vec![Operation {
-        instruction: Instruction::Standard(StandardGate::RZ),
-        qubits: smallvec![Qubit::new(1)],
-        params: smallvec![CircuitParam::Index(theta_index as u32)],
-        label: None,
-    }];
-
-    circuit
-        .append(
-            Instruction::ControlFlowGate(ControlFlow::IfElse(IfElseGate::new(
-                ConditionView::new(Qubit::new(0), 1),
-                true_body,
-                None,
-            ))),
-            [Qubit::new(0), Qubit::new(1)],
-            std::iter::empty(),
-            None,
-        )
-        .unwrap();
-
-    let canonical = canonicalize_parameter_phase(&circuit).unwrap();
-
-    let Instruction::ControlFlowGate(ControlFlow::IfElse(gate)) =
-        &canonical.operations()[0].instruction
-    else {
-        panic!("expected if-else gate");
-    };
-    let CircuitParam::Index(index) = gate.true_body()[0].params[0] else {
-        panic!("expected symbolic parameter index");
-    };
-    assert_eq!(
-        canonical
-            .parameters()
-            .get_index(index as usize)
-            .unwrap()
-            .to_string(),
-        "theta"
-    );
-}
-
-#[test]
-fn canonicalize_parameter_phase_remaps_body_only_symbolic_parameter_in_while_loop() {
-    let mut circuit = Circuit::new(2);
-    circuit.add_parameter(Parameter::from(1.0));
-    let theta = Parameter::symbol("theta");
-    let (theta_index, _) = circuit.add_parameter(theta.clone() + Parameter::from(0.0));
-
-    let body = vec![Operation {
-        instruction: Instruction::Standard(StandardGate::RZ),
-        qubits: smallvec![Qubit::new(1)],
-        params: smallvec![CircuitParam::Index(theta_index as u32)],
-        label: None,
-    }];
-
-    circuit
-        .append(
-            Instruction::ControlFlowGate(ControlFlow::WhileLoop(WhileLoopGate::new(
-                ConditionView::new(Qubit::new(0), 1),
-                body,
-            ))),
-            [Qubit::new(0), Qubit::new(1)],
-            std::iter::empty(),
-            None,
-        )
-        .unwrap();
-
-    let canonical = canonicalize_parameter_phase(&circuit).unwrap();
-
-    let Instruction::ControlFlowGate(ControlFlow::WhileLoop(gate)) =
-        &canonical.operations()[0].instruction
-    else {
-        panic!("expected while-loop gate");
-    };
-    let CircuitParam::Index(index) = gate.body()[0].params[0] else {
-        panic!("expected symbolic parameter index");
-    };
-    assert_eq!(
-        canonical
-            .parameters()
-            .get_index(index as usize)
-            .unwrap()
-            .to_string(),
-        "theta"
-    );
-}
-
-#[test]
-fn canonicalizer_uses_stable_descriptor_contract() {
-    let canonicalizer = Canonicalizer::production();
-    let descriptor = canonicalizer.descriptor();
-
-    assert_eq!(descriptor.name, "canonicalize.standard");
-    assert!(!descriptor.requires_device);
-    assert!(!descriptor.requires_layout);
-    assert!(descriptor.supports_control_flow);
-    assert!(descriptor.supports_symbolic_parameters);
-    assert!(descriptor.modifies_circuit);
-}
-
-#[test]
-fn canonicalizer_noop_when_parameter_normalization_is_disabled() {
-    let canonicalizer = Canonicalizer::new(CanonicalizeConfig::new().normalize_parameters(false));
-    let mut ctx = CompilerContext::new(Circuit::new(1));
-
-    let outcome = canonicalizer.run(&mut ctx).unwrap();
-
-    assert!(!outcome.changed);
-    assert!(outcome.notes.is_empty());
-}
-
-#[test]
-fn canonicalizer_normalizes_parameter_and_marks_context_changed() {
-    let canonicalizer = Canonicalizer::production();
-    let mut circuit = Circuit::new(1);
-    let theta = Parameter::symbol("theta");
-    circuit
-        .rz(
-            Qubit::new(0),
-            theta.clone().sin().pow(Parameter::from(2)) + theta.cos().pow(Parameter::from(2)),
-        )
-        .unwrap();
-    let mut ctx = CompilerContext::new(circuit);
-
-    let outcome = canonicalizer.run(&mut ctx).unwrap();
-
-    assert!(outcome.changed);
-    assert_eq!(ctx.revision(), 1);
-    assert_eq!(
-        param_to_string(
-            ctx.circuit(),
-            ctx.circuit().operations()[0].params[0].clone()
-        ),
-        "1"
-    );
-}
-
-#[test]
-fn canonicalizer_collapses_top_level_mc_gate_into_standard_form() {
-    let canonicalizer = Canonicalizer::new(CanonicalizeConfig::new().normalize_parameters(false));
-    let mut circuit = Circuit::new(2);
-    circuit
-        .append(
-            Instruction::McGate(Box::new(MCGate::new(1, StandardGate::X))),
-            [Qubit::new(0), Qubit::new(1)],
-            std::iter::empty(),
-            None,
-        )
-        .unwrap();
-    let mut ctx = CompilerContext::new(circuit);
-
-    let outcome = canonicalizer.run(&mut ctx).unwrap();
-
-    assert!(outcome.changed);
-    assert_eq!(ctx.revision(), 1);
-    assert!(matches!(
-        ctx.circuit().operations()[0].instruction,
-        Instruction::Standard(StandardGate::CX)
-    ));
-}
-
-#[test]
-fn canonicalizer_collapses_mc_gate_without_reordering_qubits_or_params() {
-    let canonicalizer = Canonicalizer::new(CanonicalizeConfig::new().normalize_parameters(false));
-    let mut circuit = Circuit::new(2);
-    circuit
-        .append(
-            Instruction::McGate(Box::new(MCGate::new(1, StandardGate::RZ))),
-            [Qubit::new(1), Qubit::new(0)],
-            [ParameterValue::Fixed(0.5)],
-            None,
-        )
-        .unwrap();
-    let mut ctx = CompilerContext::new(circuit);
-
-    let outcome = canonicalizer.run(&mut ctx).unwrap();
-
-    assert!(outcome.changed);
-    let operation = &ctx.circuit().operations()[0];
-    assert!(matches!(
-        operation.instruction,
-        Instruction::Standard(StandardGate::CRZ)
-    ));
-    assert_eq!(operation.qubits.as_slice(), &[Qubit::new(1), Qubit::new(0)]);
-    assert_eq!(operation.params.len(), 1);
-    assert!(matches!(operation.params[0], CircuitParam::Fixed(0.5)));
-}
-
-#[test]
-fn canonicalizer_merges_equal_adjacent_barriers() {
-    let canonicalizer = Canonicalizer::new(CanonicalizeConfig::new().normalize_parameters(false));
-    let mut circuit = Circuit::new(3);
-    circuit.barrier(vec![Qubit::new(1), Qubit::new(2)]).unwrap();
-    circuit.barrier(vec![Qubit::new(2), Qubit::new(1)]).unwrap();
-    let mut ctx = CompilerContext::new(circuit);
-
-    let outcome = canonicalizer.run(&mut ctx).unwrap();
-
-    assert!(outcome.changed);
-    assert_eq!(ctx.circuit().operations().len(), 1);
-    assert_eq!(
-        ctx.circuit().operations()[0].qubits.as_slice(),
-        &[Qubit::new(1), Qubit::new(2)]
-    );
-}
-
-#[test]
-fn canonicalizer_merges_barrier_labels_without_dropping_metadata() {
-    let canonicalizer = Canonicalizer::new(CanonicalizeConfig::new().normalize_parameters(false));
-    let mut circuit = Circuit::new(2);
-    circuit
-        .append(
-            Instruction::Directive(Directive::Barrier),
-            [Qubit::new(0), Qubit::new(1)],
-            std::iter::empty::<ParameterValue>(),
-            Some("lhs"),
-        )
-        .unwrap();
-    circuit
-        .append(
-            Instruction::Directive(Directive::Barrier),
-            [Qubit::new(1), Qubit::new(0)],
-            std::iter::empty::<ParameterValue>(),
-            Some("rhs"),
-        )
-        .unwrap();
-    let mut ctx = CompilerContext::new(circuit);
-
-    canonicalizer.run(&mut ctx).unwrap();
-
-    assert_eq!(ctx.circuit().operations().len(), 1);
-    assert_eq!(
-        ctx.circuit().operations()[0].label.as_deref(),
-        Some("lhs | rhs")
-    );
-}
-
-#[test]
-fn canonicalizer_absorbs_adjacent_subset_barrier() {
-    let canonicalizer = Canonicalizer::new(CanonicalizeConfig::new().normalize_parameters(false));
-    let mut circuit = Circuit::new(4);
-    circuit
-        .barrier(vec![Qubit::new(1), Qubit::new(2), Qubit::new(3)])
-        .unwrap();
-    circuit.barrier(vec![Qubit::new(2), Qubit::new(1)]).unwrap();
-    let mut ctx = CompilerContext::new(circuit);
-
-    canonicalizer.run(&mut ctx).unwrap();
-
-    assert_eq!(ctx.circuit().operations().len(), 1);
-    assert_eq!(
-        ctx.circuit().operations()[0].qubits.as_slice(),
-        &[Qubit::new(1), Qubit::new(2), Qubit::new(3)]
-    );
-}
-
-#[test]
-fn canonicalizer_absorbs_barrier_labels_into_superset_barrier() {
-    let canonicalizer = Canonicalizer::new(CanonicalizeConfig::new().normalize_parameters(false));
-    let mut circuit = Circuit::new(4);
-    circuit
-        .append(
-            Instruction::Directive(Directive::Barrier),
-            [Qubit::new(1), Qubit::new(2), Qubit::new(3)],
-            std::iter::empty::<ParameterValue>(),
-            Some("outer"),
-        )
-        .unwrap();
-    circuit
-        .append(
-            Instruction::Directive(Directive::Barrier),
-            [Qubit::new(2), Qubit::new(1)],
-            std::iter::empty::<ParameterValue>(),
-            Some("inner"),
-        )
-        .unwrap();
-    let mut ctx = CompilerContext::new(circuit);
-
-    canonicalizer.run(&mut ctx).unwrap();
-
-    assert_eq!(ctx.circuit().operations().len(), 1);
-    assert_eq!(
-        ctx.circuit().operations()[0].label.as_deref(),
-        Some("outer | inner")
-    );
-}
-
-#[test]
-fn canonicalizer_does_not_merge_non_adjacent_barriers() {
-    let canonicalizer = Canonicalizer::new(CanonicalizeConfig::new().normalize_parameters(false));
-    let mut circuit = Circuit::new(4);
-    circuit.barrier(vec![Qubit::new(1), Qubit::new(2)]).unwrap();
-    circuit.h(Qubit::new(3)).unwrap();
-    circuit.barrier(vec![Qubit::new(2), Qubit::new(1)]).unwrap();
-    let mut ctx = CompilerContext::new(circuit);
-
-    canonicalizer.run(&mut ctx).unwrap();
-
-    assert_eq!(ctx.circuit().operations().len(), 3);
-}
-
-#[test]
-fn canonicalizer_does_not_merge_partially_overlapping_adjacent_barriers() {
-    let canonicalizer = Canonicalizer::new(CanonicalizeConfig::new().normalize_parameters(false));
-    let mut circuit = Circuit::new(3);
-    circuit.barrier(vec![Qubit::new(0), Qubit::new(1)]).unwrap();
-    circuit.barrier(vec![Qubit::new(1), Qubit::new(2)]).unwrap();
-    let mut ctx = CompilerContext::new(circuit);
-
-    canonicalizer.run(&mut ctx).unwrap();
-
-    assert_eq!(ctx.circuit().operations().len(), 2);
-    assert_eq!(
-        ctx.circuit().operations()[0].qubits.as_slice(),
-        &[Qubit::new(0), Qubit::new(1)]
-    );
-    assert_eq!(
-        ctx.circuit().operations()[1].qubits.as_slice(),
-        &[Qubit::new(1), Qubit::new(2)]
-    );
-}
-
-#[test]
-fn canonicalizer_drops_trivial_noops() {
-    let canonicalizer = Canonicalizer::new(CanonicalizeConfig::new().normalize_parameters(false));
-    let mut circuit = Circuit::new(2);
-    circuit.i(Qubit::new(0)).unwrap();
-    circuit
-        .delay(Qubit::new(0), ParameterValue::Fixed(0.0))
-        .unwrap();
-    circuit.rz(Qubit::new(0), 0.0).unwrap();
-    circuit.rzz(Qubit::new(0), Qubit::new(1), 0.0).unwrap();
-    circuit.h(Qubit::new(1)).unwrap();
-    let mut ctx = CompilerContext::new(circuit);
-
-    canonicalizer.run(&mut ctx).unwrap();
-
-    assert_eq!(ctx.circuit().operations().len(), 1);
-    assert!(matches!(
-        ctx.circuit().operations()[0].instruction,
+        result.circuit.operations()[0].instruction,
         Instruction::Standard(StandardGate::H)
     ));
 }
 
 #[test]
-fn canonicalizer_preserves_labeled_trivial_noops() {
-    let canonicalizer = Canonicalizer::new(CanonicalizeConfig::new().normalize_parameters(false));
+fn top_level_gphase_is_folded_into_circuit_global_phase() {
     let mut circuit = Circuit::new(1);
+    circuit.set_global_phase(Parameter::from(0.125));
     circuit
         .append(
-            Instruction::Standard(StandardGate::I),
-            [Qubit::new(0)],
-            std::iter::empty::<ParameterValue>(),
-            Some("keep-i"),
-        )
-        .unwrap();
-    circuit
-        .append(
-            Instruction::Standard(StandardGate::RZ),
-            [Qubit::new(0)],
-            [ParameterValue::Fixed(0.0)],
-            Some("keep-rz"),
-        )
-        .unwrap();
-    circuit
-        .append(
-            Instruction::Delay,
-            [Qubit::new(0)],
-            [ParameterValue::Fixed(0.0)],
-            Some("keep-delay"),
-        )
-        .unwrap();
-    circuit
-        .append(
-            Instruction::Directive(Directive::Barrier),
+            Instruction::Standard(StandardGate::GPhase),
             std::iter::empty::<Qubit>(),
-            std::iter::empty::<ParameterValue>(),
-            Some("keep-empty-barrier"),
+            [ParameterValue::Fixed(0.25)],
+            Some("ignored"),
         )
         .unwrap();
     circuit.h(Qubit::new(0)).unwrap();
-    let mut ctx = CompilerContext::new(circuit);
 
-    let outcome = canonicalizer.run(&mut ctx).unwrap();
+    let result = canonicalize_circuit(&circuit).unwrap();
 
-    assert!(!outcome.changed);
-    let operations = ctx.circuit().operations();
-    assert_eq!(operations.len(), 5);
-    assert_eq!(operations[0].label.as_deref(), Some("keep-i"));
-    assert_eq!(operations[1].label.as_deref(), Some("keep-rz"));
-    assert_eq!(operations[2].label.as_deref(), Some("keep-delay"));
-    assert_eq!(operations[3].label.as_deref(), Some("keep-empty-barrier"));
-}
-
-#[test]
-fn canonicalizer_recurses_into_control_flow_bodies() {
-    let canonicalizer = Canonicalizer::new(CanonicalizeConfig::new().normalize_parameters(false));
-    let mut circuit = Circuit::new(3);
-    let true_body = vec![
-        Operation {
-            instruction: Instruction::Directive(Directive::Barrier),
-            qubits: smallvec![Qubit::new(1), Qubit::new(2)],
-            params: smallvec![],
-            label: None,
-        },
-        Operation {
-            instruction: Instruction::Directive(Directive::Barrier),
-            qubits: smallvec![Qubit::new(2), Qubit::new(1)],
-            params: smallvec![],
-            label: None,
-        },
-        Operation {
-            instruction: Instruction::Standard(StandardGate::RZZ),
-            qubits: smallvec![Qubit::new(1), Qubit::new(2)],
-            params: smallvec![CircuitParam::Fixed(0.0)],
-            label: None,
-        },
-    ];
-    circuit
-        .append(
-            Instruction::ControlFlowGate(ControlFlow::IfElse(IfElseGate::new(
-                ConditionView::new(Qubit::new(0), 1),
-                true_body,
-                None,
-            ))),
-            [Qubit::new(0), Qubit::new(1), Qubit::new(2)],
-            std::iter::empty(),
-            None,
-        )
-        .unwrap();
-    let mut ctx = CompilerContext::new(circuit);
-
-    let outcome = canonicalizer.run(&mut ctx).unwrap();
-
-    assert!(outcome.changed);
-    let Instruction::ControlFlowGate(ControlFlow::IfElse(gate)) =
-        &ctx.circuit().operations()[0].instruction
-    else {
-        panic!("expected if-else gate");
-    };
-    assert_eq!(gate.true_body().len(), 1);
+    assert_eq!(result.circuit.operations().len(), 1);
     assert!(matches!(
-        gate.true_body()[0].instruction,
-        Instruction::Directive(Directive::Barrier)
+        result.circuit.operations()[0].instruction,
+        Instruction::Standard(StandardGate::H)
     ));
-    assert_eq!(
-        gate.true_body()[0].qubits.as_slice(),
-        &[Qubit::new(1), Qubit::new(2)]
-    );
+    assert!((result.circuit.global_phase().evaluate(&None).unwrap() - 0.375).abs() < 1e-12);
 }
 
 #[test]
-fn canonicalizer_preserves_parent_parameter_indices_inside_control_flow_bodies() {
-    let canonicalizer = Canonicalizer::new(CanonicalizeConfig::new().normalize_parameters(false));
-    let mut circuit = Circuit::new(2);
-    let theta = Parameter::symbol("theta");
-    circuit.rz(Qubit::new(1), theta.clone()).unwrap();
-
-    let body = vec![Operation {
-        instruction: Instruction::Standard(StandardGate::RZ),
-        qubits: smallvec![Qubit::new(1)],
-        params: smallvec![circuit.operations()[0].params[0].clone()],
-        label: None,
-    }];
-    circuit
-        .append(
-            Instruction::ControlFlowGate(ControlFlow::IfElse(IfElseGate::new(
-                ConditionView::new(Qubit::new(0), 1),
-                body,
-                None,
-            ))),
-            [Qubit::new(0), Qubit::new(1)],
-            std::iter::empty(),
-            None,
-        )
-        .unwrap();
-    let mut ctx = CompilerContext::new(circuit);
-
-    canonicalizer.run(&mut ctx).unwrap();
-
-    let Instruction::ControlFlowGate(ControlFlow::IfElse(gate)) =
-        &ctx.circuit().operations()[1].instruction
-    else {
-        panic!("expected if-else gate");
-    };
-    let CircuitParam::Index(index) = gate.true_body()[0].params[0] else {
-        panic!("expected symbolic parameter index");
-    };
-    assert_eq!(
-        ctx.circuit()
-            .parameters()
-            .get_index(index as usize)
-            .unwrap()
-            .to_string(),
-        theta.to_string()
-    );
-}
-
-#[test]
-fn canonicalizer_returns_error_for_invalid_body_parameter_index() {
-    let canonicalizer = Canonicalizer::new(CanonicalizeConfig::new().normalize_parameters(false));
-    let mut circuit = Circuit::new(2);
-    let body = vec![Operation {
-        instruction: Instruction::Standard(StandardGate::RZ),
-        qubits: smallvec![Qubit::new(1)],
-        params: smallvec![CircuitParam::Index(99)],
-        label: None,
-    }];
-    circuit
-        .append(
-            Instruction::ControlFlowGate(ControlFlow::IfElse(IfElseGate::new(
-                ConditionView::new(Qubit::new(0), 1),
-                body,
-                None,
-            ))),
-            [Qubit::new(0), Qubit::new(1)],
-            std::iter::empty(),
-            None,
-        )
-        .unwrap();
-    let mut ctx = CompilerContext::new(circuit);
-
-    let error = canonicalizer.run(&mut ctx).unwrap_err();
-
-    assert!(matches!(error, CompilerError::InvalidContextState(_)));
-    assert!(
-        error
-            .to_string()
-            .contains("invalid control-flow body parameter index")
-    );
-}
-
-#[test]
-fn canonicalizer_is_idempotent_after_barrier_and_noop_cleanup() {
-    let canonicalizer = Canonicalizer::new(CanonicalizeConfig::new().normalize_parameters(false));
-    let mut circuit = Circuit::new(2);
-    circuit.barrier(vec![Qubit::new(1), Qubit::new(0)]).unwrap();
-    circuit.barrier(vec![Qubit::new(0), Qubit::new(1)]).unwrap();
-    circuit.rx(Qubit::new(0), 0.0).unwrap();
-    let mut ctx = CompilerContext::new(circuit);
-
-    let first = canonicalizer.run(&mut ctx).unwrap();
-    let second = canonicalizer.run(&mut ctx).unwrap();
-
-    assert!(first.changed);
-    assert!(!second.changed);
-}
-
-#[test]
-fn canonicalizer_is_idempotent_for_stable_control_flow_body() {
-    let canonicalizer = Canonicalizer::new(CanonicalizeConfig::new().normalize_parameters(false));
-    let mut circuit = Circuit::new(2);
-    let body = vec![Operation {
-        instruction: Instruction::Standard(StandardGate::H),
-        qubits: smallvec![Qubit::new(1)],
-        params: smallvec![],
-        label: None,
-    }];
-    circuit
-        .append(
-            Instruction::ControlFlowGate(ControlFlow::WhileLoop(WhileLoopGate::new(
-                ConditionView::new(Qubit::new(0), 1),
-                body,
-            ))),
-            [Qubit::new(0), Qubit::new(1)],
-            std::iter::empty(),
-            None,
-        )
-        .unwrap();
-    let mut ctx = CompilerContext::new(circuit);
-
-    let first = canonicalizer.run(&mut ctx).unwrap();
-    let second = canonicalizer.run(&mut ctx).unwrap();
-
-    assert!(!first.changed);
-    assert!(!second.changed);
-    assert_eq!(ctx.revision(), 0);
-}
-
-#[test]
-fn canonicalizer_rejects_zero_round_limit() {
-    let canonicalizer = Canonicalizer::new(CanonicalizeConfig::new().with_round_limit(0));
-    let mut ctx = CompilerContext::new(Circuit::new(1));
-
-    let error = canonicalizer.run(&mut ctx).unwrap_err();
-
-    assert!(matches!(error, CompilerError::InvalidContextState(_)));
-    assert!(
-        error
-            .to_string()
-            .contains("canonicalize round_limit must be greater than zero")
-    );
-}
-
-#[test]
-fn fixpoint_helper_stabilizes_after_second_round() {
-    let config = CanonicalizeConfig::new().with_round_limit(3);
-    let initial = Circuit::new(1);
-    let mut first_round = true;
-
-    let result = run_to_fixpoint_with(&initial, &config, |circuit, _| {
-        if first_round {
-            first_round = false;
-            let mut changed = circuit.clone();
-            changed.h(Qubit::new(0)).unwrap();
-            Ok(SingleRoundResult {
-                circuit: changed,
-                parameter_phase_changed: false,
-                structural_changed: true,
-            })
-        } else {
-            Ok(SingleRoundResult {
-                circuit: circuit.clone(),
-                parameter_phase_changed: false,
-                structural_changed: false,
-            })
-        }
-    })
-    .unwrap();
-
-    assert!(result.stabilized);
-    assert_eq!(result.rounds_executed, 2);
-    assert!(result.any_structural_changed);
-}
-
-#[test]
-fn fixpoint_helper_reports_round_limit_when_never_stable() {
-    let config = CanonicalizeConfig::new()
-        .with_round_limit(2)
-        .normalize_parameters(false);
-    let initial = Circuit::new(1);
-
-    let result = run_to_fixpoint_with(&initial, &config, |circuit, _| {
-        let mut changed = circuit.clone();
-        changed.h(Qubit::new(0)).unwrap();
-        Ok(SingleRoundResult {
-            circuit: changed,
-            parameter_phase_changed: false,
-            structural_changed: true,
-        })
-    })
-    .unwrap();
-
-    assert!(!result.stabilized);
-    assert_eq!(result.rounds_executed, 2);
-    assert!(result.any_structural_changed);
-}
-
-#[test]
-fn canonicalizer_emits_warning_when_round_limit_is_reached() {
-    let config = CanonicalizeConfig::new()
-        .with_round_limit(2)
-        .normalize_parameters(false);
-    let initial = Circuit::new(1);
-
-    let loop_result = run_to_fixpoint_with(&initial, &config, |circuit, _| {
-        let mut changed = circuit.clone();
-        changed.h(Qubit::new(0)).unwrap();
-        Ok(SingleRoundResult {
-            circuit: changed,
-            parameter_phase_changed: false,
-            structural_changed: true,
-        })
-    })
-    .unwrap();
-
-    let outcome = canonicalizer_outcome_from_fixpoint_result(loop_result);
-
-    assert!(outcome.changed);
-    assert!(
-        outcome
-            .notes
-            .iter()
-            .any(|note| note.contains("reached round limit after 2 rounds"))
-    );
-    assert!(outcome.diagnostics.iter().any(|diagnostic| {
-        diagnostic.severity == DiagnosticSeverity::Warning
-            && diagnostic.code == "compiler.canonicalize.round_limit_reached"
-    }));
-}
-
-#[test]
-fn canonical_rule_ids_are_stable_and_distinct() {
-    assert_ne!(
-        CanonicalRuleId::NormalizeParameters,
-        CanonicalRuleId::CanonicalizeInstructionForm
-    );
-    assert_ne!(
-        CanonicalRuleId::MergeAdjacentBarriers,
-        CanonicalRuleId::DropTrivialNoOps
-    );
-}
-
-#[test]
-fn instruction_equivalence_distinguishes_same_named_circuit_gates() {
-    let mut lhs_inner = Circuit::new(1);
-    lhs_inner.h(Qubit::new(0)).unwrap();
-    let mut rhs_inner = Circuit::new(1);
-    rhs_inner.x(Qubit::new(0)).unwrap();
-
-    let lhs = Instruction::CircuitGate(Box::new(
-        CircuitGate::new("same-name", FrozenCircuit::new(lhs_inner)).unwrap(),
-    ));
-    let rhs = Instruction::CircuitGate(Box::new(
-        CircuitGate::new("same-name", FrozenCircuit::new(rhs_inner)).unwrap(),
-    ));
-
-    assert!(!instructions_equivalent(
-        &lhs,
-        &rhs,
-        &Circuit::new(1),
-        &Circuit::new(1)
-    ));
-}
-
-#[test]
-fn canonicalizer_is_idempotent_for_stable_circuit_gate() {
-    let canonicalizer = Canonicalizer::production();
-    let mut inner = Circuit::new(1);
-    inner.h(Qubit::new(0)).unwrap();
-    let gate = CircuitGate::new("stable", FrozenCircuit::new(inner)).unwrap();
-
-    let mut circuit = Circuit::new(1);
-    circuit
-        .circuit_gate(
-            gate,
-            vec![Qubit::new(0)],
-            std::iter::empty::<ParameterValue>(),
-        )
-        .unwrap();
-    let mut ctx = CompilerContext::new(circuit);
-
-    let outcome = canonicalizer.run(&mut ctx).unwrap();
-
-    assert!(!outcome.changed);
-    assert!(outcome.diagnostics.is_empty());
-    assert_eq!(ctx.revision(), 0);
-}
-
-#[test]
-fn instruction_equivalence_distinguishes_same_labeled_unitary_gates() {
-    let lhs = Instruction::UnitaryGate(Box::new(
-        UnitaryGate::new("oracle", 1, 0)
-            .with_matrix(array![
-                [Complex64::new(1.0, 0.0), Complex64::new(0.0, 0.0)],
-                [Complex64::new(0.0, 0.0), Complex64::new(1.0, 0.0)],
-            ])
-            .unwrap(),
-    ));
-    let rhs = Instruction::UnitaryGate(Box::new(
-        UnitaryGate::new("oracle", 1, 0)
-            .with_matrix(array![
-                [Complex64::new(0.0, 0.0), Complex64::new(1.0, 0.0)],
-                [Complex64::new(1.0, 0.0), Complex64::new(0.0, 0.0)],
-            ])
-            .unwrap(),
-    ));
-
-    assert!(!instructions_equivalent(
-        &lhs,
-        &rhs,
-        &Circuit::new(1),
-        &Circuit::new(1)
-    ));
-}
-
-#[test]
-fn canonicalizer_recomputes_control_flow_qubits_after_body_cleanup() {
-    let canonicalizer = Canonicalizer::new(CanonicalizeConfig::new().normalize_parameters(false));
-    let mut circuit = Circuit::new(3);
-    let true_body = vec![
+fn body_gphase_is_merged_into_first_body_operation() {
+    let body = vec![
         Operation {
             instruction: Instruction::Standard(StandardGate::H),
             qubits: smallvec![Qubit::new(1)],
@@ -938,179 +76,498 @@ fn canonicalizer_recomputes_control_flow_qubits_after_body_cleanup() {
             label: None,
         },
         Operation {
+            instruction: Instruction::Standard(StandardGate::GPhase),
+            qubits: smallvec![],
+            params: smallvec![CircuitParam::Fixed(0.5)],
+            label: None,
+        },
+        Operation {
+            instruction: Instruction::Standard(StandardGate::GPhase),
+            qubits: smallvec![],
+            params: smallvec![CircuitParam::Fixed(0.25)],
+            label: None,
+        },
+    ];
+    let mut circuit = Circuit::new(2);
+    circuit
+        .if_else(ConditionView::new(Qubit::new(0), 1), body, None)
+        .unwrap();
+
+    let result = canonicalize_circuit(&circuit).unwrap();
+    let Instruction::ControlFlowGate(ControlFlow::IfElse(gate)) =
+        &result.circuit.operations()[0].instruction
+    else {
+        panic!("expected if_else");
+    };
+
+    assert_eq!(gate.true_body().len(), 2);
+    assert!(matches!(
+        gate.true_body()[0].instruction,
+        Instruction::Standard(StandardGate::GPhase)
+    ));
+    match gate.true_body()[0].params.as_slice() {
+        [CircuitParam::Fixed(value)] => assert_eq!(*value, 0.75),
+        params => panic!("expected one fixed GPhase parameter, got {params:?}"),
+    }
+    assert!(matches!(
+        gate.true_body()[1].instruction,
+        Instruction::Standard(StandardGate::H)
+    ));
+}
+
+#[test]
+fn body_zero_gphase_is_removed() {
+    let body = vec![
+        Operation {
+            instruction: Instruction::Standard(StandardGate::GPhase),
+            qubits: smallvec![],
+            params: smallvec![CircuitParam::Fixed(0.0)],
+            label: Some("zero-phase".into()),
+        },
+        Operation {
+            instruction: Instruction::Standard(StandardGate::H),
+            qubits: smallvec![Qubit::new(1)],
+            params: smallvec![],
+            label: None,
+        },
+    ];
+    let mut circuit = Circuit::new(2);
+    circuit
+        .if_else(ConditionView::new(Qubit::new(0), 1), body, None)
+        .unwrap();
+
+    let result = canonicalize_circuit(&circuit).unwrap();
+    let Instruction::ControlFlowGate(ControlFlow::IfElse(gate)) =
+        &result.circuit.operations()[0].instruction
+    else {
+        panic!("expected if_else");
+    };
+
+    assert_eq!(gate.true_body().len(), 1);
+    assert!(matches!(
+        gate.true_body()[0].instruction,
+        Instruction::Standard(StandardGate::H)
+    ));
+}
+
+#[test]
+fn false_body_and_while_body_keep_independent_local_phase() {
+    let true_body = vec![Operation {
+        instruction: Instruction::Standard(StandardGate::GPhase),
+        qubits: smallvec![],
+        params: smallvec![CircuitParam::Fixed(0.25)],
+        label: None,
+    }];
+    let false_body = vec![Operation {
+        instruction: Instruction::Standard(StandardGate::GPhase),
+        qubits: smallvec![],
+        params: smallvec![CircuitParam::Fixed(0.5)],
+        label: None,
+    }];
+    let while_body = vec![
+        Operation {
+            instruction: Instruction::Standard(StandardGate::GPhase),
+            qubits: smallvec![],
+            params: smallvec![CircuitParam::Fixed(0.75)],
+            label: None,
+        },
+        Operation {
+            instruction: Instruction::Standard(StandardGate::H),
+            qubits: smallvec![Qubit::new(1)],
+            params: smallvec![],
+            label: None,
+        },
+    ];
+    let mut circuit = Circuit::new(2);
+    circuit
+        .if_else(
+            ConditionView::new(Qubit::new(0), 1),
+            true_body,
+            Some(false_body),
+        )
+        .unwrap();
+    circuit
+        .while_loop(ConditionView::new(Qubit::new(0), 1), while_body)
+        .unwrap();
+
+    let result = canonicalize_circuit(&circuit).unwrap();
+    let Instruction::ControlFlowGate(ControlFlow::IfElse(if_gate)) =
+        &result.circuit.operations()[0].instruction
+    else {
+        panic!("expected if_else");
+    };
+    let Instruction::ControlFlowGate(ControlFlow::WhileLoop(while_gate)) =
+        &result.circuit.operations()[1].instruction
+    else {
+        panic!("expected while_loop");
+    };
+
+    match if_gate.true_body()[0].params.as_slice() {
+        [CircuitParam::Fixed(value)] => assert_eq!(*value, 0.25),
+        params => panic!("expected one fixed true-body phase parameter, got {params:?}"),
+    }
+
+    let false_body = if_gate.false_body().expect("expected false body");
+    match false_body[0].params.as_slice() {
+        [CircuitParam::Fixed(value)] => assert_eq!(*value, 0.5),
+        params => panic!("expected one fixed false-body phase parameter, got {params:?}"),
+    }
+
+    match while_gate.body()[0].params.as_slice() {
+        [CircuitParam::Fixed(value)] => assert_eq!(*value, 0.75),
+        params => panic!("expected one fixed while-body phase parameter, got {params:?}"),
+    }
+    assert!(matches!(
+        while_gate.body()[1].instruction,
+        Instruction::Standard(StandardGate::H)
+    ));
+}
+
+#[test]
+fn nested_control_flow_is_recursively_canonicalized() {
+    let nested_body = vec![
+        Operation {
             instruction: Instruction::Standard(StandardGate::I),
+            qubits: smallvec![Qubit::new(1)],
+            params: smallvec![],
+            label: None,
+        },
+        Operation {
+            instruction: Instruction::Standard(StandardGate::H),
             qubits: smallvec![Qubit::new(2)],
             params: smallvec![],
             label: None,
         },
     ];
+    let outer_body = vec![Operation {
+        instruction: Instruction::ControlFlowGate(ControlFlow::WhileLoop(
+            crate::circuit::WhileLoopGate::new(ConditionView::new(Qubit::new(1), 1), nested_body),
+        )),
+        qubits: smallvec![Qubit::new(2), Qubit::new(1)],
+        params: smallvec![],
+        label: None,
+    }];
+    let mut circuit = Circuit::new(3);
     circuit
-        .if_else(ConditionView::new(Qubit::new(0), 1), true_body, None)
+        .if_else(ConditionView::new(Qubit::new(0), 1), outer_body, None)
         .unwrap();
-    let mut ctx = CompilerContext::new(circuit);
 
-    let outcome = canonicalizer.run(&mut ctx).unwrap();
-
-    assert!(outcome.changed);
-    let operation = &ctx.circuit().operations()[0];
-    assert_eq!(operation.qubits.as_slice(), &[Qubit::new(1), Qubit::new(0)]);
-    let Instruction::ControlFlowGate(ControlFlow::IfElse(gate)) = &operation.instruction else {
-        panic!("expected if-else gate");
+    let result = canonicalize_circuit(&circuit).unwrap();
+    let Instruction::ControlFlowGate(ControlFlow::IfElse(if_gate)) =
+        &result.circuit.operations()[0].instruction
+    else {
+        panic!("expected if_else");
     };
-    assert_eq!(gate.true_body().len(), 1);
-    assert_eq!(gate.true_body()[0].qubits.as_slice(), &[Qubit::new(1)]);
+    let Instruction::ControlFlowGate(ControlFlow::WhileLoop(while_gate)) =
+        &if_gate.true_body()[0].instruction
+    else {
+        panic!("expected nested while_loop");
+    };
+
+    assert_eq!(
+        result.circuit.operations()[0].qubits.as_slice(),
+        &[Qubit::new(0), Qubit::new(1), Qubit::new(2)]
+    );
+    assert_eq!(
+        if_gate.true_body()[0].qubits.as_slice(),
+        &[Qubit::new(1), Qubit::new(2)]
+    );
+    assert_eq!(while_gate.body().len(), 1);
+    assert!(matches!(
+        while_gate.body()[0].instruction,
+        Instruction::Standard(StandardGate::H)
+    ));
 }
 
 #[test]
-fn canonicalizer_keeps_label_on_non_gphase_replacement() {
-    let canonicalizer = Canonicalizer::production();
+fn mc_gate_collapses_to_standard_gate() {
+    let mut circuit = Circuit::new(2);
+    circuit
+        .append(
+            Instruction::McGate(Box::new(MCGate::new(1, StandardGate::X))),
+            [Qubit::new(0), Qubit::new(1)],
+            std::iter::empty(),
+            Some("cx-label"),
+        )
+        .unwrap();
+
+    let result = canonicalize_circuit(&circuit).unwrap();
+
+    assert!(matches!(
+        result.circuit.operations()[0].instruction,
+        Instruction::Standard(StandardGate::CX)
+    ));
+    assert_eq!(
+        result.circuit.operations()[0].label.as_deref(),
+        Some("cx-label")
+    );
+}
+
+#[test]
+fn noops_are_removed_even_when_labeled() {
+    let mut circuit = Circuit::new(2);
+    circuit
+        .append(
+            Instruction::Standard(StandardGate::I),
+            [Qubit::new(0)],
+            std::iter::empty(),
+            Some("drop-i"),
+        )
+        .unwrap();
+    circuit
+        .append(
+            Instruction::Delay,
+            [Qubit::new(0)],
+            [ParameterValue::Fixed(0.0)],
+            Some("drop-delay"),
+        )
+        .unwrap();
+    circuit
+        .append(
+            Instruction::Standard(StandardGate::RXX),
+            [Qubit::new(0), Qubit::new(1)],
+            [ParameterValue::Fixed(0.0)],
+            Some("drop-rxx"),
+        )
+        .unwrap();
+    circuit
+        .append(
+            Instruction::Standard(StandardGate::U),
+            [Qubit::new(0)],
+            [
+                ParameterValue::Fixed(0.0),
+                ParameterValue::Fixed(0.0),
+                ParameterValue::Fixed(0.0),
+            ],
+            Some("drop-u"),
+        )
+        .unwrap();
+    circuit.x(Qubit::new(1)).unwrap();
+
+    let result = canonicalize_circuit(&circuit).unwrap();
+
+    assert_eq!(result.circuit.operations().len(), 1);
+    assert!(matches!(
+        result.circuit.operations()[0].instruction,
+        Instruction::Standard(StandardGate::X)
+    ));
+}
+
+#[test]
+fn config_can_preserve_noops_when_disabled() {
+    let mut circuit = Circuit::new(1);
+    circuit.i(Qubit::new(0)).unwrap();
+    circuit.h(Qubit::new(0)).unwrap();
+
+    let canonicalizer = Canonicalizer::new(CanonicalizeConfig::new().drop_noops(false));
+    let result = canonicalizer.run(&circuit).unwrap();
+
+    assert_eq!(result.circuit.operations().len(), 2);
+    assert!(matches!(
+        result.circuit.operations()[0].instruction,
+        Instruction::Standard(StandardGate::I)
+    ));
+}
+
+#[test]
+fn canonicalizer_implements_transformer_trait() {
+    let mut circuit = Circuit::new(1);
+    circuit.i(Qubit::new(0)).unwrap();
+
+    let transformer = &Canonicalizer::production();
+    let result = transformer.transform(&circuit).unwrap();
+
+    assert!(result.changed);
+    assert!(result.circuit.operations().is_empty());
+}
+
+#[test]
+fn config_can_preserve_top_level_gphase_when_disabled() {
     let mut circuit = Circuit::new(1);
     circuit
         .append(
-            Instruction::Standard(StandardGate::RX),
-            [Qubit::new(0)],
-            [ParameterValue::Fixed(std::f64::consts::PI)],
-            Some("rx-pi"),
+            Instruction::Standard(StandardGate::GPhase),
+            std::iter::empty::<Qubit>(),
+            [ParameterValue::Fixed(0.25)],
+            None,
         )
         .unwrap();
-    let mut ctx = CompilerContext::new(circuit);
 
-    let outcome = canonicalizer.run(&mut ctx).unwrap();
+    let canonicalizer = Canonicalizer::new(CanonicalizeConfig::new().fold_gphase(false));
+    let result = canonicalizer.run(&circuit).unwrap();
 
-    assert!(outcome.changed);
-    let ops = ctx.circuit().operations();
-    assert_eq!(ops.len(), 2);
+    assert_eq!(result.circuit.operations().len(), 1);
     assert!(matches!(
-        ops[0].instruction,
+        result.circuit.operations()[0].instruction,
         Instruction::Standard(StandardGate::GPhase)
     ));
-    assert_eq!(ops[0].label.as_deref(), None);
-    assert!(matches!(
-        ops[1].instruction,
-        Instruction::Standard(StandardGate::X)
-    ));
-    assert_eq!(ops[1].label.as_deref(), Some("rx-pi"));
+    match result.circuit.operations()[0].params.as_slice() {
+        [CircuitParam::Fixed(value)] => assert_eq!(*value, 0.25),
+        params => panic!("expected one fixed top-level GPhase parameter, got {params:?}"),
+    }
 }
 
 #[test]
-fn canonicalizer_fixpoint_drops_noop_after_parameter_normalization_to_zero() {
-    // Parameter normalization turns RZ(theta - theta) into RZ(0), which the
-    // structural pass then drops as a trivial no-op. This requires at least two
-    // fixpoint rounds to converge.
-    let canonicalizer = Canonicalizer::production();
-    let mut circuit = Circuit::new(1);
-    let theta = Parameter::symbol("theta");
+fn config_can_skip_control_flow_recursion() {
+    let body = vec![Operation {
+        instruction: Instruction::Standard(StandardGate::I),
+        qubits: smallvec![Qubit::new(1)],
+        params: smallvec![],
+        label: Some("preserve-body".into()),
+    }];
+    let mut circuit = Circuit::new(2);
     circuit
-        .rz(Qubit::new(0), theta.clone() - theta.clone())
+        .if_else(ConditionView::new(Qubit::new(0), 1), body, None)
+        .unwrap();
+
+    let canonicalizer = Canonicalizer::new(CanonicalizeConfig::new().recurse_control_flow(false));
+    let result = canonicalizer.run(&circuit).unwrap();
+    let Instruction::ControlFlowGate(ControlFlow::IfElse(gate)) =
+        &result.circuit.operations()[0].instruction
+    else {
+        panic!("expected if_else");
+    };
+
+    assert_eq!(gate.true_body().len(), 1);
+    assert!(matches!(
+        gate.true_body()[0].instruction,
+        Instruction::Standard(StandardGate::I)
+    ));
+    assert_eq!(gate.true_body()[0].label.as_deref(), Some("preserve-body"));
+}
+
+#[test]
+fn config_can_preserve_barrier_shape_when_disabled() {
+    let mut circuit = Circuit::new(3);
+    circuit
+        .append(
+            Instruction::Directive(Directive::Barrier),
+            [Qubit::new(2), Qubit::new(0), Qubit::new(2)],
+            std::iter::empty(),
+            Some("keep-barrier"),
+        )
+        .unwrap();
+
+    let canonicalizer = Canonicalizer::new(CanonicalizeConfig::new().canonicalize_barriers(false));
+    let result = canonicalizer.run(&circuit).unwrap();
+    let op = &result.circuit.operations()[0];
+
+    assert_eq!(
+        op.qubits.as_slice(),
+        &[Qubit::new(2), Qubit::new(0), Qubit::new(2)]
+    );
+    assert_eq!(op.label.as_deref(), Some("keep-barrier"));
+}
+
+#[test]
+fn barrier_scopes_are_canonicalized_and_merged() {
+    let mut circuit = Circuit::new(4);
+    circuit
+        .append(
+            Instruction::Directive(Directive::Barrier),
+            [Qubit::new(2), Qubit::new(1), Qubit::new(2)],
+            std::iter::empty(),
+            Some("drop-label"),
+        )
+        .unwrap();
+    circuit
+        .append(
+            Instruction::Directive(Directive::Barrier),
+            [Qubit::new(1), Qubit::new(2), Qubit::new(3)],
+            std::iter::empty(),
+            None,
+        )
+        .unwrap();
+
+    let result = canonicalize_circuit(&circuit).unwrap();
+
+    assert_eq!(result.circuit.operations().len(), 1);
+    let op = &result.circuit.operations()[0];
+    assert!(matches!(
+        op.instruction,
+        Instruction::Directive(Directive::Barrier)
+    ));
+    assert_eq!(
+        op.qubits.as_slice(),
+        &[Qubit::new(1), Qubit::new(2), Qubit::new(3)]
+    );
+    assert!(op.label.is_none());
+}
+
+#[test]
+fn barrier_partial_overlap_and_non_adjacent_barriers_are_not_merged() {
+    let mut circuit = Circuit::new(4);
+    circuit
+        .append(
+            Instruction::Directive(Directive::Barrier),
+            [Qubit::new(0), Qubit::new(1)],
+            std::iter::empty(),
+            None,
+        )
+        .unwrap();
+    circuit
+        .append(
+            Instruction::Directive(Directive::Barrier),
+            [Qubit::new(1), Qubit::new(2)],
+            std::iter::empty(),
+            None,
+        )
         .unwrap();
     circuit.h(Qubit::new(0)).unwrap();
-    let mut ctx = CompilerContext::new(circuit);
-
-    let first = canonicalizer.run(&mut ctx).unwrap();
-
-    assert!(first.changed);
-    assert_eq!(ctx.circuit().operations().len(), 1);
-    assert!(matches!(
-        ctx.circuit().operations()[0].instruction,
-        Instruction::Standard(StandardGate::H)
-    ));
-
-    let second = canonicalizer.run(&mut ctx).unwrap();
-    assert!(!second.changed);
-}
-
-#[test]
-fn canonicalizer_preserves_global_phase_for_two_pi_rotation() {
-    let canonicalizer = Canonicalizer::production();
-    let mut circuit = Circuit::new(1);
-    circuit.rx(Qubit::new(0), std::f64::consts::TAU).unwrap();
-    let mut ctx = CompilerContext::new(circuit);
-
-    let outcome = canonicalizer.run(&mut ctx).unwrap();
-
-    assert!(outcome.changed);
-    let ops = ctx.circuit().operations();
-    assert_eq!(ops.len(), 1);
-    assert!(matches!(
-        ops[0].instruction,
-        Instruction::Standard(StandardGate::GPhase)
-    ));
-    assert!(ops[0].qubits.is_empty());
-    assert!(matches!(
-        ops[0].params.as_slice(),
-        [CircuitParam::Fixed(value)] if (*value - std::f64::consts::PI).abs() < 1e-12
-    ));
-}
-
-#[test]
-fn canonicalizer_folds_special_angles_to_named_gates() {
-    let canonicalizer = Canonicalizer::production();
-    let mut circuit = Circuit::new(1);
     circuit
-        .phase(Qubit::new(0), std::f64::consts::FRAC_PI_2)
-        .unwrap();
-    circuit
-        .rx(Qubit::new(0), std::f64::consts::FRAC_PI_2)
-        .unwrap();
-    circuit
-        .ry(Qubit::new(0), -std::f64::consts::FRAC_PI_2)
-        .unwrap();
-    circuit
-        .rxy(
-            Qubit::new(0),
-            std::f64::consts::PI,
-            std::f64::consts::TAU + 0.125,
+        .append(
+            Instruction::Directive(Directive::Barrier),
+            [Qubit::new(0), Qubit::new(1), Qubit::new(2)],
+            std::iter::empty(),
+            None,
         )
         .unwrap();
-    let mut ctx = CompilerContext::new(circuit);
 
-    canonicalizer.run(&mut ctx).unwrap();
+    let result = canonicalize_circuit(&circuit).unwrap();
 
-    let gates: Vec<_> = ctx
-        .circuit()
-        .operations()
-        .iter()
-        .map(|op| match op.instruction {
-            Instruction::Standard(gate) => gate,
-            _ => panic!("expected standard gate"),
-        })
-        .collect();
+    assert_eq!(result.circuit.operations().len(), 4);
     assert_eq!(
-        gates,
-        vec![
-            StandardGate::S,
-            StandardGate::X2P,
-            StandardGate::Y2M,
-            StandardGate::XY
-        ]
+        result.circuit.operations()[0].qubits.as_slice(),
+        &[Qubit::new(0), Qubit::new(1)]
+    );
+    assert_eq!(
+        result.circuit.operations()[1].qubits.as_slice(),
+        &[Qubit::new(1), Qubit::new(2)]
     );
     assert!(matches!(
-        ctx.circuit().operations()[3].params.as_slice(),
-        [CircuitParam::Fixed(value)] if (*value - 0.125).abs() < 1e-12
+        result.circuit.operations()[2].instruction,
+        Instruction::Standard(StandardGate::H)
     ));
 }
 
 #[test]
-fn canonicalizer_does_not_recurse_into_if_else_when_disabled() {
-    let canonicalizer = Canonicalizer::new(
-        CanonicalizeConfig::new()
-            .normalize_parameters(false)
-            .recurse_control_flow(false),
-    );
-    let mut circuit = Circuit::new(3);
-    // Top-level operation that should be canonicalized
-    circuit.i(Qubit::new(2)).unwrap();
+fn empty_barrier_is_removed() {
+    let mut circuit = Circuit::new(1);
+    circuit
+        .append(
+            Instruction::Directive(Directive::Barrier),
+            std::iter::empty::<Qubit>(),
+            std::iter::empty(),
+            Some("drop-empty"),
+        )
+        .unwrap();
+    circuit.h(Qubit::new(0)).unwrap();
 
+    let result = canonicalize_circuit(&circuit).unwrap();
+
+    assert_eq!(result.circuit.operations().len(), 1);
+    assert!(matches!(
+        result.circuit.operations()[0].instruction,
+        Instruction::Standard(StandardGate::H)
+    ));
+}
+
+#[test]
+fn control_flow_qubits_are_recomputed_in_global_order() {
     let body = vec![
         Operation {
-            instruction: Instruction::Directive(Directive::Barrier),
-            qubits: smallvec![Qubit::new(1), Qubit::new(2)],
-            params: smallvec![],
-            label: None,
-        },
-        Operation {
-            instruction: Instruction::Directive(Directive::Barrier),
-            qubits: smallvec![Qubit::new(2), Qubit::new(1)],
+            instruction: Instruction::Standard(StandardGate::H),
+            qubits: smallvec![Qubit::new(2)],
             params: smallvec![],
             label: None,
         },
@@ -1121,137 +578,245 @@ fn canonicalizer_does_not_recurse_into_if_else_when_disabled() {
             label: None,
         },
     ];
+    let mut circuit = Circuit::new(3);
     circuit
-        .append(
-            Instruction::ControlFlowGate(ControlFlow::IfElse(IfElseGate::new(
-                ConditionView::new(Qubit::new(0), 1),
-                body.clone(),
-                None,
-            ))),
-            [Qubit::new(0), Qubit::new(1), Qubit::new(2)],
-            std::iter::empty(),
-            None,
-        )
+        .if_else(ConditionView::new(Qubit::new(0), 1), body, None)
         .unwrap();
-    let mut ctx = CompilerContext::new(circuit);
 
-    let outcome = canonicalizer.run(&mut ctx).unwrap();
+    let result = canonicalize_circuit(&circuit).unwrap();
 
-    assert!(outcome.changed);
-    // Top-level I gate was dropped
-    assert_eq!(ctx.circuit().operations().len(), 1);
-    let Instruction::ControlFlowGate(ControlFlow::IfElse(gate)) =
-        &ctx.circuit().operations()[0].instruction
-    else {
-        panic!("expected if-else gate");
-    };
-    // Body must remain untouched because recurse_control_flow is false
-    assert_eq!(gate.true_body().len(), 3);
-    assert!(matches!(
-        gate.true_body()[0].instruction,
-        Instruction::Directive(Directive::Barrier)
-    ));
-    assert!(matches!(
-        gate.true_body()[1].instruction,
-        Instruction::Directive(Directive::Barrier)
-    ));
-    assert!(matches!(
-        gate.true_body()[2].instruction,
-        Instruction::Standard(StandardGate::I)
-    ));
+    assert_eq!(
+        result.circuit.operations()[0].qubits.as_slice(),
+        &[Qubit::new(0), Qubit::new(2)]
+    );
 }
 
 #[test]
-fn canonicalizer_does_not_recurse_into_while_loop_when_disabled() {
-    let canonicalizer = Canonicalizer::new(
-        CanonicalizeConfig::new()
-            .normalize_parameters(false)
-            .recurse_control_flow(false),
+fn invalid_parameter_reference_is_rejected() {
+    let circuit = Circuit::from_parts(
+        IndexSet::from_iter([Qubit::new(0)]),
+        IndexSet::new(),
+        IndexSet::new(),
+        vec![Operation {
+            instruction: Instruction::Standard(StandardGate::RX),
+            qubits: smallvec![Qubit::new(0)],
+            params: smallvec![CircuitParam::Index(999)],
+            label: None,
+        }],
+        CircuitParam::Fixed(0.0),
     );
-    let mut circuit = Circuit::new(2);
-    // Top-level operation that should be canonicalized
-    circuit.i(Qubit::new(1)).unwrap();
 
-    let body = vec![
-        Operation {
-            instruction: Instruction::Directive(Directive::Barrier),
-            qubits: smallvec![Qubit::new(1)],
-            params: smallvec![],
-            label: None,
-        },
-        Operation {
-            instruction: Instruction::Directive(Directive::Barrier),
-            qubits: smallvec![Qubit::new(1)],
-            params: smallvec![],
-            label: None,
-        },
-    ];
-    circuit
-        .append(
-            Instruction::ControlFlowGate(ControlFlow::WhileLoop(WhileLoopGate::new(
-                ConditionView::new(Qubit::new(0), 1),
-                body.clone(),
-            ))),
-            [Qubit::new(0), Qubit::new(1)],
-            std::iter::empty(),
-            None,
-        )
-        .unwrap();
-    let mut ctx = CompilerContext::new(circuit);
-
-    let outcome = canonicalizer.run(&mut ctx).unwrap();
-
-    assert!(outcome.changed);
-    // Top-level I gate was dropped
-    assert_eq!(ctx.circuit().operations().len(), 1);
-    let Instruction::ControlFlowGate(ControlFlow::WhileLoop(gate)) =
-        &ctx.circuit().operations()[0].instruction
-    else {
-        panic!("expected while-loop gate");
-    };
-    // Body must remain untouched because recurse_control_flow is false
-    assert_eq!(gate.body().len(), 2);
-    assert!(matches!(
-        gate.body()[0].instruction,
-        Instruction::Directive(Directive::Barrier)
-    ));
-    assert!(matches!(
-        gate.body()[1].instruction,
-        Instruction::Directive(Directive::Barrier)
-    ));
+    let err = canonicalize_circuit(&circuit).unwrap_err();
+    assert!(matches!(err, CompilerError::InvalidInput(_)));
+    assert!(err.to_string().contains("missing parameter index"));
 }
 
-fn canonicalizer_outcome_from_fixpoint_result(
-    loop_result: FixpointResult,
-) -> crate::compiler::transform::TransformOutcome {
-    let mut outcome = crate::compiler::transform::TransformOutcome::changed().with_changes(
-        ContextChangeSet::circuit_changed()
-            .with_cfg_structure_changed(loop_result.any_structural_changed)
-            .with_parameter_table_changed(loop_result.any_parameter_phase_changed),
+#[test]
+fn invalid_global_phase_reference_is_rejected() {
+    let circuit = Circuit::from_parts(
+        IndexSet::from_iter([Qubit::new(0)]),
+        IndexSet::new(),
+        IndexSet::new(),
+        Vec::new(),
+        CircuitParam::Index(3),
     );
-    if loop_result.any_parameter_phase_changed {
-        outcome =
-            outcome.with_note("canonicalize: normalized symbolic parameters and global phase");
-    }
-    if loop_result.any_structural_changed {
-        outcome = outcome.with_note(
-            "canonicalize: canonicalized instruction forms, barriers, and trivial no-ops",
+
+    let err = canonicalize_circuit(&circuit).unwrap_err();
+    assert!(matches!(err, CompilerError::InvalidInput(_)));
+    assert!(err.to_string().contains("global phase references"));
+}
+
+#[test]
+fn unknown_qubit_is_rejected() {
+    let circuit = Circuit::from_parts(
+        IndexSet::from_iter([Qubit::new(0)]),
+        IndexSet::new(),
+        IndexSet::new(),
+        vec![Operation {
+            instruction: Instruction::Standard(StandardGate::H),
+            qubits: smallvec![Qubit::new(1)],
+            params: smallvec![],
+            label: None,
+        }],
+        CircuitParam::Fixed(0.0),
+    );
+
+    let err = canonicalize_circuit(&circuit).unwrap_err();
+    assert!(matches!(err, CompilerError::InvalidInput(_)));
+    assert!(err.to_string().contains("unknown qubit"));
+}
+
+#[test]
+fn duplicate_non_barrier_qubit_is_rejected() {
+    let circuit = Circuit::from_parts(
+        IndexSet::from_iter([Qubit::new(0)]),
+        IndexSet::new(),
+        IndexSet::new(),
+        vec![Operation {
+            instruction: Instruction::Standard(StandardGate::CX),
+            qubits: smallvec![Qubit::new(0), Qubit::new(0)],
+            params: smallvec![],
+            label: None,
+        }],
+        CircuitParam::Fixed(0.0),
+    );
+
+    let err = canonicalize_circuit(&circuit).unwrap_err();
+    assert!(matches!(err, CompilerError::InvalidInput(_)));
+    assert!(err.to_string().contains("duplicate qubit"));
+}
+
+#[test]
+fn invalid_arity_is_rejected() {
+    let circuit = Circuit::from_parts(
+        IndexSet::from_iter([Qubit::new(0)]),
+        IndexSet::new(),
+        IndexSet::new(),
+        vec![Operation {
+            instruction: Instruction::Standard(StandardGate::CX),
+            qubits: smallvec![Qubit::new(0)],
+            params: smallvec![],
+            label: None,
+        }],
+        CircuitParam::Fixed(0.0),
+    );
+
+    let err = canonicalize_circuit(&circuit).unwrap_err();
+    assert!(matches!(err, CompilerError::InvalidInput(_)));
+    assert!(err.to_string().contains("qubit count mismatch"));
+}
+
+#[test]
+fn parameter_count_mismatch_is_rejected() {
+    let circuit = Circuit::from_parts(
+        IndexSet::from_iter([Qubit::new(0)]),
+        IndexSet::new(),
+        IndexSet::new(),
+        vec![Operation {
+            instruction: Instruction::Standard(StandardGate::RX),
+            qubits: smallvec![Qubit::new(0)],
+            params: smallvec![],
+            label: None,
+        }],
+        CircuitParam::Fixed(0.0),
+    );
+
+    let err = canonicalize_circuit(&circuit).unwrap_err();
+    assert!(matches!(err, CompilerError::InvalidInput(_)));
+    assert!(err.to_string().contains("parameter count mismatch"));
+}
+
+#[test]
+fn non_finite_fixed_parameter_is_rejected() {
+    let circuit = Circuit::from_parts(
+        IndexSet::from_iter([Qubit::new(0)]),
+        IndexSet::new(),
+        IndexSet::new(),
+        vec![Operation {
+            instruction: Instruction::Standard(StandardGate::RX),
+            qubits: smallvec![Qubit::new(0)],
+            params: SmallVec::from_buf([CircuitParam::Fixed(f64::NAN)]),
+            label: None,
+        }],
+        CircuitParam::Fixed(0.0),
+    );
+
+    let err = canonicalize_circuit(&circuit).unwrap_err();
+    assert!(matches!(err, CompilerError::InvalidInput(_)));
+    assert!(err.to_string().contains("non-finite"));
+}
+
+#[test]
+fn measurement_reset_circuit_gate_and_unitary_gate_are_preserved() {
+    let mut inner = Circuit::new(1);
+    inner.x(Qubit::new(0)).unwrap();
+    let circuit_gate = CircuitGate::new("inner_x", FrozenCircuit::new(inner)).unwrap();
+    let unitary = UnitaryGate::new("custom_x", 1, 0)
+        .with_matrix(array![
+            [Complex64::new(0.0, 0.0), Complex64::new(1.0, 0.0)],
+            [Complex64::new(1.0, 0.0), Complex64::new(0.0, 0.0)],
+        ])
+        .unwrap();
+    let mut circuit = Circuit::new(1);
+    circuit.measure(Qubit::new(0)).unwrap();
+    circuit.reset(Qubit::new(0)).unwrap();
+    circuit
+        .append(
+            Instruction::CircuitGate(Box::new(circuit_gate)),
+            [Qubit::new(0)],
+            std::iter::empty(),
+            Some("composite"),
+        )
+        .unwrap();
+    circuit.unitary(unitary, vec![Qubit::new(0)]).unwrap();
+
+    let result = canonicalize_circuit(&circuit).unwrap();
+
+    assert!(matches!(
+        result.circuit.operations()[0].instruction,
+        Instruction::Directive(Directive::Measure)
+    ));
+    assert!(matches!(
+        result.circuit.operations()[1].instruction,
+        Instruction::Directive(Directive::Reset)
+    ));
+    assert!(matches!(
+        result.circuit.operations()[2].instruction,
+        Instruction::CircuitGate(_)
+    ));
+    assert!(matches!(
+        result.circuit.operations()[3].instruction,
+        Instruction::UnitaryGate(_)
+    ));
+    assert_eq!(
+        result.circuit.operations()[2].label.as_deref(),
+        Some("composite")
+    );
+}
+
+#[test]
+fn matrix_is_strictly_preserved_without_control_flow() {
+    let mut circuit = Circuit::new(2);
+    circuit.set_global_phase(Parameter::from(0.5));
+    circuit.h(Qubit::new(0)).unwrap();
+    circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
+    circuit.rx(Qubit::new(1), Parameter::from(0.0)).unwrap();
+    circuit.barrier(vec![Qubit::new(1), Qubit::new(0)]).unwrap();
+
+    let before = circuit_to_matrix(&circuit, None).unwrap();
+    let result = canonicalize_circuit(&circuit).unwrap();
+    let after = circuit_to_matrix(&result.circuit, None).unwrap();
+
+    let before = before.as_slice().expect("matrix storage is contiguous");
+    let after = after.as_slice().expect("matrix storage is contiguous");
+    assert_eq!(before.len(), after.len());
+    for (index, (before, after)) in before.iter().zip(after).enumerate() {
+        let diff = (*before - *after).norm();
+        assert!(
+            diff <= 1e-10,
+            "matrix entry {index} differs: before={before}, after={after}, diff={diff}"
         );
     }
-    if !loop_result.stabilized {
-        outcome = outcome
-            .with_note(format!(
-                "canonicalize: reached round limit after {} rounds before proving stability",
-                loop_result.rounds_executed
-            ))
-            .with_diagnostic(crate::compiler::artifact::CompileDiagnostic {
-                severity: DiagnosticSeverity::Warning,
-                code: "compiler.canonicalize.round_limit_reached",
-                message: format!(
-                    "canonicalization stopped after {} rounds before reaching a fixed point",
-                    loop_result.rounds_executed
-                ),
-            });
-    }
-    outcome
+
+    assert!(result.circuit.operations().iter().all(|operation| {
+        !matches!(
+            operation.instruction,
+            Instruction::Standard(StandardGate::GPhase)
+        )
+    }));
+}
+
+#[test]
+fn canonicalization_is_idempotent() {
+    let mut circuit = Circuit::new(2);
+    circuit.i(Qubit::new(0)).unwrap();
+    circuit.barrier(vec![Qubit::new(1), Qubit::new(0)]).unwrap();
+    circuit.barrier(vec![Qubit::new(0), Qubit::new(1)]).unwrap();
+    circuit.h(Qubit::new(1)).unwrap();
+
+    let first = canonicalize_circuit(&circuit).unwrap();
+    let second = canonicalize_circuit(&first.circuit).unwrap();
+
+    assert!(first.changed);
+    assert!(!second.changed);
 }

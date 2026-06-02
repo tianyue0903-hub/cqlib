@@ -10,51 +10,17 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
-//! Stable configuration for production canonicalization.
-//!
-//! The configuration surface is intentionally small:
-//! - it exposes only durable policy toggles
-//! - it keeps the built-in canonicalization rule set internally owned by the
-//!   compiler
-//! - it avoids pass-manager style tuning knobs that would leak implementation
-//!   detail into the public API too early
-//!
-//! These flags cover the currently implemented parameter and structural
-//! canonicalization stages while keeping the public shape narrow.
-//!
-//! # Defaults
-//!
-//! `CanonicalizeConfig::production()` enables all safe canonicalization rules
-//! with a round limit of 8:
-//!
-//! | Flag | Production default |
-//! |------|-------------------|
-//! | `normalize_parameters` | `true` |
-//! | `canonicalize_instruction_form` | `true` |
-//! | `merge_adjacent_barriers` | `true` |
-//! | `drop_trivial_noops` | `true` |
-//! | `recurse_control_flow` | `true` |
-//! | `round_limit` | `8` |
+//! User-facing configuration for canonicalization.
 
-/// Configuration for the production canonicalizer.
-///
-/// The surface is intentionally small: only durable policy toggles are
-/// exposed, while the built-in rule set remains compiler-internal. This
-/// avoids leaking pass-manager details into the public API too early.
+/// Configuration for circuit canonicalization.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CanonicalizeConfig {
-    /// Maximum number of fixpoint rounds.
     round_limit: u8,
-    /// Whether to recurse into `IfElse` and `WhileLoop` bodies.
     recurse_control_flow: bool,
-    /// Whether to simplify symbolic parameters and fold constants.
-    normalize_parameters: bool,
-    /// Whether to collapse multi-controlled gates into standard forms.
+    fold_gphase: bool,
     canonicalize_instruction_form: bool,
-    /// Whether to merge adjacent barriers when their scopes allow it.
-    merge_adjacent_barriers: bool,
-    /// Whether to drop unlabeled trivial no-ops such as `I` or `RZ(0)`.
-    drop_trivial_noops: bool,
+    drop_noops: bool,
+    canonicalize_barriers: bool,
 }
 
 impl Default for CanonicalizeConfig {
@@ -64,67 +30,60 @@ impl Default for CanonicalizeConfig {
 }
 
 impl CanonicalizeConfig {
-    /// Returns the production default canonicalization configuration.
-    ///
-    /// These defaults enable the currently implemented parameter and structural
-    /// canonicalization rules.
+    /// Returns production defaults for the first canonicalization stage.
     pub const fn production() -> Self {
         Self {
             round_limit: 8,
             recurse_control_flow: true,
-            normalize_parameters: true,
+            fold_gphase: true,
             canonicalize_instruction_form: true,
-            merge_adjacent_barriers: true,
-            drop_trivial_noops: true,
+            drop_noops: true,
+            canonicalize_barriers: true,
         }
     }
 
-    /// Returns a new canonicalization configuration using production defaults.
+    /// Returns a new configuration using production defaults.
     pub const fn new() -> Self {
         Self::production()
     }
 
     /// Sets the maximum number of canonicalization rounds.
-    ///
-    /// This bounds the entire canonicalization process, not the retry count of
-    /// any individual rule. The value must be greater than zero; `0` is
-    /// treated as an invalid runtime configuration by the canonicalizer.
     pub const fn with_round_limit(mut self, round_limit: u8) -> Self {
         self.round_limit = round_limit;
         self
     }
 
-    /// Controls whether canonicalization should recurse into control-flow bodies.
+    /// Controls whether control-flow bodies are recursively canonicalized.
     pub const fn recurse_control_flow(mut self, enabled: bool) -> Self {
         self.recurse_control_flow = enabled;
         self
     }
 
-    /// Controls whether symbolic parameters and global phase are normalized.
-    pub const fn normalize_parameters(mut self, enabled: bool) -> Self {
-        self.normalize_parameters = enabled;
+    /// Controls whether `GPhase` operations are folded into scope-local phase.
+    pub const fn fold_gphase(mut self, enabled: bool) -> Self {
+        self.fold_gphase = enabled;
         self
     }
 
-    /// Controls whether instruction forms are canonicalized.
+    /// Controls whether `McGate` forms are collapsed into existing standard gates.
     pub const fn canonicalize_instruction_form(mut self, enabled: bool) -> Self {
         self.canonicalize_instruction_form = enabled;
         self
     }
 
-    /// Controls whether adjacent barriers are merged.
-    pub const fn merge_adjacent_barriers(mut self, enabled: bool) -> Self {
-        self.merge_adjacent_barriers = enabled;
+    /// Controls strict no-op removal.
+    pub const fn drop_noops(mut self, enabled: bool) -> Self {
+        self.drop_noops = enabled;
         self
     }
 
-    /// Controls whether unlabeled trivial no-op operations are dropped.
-    pub const fn drop_trivial_noops(mut self, enabled: bool) -> Self {
-        self.drop_trivial_noops = enabled;
+    /// Controls barrier scope canonicalization and adjacent barrier merging.
+    pub const fn canonicalize_barriers(mut self, enabled: bool) -> Self {
+        self.canonicalize_barriers = enabled;
         self
     }
 
-    /// Returns the configured round limit for the whole canonicalization run.
+    /// Returns the configured round limit.
     pub const fn round_limit(&self) -> u8 {
         self.round_limit
     }
@@ -134,23 +93,19 @@ impl CanonicalizeConfig {
         self.recurse_control_flow
     }
 
-    /// Returns whether parameter normalization is enabled.
-    pub const fn normalizes_parameters(&self) -> bool {
-        self.normalize_parameters
+    pub(super) const fn folds_gphase(&self) -> bool {
+        self.fold_gphase
     }
 
-    /// Returns whether instruction-form canonicalization is enabled.
-    pub const fn canonicalizes_instruction_form(&self) -> bool {
+    pub(super) const fn canonicalizes_instruction_form(&self) -> bool {
         self.canonicalize_instruction_form
     }
 
-    /// Returns whether adjacent barrier merging is enabled.
-    pub const fn merges_adjacent_barriers(&self) -> bool {
-        self.merge_adjacent_barriers
+    pub(super) const fn drops_noops(&self) -> bool {
+        self.drop_noops
     }
 
-    /// Returns whether trivial no-op dropping is enabled.
-    pub const fn drops_trivial_noops(&self) -> bool {
-        self.drop_trivial_noops
+    pub(super) const fn canonicalizes_barriers(&self) -> bool {
+        self.canonicalize_barriers
     }
 }

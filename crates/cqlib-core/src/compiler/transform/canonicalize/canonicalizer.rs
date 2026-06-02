@@ -10,49 +10,49 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
-//! Canonicalizer transformer entry point.
-//!
-//! The canonicalizer is built in layers:
-//! - Task 2 normalized symbolic parameters and global phase
-//! - Task 3 adds recursive linear-structure canonicalization
-//!
-//! This separation matters because:
-//! - it lets us ship a production-ready canonicalization interface without
-//!   mixing in unrelated structural cleanup logic
-//! - it reuses current `Circuit` functionality instead of duplicating symbolic
-//!   parameter handling in the compiler layer
-//! - it keeps later tasks free to add instruction-form and structural rules
-//!   without changing the public `Canonicalizer` shape
+//! Canonicalizer entry point and round orchestration.
 
-use crate::circuit::Circuit;
-use crate::compiler::artifact::{CompileDiagnostic, DiagnosticSeverity};
-use crate::compiler::context::{CompilerContext, ContextChangeSet};
-use crate::compiler::error::CompilerError;
-use crate::compiler::transform::{TransformDescriptor, TransformOutcome, Transformer};
+use crate::circuit::{
+    Circuit, CircuitParam, ControlFlow, Directive, IfElseGate, Instruction, Operation, Parameter,
+    StandardGate, WhileLoopGate,
+};
+use crate::compiler::CompilerError;
+use crate::compiler::transform::transformer::{TransformResult, Transformer};
+use smallvec::{SmallVec, smallvec};
 
 use super::config::CanonicalizeConfig;
-use super::linear::canonicalize_linear_structure;
-use super::parameter_phase::{canonicalize_parameter_phase, parameter_phase_changed};
+use super::equivalence::circuits_equivalent_for_canonicalize;
+use super::ops::{
+    canonical_control_flow_qubits_for_operation, canonicalize_operation_qubits, is_strict_noop,
+    push_operation,
+};
+use super::params::{
+    canonical_parameter, circuit_param_to_value, parameter_is_exact_zero,
+    parameter_to_circuit_param, resolve_parameter,
+};
+use super::verify::{VerifyMode, verify_circuit};
 
-/// Stable rule identifiers for built-in canonicalization behaviors.
-///
-/// These identifiers are exposed so that downstream diagnostics, logging, or
-/// future configuration surfaces can refer to rules by name. They are
-/// **intentionally not** wired into a pluggable rule engine yet — the current
-/// canonicalizer still uses simple hard-coded checks in `ops.rs` and
-/// `linear.rs` because the rule set is small and the extra abstraction would
-/// hurt readability more than it helps.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum CanonicalRuleId {
-    NormalizeParameters,
-    CanonicalizeInstructionForm,
-    MergeAdjacentBarriers,
-    DropTrivialNoOps,
+/// Result of a canonicalization run.
+#[derive(Debug, Clone)]
+pub struct CanonicalizeResult {
+    /// Canonicalized circuit.
+    pub circuit: Circuit,
+    /// Whether the output differs from the input representation.
+    pub changed: bool,
+    /// Number of canonicalization rounds executed.
+    pub rounds: u8,
 }
 
-/// Production canonicalizer entry point.
+/// Canonicalizer entry point.
+#[derive(Debug, Clone)]
 pub struct Canonicalizer {
     config: CanonicalizeConfig,
+}
+
+impl Default for Canonicalizer {
+    fn default() -> Self {
+        Self::production()
+    }
 }
 
 impl Canonicalizer {
@@ -66,190 +66,291 @@ impl Canonicalizer {
         Self::new(CanonicalizeConfig::production())
     }
 
-    /// Returns the active canonicalization configuration.
+    /// Returns the active configuration.
     pub const fn config(&self) -> &CanonicalizeConfig {
         &self.config
     }
-}
 
-static CANONICALIZER_DESCRIPTOR: TransformDescriptor = TransformDescriptor::new(
-    "canonicalize.standard",
-    "Canonicalizes circuit structure into a stable internal form",
-)
-.supports_control_flow(true)
-.supports_symbolic_parameters(true)
-.modifies_circuit();
+    /// Canonicalizes `circuit` and returns the rebuilt circuit plus run metadata.
+    pub fn run(&self, circuit: &Circuit) -> Result<CanonicalizeResult, CompilerError> {
+        verify_circuit(circuit, VerifyMode::Input)?;
+
+        if self.config.round_limit() == 0 {
+            return Err(CompilerError::InvalidInput(
+                "canonicalize round_limit must be greater than zero".to_string(),
+            ));
+        }
+
+        // A single pass can expose new canonicalization opportunities. For
+        // example, parameter simplification can turn `theta - theta` into a
+        // fixed zero, which then lets the next pass remove a rotation. The loop
+        // therefore proves a stable representation before reporting success.
+        let mut current = circuit.clone();
+        for round in 1..=self.config.round_limit() {
+            let next = CanonicalizeRound::new(&current, &self.config).run()?;
+            verify_circuit(
+                &next,
+                VerifyMode::Output {
+                    config: &self.config,
+                },
+            )?;
+
+            if circuits_equivalent_for_canonicalize(&current, &next) {
+                return Ok(CanonicalizeResult {
+                    circuit: next,
+                    changed: !circuits_equivalent_for_canonicalize(circuit, &current),
+                    rounds: round,
+                });
+            }
+
+            current = next;
+        }
+
+        Err(CompilerError::InvariantViolation(format!(
+            "canonicalization did not reach a fixed point within {} rounds",
+            self.config.round_limit()
+        )))
+    }
+}
 
 impl Transformer for Canonicalizer {
-    fn descriptor(&self) -> &'static TransformDescriptor {
-        &CANONICALIZER_DESCRIPTOR
+    fn transform(&self, circuit: &Circuit) -> Result<TransformResult, CompilerError> {
+        let result = self.run(circuit)?;
+        Ok(TransformResult {
+            circuit: result.circuit,
+            changed: result.changed,
+        })
+    }
+}
+
+/// Canonicalizes a circuit using production defaults.
+pub fn canonicalize_circuit(circuit: &Circuit) -> Result<CanonicalizeResult, CompilerError> {
+    Canonicalizer::production().run(circuit)
+}
+
+struct CanonicalizeRound<'a> {
+    source: &'a Circuit,
+    config: &'a CanonicalizeConfig,
+    target: Circuit,
+    top_phase: Parameter,
+}
+
+impl<'a> CanonicalizeRound<'a> {
+    fn new(source: &'a Circuit, config: &'a CanonicalizeConfig) -> Self {
+        Self {
+            source,
+            config,
+            target: Circuit::from_qubits(source.qubits()).expect("source qubits are unique"),
+            top_phase: source.global_phase(),
+        }
     }
 
-    fn transform(&self, ctx: &mut CompilerContext) -> Result<TransformOutcome, CompilerError> {
-        let loop_result = run_to_fixpoint_with(ctx.circuit(), &self.config, run_single_round)?;
+    fn run(mut self) -> Result<Circuit, CompilerError> {
+        self.top_phase = canonical_parameter(self.top_phase)?;
+        let mut top_level = Vec::with_capacity(self.source.operations().len());
 
-        if !loop_result.any_parameter_phase_changed && !loop_result.any_structural_changed {
-            return Ok(TransformOutcome::unchanged());
+        // Top-level `GPhase` operations are not retained as operations. Their
+        // phase contribution is accumulated here and materialized into
+        // `Circuit::global_phase` after all operations have been rebuilt.
+        for operation in self.source.operations() {
+            let rewritten = self.rewrite_operation(operation, ScopeKind::TopLevel)?;
+            self.top_phase = canonical_parameter(self.top_phase + rewritten.phase)?;
+            for operation in rewritten.operations {
+                push_operation(&mut top_level, operation, self.config);
+            }
         }
 
-        *ctx.circuit_mut() = loop_result.circuit;
-
-        let mut outcome = TransformOutcome::changed().with_changes(
-            ContextChangeSet::circuit_changed()
-                .with_cfg_structure_changed(loop_result.any_structural_changed)
-                .with_parameter_table_changed(loop_result.any_parameter_phase_changed),
-        );
-        if loop_result.any_parameter_phase_changed {
-            outcome =
-                outcome.with_note("canonicalize: normalized symbolic parameters and global phase");
+        for operation in top_level {
+            self.append_top_level(operation)?;
         }
-        if loop_result.any_structural_changed {
-            outcome = outcome.with_note(
-                "canonicalize: canonicalized instruction forms, barriers, and trivial no-ops",
+
+        let phase = canonical_parameter(self.top_phase)?;
+        self.target.set_global_phase(phase);
+        Ok(self.target)
+    }
+
+    fn append_top_level(&mut self, operation: Operation) -> Result<(), CompilerError> {
+        let params = operation
+            .params
+            .iter()
+            .map(|param| circuit_param_to_value(&self.target, param))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        self.target.append(
+            operation.instruction,
+            operation.qubits,
+            params,
+            operation.label.as_deref(),
+        )?;
+        Ok(())
+    }
+
+    fn canonicalize_body(&mut self, body: &[Operation]) -> Result<Vec<Operation>, CompilerError> {
+        let mut out = Vec::with_capacity(body.len());
+        let mut body_phase = Parameter::from(0.0);
+
+        // Body-local phase is conditional on the enclosing control-flow branch
+        // or loop iteration, so it cannot be lifted to circuit global phase.
+        // The canonical body representation keeps it as one leading `GPhase`.
+        for operation in body {
+            let rewritten = self.rewrite_operation(operation, ScopeKind::ControlFlowBody)?;
+            body_phase = canonical_parameter(body_phase + rewritten.phase)?;
+            for operation in rewritten.operations {
+                push_operation(&mut out, operation, self.config);
+            }
+        }
+
+        body_phase = canonical_parameter(body_phase)?;
+        if !parameter_is_exact_zero(&body_phase)? {
+            let param = self.intern_parameter(body_phase)?;
+            out.insert(
+                0,
+                Operation {
+                    instruction: Instruction::Standard(StandardGate::GPhase),
+                    qubits: smallvec![],
+                    params: smallvec![param],
+                    label: None,
+                },
             );
         }
-        if !loop_result.stabilized {
-            outcome = outcome
-                .with_note(format!(
-                    "canonicalize: reached round limit after {} rounds before proving stability",
-                    loop_result.rounds_executed
-                ))
-                .with_diagnostic(CompileDiagnostic {
-                    severity: DiagnosticSeverity::Warning,
-                    code: "compiler.canonicalize.round_limit_reached",
-                    message: format!(
-                        "canonicalization stopped after {} rounds before reaching a fixed point",
-                        loop_result.rounds_executed
-                    ),
-                });
+
+        Ok(out)
+    }
+
+    fn rewrite_operation(
+        &mut self,
+        operation: &Operation,
+        scope: ScopeKind,
+    ) -> Result<RewriteResult, CompilerError> {
+        let mut instruction = operation.instruction.clone();
+        if self.config.canonicalizes_instruction_form() {
+            instruction = instruction.canonicalize_form();
         }
 
-        Ok(outcome)
+        if self.config.recurses_control_flow() {
+            instruction = self.rewrite_control_flow_instruction(instruction)?;
+        }
+
+        let qubits = canonicalize_operation_qubits(&instruction, &operation.qubits, self.config);
+        let semantic_params = operation
+            .params
+            .iter()
+            .map(|param| resolve_parameter(self.source, param))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        if self.config.folds_gphase()
+            && matches!(instruction, Instruction::Standard(StandardGate::GPhase))
+        {
+            let phase = semantic_params
+                .first()
+                .cloned()
+                .unwrap_or_else(|| Parameter::from(0.0));
+            return Ok(RewriteResult::phase(phase));
+        }
+
+        if self.config.drops_noops() && is_strict_noop(&instruction, &semantic_params, &qubits)? {
+            return Ok(RewriteResult::drop());
+        }
+
+        let params = semantic_params
+            .into_iter()
+            .map(|param| self.intern_parameter(param))
+            .collect::<Result<SmallVec<[CircuitParam; 1]>, _>>()?;
+
+        let mut label = operation.label.clone();
+        if self.config.canonicalizes_barriers()
+            && matches!(instruction, Instruction::Directive(Directive::Barrier))
+        {
+            label = None;
+        }
+
+        let mut operation = Operation {
+            instruction,
+            qubits,
+            params,
+            label,
+        };
+
+        // The operation-level qubit list is derived from the canonicalized body,
+        // not preserved from input. This prevents deleted body no-ops from
+        // keeping dead qubits visible to later analysis passes.
+        if matches!(
+            (&operation.instruction, scope),
+            (
+                Instruction::ControlFlowGate(_),
+                ScopeKind::TopLevel | ScopeKind::ControlFlowBody
+            )
+        ) {
+            operation.qubits = canonical_control_flow_qubits_for_operation(
+                &operation.instruction,
+                &self.target.qubits(),
+            );
+        }
+
+        Ok(RewriteResult::keep(operation))
+    }
+
+    fn rewrite_control_flow_instruction(
+        &mut self,
+        instruction: Instruction,
+    ) -> Result<Instruction, CompilerError> {
+        match instruction {
+            Instruction::ControlFlowGate(ControlFlow::IfElse(gate)) => {
+                let true_body = self.canonicalize_body(gate.true_body())?;
+                let false_body = gate
+                    .false_body()
+                    .map(|body| self.canonicalize_body(body))
+                    .transpose()?;
+                Ok(Instruction::ControlFlowGate(ControlFlow::IfElse(
+                    IfElseGate::new(gate.condition(), true_body, false_body),
+                )))
+            }
+            Instruction::ControlFlowGate(ControlFlow::WhileLoop(gate)) => {
+                let body = self.canonicalize_body(gate.body())?;
+                Ok(Instruction::ControlFlowGate(ControlFlow::WhileLoop(
+                    WhileLoopGate::new(gate.condition(), body),
+                )))
+            }
+            _ => Ok(instruction),
+        }
+    }
+
+    fn intern_parameter(&mut self, param: Parameter) -> Result<CircuitParam, CompilerError> {
+        parameter_to_circuit_param(&mut self.target, param)
     }
 }
 
-/// Result of one canonicalization round.
-///
-/// A single round performs parameter-phase canonicalization first, then structural
-/// canonicalization. The two flags are tracked independently so the outer fixpoint
-/// loop can decide whether another round is needed.
+#[derive(Debug, Clone, Copy)]
+enum ScopeKind {
+    TopLevel,
+    ControlFlowBody,
+}
+
 #[derive(Debug, Clone)]
-pub(crate) struct SingleRoundResult {
-    /// Circuit produced by this round.
-    pub(crate) circuit: Circuit,
-    /// Whether parameter normalization or global-phase simplification changed anything.
-    pub(crate) parameter_phase_changed: bool,
-    /// Whether structural rules (instruction-form collapse, barrier merge, no-op drop) changed anything.
-    pub(crate) structural_changed: bool,
+struct RewriteResult {
+    operations: Vec<Operation>,
+    phase: Parameter,
 }
 
-/// Result of the fixpoint loop.
-///
-/// The canonicalizer runs rounds iteratively because parameter normalization can
-/// turn a symbolic angle into `0.0`, which then enables structural cleanup to drop
-/// the now-trivial gate in the next round. The loop stops when both phases report
-/// no change or when the configured round limit is reached.
-#[derive(Debug, Clone)]
-pub(crate) struct FixpointResult {
-    /// Final circuit after all executed rounds.
-    pub(crate) circuit: Circuit,
-    /// Whether the parameter phase changed in *any* round.
-    pub(crate) any_parameter_phase_changed: bool,
-    /// Whether the structure changed in *any* round.
-    pub(crate) any_structural_changed: bool,
-    /// Number of rounds actually executed.
-    pub(crate) rounds_executed: u8,
-    /// `true` if the circuit reached a fixed point before the round limit.
-    pub(crate) stabilized: bool,
-}
-
-/// Runs a single canonicalization round.
-///
-/// Order matters: parameter-phase canonicalization runs first so that a
-/// simplified parameter (e.g. `0.0`) can be picked up by structural rules in
-/// the same round. Structural canonicalization is skipped entirely when all
-/// structural config flags are disabled.
-fn run_single_round(
-    circuit: &Circuit,
-    config: &CanonicalizeConfig,
-) -> Result<SingleRoundResult, CompilerError> {
-    let mut canonical = if config.normalizes_parameters() {
-        canonicalize_parameter_phase(circuit)?
-    } else {
-        circuit.clone()
-    };
-    let parameter_phase_changed = parameter_phase_changed(circuit, &canonical);
-
-    let structural_changed = if config.canonicalizes_instruction_form()
-        || config.merges_adjacent_barriers()
-        || config.drops_trivial_noops()
-    {
-        let structural = canonicalize_linear_structure(&canonical, config)?;
-        if let Some(rebuilt) = structural.circuit {
-            canonical = rebuilt;
+impl RewriteResult {
+    fn keep(operation: Operation) -> Self {
+        Self {
+            operations: vec![operation],
+            phase: Parameter::from(0.0),
         }
-        structural.changed
-    } else {
-        false
-    };
-
-    Ok(SingleRoundResult {
-        circuit: canonical,
-        parameter_phase_changed,
-        structural_changed,
-    })
-}
-
-/// Runs canonicalization rounds until the circuit reaches a fixed point or the round limit.
-///
-/// Each round can enable further simplifications in the next round (e.g.
-/// parameter normalization → structural no-op drop). The loop terminates
-/// early when both phases report no change, indicating stability. If the
-/// round limit is reached first, a warning diagnostic is produced but the
-/// partially canonicalized circuit is still returned.
-pub(crate) fn run_to_fixpoint_with<F>(
-    initial: &Circuit,
-    config: &CanonicalizeConfig,
-    mut step: F,
-) -> Result<FixpointResult, CompilerError>
-where
-    F: FnMut(&Circuit, &CanonicalizeConfig) -> Result<SingleRoundResult, CompilerError>,
-{
-    if config.round_limit() == 0 {
-        return Err(CompilerError::InvalidContextState(
-            "canonicalize round_limit must be greater than zero".to_string(),
-        ));
     }
 
-    let mut current = initial.clone();
-    let mut any_parameter_phase_changed = false;
-    let mut any_structural_changed = false;
-    let mut rounds_executed = 0;
-
-    for round in 1..=config.round_limit() {
-        let round_result = step(&current, config)?;
-        rounds_executed = round;
-        any_parameter_phase_changed |= round_result.parameter_phase_changed;
-        any_structural_changed |= round_result.structural_changed;
-
-        if !round_result.parameter_phase_changed && !round_result.structural_changed {
-            return Ok(FixpointResult {
-                circuit: current,
-                any_parameter_phase_changed,
-                any_structural_changed,
-                rounds_executed,
-                stabilized: true,
-            });
+    fn drop() -> Self {
+        Self {
+            operations: Vec::new(),
+            phase: Parameter::from(0.0),
         }
-
-        current = round_result.circuit;
     }
 
-    Ok(FixpointResult {
-        circuit: current,
-        any_parameter_phase_changed,
-        any_structural_changed,
-        rounds_executed,
-        stabilized: false,
-    })
+    fn phase(phase: Parameter) -> Self {
+        Self {
+            operations: Vec::new(),
+            phase,
+        }
+    }
 }
