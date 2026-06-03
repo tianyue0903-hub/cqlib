@@ -14,6 +14,7 @@ pub mod canonicalize;
 pub mod decompose;
 pub mod layout;
 pub mod rewrite;
+pub mod routing;
 pub mod transformer;
 
 pub use canonicalize::{
@@ -30,4 +31,5 @@ pub use rewrite::{
     KnowledgeRewriteResult, KnowledgeRewriteStats, KnowledgeRewriter, RewriteConfig, RewriteMode,
     rewrite_circuit,
 };
+pub use routing::sabre::{RoutingResult, route_sabre};
 pub use transformer::{TransformResult, Transformer};
