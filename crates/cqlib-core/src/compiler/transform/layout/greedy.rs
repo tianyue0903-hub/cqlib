@@ -14,8 +14,9 @@
 
 use super::{
     CircuitLayoutAnalysis, Interaction, LayoutDiagnostics, LayoutObjective, LayoutResult,
-    PhysicalLayoutGraph, build_physical_layout_graph,
+    PhysicalLayoutGraph, analyze_circuit_for_layout, build_physical_layout_graph,
 };
+use crate::circuit::Circuit;
 use crate::compiler::CompilerError;
 use crate::device::{Device, Layout, LogicalQubit, PhysicalQubit};
 use std::cmp::Ordering;
@@ -35,20 +36,20 @@ use std::collections::{BTreeMap, BTreeSet};
 /// qubits than logical qubits, no physical candidate can be selected for a
 /// required placement, or if final objective scoring rejects the layout.
 pub fn greedy_layout(
-    analysis: &CircuitLayoutAnalysis,
+    circuit: &Circuit,
     device: &Device,
     objective: &LayoutObjective,
 ) -> Result<LayoutResult, CompilerError> {
+    let analysis = analyze_circuit_for_layout(circuit)?;
     let physical = build_physical_layout_graph(device)?;
-    greedy_layout_with_physical(analysis, &physical, objective)
+    greedy_layout_prepared(&analysis, &physical, objective)
 }
 
 /// Builds a deterministic greedy layout from an already-built physical graph.
 ///
-/// This advanced entry point lets workflow code reuse distance and calibration
-/// analysis across several layout algorithms without rebuilding the physical
-/// graph.
-pub fn greedy_layout_with_physical(
+/// This lower-level entry point is useful when a workflow has already prepared
+/// circuit analysis and physical graph data for one or more layout algorithms.
+pub fn greedy_layout_prepared(
     analysis: &CircuitLayoutAnalysis,
     physical: &PhysicalLayoutGraph,
     objective: &LayoutObjective,

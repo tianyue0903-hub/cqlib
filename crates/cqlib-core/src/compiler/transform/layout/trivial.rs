@@ -14,8 +14,9 @@
 
 use super::{
     CircuitLayoutAnalysis, LayoutDiagnostics, LayoutObjective, LayoutResult, PhysicalLayoutGraph,
-    build_physical_layout_graph,
+    analyze_circuit_for_layout, build_physical_layout_graph,
 };
+use crate::circuit::Circuit;
 use crate::compiler::CompilerError;
 use crate::device::{Device, Layout};
 
@@ -31,20 +32,20 @@ use crate::device::{Device, Layout};
 /// qubits than the device has usable physical qubits, or if scoring rejects the
 /// resulting layout.
 pub fn trivial_layout(
-    analysis: &CircuitLayoutAnalysis,
+    circuit: &Circuit,
     device: &Device,
     objective: &LayoutObjective,
 ) -> Result<LayoutResult, CompilerError> {
+    let analysis = analyze_circuit_for_layout(circuit)?;
     let physical = build_physical_layout_graph(device)?;
-    trivial_layout_with_physical(analysis, &physical, objective)
+    trivial_layout_prepared(&analysis, &physical, objective)
 }
 
 /// Maps logical qubits to an already-built physical graph in their existing order.
 ///
-/// This advanced entry point is useful when a workflow evaluates multiple
-/// layout algorithms against the same device and wants to reuse the derived
-/// physical graph instead of rebuilding the distance table each time.
-pub fn trivial_layout_with_physical(
+/// This lower-level entry point is useful when a workflow has already prepared
+/// circuit analysis and physical graph data for one or more layout algorithms.
+pub fn trivial_layout_prepared(
     analysis: &CircuitLayoutAnalysis,
     physical: &PhysicalLayoutGraph,
     objective: &LayoutObjective,

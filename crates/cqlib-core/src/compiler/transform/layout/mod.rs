@@ -25,6 +25,7 @@ mod greedy;
 mod objective;
 mod physical;
 mod result;
+mod sabre;
 mod trivial;
 mod vf2;
 mod vf2_engine;
@@ -32,13 +33,14 @@ mod vf2_engine;
 pub use analysis::{
     CircuitLayoutAnalysis, Interaction, InteractionGraph, analyze_circuit_for_layout,
 };
-pub use greedy::{greedy_layout, greedy_layout_with_physical};
+pub use greedy::{greedy_layout, greedy_layout_prepared};
 pub use objective::{LayoutObjective, LayoutScore};
 pub use physical::{DistanceTable, PhysicalLayoutGraph, build_physical_layout_graph};
 pub use result::{LayoutDiagnostics, LayoutResult};
-pub use trivial::{trivial_layout, trivial_layout_with_physical};
+pub use sabre::{sabre_layout, sabre_layout_prepared};
+pub use trivial::{trivial_layout, trivial_layout_prepared};
 pub use vf2::{
-    Vf2EdgeRequirement, Vf2LayoutConfig, vf2_perfect_layout, vf2_perfect_layout_with_physical,
+    Vf2EdgeRequirement, Vf2LayoutConfig, vf2_perfect_layout, vf2_perfect_layout_prepared,
 };
 
 #[cfg(test)]
@@ -46,6 +48,9 @@ mod greedy_test;
 
 #[cfg(test)]
 mod layout_test;
+
+#[cfg(test)]
+mod sabre_test;
 
 #[cfg(test)]
 mod vf2_test;

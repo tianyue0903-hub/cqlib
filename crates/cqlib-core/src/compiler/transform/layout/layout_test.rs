@@ -223,9 +223,8 @@ fn trivial_layout_maps_logical_qubits_to_usable_physical_qubits_in_order() {
 
     let mut circuit = Circuit::new(3);
     circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
-    let analysis = analyze_circuit_for_layout(&circuit).unwrap();
 
-    let result = trivial_layout(&analysis, &device, &objective).unwrap();
+    let result = trivial_layout(&circuit, &device, &objective).unwrap();
 
     assert_eq!(result.layout.get_physical(LogicalQubit::new(0)), Some(p0));
     assert_eq!(result.layout.get_physical(LogicalQubit::new(1)), Some(p1));
@@ -255,9 +254,8 @@ fn trivial_layout_skips_invalid_physical_qubits() {
         .unwrap();
     let objective = LayoutObjective::topology_only();
     let circuit = Circuit::new(2);
-    let analysis = analyze_circuit_for_layout(&circuit).unwrap();
 
-    let result = trivial_layout(&analysis, &device, &objective).unwrap();
+    let result = trivial_layout(&circuit, &device, &objective).unwrap();
 
     assert_eq!(result.layout.get_physical(LogicalQubit::new(0)), Some(p0));
     assert_eq!(result.layout.get_physical(LogicalQubit::new(1)), Some(p2));
@@ -272,9 +270,8 @@ fn trivial_layout_rejects_insufficient_physical_qubits() {
     let device = Device::new("one", HashSet::from_iter([p0]), topology).unwrap();
     let objective = LayoutObjective::topology_only();
     let circuit = Circuit::new(2);
-    let analysis = analyze_circuit_for_layout(&circuit).unwrap();
 
-    let error = trivial_layout(&analysis, &device, &objective).unwrap_err();
+    let error = trivial_layout(&circuit, &device, &objective).unwrap_err();
 
     assert!(
         matches!(error, CompilerError::InvalidInput(message) if message.contains("2 logical qubits") && message.contains("1 usable physical qubits"))
@@ -296,9 +293,8 @@ fn trivial_layout_reports_non_perfect_when_interaction_is_not_adjacent() {
 
     let mut circuit = Circuit::new(3);
     circuit.cx(Qubit::new(0), Qubit::new(2)).unwrap();
-    let analysis = analyze_circuit_for_layout(&circuit).unwrap();
 
-    let result = trivial_layout(&analysis, &device, &objective).unwrap();
+    let result = trivial_layout(&circuit, &device, &objective).unwrap();
 
     assert!(!result.diagnostics.is_perfect);
     assert_eq!(result.score.unwrap().distance, 2.0);
@@ -320,7 +316,7 @@ fn trivial_layout_uses_fidelity_objective_when_requested() {
     circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
     let analysis = analyze_circuit_for_layout(&circuit).unwrap();
 
-    let result = trivial_layout_with_physical(&analysis, &physical, &objective).unwrap();
+    let result = trivial_layout_prepared(&analysis, &physical, &objective).unwrap();
 
     assert!(result.diagnostics.used_fidelity);
     assert!(result.score.unwrap().used_fidelity);

@@ -12,11 +12,19 @@
 
 pub mod canonicalize;
 pub mod decompose;
+pub mod layout;
 pub mod rewrite;
 pub mod transformer;
 
 pub use canonicalize::{
     CanonicalizeConfig, CanonicalizeResult, Canonicalizer, canonicalize_circuit,
+};
+pub use layout::{
+    CircuitLayoutAnalysis, DistanceTable, Interaction, InteractionGraph, LayoutDiagnostics,
+    LayoutObjective, LayoutResult, LayoutScore, PhysicalLayoutGraph, Vf2EdgeRequirement,
+    Vf2LayoutConfig, analyze_circuit_for_layout, build_physical_layout_graph, greedy_layout,
+    greedy_layout_prepared, sabre_layout, sabre_layout_prepared, trivial_layout,
+    trivial_layout_prepared, vf2_perfect_layout, vf2_perfect_layout_prepared,
 };
 pub use rewrite::{
     KnowledgeRewriteResult, KnowledgeRewriteStats, KnowledgeRewriter, RewriteConfig, RewriteMode,

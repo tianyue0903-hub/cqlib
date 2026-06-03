@@ -22,7 +22,7 @@ use crate::compiler::CompilerError;
 use crate::compiler::transform::layout::{
     CircuitLayoutAnalysis, LayoutDiagnostics, LayoutObjective, LayoutResult, LayoutScore,
     PhysicalLayoutGraph, Vf2LayoutConfig, analyze_circuit_for_layout, build_physical_layout_graph,
-    greedy_layout_with_physical, vf2_perfect_layout_with_physical,
+    greedy_layout_prepared, vf2_perfect_layout_prepared,
 };
 use crate::device::{Device, Layout, LogicalQubit, PhysicalQubit};
 use rand::SeedableRng;
@@ -53,18 +53,46 @@ pub fn sabre_refine_layout(
     objective: &LayoutObjective,
     config: &SabreConfig,
 ) -> Result<LayoutResult, CompilerError> {
-    validate_config(config)?;
     let analysis = analyze_circuit_for_layout(circuit)?;
     let physical = build_physical_layout_graph(device)?;
-    let target = RoutingTarget::from_physical(&physical)?;
+    sabre_refine_layout_prepared(
+        circuit,
+        &analysis,
+        &physical,
+        initial_layout,
+        objective,
+        config,
+    )
+}
+
+/// Refines an initial layout with already-prepared layout analysis.
+///
+/// This is the low-level variant of [`sabre_refine_layout`] for callers that
+/// have already built layout analysis and the physical graph, for example to
+/// compare several layout algorithms against the same prepared data. The
+/// original `circuit` is still required because SABRE refinement uses operation
+/// dependency order for trial routing; `analysis` and `physical` are reused for
+/// candidate construction and scoring.
+///
+/// # Errors
+///
+/// Returns [`CompilerError::InvalidInput`] for invalid SABRE configuration,
+/// insufficient usable physical qubits, unreachable interactions in the usable
+/// topology, or unsupported circuit operations.
+pub fn sabre_refine_layout_prepared(
+    circuit: &Circuit,
+    analysis: &CircuitLayoutAnalysis,
+    physical: &PhysicalLayoutGraph,
+    initial_layout: Option<&Layout>,
+    objective: &LayoutObjective,
+    config: &SabreConfig,
+) -> Result<LayoutResult, CompilerError> {
+    validate_config(config)?;
+    let target = RoutingTarget::from_physical(physical)?;
     let sabre = SabreDag::from_operations(circuit.operations())?;
     let forwards = sabre.only_interactions();
     let backwards = forwards.reverse_interactions();
-    let logical_qubits = circuit
-        .qubits()
-        .into_iter()
-        .map(LogicalQubit::from_qubit)
-        .collect::<Vec<_>>();
+    let logical_qubits = analysis.logical_qubits.clone();
 
     if logical_qubits.len() > target.physical_qubits.len() {
         return Err(CompilerError::InvalidInput(format!(
@@ -77,9 +105,9 @@ pub fn sabre_refine_layout(
     let mut rng = StdRng::seed_from_u64(config.seed.unwrap_or_else(rand::random));
     let candidates = initial_layout_candidates(
         CandidateLayoutContext {
-            analysis: &analysis,
+            analysis,
             logical_qubits: &logical_qubits,
-            physical: &physical,
+            physical,
             target: &target,
             objective,
         },
@@ -152,7 +180,7 @@ pub fn sabre_refine_layout(
                     }
                     Err(error) => return Err(error),
                 };
-            let score = objective.score_layout(&analysis, &physical, &refined)?;
+            let score = objective.score_layout(analysis, physical, &refined)?;
             Ok(Some(CandidateEvaluation {
                 index: trial.index,
                 route_quality,
@@ -269,7 +297,7 @@ fn initial_layout_candidates(
     )?);
 
     if let Ok(greedy) =
-        greedy_layout_with_physical(context.analysis, context.physical, context.objective)
+        greedy_layout_prepared(context.analysis, context.physical, context.objective)
     {
         candidates.push(normalize_initial_layout(
             context.logical_qubits,
@@ -277,7 +305,7 @@ fn initial_layout_candidates(
             &greedy.layout,
         )?);
     }
-    if let Ok(vf2) = vf2_perfect_layout_with_physical(
+    if let Ok(vf2) = vf2_perfect_layout_prepared(
         context.analysis,
         context.physical,
         context.objective,

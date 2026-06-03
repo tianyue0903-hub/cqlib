@@ -15,8 +15,9 @@
 use super::vf2_engine::{Vf2Graph, Vf2SearchConfig, find_non_induced_mappings};
 use super::{
     CircuitLayoutAnalysis, Interaction, LayoutDiagnostics, LayoutObjective, LayoutResult,
-    LayoutScore, PhysicalLayoutGraph, build_physical_layout_graph,
+    LayoutScore, PhysicalLayoutGraph, analyze_circuit_for_layout, build_physical_layout_graph,
 };
+use crate::circuit::Circuit;
 use crate::compiler::CompilerError;
 use crate::device::{Device, Layout, LogicalQubit, PhysicalQubit};
 use rustworkx_core::petgraph::graph::NodeIndex;
@@ -74,20 +75,21 @@ impl Default for Vf2LayoutConfig {
 /// `candidate_limit` is zero, no perfect mapping is found, or scoring rejects
 /// all complete candidates.
 pub fn vf2_perfect_layout(
-    analysis: &CircuitLayoutAnalysis,
+    circuit: &Circuit,
     device: &Device,
     objective: &LayoutObjective,
     config: &Vf2LayoutConfig,
 ) -> Result<LayoutResult, CompilerError> {
+    let analysis = analyze_circuit_for_layout(circuit)?;
     let physical = build_physical_layout_graph(device)?;
-    vf2_perfect_layout_with_physical(analysis, &physical, objective, config)
+    vf2_perfect_layout_prepared(&analysis, &physical, objective, config)
 }
 
 /// Searches for a perfect initial layout on an already-built physical graph.
 ///
-/// This advanced entry point lets workflow code reuse distance and calibration
-/// analysis across layout algorithms.
-pub fn vf2_perfect_layout_with_physical(
+/// This lower-level entry point is useful when a workflow has already prepared
+/// circuit analysis and physical graph data for one or more layout algorithms.
+pub fn vf2_perfect_layout_prepared(
     analysis: &CircuitLayoutAnalysis,
     physical: &PhysicalLayoutGraph,
     objective: &LayoutObjective,

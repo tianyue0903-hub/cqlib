@@ -108,7 +108,9 @@ mod refine;
 mod routing;
 
 pub use heuristic::{SabreConfig, SabreHeuristicConfig, SabreTrialObjective};
-pub use refine::{SabreCompileResult, sabre_layout_and_route, sabre_refine_layout};
+pub use refine::{
+    SabreCompileResult, sabre_layout_and_route, sabre_refine_layout, sabre_refine_layout_prepared,
+};
 pub use routing::{SabreRoutingDiagnostics, SabreRoutingResult, sabre_route};
 
 #[cfg(test)]

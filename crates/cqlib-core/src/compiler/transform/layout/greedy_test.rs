@@ -29,9 +29,8 @@ fn greedy_layout_prioritizes_highest_weight_interaction() {
     circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
     circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
     circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
-    let analysis = analyze_circuit_for_layout(&circuit).unwrap();
 
-    let result = greedy_layout(&analysis, &device, &objective).unwrap();
+    let result = greedy_layout(&circuit, &device, &objective).unwrap();
 
     assert_eq!(result.layout.get_physical(LogicalQubit::new(0)), Some(p0));
     assert_eq!(result.layout.get_physical(LogicalQubit::new(1)), Some(p1));
@@ -53,9 +52,8 @@ fn greedy_layout_extends_from_mapped_endpoint() {
     circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
     circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
     circuit.cx(Qubit::new(1), Qubit::new(2)).unwrap();
-    let analysis = analyze_circuit_for_layout(&circuit).unwrap();
 
-    let result = greedy_layout(&analysis, &device, &objective).unwrap();
+    let result = greedy_layout(&circuit, &device, &objective).unwrap();
 
     assert_eq!(result.layout.get_physical(LogicalQubit::new(0)), Some(p0));
     assert_eq!(result.layout.get_physical(LogicalQubit::new(1)), Some(p1));
@@ -73,9 +71,8 @@ fn greedy_layout_maps_idle_logical_qubits_deterministically() {
     let device = line_device(vec![p0, p1, p2, p3]);
     let objective = LayoutObjective::topology_only();
     let circuit = Circuit::new(3);
-    let analysis = analyze_circuit_for_layout(&circuit).unwrap();
 
-    let result = greedy_layout(&analysis, &device, &objective).unwrap();
+    let result = greedy_layout(&circuit, &device, &objective).unwrap();
 
     assert_eq!(result.layout.get_physical(LogicalQubit::new(0)), Some(p0));
     assert_eq!(result.layout.get_physical(LogicalQubit::new(1)), Some(p1));
@@ -91,9 +88,8 @@ fn greedy_layout_rejects_insufficient_physical_qubits() {
     let device = Device::new("one", HashSet::from_iter([p0]), topology).unwrap();
     let objective = LayoutObjective::topology_only();
     let circuit = Circuit::new(2);
-    let analysis = analyze_circuit_for_layout(&circuit).unwrap();
 
-    let error = greedy_layout(&analysis, &device, &objective).unwrap_err();
+    let error = greedy_layout(&circuit, &device, &objective).unwrap_err();
 
     assert!(
         matches!(error, CompilerError::InvalidInput(message) if message.contains("2 logical qubits") && message.contains("1 usable physical qubits"))
@@ -113,9 +109,8 @@ fn greedy_layout_reports_non_perfect_for_non_adjacent_interaction() {
     circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
     circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
     circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
-    let analysis = analyze_circuit_for_layout(&circuit).unwrap();
 
-    let result = greedy_layout(&analysis, &device, &objective).unwrap();
+    let result = greedy_layout(&circuit, &device, &objective).unwrap();
 
     assert!(!result.diagnostics.is_perfect);
     assert_eq!(result.score.unwrap().distance, 5.0);
@@ -159,7 +154,7 @@ fn greedy_layout_uses_fidelity_objective_for_ties() {
     circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
     let analysis = analyze_circuit_for_layout(&circuit).unwrap();
 
-    let result = greedy_layout_with_physical(&analysis, &physical, &objective).unwrap();
+    let result = greedy_layout_prepared(&analysis, &physical, &objective).unwrap();
 
     assert_eq!(result.layout.get_physical(LogicalQubit::new(0)), Some(p1));
     assert_eq!(result.layout.get_physical(LogicalQubit::new(1)), Some(p2));

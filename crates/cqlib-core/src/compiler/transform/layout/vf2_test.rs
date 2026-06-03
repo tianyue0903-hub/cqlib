@@ -27,10 +27,9 @@ fn vf2_perfect_layout_maps_path_to_line() {
     let mut circuit = Circuit::new(3);
     circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
     circuit.cx(Qubit::new(1), Qubit::new(2)).unwrap();
-    let analysis = analyze_circuit_for_layout(&circuit).unwrap();
 
     let result =
-        vf2_perfect_layout(&analysis, &device, &objective, &Vf2LayoutConfig::default()).unwrap();
+        vf2_perfect_layout(&circuit, &device, &objective, &Vf2LayoutConfig::default()).unwrap();
 
     assert!(result.diagnostics.is_perfect);
     assert!(result.diagnostics.candidates_evaluated > 0);
@@ -48,10 +47,9 @@ fn vf2_perfect_layout_uses_non_induced_subgraph_matching() {
     let mut circuit = Circuit::new(3);
     circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
     circuit.cx(Qubit::new(1), Qubit::new(2)).unwrap();
-    let analysis = analyze_circuit_for_layout(&circuit).unwrap();
 
     let result =
-        vf2_perfect_layout(&analysis, &device, &objective, &Vf2LayoutConfig::default()).unwrap();
+        vf2_perfect_layout(&circuit, &device, &objective, &Vf2LayoutConfig::default()).unwrap();
 
     assert!(result.diagnostics.is_perfect);
     assert_eq!(result.score.unwrap().distance, 2.0);
@@ -69,10 +67,9 @@ fn vf2_perfect_layout_rejects_when_no_perfect_mapping_exists() {
     circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
     circuit.cx(Qubit::new(1), Qubit::new(2)).unwrap();
     circuit.cx(Qubit::new(0), Qubit::new(2)).unwrap();
-    let analysis = analyze_circuit_for_layout(&circuit).unwrap();
 
-    let error = vf2_perfect_layout(&analysis, &device, &objective, &Vf2LayoutConfig::default())
-        .unwrap_err();
+    let error =
+        vf2_perfect_layout(&circuit, &device, &objective, &Vf2LayoutConfig::default()).unwrap_err();
 
     assert!(
         matches!(error, CompilerError::InvalidInput(message) if message.contains("could not find a perfect mapping"))
@@ -117,7 +114,7 @@ fn vf2_perfect_layout_uses_fidelity_objective_to_choose_candidate() {
     circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
     let analysis = analyze_circuit_for_layout(&circuit).unwrap();
 
-    let result = vf2_perfect_layout_with_physical(
+    let result = vf2_perfect_layout_prepared(
         &analysis,
         &physical,
         &objective,
@@ -144,9 +141,8 @@ fn vf2_perfect_layout_keeps_direction_as_scoring_penalty() {
 
     let mut circuit = Circuit::new(2);
     circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
-    let analysis = analyze_circuit_for_layout(&circuit).unwrap();
 
-    let result = vf2_perfect_layout(&analysis, &device, &objective, &config).unwrap();
+    let result = vf2_perfect_layout(&circuit, &device, &objective, &config).unwrap();
 
     assert!(result.diagnostics.is_perfect);
     assert_eq!(result.score.unwrap().direction, 1.0);
@@ -163,10 +159,9 @@ fn vf2_perfect_layout_maps_idle_logical_qubits() {
 
     let mut circuit = Circuit::new(3);
     circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
-    let analysis = analyze_circuit_for_layout(&circuit).unwrap();
 
     let result =
-        vf2_perfect_layout(&analysis, &device, &objective, &Vf2LayoutConfig::default()).unwrap();
+        vf2_perfect_layout(&circuit, &device, &objective, &Vf2LayoutConfig::default()).unwrap();
 
     assert!(result.layout.get_physical(LogicalQubit::new(2)).is_some());
     assert_eq!(result.layout.num_vacant_physical(), 1);
@@ -190,7 +185,7 @@ fn vf2_perfect_layout_scores_interaction_free_circuit() {
     let circuit = Circuit::new(2);
     let analysis = analyze_circuit_for_layout(&circuit).unwrap();
 
-    let result = vf2_perfect_layout_with_physical(
+    let result = vf2_perfect_layout_prepared(
         &analysis,
         &physical,
         &objective,
@@ -210,13 +205,12 @@ fn vf2_perfect_layout_rejects_invalid_candidate_limit() {
     let device = line_device(vec![p0]);
     let objective = LayoutObjective::topology_only();
     let circuit = Circuit::new(1);
-    let analysis = analyze_circuit_for_layout(&circuit).unwrap();
     let config = Vf2LayoutConfig {
         candidate_limit: 0,
         ..Vf2LayoutConfig::default()
     };
 
-    let error = vf2_perfect_layout(&analysis, &device, &objective, &config).unwrap_err();
+    let error = vf2_perfect_layout(&circuit, &device, &objective, &config).unwrap_err();
 
     assert!(
         matches!(error, CompilerError::InvalidInput(message) if message.contains("candidate_limit"))
@@ -237,9 +231,8 @@ fn vf2_perfect_layout_respects_candidate_limit() {
 
     let mut circuit = Circuit::new(2);
     circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
-    let analysis = analyze_circuit_for_layout(&circuit).unwrap();
 
-    let result = vf2_perfect_layout(&analysis, &device, &objective, &config).unwrap();
+    let result = vf2_perfect_layout(&circuit, &device, &objective, &config).unwrap();
 
     assert_eq!(result.diagnostics.candidates_evaluated, 1);
     assert!(result.diagnostics.notes.is_empty());
@@ -260,9 +253,8 @@ fn vf2_perfect_layout_reports_call_limit_exhaustion() {
     let mut circuit = Circuit::new(3);
     circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
     circuit.cx(Qubit::new(1), Qubit::new(2)).unwrap();
-    let analysis = analyze_circuit_for_layout(&circuit).unwrap();
 
-    let error = vf2_perfect_layout(&analysis, &device, &objective, &config).unwrap_err();
+    let error = vf2_perfect_layout(&circuit, &device, &objective, &config).unwrap_err();
 
     assert!(
         matches!(error, CompilerError::InvalidInput(message) if message.contains("call limit"))
@@ -275,10 +267,9 @@ fn vf2_perfect_layout_rejects_insufficient_physical_qubits() {
     let device = line_device(vec![p0]);
     let objective = LayoutObjective::topology_only();
     let circuit = Circuit::new(2);
-    let analysis = analyze_circuit_for_layout(&circuit).unwrap();
 
-    let error = vf2_perfect_layout(&analysis, &device, &objective, &Vf2LayoutConfig::default())
-        .unwrap_err();
+    let error =
+        vf2_perfect_layout(&circuit, &device, &objective, &Vf2LayoutConfig::default()).unwrap_err();
 
     assert!(
         matches!(error, CompilerError::InvalidInput(message) if message.contains("2 logical qubits") && message.contains("1 usable physical qubits"))

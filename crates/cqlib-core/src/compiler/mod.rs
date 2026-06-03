@@ -15,6 +15,7 @@ pub mod compile;
 pub mod error;
 pub mod knowledge;
 pub mod resource;
+pub mod sabre;
 pub mod transform;
 pub mod workflow;
 
@@ -33,4 +34,8 @@ pub use commutation::{
 };
 pub use compile::{CompileConfig, CompileMode, CompileResult, compile};
 pub use error::CompilerError;
+pub use sabre::{
+    SabreCompileResult, SabreConfig, SabreHeuristicConfig, SabreRoutingDiagnostics,
+    SabreRoutingResult, sabre_layout_and_route, sabre_refine_layout, sabre_route,
+};
 pub use workflow::{CompilerWorkflow, WorkflowStepReport};
