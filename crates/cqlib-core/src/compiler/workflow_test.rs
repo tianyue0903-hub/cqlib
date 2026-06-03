@@ -12,9 +12,15 @@
 // that they have been altered from the originals.
 
 use super::CompilerWorkflow;
-use crate::circuit::{Circuit, Instruction, Qubit, StandardGate};
+use crate::circuit::gate::FrozenCircuit;
+use crate::circuit::{
+    Circuit, CircuitGate, Instruction, MCGate, ParameterValue, Qubit, StandardGate, UnitaryGate,
+};
+use crate::compiler::resource::ResourcePolicy;
 use crate::compiler::{CompileConfig, CompileMode, CompilerError, compile};
 use crate::device::{Device, PhysicalQubit, Topology};
+use ndarray::array;
+use num_complex::Complex64;
 use std::collections::HashSet;
 
 fn standard_ops(circuit: &Circuit) -> Vec<StandardGate> {
@@ -33,6 +39,7 @@ fn compile_config(mode: CompileMode) -> CompileConfig {
         mode,
         target_basis: None,
         device: None,
+        resource_policy: ResourcePolicy::default(),
         seed: None,
     }
 }
@@ -44,13 +51,38 @@ fn run_workflow(circuit: &Circuit, mode: CompileMode) -> super::CompileResult {
 }
 
 fn two_qubit_device(native_gates: Vec<Instruction>) -> Device {
-    let q0 = PhysicalQubit::new(0);
-    let q1 = PhysicalQubit::new(1);
-    let qubits = HashSet::from([q0, q1]);
-    let topology = Topology::new(vec![q0, q1], vec![(q0, q1, "q0-q1".to_string())]).unwrap();
+    linear_device(2, native_gates)
+}
+
+fn linear_device(num_qubits: u32, native_gates: Vec<Instruction>) -> Device {
+    let physical_qubits = (0..num_qubits).map(PhysicalQubit::new).collect::<Vec<_>>();
+    let qubits = physical_qubits.iter().copied().collect::<HashSet<_>>();
+    let edges = physical_qubits
+        .windows(2)
+        .enumerate()
+        .map(|(index, pair)| (pair[0], pair[1], format!("q{index}-q{}", index + 1)))
+        .collect::<Vec<_>>();
+    let topology = Topology::new(physical_qubits, edges).unwrap();
     Device::new("test-device", qubits, topology)
         .unwrap()
         .with_native_gates(native_gates)
+}
+
+fn step_changed(result: &super::CompileResult, name: &str) -> bool {
+    result
+        .steps
+        .iter()
+        .find(|step| step.name == name)
+        .is_some_and(|step| step.changed)
+}
+
+fn contains_high_level_gate(circuit: &Circuit) -> bool {
+    circuit.operations().iter().any(|operation| {
+        matches!(
+            operation.instruction,
+            Instruction::CircuitGate(_) | Instruction::UnitaryGate(_) | Instruction::McGate(_)
+        )
+    })
 }
 
 #[test]
@@ -96,13 +128,19 @@ fn normal_workflow_reports_staged_order() {
             .collect::<Vec<_>>(),
         vec![
             "resolve.target",
+            "validate.resources",
             "canonicalize.input",
-            "optimize.light",
+            "decompose.definitions",
+            "optimize.pre_decomposition",
+            "decompose.unitary",
+            "decompose.mc_gates",
+            "canonicalize.after_decomposition",
+            "optimize.post_decomposition",
             "translate.target_basis",
             "canonicalize.output",
         ]
     );
-    assert!(result.steps[3].skipped);
+    assert!(result.steps[9].skipped);
 }
 
 #[test]
@@ -125,17 +163,112 @@ fn enhanced_workflow_uses_richer_stage_sequence() {
             .collect::<Vec<_>>(),
         vec![
             "resolve.target",
+            "validate.resources",
             "canonicalize.input",
-            "optimize.pre_translation",
+            "decompose.definitions",
+            "optimize.pre_decomposition",
+            "decompose.unitary",
+            "decompose.mc_gates",
+            "canonicalize.after_decomposition",
+            "optimize.post_decomposition",
             "translate.target_basis",
-            "optimize.cleanup",
-            "canonicalize.mid",
-            "optimize.final",
+            "optimize.target_cleanup",
             "canonicalize.output",
         ]
     );
-    assert!(enhanced.steps[3].skipped);
+    assert!(enhanced.steps[9].skipped);
     assert!(enhanced.circuit.operations().is_empty());
+}
+
+#[test]
+fn workflow_expands_circuit_gate_definitions_before_optimization() {
+    let q0 = Qubit::new(0);
+    let mut definition = Circuit::new(1);
+    definition.h(q0).unwrap();
+    let gate = CircuitGate::new("H_DEF", FrozenCircuit::new(definition)).unwrap();
+
+    let mut circuit = Circuit::new(1);
+    circuit
+        .circuit_gate(gate, vec![q0], Vec::<ParameterValue>::new())
+        .unwrap();
+
+    let result = run_workflow(&circuit, CompileMode::Normal);
+
+    assert!(step_changed(&result, "decompose.definitions"));
+    assert_eq!(standard_ops(&result.circuit), vec![StandardGate::H]);
+    assert!(!contains_high_level_gate(&result.circuit));
+}
+
+#[test]
+fn workflow_synthesizes_matrix_backed_unitary_gates() {
+    let q0 = Qubit::new(0);
+    let matrix = array![
+        [Complex64::new(0.0, 0.0), Complex64::new(1.0, 0.0)],
+        [Complex64::new(1.0, 0.0), Complex64::new(0.0, 0.0)],
+    ];
+    let gate = UnitaryGate::new("X_MATRIX", 1, 0)
+        .with_matrix(matrix)
+        .unwrap();
+    let mut circuit = Circuit::new(1);
+    circuit.unitary(gate, vec![q0]).unwrap();
+
+    let result = run_workflow(&circuit, CompileMode::Normal);
+
+    assert!(step_changed(&result, "decompose.unitary"));
+    assert!(!contains_high_level_gate(&result.circuit));
+    assert!(!result.circuit.operations().is_empty());
+}
+
+#[test]
+fn workflow_decomposes_multi_controlled_gates() {
+    let qubits = (0..4).map(Qubit::new).collect::<Vec<_>>();
+    let mut circuit = Circuit::new(4);
+    circuit
+        .append(
+            Instruction::McGate(Box::new(MCGate::new(3, StandardGate::X))),
+            qubits.clone(),
+            Vec::<ParameterValue>::new(),
+            None,
+        )
+        .unwrap();
+
+    let result = run_workflow(&circuit, CompileMode::Normal);
+
+    assert!(step_changed(&result, "decompose.mc_gates"));
+    assert!(!contains_high_level_gate(&result.circuit));
+}
+
+#[test]
+fn target_basis_translation_runs_after_definition_decomposition() {
+    let q0 = Qubit::new(0);
+    let q1 = Qubit::new(1);
+    let mut definition = Circuit::new(2);
+    definition.cx(q0, q1).unwrap();
+    let gate = CircuitGate::new("CX_DEF", FrozenCircuit::new(definition)).unwrap();
+    let mut circuit = Circuit::new(2);
+    circuit
+        .circuit_gate(gate, vec![q0, q1], Vec::<ParameterValue>::new())
+        .unwrap();
+
+    let result = CompilerWorkflow::new(CompileConfig {
+        mode: CompileMode::Normal,
+        target_basis: Some(vec![
+            Instruction::Standard(StandardGate::H),
+            Instruction::Standard(StandardGate::CZ),
+        ]),
+        device: None,
+        resource_policy: ResourcePolicy::default(),
+        seed: None,
+    })
+    .run(&circuit)
+    .unwrap();
+
+    assert!(step_changed(&result, "decompose.definitions"));
+    assert!(step_changed(&result, "translate.target_basis"));
+    assert_eq!(
+        standard_ops(&result.circuit),
+        vec![StandardGate::H, StandardGate::CZ, StandardGate::H]
+    );
 }
 
 #[test]
@@ -152,6 +285,7 @@ fn explicit_target_basis_runs_lowering() {
             Instruction::Standard(StandardGate::CZ),
         ]),
         device: None,
+        resource_policy: ResourcePolicy::default(),
         seed: None,
     })
     .run(&circuit)
@@ -177,6 +311,28 @@ fn target_basis_failure_is_reported() {
         mode: CompileMode::Normal,
         target_basis: Some(vec![Instruction::Standard(StandardGate::CZ)]),
         device: None,
+        resource_policy: ResourcePolicy::default(),
+        seed: None,
+    })
+    .run(&circuit)
+    .unwrap_err();
+
+    assert!(matches!(err, CompilerError::InvalidInput(_)));
+}
+
+#[test]
+fn mc_gate_target_basis_is_rejected_by_workflow_contract() {
+    let mut circuit = Circuit::new(2);
+    circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
+
+    let err = CompilerWorkflow::new(CompileConfig {
+        mode: CompileMode::Normal,
+        target_basis: Some(vec![Instruction::McGate(Box::new(MCGate::new(
+            1,
+            StandardGate::X,
+        )))]),
+        device: None,
+        resource_policy: ResourcePolicy::default(),
         seed: None,
     })
     .run(&circuit)
@@ -200,6 +356,7 @@ fn device_native_gates_are_used_as_target_basis() {
         mode: CompileMode::Enhanced,
         target_basis: None,
         device: Some(device),
+        resource_policy: ResourcePolicy::default(),
         seed: None,
     })
     .run(&circuit)
@@ -209,6 +366,90 @@ fn device_native_gates_are_used_as_target_basis() {
         standard_ops(&result.circuit),
         vec![StandardGate::H, StandardGate::CZ, StandardGate::H]
     );
+}
+
+#[test]
+fn device_capacity_blocks_clean_ancilla_allocation_but_allows_no_aux_fallback() {
+    let qubits = (0..4).map(Qubit::new).collect::<Vec<_>>();
+    let mut circuit = Circuit::new(4);
+    circuit
+        .append(
+            Instruction::McGate(Box::new(MCGate::new(3, StandardGate::X))),
+            qubits,
+            Vec::<ParameterValue>::new(),
+            None,
+        )
+        .unwrap();
+    let device = linear_device(4, Vec::new());
+
+    let result = CompilerWorkflow::new(CompileConfig {
+        mode: CompileMode::Normal,
+        target_basis: None,
+        device: Some(device),
+        resource_policy: ResourcePolicy {
+            max_pre_layout_clean_ancillas: 2,
+            allow_dirty_borrowing: false,
+        },
+        seed: None,
+    })
+    .run(&circuit)
+    .unwrap();
+
+    assert!(step_changed(&result, "decompose.mc_gates"));
+    assert_eq!(result.circuit.qubits().len(), 4);
+    assert!(!contains_high_level_gate(&result.circuit));
+}
+
+#[test]
+fn device_capacity_rejects_source_circuit_that_is_too_wide() {
+    let mut circuit = Circuit::new(3);
+    circuit.h(Qubit::new(0)).unwrap();
+    let device = linear_device(2, Vec::new());
+
+    let err = CompilerWorkflow::new(CompileConfig {
+        mode: CompileMode::Normal,
+        target_basis: None,
+        device: Some(device),
+        resource_policy: ResourcePolicy::default(),
+        seed: None,
+    })
+    .run(&circuit)
+    .unwrap_err();
+
+    assert!(matches!(
+        err,
+        CompilerError::InvalidInput(reason) if reason.contains("source circuit uses 3 logical qubits")
+    ));
+}
+
+#[test]
+fn device_capacity_rejects_too_wide_source_before_mc_decomposition() {
+    let qubits = (0..3).map(Qubit::new).collect::<Vec<_>>();
+    let mut circuit = Circuit::new(3);
+    circuit
+        .append(
+            Instruction::McGate(Box::new(MCGate::new(2, StandardGate::X))),
+            qubits,
+            Vec::<ParameterValue>::new(),
+            None,
+        )
+        .unwrap();
+    let device = linear_device(2, Vec::new());
+
+    let err = CompilerWorkflow::new(CompileConfig {
+        mode: CompileMode::Normal,
+        target_basis: None,
+        device: Some(device),
+        resource_policy: ResourcePolicy::default(),
+        seed: None,
+    })
+    .run(&circuit)
+    .unwrap_err();
+
+    assert!(matches!(
+        err,
+        CompilerError::InvalidInput(reason) if reason.contains("source circuit uses 3 logical qubits")
+    ));
 }
 
 #[test]

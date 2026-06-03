@@ -49,8 +49,6 @@
 //! construction. Fixed small-control templates such as C3X and C4X belong in
 //! the compiler knowledge-rule library rather than this algorithm module.
 
-#![allow(dead_code)]
-
 mod clean_v_chain;
 mod conditionally_clean;
 mod dirty_v_chain;

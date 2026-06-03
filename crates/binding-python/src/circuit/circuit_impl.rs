@@ -1009,7 +1009,7 @@ impl PyCircuit {
         let circuit = self.inner.clone();
         let order = qubits_order.clone();
         // Release GIL during potentially expensive matrix computation
-        let result = py.detach(move || circuit.to_matrix(order.as_ref()));
+        let result = py.detach(move || circuit.to_matrix(order.as_deref()));
         Ok(result.to_pyarray(py))
     }
 

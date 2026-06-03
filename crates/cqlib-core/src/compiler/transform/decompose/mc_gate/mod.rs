@@ -14,9 +14,11 @@
 //!
 //! This module provides explicit synthesis primitives for lowering
 //! [`Instruction::McGate`](crate::circuit::Instruction::McGate) operations.
-//! The primitives do not choose an algorithm, allocate ancillary qubits, or
-//! rewrite a circuit automatically. Those responsibilities belong to the
-//! future multi-controlled-gate decomposition planner.
+//! The synthesis primitives do not choose an algorithm or allocate ancillary
+//! qubits. Circuit-level callers should use [`decompose_mc_gates`] or
+//! [`decompose_mc_gates_for_device`], which select a deterministic exact
+//! decomposition, manage ancillary resources, and rebuild control-flow bodies
+//! recursively.
 //!
 //! # Gate categories and decomposition flow
 //!
@@ -261,6 +263,7 @@
 //! targets. Duplicate-qubit errors are returned as
 //! [`CompilerError::TransformFailed`].
 
+pub mod decomposer;
 pub mod fsim;
 pub mod hadamard;
 pub mod mc_su2;
@@ -273,6 +276,8 @@ pub mod rotation;
 pub mod rzz;
 pub mod swap;
 pub mod unitary;
+
+pub use decomposer::{McGateDecomposeConfig, decompose_mc_gates, decompose_mc_gates_for_device};
 
 pub use fsim::{decompose_fsim_n_clean, decompose_fsim_no_aux};
 
@@ -306,6 +311,8 @@ pub use swap::{decompose_swap_n_clean, decompose_swap_no_aux};
 
 pub use unitary::{decompose_unitary_n_clean, decompose_unitary_no_aux};
 
+#[cfg(test)]
+mod decomposer_test;
 #[cfg(test)]
 mod fsim_test;
 #[cfg(test)]
