@@ -502,6 +502,25 @@ impl Device {
         Ok(())
     }
 
+    fn instruction_matches(stored: &Instruction, requested: &Instruction) -> bool {
+        match (stored, requested) {
+            (Instruction::Standard(stored), Instruction::Standard(requested)) => {
+                stored == requested
+            }
+            _ => false,
+        }
+    }
+
+    fn native_instruction_error(
+        native_instructions: &[InstructionProp],
+        instruction: &Instruction,
+    ) -> Option<f64> {
+        native_instructions
+            .iter()
+            .find(|prop| Self::instruction_matches(prop.instruction(), instruction))
+            .map(InstructionProp::error_rate)
+    }
+
     /// Gets the name of the device.
     pub fn name(&self) -> &str {
         &self.name
@@ -554,6 +573,76 @@ impl Device {
         target: PhysicalQubit,
     ) -> Option<&EdgeProp> {
         self.edge_properties.get(&(control, target))
+    }
+
+    /// Gets the error rate for `instruction` on a single physical qubit.
+    ///
+    /// Returns `None` if the qubit is not usable. If the qubit has no matching
+    /// instruction-specific calibration, falls back to the default single-qubit
+    /// error rate.
+    pub fn single_qubit_error(
+        &self,
+        qubit: PhysicalQubit,
+        instruction: &Instruction,
+    ) -> Option<f64> {
+        if !self.is_usable_qubit(qubit) {
+            return None;
+        }
+
+        self.qubit_properties
+            .get(&qubit)
+            .and_then(|props| {
+                Self::native_instruction_error(props.native_instructions(), instruction)
+            })
+            .or(self.default_single_qubit_error)
+    }
+
+    /// Gets the error rate for `instruction` on a directed coupling.
+    ///
+    /// Returns `None` if either endpoint is not usable or the directed coupling
+    /// does not exist. If the edge has no matching instruction-specific
+    /// calibration, falls back to the default two-qubit error rate.
+    pub fn two_qubit_error(
+        &self,
+        control: PhysicalQubit,
+        target: PhysicalQubit,
+        instruction: &Instruction,
+    ) -> Option<f64> {
+        if !self.is_usable_qubit(control)
+            || !self.is_usable_qubit(target)
+            || !self.topology.supports_directed_coupling(control, target)
+        {
+            return None;
+        }
+
+        self.edge_properties(control, target)
+            .and_then(|props| {
+                Self::native_instruction_error(props.native_instructions(), instruction)
+            })
+            .or(self.default_two_qubit_error)
+    }
+
+    /// Gets a direction-specific coupling error suitable for routing costs.
+    ///
+    /// Returns the best available native two-qubit instruction error on the
+    /// edge, or the default two-qubit error if no per-edge calibration exists.
+    pub fn edge_error(&self, control: PhysicalQubit, target: PhysicalQubit) -> Option<f64> {
+        if !self.is_usable_qubit(control)
+            || !self.is_usable_qubit(target)
+            || !self.topology.supports_directed_coupling(control, target)
+        {
+            return None;
+        }
+
+        self.edge_properties(control, target)
+            .and_then(|props| {
+                props
+                    .native_instructions()
+                    .iter()
+                    .map(InstructionProp::error_rate)
+                    .min_by(|a, b| a.total_cmp(b))
+            })
+            .or(self.default_two_qubit_error)
     }
 
     /// Gets the T1 relaxation time for a qubit (μs).

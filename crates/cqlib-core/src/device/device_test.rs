@@ -166,3 +166,109 @@ fn usable_qubits_exclude_invalid_qubits_in_stable_order() {
     assert!(!device.is_usable_qubit(PhysicalQubit::new(99)));
     assert_eq!(device.num_usable_qubits(), 2);
 }
+
+#[test]
+fn single_qubit_error_uses_native_instruction_then_default() {
+    let q0 = PhysicalQubit::new(0);
+    let q1 = PhysicalQubit::new(1);
+    let q2 = PhysicalQubit::new(2);
+    let topology = Topology::new(vec![q0, q1, q2], vec![]).unwrap();
+    let mut device = Device::new("test-device", HashSet::from([q0, q1, q2]), topology)
+        .unwrap()
+        .with_default_single_qubit_error(0.01)
+        .with_invalid_qubits(HashSet::from([q2]))
+        .unwrap();
+    device
+        .add_qubit_properties(
+            q0,
+            QubitProp::new(0.02).with_native_instruction(InstructionProp::new(
+                Instruction::Standard(StandardGate::H),
+                0.001,
+            )),
+        )
+        .unwrap();
+
+    assert_eq!(
+        device.single_qubit_error(q0, &Instruction::Standard(StandardGate::H)),
+        Some(0.001)
+    );
+    assert_eq!(
+        device.single_qubit_error(q0, &Instruction::Standard(StandardGate::X)),
+        Some(0.01)
+    );
+    assert_eq!(
+        device.single_qubit_error(q1, &Instruction::Standard(StandardGate::H)),
+        Some(0.01)
+    );
+    assert_eq!(
+        device.single_qubit_error(q2, &Instruction::Standard(StandardGate::H)),
+        None
+    );
+    assert_eq!(
+        device.single_qubit_error(
+            PhysicalQubit::new(99),
+            &Instruction::Standard(StandardGate::H)
+        ),
+        None
+    );
+}
+
+#[test]
+fn two_qubit_and_edge_errors_respect_direction_and_usability() {
+    let q0 = PhysicalQubit::new(0);
+    let q1 = PhysicalQubit::new(1);
+    let q2 = PhysicalQubit::new(2);
+    let topology = Topology::new(
+        vec![q0, q1, q2],
+        vec![
+            (q0, q1, "CX".to_string()),
+            (q1, q0, "CX".to_string()),
+            (q1, q2, "CX".to_string()),
+        ],
+    )
+    .unwrap();
+    let mut device = Device::new("test-device", HashSet::from([q0, q1, q2]), topology)
+        .unwrap()
+        .with_default_two_qubit_error(0.07);
+    device
+        .add_edge_properties(
+            q0,
+            q1,
+            EdgeProp::new()
+                .with_native_instruction(InstructionProp::new(
+                    Instruction::Standard(StandardGate::CZ),
+                    0.03,
+                ))
+                .with_native_instruction(InstructionProp::new(
+                    Instruction::Standard(StandardGate::CX),
+                    0.02,
+                )),
+        )
+        .unwrap();
+
+    assert_eq!(
+        device.two_qubit_error(q0, q1, &Instruction::Standard(StandardGate::CX)),
+        Some(0.02)
+    );
+    assert_eq!(
+        device.two_qubit_error(q0, q1, &Instruction::Standard(StandardGate::SWAP)),
+        Some(0.07)
+    );
+    assert_eq!(
+        device.two_qubit_error(q1, q0, &Instruction::Standard(StandardGate::CX)),
+        Some(0.07)
+    );
+    assert_eq!(
+        device.two_qubit_error(q0, q2, &Instruction::Standard(StandardGate::CX)),
+        None
+    );
+    assert_eq!(device.edge_error(q0, q1), Some(0.02));
+    assert_eq!(device.edge_error(q1, q0), Some(0.07));
+
+    device.set_invalid_qubits(HashSet::from([q2])).unwrap();
+    assert_eq!(
+        device.two_qubit_error(q1, q2, &Instruction::Standard(StandardGate::CX)),
+        None
+    );
+    assert_eq!(device.edge_error(q1, q2), None);
+}

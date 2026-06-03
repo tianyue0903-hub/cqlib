@@ -412,6 +412,67 @@ fn predecessors_and_degrees_follow_edge_direction() {
 }
 
 #[test]
+fn supports_coupling_either_direction_checks_both_directions() {
+    let q0 = PhysicalQubit::new(0);
+    let q1 = PhysicalQubit::new(1);
+    let q2 = PhysicalQubit::new(2);
+    let topology = Topology::new(vec![q0, q1, q2], vec![(q0, q1, "CX".to_string())]).unwrap();
+
+    assert!(topology.supports_coupling_either_direction(q0, q1));
+    assert!(topology.supports_coupling_either_direction(q1, q0));
+    assert!(!topology.supports_coupling_either_direction(q0, q2));
+}
+
+#[test]
+fn neighbors_undirected_merges_successors_and_predecessors() {
+    let q0 = PhysicalQubit::new(0);
+    let q1 = PhysicalQubit::new(1);
+    let q2 = PhysicalQubit::new(2);
+    let q3 = PhysicalQubit::new(3);
+    let topology = Topology::new(
+        vec![q0, q1, q2, q3],
+        vec![
+            (q0, q1, "CX".to_string()),
+            (q1, q0, "CX".to_string()),
+            (q2, q1, "CZ".to_string()),
+        ],
+    )
+    .unwrap();
+
+    assert_eq!(
+        topology.neighbors_undirected(q1).collect::<Vec<_>>(),
+        vec![q0, q2]
+    );
+    assert!(
+        topology
+            .neighbors_undirected(q3)
+            .collect::<Vec<_>>()
+            .is_empty()
+    );
+}
+
+#[test]
+fn undirected_edges_collapses_reverse_couplings() {
+    let q0 = PhysicalQubit::new(0);
+    let q1 = PhysicalQubit::new(1);
+    let q2 = PhysicalQubit::new(2);
+    let topology = Topology::new(
+        vec![q0, q1, q2],
+        vec![
+            (q1, q0, "CX".to_string()),
+            (q0, q1, "CX".to_string()),
+            (q2, q1, "CZ".to_string()),
+        ],
+    )
+    .unwrap();
+
+    assert_eq!(
+        topology.undirected_edges().collect::<Vec<_>>(),
+        vec![(q0, q1), (q1, q2)]
+    );
+}
+
+#[test]
 fn remove_qubits_rejects_batch_duplicates_without_mutation() {
     let q0 = PhysicalQubit::new(0);
     let q1 = PhysicalQubit::new(1);

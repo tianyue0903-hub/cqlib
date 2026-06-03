@@ -20,8 +20,8 @@ use crate::device::PhysicalQubit;
 use crate::device::error::TopologyError;
 use rustworkx_core::petgraph::Direction;
 use rustworkx_core::petgraph::prelude::{NodeIndex, StableDiGraph, StableGraph};
-use rustworkx_core::petgraph::visit::EdgeRef;
-use std::collections::{HashMap, HashSet};
+use rustworkx_core::petgraph::visit::{EdgeRef, IntoEdgeReferences};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 /// Represents the coupling/connectivity of a quantum device.
 ///
@@ -254,6 +254,11 @@ impl Topology {
         }
     }
 
+    /// Checks whether a coupling exists between two qubits in either direction.
+    pub fn supports_coupling_either_direction(&self, a: PhysicalQubit, b: PhysicalQubit) -> bool {
+        self.supports_directed_coupling(a, b) || self.supports_directed_coupling(b, a)
+    }
+
     /// Gets qubits reachable through outgoing couplings from `qubit`.
     ///
     /// Returns an iterator. Call `.collect()` to get a Vec if needed.
@@ -276,6 +281,39 @@ impl Topology {
                     .edges_directed(node_idx, Direction::Incoming)
                     .map(|e| self.graph[e.source()])
             })
+    }
+
+    /// Gets qubits coupled to `qubit` in either direction.
+    ///
+    /// Bidirectional couplings are returned once.
+    pub fn neighbors_undirected(
+        &self,
+        qubit: PhysicalQubit,
+    ) -> impl Iterator<Item = PhysicalQubit> + '_ {
+        let mut neighbors = BTreeSet::new();
+        neighbors.extend(self.successors(qubit));
+        neighbors.extend(self.predecessors(qubit));
+        neighbors.into_iter()
+    }
+
+    /// Gets all unique coupling edges without direction.
+    ///
+    /// Each returned pair is ordered by physical qubit ID, and bidirectional
+    /// couplings collapse to one pair.
+    pub fn undirected_edges(&self) -> impl Iterator<Item = (PhysicalQubit, PhysicalQubit)> + '_ {
+        self.graph
+            .edge_references()
+            .map(|edge| {
+                let source = self.graph[edge.source()];
+                let target = self.graph[edge.target()];
+                if source <= target {
+                    (source, target)
+                } else {
+                    (target, source)
+                }
+            })
+            .collect::<BTreeSet<_>>()
+            .into_iter()
     }
 
     /// Gets the coupling name between two qubits.
