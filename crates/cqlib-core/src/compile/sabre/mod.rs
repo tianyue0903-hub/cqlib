@@ -112,6 +112,7 @@ pub use refine::{
     SabreCompileResult, sabre_layout_and_route, sabre_refine_layout, sabre_refine_layout_prepared,
 };
 pub use routing::{SabreRoutingDiagnostics, SabreRoutingResult, sabre_route};
+pub use routing::{normalize_initial_layout, validate_config, validate_reachable_interactions};
 
 #[cfg(test)]
 #[path = "./sabre_test.rs"]

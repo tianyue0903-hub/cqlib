@@ -400,7 +400,7 @@ fn test_from_circuit_unitary_gate() {
         [Complex64::new(0.0, 0.0), Complex64::new(1.0, 0.0)],
         [Complex64::new(1.0, 0.0), Complex64::new(0.0, 0.0)]
     ];
-    let u_gate = UnitaryGate::new("U", 1).with_matrix(u_mat).unwrap();
+    let u_gate = UnitaryGate::new("U", 1, 0).with_matrix(u_mat).unwrap();
     circuit
         .append(
             Instruction::UnitaryGate(Box::new(u_gate)),
@@ -1292,7 +1292,7 @@ fn test_unitary_gate_fallback_applies_noise() {
         [Complex64::new(0.0, 0.0), Complex64::new(1.0, 0.0)],
         [Complex64::new(1.0, 0.0), Complex64::new(0.0, 0.0)]
     ];
-    let custom_x = UnitaryGate::new("CustomX", 1)
+    let custom_x = UnitaryGate::new("CustomX", 1, 0)
         .with_matrix(x_matrix)
         .unwrap();
     circuit

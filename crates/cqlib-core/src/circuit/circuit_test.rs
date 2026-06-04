@@ -16,7 +16,7 @@ use crate::circuit::circuit_param::{CircuitParam, ParameterValue};
 use crate::circuit::error::CircuitError;
 use crate::circuit::gate::control_flow::ConditionView;
 use crate::circuit::gate::{Instruction, StandardGate, UnitaryGate};
-use crate::circuit::operation::Operation;
+use crate::circuit::operation::{Operation, ValueOperation};
 use crate::circuit::parameter::Parameter;
 use smallvec::smallvec;
 use std::collections::HashSet;
@@ -94,6 +94,69 @@ fn test_from_qubits_and_add() {
     // Add duplicate
     let res = circuit.add_qubits(vec![q0]);
     assert!(matches!(res, Err(CircuitError::DuplicateQubits)));
+}
+
+#[test]
+fn from_operations_builds_circuit_and_interns_symbolic_parameters() {
+    let theta = Parameter::symbol("theta");
+    let operations = vec![
+        ValueOperation {
+            instruction: Instruction::Standard(StandardGate::H),
+            qubits: smallvec![Qubit::new(2)],
+            params: smallvec![],
+            label: Some("prepare".into()),
+        },
+        ValueOperation {
+            instruction: Instruction::Standard(StandardGate::RX),
+            qubits: smallvec![Qubit::new(4)],
+            params: smallvec![ParameterValue::Param(theta.clone())],
+            label: None,
+        },
+        ValueOperation {
+            instruction: Instruction::Standard(StandardGate::RZ),
+            qubits: smallvec![Qubit::new(2)],
+            params: smallvec![ParameterValue::Fixed(0.25)],
+            label: None,
+        },
+    ];
+
+    let circuit = Circuit::from_operations(vec![Qubit::new(2), Qubit::new(4)], operations).unwrap();
+
+    assert_eq!(circuit.qubits(), vec![Qubit::new(2), Qubit::new(4)]);
+    assert_eq!(circuit.operations().len(), 3);
+    assert_eq!(circuit.operations()[0].label.as_deref(), Some("prepare"));
+    assert_eq!(circuit.parameters().len(), 1);
+    assert!(circuit.parameters().contains(&theta));
+    assert!(circuit.symbols().contains("theta"));
+    assert!(matches!(
+        circuit.operations()[1].params.as_slice(),
+        [CircuitParam::Index(0)]
+    ));
+    assert!(matches!(
+        circuit.operations()[2].params.as_slice(),
+        [CircuitParam::Fixed(value)] if value.to_bits() == 0.25f64.to_bits()
+    ));
+}
+
+#[test]
+fn from_operations_rejects_duplicate_qubit_declarations() {
+    let result = Circuit::from_operations(vec![Qubit::new(0), Qubit::new(0)], Vec::new());
+
+    assert!(matches!(result, Err(CircuitError::DuplicateQubits)));
+}
+
+#[test]
+fn from_operations_rejects_unknown_operation_qubits() {
+    let operations = vec![ValueOperation {
+        instruction: Instruction::Standard(StandardGate::H),
+        qubits: smallvec![Qubit::new(1)],
+        params: smallvec![],
+        label: None,
+    }];
+
+    let result = Circuit::from_operations(vec![Qubit::new(0)], operations);
+
+    assert!(matches!(result, Err(CircuitError::QubitNotFound(1))));
 }
 
 #[test]

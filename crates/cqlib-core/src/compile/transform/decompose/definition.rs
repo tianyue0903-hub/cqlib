@@ -519,8 +519,7 @@ fn fresh_temp_symbol(index: usize, symbol: &str, occupied: &mut HashSet<String>)
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::circuit::gate::{CircuitGate, FrozenCircuit, UnitaryGate};
-    use indexmap::IndexSet;
+    use crate::circuit::gate::{FrozenCircuit, UnitaryGate};
     use ndarray::array;
     use num_complex::Complex;
     use std::collections::HashMap;
@@ -828,41 +827,6 @@ mod tests {
         let err = expand_definitions(&top).unwrap_err();
         assert!(
             matches!(err, CompilerError::InvalidInput(message) if message.contains("maximum recursion depth"))
-        );
-    }
-
-    #[test]
-    fn rejects_definition_operation_with_unmapped_qubit() {
-        let qubits: IndexSet<Qubit> = [Qubit::new(0)].into_iter().collect();
-        let malformed_op = Operation {
-            instruction: Instruction::Standard(StandardGate::H),
-            qubits: smallvec![Qubit::new(1)],
-            params: smallvec![],
-            label: None,
-        };
-        let malformed_definition = Circuit::from_parts(
-            qubits,
-            IndexSet::new(),
-            IndexSet::new(),
-            vec![malformed_op],
-            CircuitParam::Fixed(0.0),
-        );
-        let gate =
-            CircuitGate::new("bad_definition", FrozenCircuit::new(malformed_definition)).unwrap();
-
-        let mut circuit = Circuit::new(1);
-        circuit
-            .append(
-                Instruction::CircuitGate(Box::new(gate)),
-                [Qubit::new(0)],
-                [],
-                None,
-            )
-            .unwrap();
-
-        let err = expand_definitions(&circuit).unwrap_err();
-        assert!(
-            matches!(err, CompilerError::InvalidInput(message) if message.contains("unmapped qubit"))
         );
     }
 }

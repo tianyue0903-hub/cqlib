@@ -371,8 +371,125 @@ impl Device {
     /// configured with the builder-style setters.
     pub fn line(name: impl Into<String>, num_qubits: u32) -> Result<Self, DeviceError> {
         let physical_qubits = (0..num_qubits).map(PhysicalQubit::new).collect::<Vec<_>>();
+        Self::line_from_qubits(name, physical_qubits)
+    }
+
+    /// Creates a device with the supplied physical qubits connected as a directed line.
+    ///
+    /// The device contains every supplied physical qubit, all of which are
+    /// online. Couplings follow the supplied order: `qubits[i] -> qubits[i + 1]`.
+    pub fn line_from_qubits(
+        name: impl Into<String>,
+        physical_qubits: Vec<PhysicalQubit>,
+    ) -> Result<Self, DeviceError> {
         let qubits = physical_qubits.iter().copied().collect::<HashSet<_>>();
         let topology = Topology::line(physical_qubits).map_err(DeviceError::InvalidTopology)?;
+        Self::new(name, qubits, topology)
+    }
+
+    /// Creates a device with physical qubits connected as a bidirectional line.
+    ///
+    /// The device contains physical qubits `0..num_qubits`, all of which are
+    /// online. Adjacent qubits are connected in both directions.
+    pub fn bidirectional_line(
+        name: impl Into<String>,
+        num_qubits: u32,
+    ) -> Result<Self, DeviceError> {
+        let edges = (0..num_qubits.saturating_sub(1))
+            .flat_map(|index| [(index, index + 1), (index + 1, index)])
+            .collect::<Vec<_>>();
+        Self::from_u32_edges(name, num_qubits, &edges)
+    }
+
+    /// Creates a device with physical qubits connected as a bidirectional ring.
+    ///
+    /// The device contains physical qubits `0..num_qubits`, all of which are
+    /// online. For two or more qubits, each qubit is connected to its successor
+    /// modulo `num_qubits` in both directions.
+    pub fn ring(name: impl Into<String>, num_qubits: u32) -> Result<Self, DeviceError> {
+        let mut edges = BTreeSet::new();
+        if num_qubits >= 2 {
+            for index in 0..num_qubits {
+                let next = (index + 1) % num_qubits;
+                edges.insert((index, next));
+                edges.insert((next, index));
+            }
+        }
+        let edges = edges.into_iter().collect::<Vec<_>>();
+        Self::from_u32_edges(name, num_qubits, &edges)
+    }
+
+    /// Creates a device with physical qubits connected as a bidirectional star.
+    ///
+    /// The device contains physical qubits `0..num_qubits`, all of which are
+    /// online. Every non-center qubit is connected to `center` in both
+    /// directions.
+    pub fn star(
+        name: impl Into<String>,
+        num_qubits: u32,
+        center: u32,
+    ) -> Result<Self, DeviceError> {
+        let edges = (0..num_qubits)
+            .filter(|&index| index != center)
+            .flat_map(|index| [(center, index), (index, center)])
+            .collect::<Vec<_>>();
+        Self::from_u32_edges(name, num_qubits, &edges)
+    }
+
+    /// Creates a device with physical qubits connected as a bidirectional grid.
+    ///
+    /// Qubit IDs are assigned in row-major order. Horizontal and vertical
+    /// nearest-neighbor couplings are added in both directions.
+    pub fn grid(name: impl Into<String>, rows: u32, cols: u32) -> Result<Self, DeviceError> {
+        let num_qubits = rows.saturating_mul(cols);
+        let mut edges = Vec::new();
+        for row in 0..rows {
+            for col in 0..cols {
+                let current = row * cols + col;
+                if col + 1 < cols {
+                    edges.push((current, current + 1));
+                    edges.push((current + 1, current));
+                }
+                if row + 1 < rows {
+                    edges.push((current, current + cols));
+                    edges.push((current + cols, current));
+                }
+            }
+        }
+        Self::from_u32_edges(name, num_qubits, &edges)
+    }
+
+    /// Creates a device with physical qubits `0..num_qubits` and explicit directed edges.
+    ///
+    /// Each `(control, target)` pair in `edges` becomes one directed coupling.
+    pub fn from_edges(
+        name: impl Into<String>,
+        num_qubits: u32,
+        edges: &[(u32, u32)],
+    ) -> Result<Self, DeviceError> {
+        Self::from_u32_edges(name, num_qubits, edges)
+    }
+
+    fn from_u32_edges(
+        name: impl Into<String>,
+        num_qubits: u32,
+        edges: &[(u32, u32)],
+    ) -> Result<Self, DeviceError> {
+        let physical_qubits = (0..num_qubits).map(PhysicalQubit::new).collect::<Vec<_>>();
+        let qubits = physical_qubits.iter().copied().collect::<HashSet<_>>();
+        let coupling_map = edges
+            .iter()
+            .enumerate()
+            .map(|(index, &(control, target))| {
+                (
+                    PhysicalQubit::new(control),
+                    PhysicalQubit::new(target),
+                    format!("e{index}"),
+                )
+            })
+            .collect::<Vec<_>>();
+        let topology =
+            Topology::new(physical_qubits, coupling_map).map_err(DeviceError::InvalidTopology)?;
         Self::new(name, qubits, topology)
     }
 

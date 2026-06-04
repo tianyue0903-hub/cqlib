@@ -21,7 +21,7 @@ fn greedy_layout_prioritizes_highest_weight_interaction() {
     let p0 = PhysicalQubit::new(0);
     let p1 = PhysicalQubit::new(1);
     let p2 = PhysicalQubit::new(2);
-    let device = line_device(vec![p0, p1, p2]);
+    let device = Device::line_from_qubits("line", vec![p0, p1, p2]).unwrap();
     let objective = LayoutObjective::topology_only();
 
     let mut circuit = Circuit::new(3);
@@ -45,7 +45,7 @@ fn greedy_layout_extends_from_mapped_endpoint() {
     let p1 = PhysicalQubit::new(1);
     let p2 = PhysicalQubit::new(2);
     let p3 = PhysicalQubit::new(3);
-    let device = line_device(vec![p0, p1, p2, p3]);
+    let device = Device::line_from_qubits("line", vec![p0, p1, p2, p3]).unwrap();
     let objective = LayoutObjective::topology_only();
 
     let mut circuit = Circuit::new(3);
@@ -68,7 +68,7 @@ fn greedy_layout_maps_idle_logical_qubits_deterministically() {
     let p1 = PhysicalQubit::new(1);
     let p2 = PhysicalQubit::new(2);
     let p3 = PhysicalQubit::new(3);
-    let device = line_device(vec![p0, p1, p2, p3]);
+    let device = Device::line_from_qubits("line", vec![p0, p1, p2, p3]).unwrap();
     let objective = LayoutObjective::topology_only();
     let circuit = Circuit::new(3);
 
@@ -121,7 +121,7 @@ fn greedy_layout_reports_non_perfect_for_non_adjacent_interaction() {
     let p0 = PhysicalQubit::new(0);
     let p1 = PhysicalQubit::new(1);
     let p2 = PhysicalQubit::new(2);
-    let device = line_device(vec![p0, p1, p2]);
+    let device = Device::line_from_qubits("line", vec![p0, p1, p2]).unwrap();
     let objective = LayoutObjective::topology_only();
 
     let mut circuit = Circuit::new(3);
@@ -180,18 +180,4 @@ fn greedy_layout_uses_fidelity_objective_for_ties() {
     assert_eq!(result.layout.get_physical(LogicalQubit::new(1)), Some(p2));
     assert!(result.diagnostics.used_fidelity);
     assert_eq!(result.score.unwrap().two_qubit_error, 0.01);
-}
-
-fn line_device(qubits: Vec<PhysicalQubit>) -> Device {
-    let couplings = qubits
-        .windows(2)
-        .map(|window| (window[0], window[1], "cx".to_string()))
-        .collect::<Vec<_>>();
-    let topology = Topology::new(qubits.clone(), couplings).unwrap();
-    Device::new(
-        "line",
-        qubits.iter().copied().collect::<HashSet<_>>(),
-        topology,
-    )
-    .unwrap()
 }

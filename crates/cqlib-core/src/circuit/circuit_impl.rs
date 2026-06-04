@@ -167,6 +167,34 @@ impl Circuit {
         })
     }
 
+    /// Creates a circuit from qubits and value-level operations.
+    ///
+    /// Operations are appended in order through [`Circuit::append`], so qubit
+    /// membership is validated and symbolic parameters are interned into the
+    /// circuit parameter table.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CircuitError::DuplicateQubits`] if `qubits` contains
+    /// duplicates. Also returns any error from [`Circuit::append`], including
+    /// [`CircuitError::QubitNotFound`] when an operation references a qubit
+    /// outside the circuit.
+    pub fn from_operations(
+        qubits: Vec<Qubit>,
+        operations: impl IntoIterator<Item = ValueOperation>,
+    ) -> Result<Self, CircuitError> {
+        let mut circuit = Self::from_qubits(qubits)?;
+        for operation in operations {
+            circuit.append(
+                operation.instruction,
+                operation.qubits,
+                operation.params,
+                operation.label.as_deref(),
+            )?;
+        }
+        Ok(circuit)
+    }
+
     /// Adds new qubits to the existing circuit.
     ///
     /// # Arguments
@@ -1942,22 +1970,6 @@ impl Circuit {
             qubits: v.qubits.clone(),
             params: ps,
             label: v.label.clone(),
-        }
-    }
-
-    pub(crate) fn from_parts(
-        qubits: IndexSet<Qubit>,
-        symbols: IndexSet<String>,
-        parameters: IndexSet<Parameter>,
-        data: Vec<Operation>,
-        global_phase: CircuitParam,
-    ) -> Self {
-        Self {
-            qubits,
-            symbols,
-            parameters,
-            data,
-            global_phase,
         }
     }
 }

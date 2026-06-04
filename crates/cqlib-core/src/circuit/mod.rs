@@ -50,5 +50,5 @@ pub use gate::instruction::Instruction;
 pub use gate::mc_gate::MCGate;
 pub use gate::standard_gate::StandardGate;
 pub use gate::unitary_gate::UnitaryGate;
-pub use operation::Operation;
+pub use operation::{Operation, ValueOperation};
 pub use parameter::Parameter;

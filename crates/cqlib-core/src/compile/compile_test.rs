@@ -22,7 +22,6 @@ use crate::util::test_utils::{
     EPSILON, assert_circuits_equivalent_up_to_global_phase,
     assert_matrices_equal_up_to_global_phase, contains_high_level_gate, standard_ops, step_changed,
 };
-use std::collections::HashSet;
 
 fn compile_normal(circuit: &Circuit) -> super::CompileResult {
     compile(
@@ -158,101 +157,6 @@ fn qcis_cz_basis() -> Vec<StandardGate> {
         StandardGate::CZ,
         StandardGate::GPhase,
     ]
-}
-
-fn device_from_edges(
-    name: &str,
-    num_qubits: u32,
-    edges: &[(u32, u32)],
-    native_gates: &[StandardGate],
-) -> Device {
-    let physical = (0..num_qubits).map(PhysicalQubit::new).collect::<Vec<_>>();
-    let couplings = edges
-        .iter()
-        .enumerate()
-        .map(|(index, &(a, b))| {
-            (
-                PhysicalQubit::new(a),
-                PhysicalQubit::new(b),
-                format!("e{index}"),
-            )
-        })
-        .collect::<Vec<_>>();
-    let topology = Topology::new(physical.clone(), couplings).unwrap();
-    Device::new(
-        name,
-        physical.iter().copied().collect::<HashSet<_>>(),
-        topology,
-    )
-    .unwrap()
-    .with_native_gates(native_basis(native_gates))
-}
-
-fn line_device_with_basis(name: &str, num_qubits: u32, native_gates: &[StandardGate]) -> Device {
-    let edges = (0..num_qubits - 1).map(|i| (i, i + 1)).collect::<Vec<_>>();
-    device_from_edges(name, num_qubits, &edges, native_gates)
-}
-
-fn bidirectional_line_device_with_basis(
-    name: &str,
-    num_qubits: u32,
-    native_gates: &[StandardGate],
-) -> Device {
-    let mut edges = Vec::new();
-    for i in 0..num_qubits - 1 {
-        edges.push((i, i + 1));
-        edges.push((i + 1, i));
-    }
-    device_from_edges(name, num_qubits, &edges, native_gates)
-}
-
-fn ring_device_with_basis(name: &str, num_qubits: u32, native_gates: &[StandardGate]) -> Device {
-    let mut edges = Vec::new();
-    for i in 0..num_qubits {
-        edges.push((i, (i + 1) % num_qubits));
-        edges.push(((i + 1) % num_qubits, i));
-    }
-    device_from_edges(name, num_qubits, &edges, native_gates)
-}
-
-fn star_device_with_basis(
-    name: &str,
-    num_qubits: u32,
-    center: u32,
-    native_gates: &[StandardGate],
-) -> Device {
-    let mut edges = Vec::new();
-    for i in 0..num_qubits {
-        if i != center {
-            edges.push((center, i));
-            edges.push((i, center));
-        }
-    }
-    device_from_edges(name, num_qubits, &edges, native_gates)
-}
-
-fn grid_device_with_basis(name: &str, native_gates: &[StandardGate]) -> Device {
-    device_from_edges(
-        name,
-        6,
-        &[
-            (0, 1),
-            (1, 0),
-            (1, 2),
-            (2, 1),
-            (3, 4),
-            (4, 3),
-            (4, 5),
-            (5, 4),
-            (0, 3),
-            (3, 0),
-            (1, 4),
-            (4, 1),
-            (2, 5),
-            (5, 2),
-        ],
-        native_gates,
-    )
 }
 
 fn bell_circuit() -> Circuit {
@@ -1127,7 +1031,9 @@ fn compile_toffoli_on_4q_line_device_requires_target_basis_for_ccx_lowering() {
 fn compile_long_range_circuit_on_line_device_to_qcis_native_basis() {
     let circuit = long_range_device_circuit();
     let basis = qcis_cz_basis();
-    let device = line_device_with_basis("line-qcis", 4, &basis);
+    let device = Device::line("line-qcis", 4)
+        .unwrap()
+        .with_native_gates(native_basis(&basis));
 
     let result = compile_on_device_checked(&circuit, device, 101, &basis);
 
@@ -1139,7 +1045,9 @@ fn compile_long_range_circuit_on_line_device_to_qcis_native_basis() {
 fn compile_long_range_circuit_on_ring_device_to_qcis_native_basis() {
     let circuit = long_range_device_circuit();
     let basis = qcis_cz_basis();
-    let device = ring_device_with_basis("ring-qcis", 4, &basis);
+    let device = Device::ring("ring-qcis", 4)
+        .unwrap()
+        .with_native_gates(native_basis(&basis));
 
     let result = compile_on_device_checked(&circuit, device, 102, &basis);
 
@@ -1159,7 +1067,9 @@ fn compile_dense_circuit_on_bidirectional_line_to_cz_native_basis() {
         StandardGate::CZ,
         StandardGate::GPhase,
     ];
-    let device = bidirectional_line_device_with_basis("bidir-line-cz", 4, &basis);
+    let device = Device::bidirectional_line("bidir-line-cz", 4)
+        .unwrap()
+        .with_native_gates(native_basis(&basis));
 
     let result = compile_on_device_checked(&circuit, device, 103, &basis);
 
@@ -1179,7 +1089,9 @@ fn compile_dense_circuit_on_star_device_to_cx_native_basis() {
         StandardGate::CX,
         StandardGate::GPhase,
     ];
-    let device = star_device_with_basis("star-cx", 4, 0, &basis);
+    let device = Device::star("star-cx", 4, 0)
+        .unwrap()
+        .with_native_gates(native_basis(&basis));
 
     let result = compile_on_device_checked(&circuit, device, 104, &basis);
 
@@ -1199,7 +1111,9 @@ fn compile_ising_circuit_on_grid_device_to_ising_native_basis() {
         StandardGate::RZZ,
         StandardGate::GPhase,
     ];
-    let device = grid_device_with_basis("grid-ising", &basis);
+    let device = Device::grid("grid-ising", 2, 3)
+        .unwrap()
+        .with_native_gates(native_basis(&basis));
 
     let result = compile_on_device_checked(&circuit, device, 105, &basis);
 

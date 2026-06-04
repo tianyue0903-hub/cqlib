@@ -395,7 +395,9 @@ fn test_dump_unitary_gate_with_circuit() {
 
     // 2. Create a UnitaryGate with the inner circuit
     let frozen_circuit = FrozenCircuit::new(inner_circuit);
-    let u_gate = UnitaryGate::new("MyBell", 2).with_circuit(Arc::new(frozen_circuit));
+    let u_gate = UnitaryGate::new("MyBell", 2, 0)
+        .with_circuit(Arc::new(frozen_circuit))
+        .unwrap();
 
     // 3. Use the UnitaryGate in a main circuit
     let mut main_circuit = Circuit::new(3);
@@ -444,7 +446,9 @@ fn test_dump_unitary_gate_with_circuit_nested() {
 
     // 3. Create a UnitaryGate with this inner circuit
     let frozen_circuit = FrozenCircuit::new(inner_circuit);
-    let u_gate = UnitaryGate::new("CustomOp", 2).with_circuit(Arc::new(frozen_circuit));
+    let u_gate = UnitaryGate::new("CustomOp", 2, 0)
+        .with_circuit(Arc::new(frozen_circuit))
+        .unwrap();
 
     // 4. Use in main circuit
     let mut main_circuit = Circuit::new(2);
@@ -482,7 +486,9 @@ fn test_dump_unitary_gate_without_circuit() {
 
     // Create a UnitaryGate with only matrix (no circuit)
     let mat = Array2::eye(2).mapv(|x| Complex64::new(x, 0.0));
-    let u_gate = UnitaryGate::new("MatrixOnly", 1).with_matrix(mat).unwrap();
+    let u_gate = UnitaryGate::new("MatrixOnly", 1, 0)
+        .with_matrix(mat)
+        .unwrap();
 
     let mut circuit = Circuit::new(1);
     circuit.unitary(u_gate, vec![Qubit::new(0)]).unwrap();

@@ -64,6 +64,54 @@ fn test_layout_with_init_map_maps_remaining_logical_in_input_order() {
 }
 
 #[test]
+fn from_pairs_maps_only_supplied_logical_qubits_and_leaves_vacancies() {
+    let layout = Layout::from_pairs(&[(2, 3), (0, 1)], 5).unwrap();
+
+    assert_eq!(layout.num_logical(), 2);
+    assert_eq!(layout.num_physical(), 5);
+    assert_eq!(layout.num_vacant_physical(), 3);
+    assert_eq!(
+        layout.get_physical(LogicalQubit::new(2)),
+        Some(PhysicalQubit::new(3))
+    );
+    assert_eq!(
+        layout.get_physical(LogicalQubit::new(0)),
+        Some(PhysicalQubit::new(1))
+    );
+    assert_eq!(layout.get_physical(LogicalQubit::new(1)), None);
+}
+
+#[test]
+fn from_pairs_rejects_duplicate_logical_qubits() {
+    let error = Layout::from_pairs(&[(0, 0), (0, 1)], 2).unwrap_err();
+
+    assert!(matches!(
+        error,
+        LayoutError::DuplicateLogicalQubit(q) if q == LogicalQubit::new(0)
+    ));
+}
+
+#[test]
+fn from_pairs_rejects_duplicate_physical_qubits() {
+    let error = Layout::from_pairs(&[(0, 1), (1, 1)], 2).unwrap_err();
+
+    assert!(matches!(
+        error,
+        LayoutError::PhysicalQubitAlreadyOccupied(q) if q == PhysicalQubit::new(1)
+    ));
+}
+
+#[test]
+fn from_pairs_rejects_physical_qubit_outside_declared_range() {
+    let error = Layout::from_pairs(&[(0, 2)], 2).unwrap_err();
+
+    assert!(matches!(
+        error,
+        LayoutError::InvalidPhysicalQubit(q) if q == PhysicalQubit::new(2)
+    ));
+}
+
+#[test]
 fn test_layout_too_many_logical_error() {
     let result = Layout::new(
         vec![

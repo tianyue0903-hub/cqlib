@@ -148,11 +148,11 @@
 //! assert_eq!(cfg.num_blocks(), 1); // Linear circuit has one basic block
 //! ```
 
-use crate::circuit::circuit_param::CircuitParam;
+use crate::circuit::circuit_param::{CircuitParam, ParameterValue};
 use crate::circuit::gate::control_flow::ControlFlow;
 use crate::circuit::gate::instruction::Instruction;
 use crate::circuit::{Circuit, CircuitError, IfElseGate, WhileLoopGate};
-use crate::circuit::{ConditionView, Operation, Parameter, Qubit};
+use crate::circuit::{ConditionView, Operation, Parameter, Qubit, ValueOperation};
 use indexmap::IndexSet;
 use rustworkx_core::petgraph::prelude::{EdgeIndex, NodeIndex, StableDiGraph};
 use rustworkx_core::petgraph::visit::EdgeRef;
@@ -984,13 +984,51 @@ impl CircuitCFG {
         let mut visited = HashSet::new();
         let ops = self.parse_subgraph(entry, None, &mut visited)?;
 
-        Ok(Circuit::from_parts(
-            self.qubits.clone(),
-            self.symbols.clone(),
-            self.parameters.clone(),
-            ops,
-            self.global_phase.clone(),
-        ))
+        let value_ops = ops
+            .into_iter()
+            .map(|operation| self.value_operation(operation))
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut circuit =
+            Circuit::from_operations(self.qubits.iter().copied().collect(), value_ops)?;
+        circuit.set_global_phase(self.global_phase_parameter()?);
+        Ok(circuit)
+    }
+
+    fn value_operation(&self, operation: Operation) -> Result<ValueOperation, CircuitError> {
+        let params = operation
+            .params
+            .iter()
+            .map(|param| self.parameter_value(param))
+            .collect::<Result<SmallVec<[ParameterValue; 1]>, _>>()?;
+        Ok(ValueOperation {
+            instruction: operation.instruction,
+            qubits: operation.qubits,
+            params,
+            label: operation.label,
+        })
+    }
+
+    fn parameter_value(&self, parameter: &CircuitParam) -> Result<ParameterValue, CircuitError> {
+        match parameter {
+            CircuitParam::Fixed(value) => Ok(ParameterValue::Fixed(*value)),
+            CircuitParam::Index(index) => self
+                .parameters
+                .get_index(*index as usize)
+                .cloned()
+                .map(ParameterValue::Param)
+                .ok_or(CircuitError::InvalidParameterIndex(*index)),
+        }
+    }
+
+    fn global_phase_parameter(&self) -> Result<Parameter, CircuitError> {
+        match self.global_phase {
+            CircuitParam::Fixed(value) => Ok(Parameter::from(value)),
+            CircuitParam::Index(index) => self
+                .parameters
+                .get_index(index as usize)
+                .cloned()
+                .ok_or(CircuitError::InvalidParameterIndex(index)),
+        }
     }
 
     fn parse_subgraph(

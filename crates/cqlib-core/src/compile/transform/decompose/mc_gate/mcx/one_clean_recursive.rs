@@ -28,7 +28,7 @@
 //! Ancilla allocation, algorithm selection, open-control normalization,
 //! fixed small-control templates, and later `CCX` basis lowering remain the
 //! responsibility of higher compiler layers. The relative-phase optimization
-//! follows Iten et al., *Quantum Circuits for Isometries*, Phys. Rev. A 93,
+//! follows Item et al., *Quantum Circuits for Isometries*, Phys. Rev. A 93,
 //! 032318 (2016), [arXiv:1501.06911](https://arxiv.org/abs/1501.06911).
 
 use crate::circuit::{Qubit, operation::ValueOperation};
@@ -53,7 +53,7 @@ use super::utils::invert_parameter_free_operations;
 /// The four-segment construction is based on Barenco et al., *Elementary
 /// gates for quantum computation*, Phys. Rev. A 52, 3457 (1995),
 /// [arXiv:quant-ph/9503016](https://arxiv.org/abs/quant-ph/9503016), with the
-/// relative-phase I15 optimization from Iten et al.,
+/// relative-phase I15 optimization from Item et al.,
 /// [arXiv:1501.06911](https://arxiv.org/abs/1501.06911).
 ///
 /// # Errors

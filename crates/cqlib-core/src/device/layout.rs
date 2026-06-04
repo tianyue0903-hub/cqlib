@@ -183,6 +183,49 @@ impl Layout {
         Ok(layout)
     }
 
+    /// Creates a layout from `(logical, physical)` qubit ID pairs.
+    ///
+    /// Logical qubits are exactly the logical IDs that appear in
+    /// `logical_physical`. Physical qubits are `0..physical_count`; any
+    /// physical qubit not referenced by a pair remains vacant.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LayoutError`] if a logical ID appears more than once, a
+    /// physical ID appears more than once, or any physical ID is outside
+    /// `0..physical_count`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use cqlib_core::device::{Layout, LogicalQubit, PhysicalQubit};
+    ///
+    /// let layout = Layout::from_pairs(&[(0, 2), (1, 0)], 4).unwrap();
+    ///
+    /// assert_eq!(
+    ///     layout.get_physical(LogicalQubit::new(0)),
+    ///     Some(PhysicalQubit::new(2)),
+    /// );
+    /// assert_eq!(layout.num_vacant_physical(), 2);
+    /// ```
+    pub fn from_pairs(
+        logical_physical: &[(u32, u32)],
+        physical_count: u32,
+    ) -> Result<Self, LayoutError> {
+        let logical = logical_physical
+            .iter()
+            .map(|&(logical, _)| LogicalQubit::new(logical))
+            .collect::<Vec<_>>();
+        let physical = (0..physical_count)
+            .map(PhysicalQubit::new)
+            .collect::<Vec<_>>();
+        let init_map = logical_physical
+            .iter()
+            .map(|&(logical, physical)| (LogicalQubit::new(logical), PhysicalQubit::new(physical)))
+            .collect::<BTreeMap<_, _>>();
+        Self::new(logical, physical, Some(init_map))
+    }
+
     /// Returns the number of mapped logical qubits.
     pub fn num_logical(&self) -> usize {
         self.l2p.len()

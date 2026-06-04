@@ -13,15 +13,15 @@
 use super::*;
 use crate::circuit::{Circuit, Qubit};
 use crate::compile::CompilerError;
-use crate::compile::sabre::{SabreConfig, SabreHeuristicConfig, SabreTrialObjective};
+use crate::compile::sabre::SabreConfig;
 use crate::device::{Device, Layout, LogicalQubit, PhysicalQubit, Topology};
 use std::collections::{BTreeMap, HashSet};
 
 #[test]
 fn sabre_routing_auto_layout_routes_non_embeddable_interactions() {
-    let device = line_device(3);
+    let device = Device::line("line", 3).unwrap();
     let objective = LayoutObjective::topology_only();
-    let config = deterministic_config();
+    let config = SabreConfig::deterministic_seeded(7);
     let mut circuit = Circuit::new(3);
     circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
     circuit.cx(Qubit::new(1), Qubit::new(2)).unwrap();
@@ -37,9 +37,9 @@ fn sabre_routing_auto_layout_routes_non_embeddable_interactions() {
 
 #[test]
 fn sabre_routing_keeps_adjacent_two_qubit_circuit_without_swap() {
-    let device = line_device(2);
+    let device = Device::line("line", 2).unwrap();
     let objective = LayoutObjective::topology_only();
-    let config = deterministic_config();
+    let config = SabreConfig::deterministic_seeded(7);
     let mut circuit = Circuit::new(2);
     circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
 
@@ -53,9 +53,9 @@ fn sabre_routing_keeps_adjacent_two_qubit_circuit_without_swap() {
 
 #[test]
 fn sabre_routing_keeps_parameterized_single_qubit_circuit_unchanged() {
-    let device = line_device(1);
+    let device = Device::line("line", 1).unwrap();
     let objective = LayoutObjective::topology_only();
-    let config = deterministic_config();
+    let config = SabreConfig::deterministic_seeded(7);
     let mut circuit = Circuit::new(1);
     circuit.rx(Qubit::new(0), 0.25).unwrap();
 
@@ -85,9 +85,9 @@ fn sabre_changed_detects_non_identity_layout_without_swaps() {
 
 #[test]
 fn sabre_routing_is_reproducible_for_same_seed() {
-    let device = line_device(4);
+    let device = Device::line("line", 4).unwrap();
     let objective = LayoutObjective::topology_only();
-    let config = deterministic_config();
+    let config = SabreConfig::deterministic_seeded(7);
     let mut circuit = Circuit::new(3);
     circuit.cx(Qubit::new(0), Qubit::new(2)).unwrap();
     circuit.cx(Qubit::new(1), Qubit::new(2)).unwrap();
@@ -114,9 +114,9 @@ fn sabre_routing_is_reproducible_for_same_seed() {
 
 #[test]
 fn sabre_routing_rejects_invalid_config() {
-    let device = line_device(2);
+    let device = Device::line("line", 2).unwrap();
     let objective = LayoutObjective::topology_only();
-    let mut config = deterministic_config();
+    let mut config = SabreConfig::deterministic_seeded(7);
     config.routing_trials = 0;
     let mut circuit = Circuit::new(2);
     circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
@@ -134,7 +134,7 @@ fn sabre_routing_rejects_insufficient_physical_qubits() {
     let topology = Topology::new(vec![p0], vec![]).unwrap();
     let device = Device::new("one", HashSet::from_iter([p0]), topology).unwrap();
     let objective = LayoutObjective::topology_only();
-    let config = deterministic_config();
+    let config = SabreConfig::deterministic_seeded(7);
     let circuit = Circuit::new(2);
 
     let error = route_sabre(&circuit, &device, &objective, &config).unwrap_err();
@@ -146,9 +146,9 @@ fn sabre_routing_rejects_insufficient_physical_qubits() {
 
 #[test]
 fn sabre_routing_rejects_undecomposed_three_qubit_gate() {
-    let device = line_device(3);
+    let device = Device::line("line", 3).unwrap();
     let objective = LayoutObjective::topology_only();
-    let config = deterministic_config();
+    let config = SabreConfig::deterministic_seeded(7);
     let mut circuit = Circuit::new(3);
     circuit
         .ccx(Qubit::new(0), Qubit::new(1), Qubit::new(2))
@@ -159,37 +159,6 @@ fn sabre_routing_rejects_undecomposed_three_qubit_gate() {
     assert!(
         matches!(error, CompilerError::InvalidInput(message) if message.contains("more than two qubits"))
     );
-}
-
-fn deterministic_config() -> SabreConfig {
-    SabreConfig {
-        layout_trials: 2,
-        refinement_iterations: 1,
-        layout_scoring_trials: 1,
-        routing_trials: 1,
-        trial_objective: SabreTrialObjective::SwapThenDepth,
-        seed: Some(7),
-        heuristic: SabreHeuristicConfig {
-            lookahead_weights: vec![0.5],
-            attempt_limit: 20,
-            ..SabreHeuristicConfig::default()
-        },
-    }
-}
-
-fn line_device(count: u32) -> Device {
-    let qubits = (0..count).map(PhysicalQubit::new).collect::<Vec<_>>();
-    let couplings = qubits
-        .windows(2)
-        .map(|window| (window[0], window[1], "cx".to_string()))
-        .collect::<Vec<_>>();
-    let topology = Topology::new(qubits.clone(), couplings).unwrap();
-    Device::new(
-        "line",
-        qubits.iter().copied().collect::<HashSet<_>>(),
-        topology,
-    )
-    .unwrap()
 }
 
 fn assert_all_two_qubit_operations_are_adjacent_on_line(circuit: &Circuit) {

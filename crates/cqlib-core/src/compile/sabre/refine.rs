@@ -35,8 +35,8 @@ use super::dag::SabreDag;
 use super::heuristic::SabreConfig;
 use super::routing::{
     RoutingTarget, SabreRoutingResult, TrialQuality, compare_trial_quality,
-    normalize_initial_layout, route_trial, route_trial_unchecked, sabre_route, trial_seeds,
-    validate_config, validate_reachable_interactions,
+    normalize_initial_layout_for_target, route_trial, route_trial_unchecked, sabre_route,
+    trial_seeds, validate_config, validate_reachable_interactions_for_target,
 };
 use crate::circuit::Circuit;
 use crate::compile::CompilerError;
@@ -317,7 +317,7 @@ fn initial_layout_candidates(
 ) -> Result<Vec<Layout>, CompilerError> {
     let mut candidates = Vec::new();
     if let Some(layout) = initial_layout {
-        candidates.push(normalize_initial_layout(
+        candidates.push(normalize_initial_layout_for_target(
             context.logical_qubits,
             context.target,
             layout,
@@ -342,7 +342,7 @@ fn initial_layout_candidates(
     if let Ok(greedy) =
         greedy_layout_prepared(context.analysis, context.physical, context.objective)
     {
-        candidates.push(normalize_initial_layout(
+        candidates.push(normalize_initial_layout_for_target(
             context.logical_qubits,
             context.target,
             &greedy.layout,
@@ -354,7 +354,7 @@ fn initial_layout_candidates(
         context.objective,
         &Vf2LayoutConfig::default(),
     ) {
-        candidates.push(normalize_initial_layout(
+        candidates.push(normalize_initial_layout_for_target(
             context.logical_qubits,
             context.target,
             &vf2.layout,
@@ -430,7 +430,7 @@ fn best_route_quality(
     config: &SabreConfig,
     seed: u64,
 ) -> Result<TrialQuality, CompilerError> {
-    validate_reachable_interactions(sabre, target, initial_layout)?;
+    validate_reachable_interactions_for_target(sabre, target, initial_layout)?;
     let mut best: Option<(usize, TrialQuality)> = None;
     for (index, seed) in trial_seeds(Some(seed), config.layout_scoring_trials)
         .into_iter()

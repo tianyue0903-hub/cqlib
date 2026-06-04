@@ -19,13 +19,80 @@ use crate::compile::CompilerError;
 use crate::compile::transform::layout::LayoutObjective;
 use crate::device::{Device, Layout, LogicalQubit, PhysicalQubit, Topology};
 use smallvec::smallvec;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
+
+#[test]
+fn deterministic_seeded_config_uses_compact_reproducible_settings() {
+    let config = SabreConfig::deterministic_seeded(7);
+
+    assert_eq!(config.layout_trials, 2);
+    assert_eq!(config.refinement_iterations, 1);
+    assert_eq!(config.layout_scoring_trials, 1);
+    assert_eq!(config.routing_trials, 1);
+    assert_eq!(config.trial_objective, SabreTrialObjective::SwapThenDepth);
+    assert_eq!(config.seed, Some(7));
+    assert_eq!(config.heuristic.lookahead_weights, vec![0.5]);
+    assert_eq!(config.heuristic.attempt_limit, 20);
+}
+
+#[test]
+fn validate_config_reports_invalid_trial_counts() {
+    let config = SabreConfig {
+        routing_trials: 0,
+        ..SabreConfig::deterministic_seeded(7)
+    };
+
+    let error = validate_config(&config).unwrap_err();
+
+    assert!(
+        matches!(error, CompilerError::InvalidInput(message) if message.contains("routing_trials"))
+    );
+}
+
+#[test]
+fn normalize_initial_layout_public_api_uses_device_usable_qubits() {
+    let device = Device::line("line", 3).unwrap();
+    let layout = Layout::from_pairs(&[(0, 2), (1, 0)], 3).unwrap();
+
+    let normalized = normalize_initial_layout(
+        &[LogicalQubit::new(0), LogicalQubit::new(1)],
+        &device,
+        &layout,
+    )
+    .unwrap();
+
+    assert_eq!(normalized.num_logical(), 2);
+    assert_eq!(normalized.num_physical(), 3);
+    assert_eq!(normalized.num_vacant_physical(), 1);
+    assert_eq!(
+        normalized.get_physical(LogicalQubit::new(0)),
+        Some(PhysicalQubit::new(2))
+    );
+}
+
+#[test]
+fn validate_reachable_interactions_public_api_reports_disconnected_pairs() {
+    let p0 = PhysicalQubit::new(0);
+    let p1 = PhysicalQubit::new(1);
+    let topology = Topology::new(vec![p0, p1], vec![]).unwrap();
+    let device = Device::new("disconnected", HashSet::from([p0, p1]), topology).unwrap();
+    let layout = Layout::from_pairs(&[(0, 0), (1, 1)], 2).unwrap();
+    let mut circuit = Circuit::new(2);
+    circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
+
+    let error = validate_reachable_interactions(&circuit, &device, &layout).unwrap_err();
+
+    assert!(matches!(
+        error,
+        CompilerError::InvalidInput(message) if message.contains("disconnected")
+    ));
+}
 
 #[test]
 fn route_keeps_adjacent_two_qubit_gate_without_swap() {
-    let device = line_device(2);
-    let layout = layout(&[(0, 0), (1, 1)], 2);
-    let config = deterministic_config();
+    let device = Device::line("line", 2).unwrap();
+    let layout = Layout::from_pairs(&[(0, 0), (1, 1)], 2).unwrap();
+    let config = SabreConfig::deterministic_seeded(7);
     let mut circuit = Circuit::new(2);
     circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
 
@@ -45,9 +112,9 @@ fn route_keeps_adjacent_two_qubit_gate_without_swap() {
 
 #[test]
 fn route_inserts_swap_on_line_topology() {
-    let device = line_device(3);
-    let layout = layout(&[(0, 0), (1, 2)], 3);
-    let config = deterministic_config();
+    let device = Device::line("line", 3).unwrap();
+    let layout = Layout::from_pairs(&[(0, 0), (1, 2)], 3).unwrap();
+    let config = SabreConfig::deterministic_seeded(7);
     let mut circuit = Circuit::new(2);
     circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
 
@@ -69,9 +136,9 @@ fn route_inserts_swap_on_line_topology() {
 
 #[test]
 fn route_does_not_fold_overlapping_two_qubit_gates() {
-    let device = line_device(3);
-    let layout = layout(&[(0, 0), (1, 1), (2, 2)], 3);
-    let config = deterministic_config();
+    let device = Device::line("line", 3).unwrap();
+    let layout = Layout::from_pairs(&[(0, 0), (1, 1), (2, 2)], 3).unwrap();
+    let config = SabreConfig::deterministic_seeded(7);
     let mut circuit = Circuit::new(3);
     circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
     circuit.cx(Qubit::new(1), Qubit::new(2)).unwrap();
@@ -85,9 +152,9 @@ fn route_does_not_fold_overlapping_two_qubit_gates() {
 
 #[test]
 fn route_may_fold_consecutive_two_qubit_gates_on_same_pair() {
-    let device = line_device(2);
-    let layout = layout(&[(0, 0), (1, 1)], 2);
-    let config = deterministic_config();
+    let device = Device::line("line", 2).unwrap();
+    let layout = Layout::from_pairs(&[(0, 0), (1, 1)], 2).unwrap();
+    let config = SabreConfig::deterministic_seeded(7);
     let mut circuit = Circuit::new(2);
     circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
     circuit.cx(Qubit::new(1), Qubit::new(0)).unwrap();
@@ -101,9 +168,9 @@ fn route_may_fold_consecutive_two_qubit_gates_on_same_pair() {
 
 #[test]
 fn refine_layout_is_reproducible_for_same_seed() {
-    let device = line_device(4);
+    let device = Device::line("line", 4).unwrap();
     let objective = LayoutObjective::topology_only();
-    let config = deterministic_config();
+    let config = SabreConfig::deterministic_seeded(7);
     let mut circuit = Circuit::new(3);
     circuit.cx(Qubit::new(0), Qubit::new(2)).unwrap();
     circuit.cx(Qubit::new(1), Qubit::new(2)).unwrap();
@@ -120,8 +187,8 @@ fn refine_layout_is_reproducible_for_same_seed() {
 
 #[test]
 fn route_with_decay_is_reproducible_for_same_seed() {
-    let device = line_device(5);
-    let layout = layout(&[(0, 0), (1, 4), (2, 2)], 5);
+    let device = Device::line("line", 5).unwrap();
+    let layout = Layout::from_pairs(&[(0, 0), (1, 4), (2, 2)], 5).unwrap();
     let config = SabreConfig {
         routing_trials: 4,
         seed: Some(23),
@@ -132,7 +199,7 @@ fn route_with_decay_is_reproducible_for_same_seed() {
             attempt_limit: 20,
             ..SabreHeuristicConfig::default()
         },
-        ..deterministic_config()
+        ..SabreConfig::deterministic_seeded(7)
     };
     let mut circuit = Circuit::new(3);
     circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
@@ -156,9 +223,9 @@ fn route_with_decay_is_reproducible_for_same_seed() {
 
 #[test]
 fn control_flow_body_is_routed_and_restored() {
-    let device = line_device(3);
-    let layout = layout(&[(0, 0), (1, 2)], 3);
-    let config = deterministic_config();
+    let device = Device::line("line", 3).unwrap();
+    let layout = Layout::from_pairs(&[(0, 0), (1, 2)], 3).unwrap();
+    let config = SabreConfig::deterministic_seeded(7);
     let true_body = vec![Operation {
         instruction: Instruction::Standard(StandardGate::CX),
         qubits: smallvec![Qubit::new(0), Qubit::new(1)],
@@ -187,9 +254,9 @@ fn control_flow_body_is_routed_and_restored() {
 
 #[test]
 fn if_else_routes_both_branches_and_restores_layout() {
-    let device = line_device(3);
-    let layout = layout(&[(0, 0), (1, 2)], 3);
-    let config = deterministic_config();
+    let device = Device::line("line", 3).unwrap();
+    let layout = Layout::from_pairs(&[(0, 0), (1, 2)], 3).unwrap();
+    let config = SabreConfig::deterministic_seeded(7);
     let true_body = vec![cx_operation(0, 1)];
     let false_body = vec![cx_operation(1, 0)];
     let mut circuit = Circuit::new(2);
@@ -222,9 +289,9 @@ fn if_else_routes_both_branches_and_restores_layout() {
 
 #[test]
 fn empty_control_flow_bodies_route_without_layout_drift() {
-    let device = line_device(2);
-    let layout = layout(&[(0, 0), (1, 1)], 2);
-    let config = deterministic_config();
+    let device = Device::line("line", 2).unwrap();
+    let layout = Layout::from_pairs(&[(0, 0), (1, 1)], 2).unwrap();
+    let config = SabreConfig::deterministic_seeded(7);
     let mut circuit = Circuit::new(2);
     circuit
         .if_else(ConditionView::new(Qubit::new(0), 1), vec![], Some(vec![]))
@@ -242,9 +309,9 @@ fn empty_control_flow_bodies_route_without_layout_drift() {
 
 #[test]
 fn route_keeps_grid_adjacent_gates_without_swap() {
-    let device = grid_device(2, 2);
-    let layout = layout(&[(0, 0), (1, 1), (2, 2), (3, 3)], 4);
-    let config = deterministic_config();
+    let device = Device::grid("grid", 2, 2).unwrap();
+    let layout = Layout::from_pairs(&[(0, 0), (1, 1), (2, 2), (3, 3)], 4).unwrap();
+    let config = SabreConfig::deterministic_seeded(7);
     let mut circuit = Circuit::new(4);
     circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
     circuit.cx(Qubit::new(2), Qubit::new(3)).unwrap();
@@ -260,9 +327,9 @@ fn route_keeps_grid_adjacent_gates_without_swap() {
 
 #[test]
 fn route_handles_empty_and_single_qubit_circuits_without_swap() {
-    let device = line_device(2);
-    let layout = layout(&[(0, 0), (1, 1)], 2);
-    let config = deterministic_config();
+    let device = Device::line("line", 2).unwrap();
+    let layout = Layout::from_pairs(&[(0, 0), (1, 1)], 2).unwrap();
+    let config = SabreConfig::deterministic_seeded(7);
 
     let empty = Circuit::new(2);
     let empty_result = sabre_route(&empty, &device, &layout, &config).unwrap();
@@ -280,9 +347,9 @@ fn route_handles_empty_and_single_qubit_circuits_without_swap() {
 
 #[test]
 fn route_rejects_three_qubit_gate_before_routing() {
-    let device = line_device(3);
-    let layout = layout(&[(0, 0), (1, 1), (2, 2)], 3);
-    let config = deterministic_config();
+    let device = Device::line("line", 3).unwrap();
+    let layout = Layout::from_pairs(&[(0, 0), (1, 1), (2, 2)], 3).unwrap();
+    let config = SabreConfig::deterministic_seeded(7);
     let mut circuit = Circuit::new(3);
     circuit
         .ccx(Qubit::new(0), Qubit::new(1), Qubit::new(2))
@@ -297,9 +364,9 @@ fn route_rejects_three_qubit_gate_before_routing() {
 
 #[test]
 fn refine_layout_rejects_more_logical_than_physical_qubits() {
-    let device = line_device(1);
+    let device = Device::line("line", 1).unwrap();
     let objective = LayoutObjective::topology_only();
-    let config = deterministic_config();
+    let config = SabreConfig::deterministic_seeded(7);
     let mut circuit = Circuit::new(2);
     circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
 
@@ -312,9 +379,9 @@ fn refine_layout_rejects_more_logical_than_physical_qubits() {
 
 #[test]
 fn route_rejects_incomplete_initial_layout() {
-    let device = line_device(2);
-    let incomplete = layout(&[(0, 0)], 2);
-    let config = deterministic_config();
+    let device = Device::line("line", 2).unwrap();
+    let incomplete = Layout::from_pairs(&[(0, 0)], 2).unwrap();
+    let config = SabreConfig::deterministic_seeded(7);
     let mut circuit = Circuit::new(2);
     circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
 
@@ -339,8 +406,8 @@ fn route_disconnected_topology_errors_without_panic() {
         topology,
     )
     .unwrap();
-    let layout = layout(&[(0, 0), (1, 1)], 2);
-    let config = deterministic_config();
+    let layout = Layout::from_pairs(&[(0, 0), (1, 1)], 2).unwrap();
+    let config = SabreConfig::deterministic_seeded(7);
     let mut circuit = Circuit::new(2);
     circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
 
@@ -353,9 +420,9 @@ fn route_disconnected_topology_errors_without_panic() {
 
 #[test]
 fn route_preserves_parameterized_gate_parameters() {
-    let device = line_device(3);
-    let layout = layout(&[(0, 0), (1, 2)], 3);
-    let config = deterministic_config();
+    let device = Device::line("line", 3).unwrap();
+    let layout = Layout::from_pairs(&[(0, 0), (1, 2)], 3).unwrap();
+    let config = SabreConfig::deterministic_seeded(7);
     let theta = Parameter::symbol("theta");
     let mut circuit = Circuit::new(2);
     circuit
@@ -382,9 +449,9 @@ fn route_preserves_parameterized_gate_parameters() {
 
 #[test]
 fn route_preserves_multiple_parameters_and_global_phase() {
-    let device = line_device(3);
-    let layout = layout(&[(0, 0), (1, 2)], 3);
-    let config = deterministic_config();
+    let device = Device::line("line", 3).unwrap();
+    let layout = Layout::from_pairs(&[(0, 0), (1, 2)], 3).unwrap();
+    let config = SabreConfig::deterministic_seeded(7);
     let theta = Parameter::symbol("theta");
     let phi = Parameter::symbol("phi");
     let gamma = Parameter::symbol("gamma");
@@ -422,9 +489,9 @@ fn route_preserves_multiple_parameters_and_global_phase() {
 
 #[test]
 fn nested_control_flow_is_routed_and_restored() {
-    let device = line_device(3);
-    let layout = layout(&[(0, 0), (1, 2)], 3);
-    let config = deterministic_config();
+    let device = Device::line("line", 3).unwrap();
+    let layout = Layout::from_pairs(&[(0, 0), (1, 2)], 3).unwrap();
+    let config = SabreConfig::deterministic_seeded(7);
     let while_body = vec![cx_operation(0, 1)];
     let while_operation = Operation {
         instruction: Instruction::ControlFlowGate(ControlFlow::while_loop(
@@ -452,8 +519,8 @@ fn nested_control_flow_is_routed_and_restored() {
 
 #[test]
 fn routing_trials_select_no_worse_than_first_trial() {
-    let device = line_device(4);
-    let layout = layout(&[(0, 0), (1, 3), (2, 1)], 4);
+    let device = Device::line("line", 4).unwrap();
+    let layout = Layout::from_pairs(&[(0, 0), (1, 3), (2, 1)], 4).unwrap();
     let mut circuit = Circuit::new(3);
     circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
     circuit.cx(Qubit::new(2), Qubit::new(1)).unwrap();
@@ -466,7 +533,7 @@ fn routing_trials_select_no_worse_than_first_trial() {
         &SabreConfig {
             routing_trials: 1,
             seed: Some(19),
-            ..deterministic_config()
+            ..SabreConfig::deterministic_seeded(7)
         },
     )
     .unwrap();
@@ -477,7 +544,7 @@ fn routing_trials_select_no_worse_than_first_trial() {
         &SabreConfig {
             routing_trials: 5,
             seed: Some(19),
-            ..deterministic_config()
+            ..SabreConfig::deterministic_seeded(7)
         },
     )
     .unwrap();
@@ -488,14 +555,14 @@ fn routing_trials_select_no_worse_than_first_trial() {
 
 #[test]
 fn fallback_triggers_when_attempt_limit_is_zero() {
-    let device = line_device(4);
-    let layout = layout(&[(0, 0), (1, 3)], 4);
+    let device = Device::line("line", 4).unwrap();
+    let layout = Layout::from_pairs(&[(0, 0), (1, 3)], 4).unwrap();
     let config = SabreConfig {
         heuristic: SabreHeuristicConfig {
             attempt_limit: 0,
-            ..deterministic_config().heuristic
+            ..SabreConfig::deterministic_seeded(7).heuristic
         },
-        ..deterministic_config()
+        ..SabreConfig::deterministic_seeded(7)
     };
     let mut circuit = Circuit::new(2);
     circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
@@ -509,7 +576,7 @@ fn fallback_triggers_when_attempt_limit_is_zero() {
 
 #[test]
 fn refinement_with_multiple_iterations_is_no_worse_than_zero_iterations_for_seeded_case() {
-    let device = line_device(5);
+    let device = Device::line("line", 5).unwrap();
     let objective = LayoutObjective::topology_only();
     let mut circuit = Circuit::new(4);
     circuit.cx(Qubit::new(0), Qubit::new(3)).unwrap();
@@ -519,13 +586,13 @@ fn refinement_with_multiple_iterations_is_no_worse_than_zero_iterations_for_seed
         refinement_iterations: 0,
         routing_trials: 3,
         seed: Some(31),
-        ..deterministic_config()
+        ..SabreConfig::deterministic_seeded(7)
     };
     let refined = SabreConfig {
         refinement_iterations: 2,
         routing_trials: 3,
         seed: Some(31),
-        ..deterministic_config()
+        ..SabreConfig::deterministic_seeded(7)
     };
 
     let base_layout =
@@ -569,12 +636,12 @@ fn trial_objective_controls_quality_tie_breaking() {
 
 #[test]
 fn route_diagnostics_report_selected_quality_metrics() {
-    let device = line_device(3);
-    let layout = layout(&[(0, 0), (1, 2)], 3);
+    let device = Device::line("line", 3).unwrap();
+    let layout = Layout::from_pairs(&[(0, 0), (1, 2)], 3).unwrap();
     let config = SabreConfig {
         routing_trials: 3,
         seed: Some(11),
-        ..deterministic_config()
+        ..SabreConfig::deterministic_seeded(7)
     };
     let mut circuit = Circuit::new(2);
     circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
@@ -592,13 +659,13 @@ fn route_diagnostics_report_selected_quality_metrics() {
 
 #[test]
 fn layout_scoring_trials_must_be_positive() {
-    let device = line_device(2);
+    let device = Device::line("line", 2).unwrap();
     let objective = LayoutObjective::topology_only();
     let mut circuit = Circuit::new(2);
     circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
     let config = SabreConfig {
         layout_scoring_trials: 0,
-        ..deterministic_config()
+        ..SabreConfig::deterministic_seeded(7)
     };
 
     let error = sabre_refine_layout(&circuit, &device, None, &objective, &config).unwrap_err();
@@ -606,84 +673,6 @@ fn layout_scoring_trials_must_be_positive() {
     assert!(
         matches!(error, CompilerError::InvalidInput(message) if message.contains("layout_scoring_trials"))
     );
-}
-
-fn deterministic_config() -> SabreConfig {
-    SabreConfig {
-        layout_trials: 2,
-        refinement_iterations: 1,
-        layout_scoring_trials: 1,
-        routing_trials: 1,
-        trial_objective: SabreTrialObjective::SwapThenDepth,
-        seed: Some(7),
-        heuristic: SabreHeuristicConfig {
-            lookahead_weights: vec![0.5],
-            attempt_limit: 20,
-            ..SabreHeuristicConfig::default()
-        },
-    }
-}
-
-fn line_device(count: u32) -> Device {
-    let qubits = (0..count).map(PhysicalQubit::new).collect::<Vec<_>>();
-    let couplings = qubits
-        .windows(2)
-        .map(|window| (window[0], window[1], "cx".to_string()))
-        .collect::<Vec<_>>();
-    let topology = Topology::new(qubits.clone(), couplings).unwrap();
-    Device::new(
-        "line",
-        qubits.iter().copied().collect::<HashSet<_>>(),
-        topology,
-    )
-    .unwrap()
-}
-
-fn grid_device(rows: u32, cols: u32) -> Device {
-    let count = rows * cols;
-    let qubits = (0..count).map(PhysicalQubit::new).collect::<Vec<_>>();
-    let mut couplings = Vec::new();
-    for row in 0..rows {
-        for col in 0..cols {
-            let current = row * cols + col;
-            if col + 1 < cols {
-                couplings.push((
-                    PhysicalQubit::new(current),
-                    PhysicalQubit::new(current + 1),
-                    "cx".to_string(),
-                ));
-            }
-            if row + 1 < rows {
-                couplings.push((
-                    PhysicalQubit::new(current),
-                    PhysicalQubit::new(current + cols),
-                    "cx".to_string(),
-                ));
-            }
-        }
-    }
-    let topology = Topology::new(qubits.clone(), couplings).unwrap();
-    Device::new(
-        "grid",
-        qubits.iter().copied().collect::<HashSet<_>>(),
-        topology,
-    )
-    .unwrap()
-}
-
-fn layout(pairs: &[(u32, u32)], physical_count: u32) -> Layout {
-    let logical = pairs
-        .iter()
-        .map(|(logical, _)| LogicalQubit::new(*logical))
-        .collect::<Vec<_>>();
-    let physical = (0..physical_count)
-        .map(PhysicalQubit::new)
-        .collect::<Vec<_>>();
-    let mapping = pairs
-        .iter()
-        .map(|(logical, physical)| (LogicalQubit::new(*logical), PhysicalQubit::new(*physical)))
-        .collect::<BTreeMap<_, _>>();
-    Layout::new(logical, physical, Some(mapping)).unwrap()
 }
 
 fn are_adjacent(left: Qubit, right: Qubit) -> bool {

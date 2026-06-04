@@ -11,7 +11,6 @@
 // that they have been altered from the originals.
 
 use super::*;
-use crate::circuit::circuit_param::CircuitParam;
 use crate::circuit::circuit_to_matrix;
 use crate::circuit::gate::control_flow::{ConditionView, IfElseGate};
 use crate::circuit::gate::{ControlFlow, FrozenCircuit, UnitaryGate};
@@ -25,7 +24,6 @@ use crate::circuit::symbolic_matrix::matrix::{
 };
 use crate::circuit::symbolic_matrix::test_utils::assert_matrix_approx_eq;
 use crate::circuit::{Circuit, Directive, Instruction, ParameterValue, Qubit};
-use indexmap::IndexSet;
 use ndarray::{Array2, array};
 use num_complex::Complex64;
 use smallvec::smallvec;
@@ -425,27 +423,6 @@ fn test_zero_qubit_circuit_identity() {
 
     let numeric = circuit_to_matrix(&circuit, None).unwrap();
     assert_matrix_approx_eq(&evaluated, &numeric, 1e-12);
-}
-
-#[test]
-fn test_invalid_parameter_index_error() {
-    let qubits: IndexSet<Qubit> = [Qubit::new(0)].into_iter().collect();
-    let op = Operation {
-        instruction: Instruction::Standard(StandardGate::RX),
-        qubits: smallvec![Qubit::new(0)],
-        params: smallvec![CircuitParam::Index(999)],
-        label: None,
-    };
-    let circuit = Circuit::from_parts(
-        qubits,
-        IndexSet::new(),
-        IndexSet::new(),
-        vec![op],
-        CircuitParam::Fixed(0.0),
-    );
-
-    let err = circuit_to_symbolic_matrix(&circuit, None).unwrap_err();
-    assert!(matches!(err, CircuitError::InvalidParameterIndex(999)));
 }
 
 #[test]

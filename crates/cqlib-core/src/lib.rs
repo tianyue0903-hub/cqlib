@@ -22,7 +22,6 @@ pub mod qis;
 pub(crate) mod util;
 pub mod visualization;
 
-
 pub use error_mitigation::ErrorMitigation;
 pub use error_mitigation::ErrorMitigationError;
 pub use error_mitigation::ExtrapolateMethod;

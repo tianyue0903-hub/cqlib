@@ -16,8 +16,8 @@ use crate::circuit::{
     Circuit, Instruction, MCGate, ParameterValue, Qubit, StandardGate, circuit_to_matrix,
     operation::ValueOperation,
 };
-use crate::compiler::CompileResult;
-use crate::compiler::transform::decompose::mc_gate::Su2RotationAxis;
+use crate::compile::CompileResult;
+use crate::compile::transform::decompose::mc_gate::Su2RotationAxis;
 use crate::device::Device;
 use crate::qis::Statevector;
 use ndarray::Array2;

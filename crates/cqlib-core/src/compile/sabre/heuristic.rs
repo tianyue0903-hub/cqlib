@@ -130,6 +130,29 @@ impl Default for SabreConfig {
     }
 }
 
+impl SabreConfig {
+    /// Returns a compact deterministic SABRE configuration for reproducible tests and examples.
+    ///
+    /// This keeps all trial counts small, fixes the random seed, and uses a
+    /// bounded swap-attempt limit so small fixtures run quickly while still
+    /// exercising the SABRE routing path.
+    pub fn deterministic_seeded(seed: u64) -> Self {
+        Self {
+            layout_trials: 2,
+            refinement_iterations: 1,
+            layout_scoring_trials: 1,
+            routing_trials: 1,
+            trial_objective: SabreTrialObjective::SwapThenDepth,
+            seed: Some(seed),
+            heuristic: SabreHeuristicConfig {
+                lookahead_weights: vec![0.5],
+                attempt_limit: 20,
+                ..SabreHeuristicConfig::default()
+            },
+        }
+    }
+}
+
 impl SabreHeuristicConfig {
     pub(crate) fn validate(&self) -> Result<(), CompilerError> {
         validate_weight(self.basic_weight, "sabre basic_weight")?;

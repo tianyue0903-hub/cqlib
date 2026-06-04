@@ -36,6 +36,7 @@ pub use compiler::{CompileConfig, CompileMode, CompileResult, compile};
 pub use error::CompilerError;
 pub use sabre::{
     SabreCompileResult, SabreConfig, SabreHeuristicConfig, SabreRoutingDiagnostics,
-    SabreRoutingResult, sabre_layout_and_route, sabre_refine_layout, sabre_route,
+    SabreRoutingResult, normalize_initial_layout, sabre_layout_and_route, sabre_refine_layout,
+    sabre_route, validate_config, validate_reachable_interactions,
 };
 pub use workflow::{CompilerWorkflow, WorkflowStepReport};

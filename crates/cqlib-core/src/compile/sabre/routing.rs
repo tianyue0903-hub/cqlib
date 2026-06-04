@@ -102,9 +102,10 @@ pub fn sabre_route(
         .into_iter()
         .map(LogicalQubit::from_qubit)
         .collect::<Vec<_>>();
-    let initial_layout = normalize_initial_layout(&logical_qubits, &target, initial_layout)?;
+    let initial_layout =
+        normalize_initial_layout_for_target(&logical_qubits, &target, initial_layout)?;
     let sabre = SabreDag::from_operations(circuit.operations())?;
-    validate_reachable_interactions(&sabre, &target, &initial_layout)?;
+    validate_reachable_interactions_for_target(&sabre, &target, &initial_layout)?;
 
     let trial_results = trial_seeds(config.seed, config.routing_trials)
         .into_par_iter()
@@ -156,7 +157,8 @@ pub fn sabre_route(
     })
 }
 
-pub(crate) fn validate_config(config: &SabreConfig) -> Result<(), CompilerError> {
+/// Validates a SABRE configuration before layout refinement or routing.
+pub fn validate_config(config: &SabreConfig) -> Result<(), CompilerError> {
     if config.layout_trials == 0 {
         return Err(CompilerError::InvalidInput(
             "sabre layout_trials must be greater than zero".to_string(),
@@ -182,7 +184,7 @@ pub(crate) fn route_trial(
     heuristic: &SabreHeuristicConfig,
     seed: u64,
 ) -> Result<TrialResult, CompilerError> {
-    validate_reachable_interactions(sabre, target, initial_layout)?;
+    validate_reachable_interactions_for_target(sabre, target, initial_layout)?;
     route_trial_unchecked(sabre, target, initial_layout, heuristic, seed)
 }
 
@@ -295,7 +297,22 @@ pub(crate) fn trial_seeds(seed: Option<u64>, count: usize) -> Vec<u64> {
     (0..count).map(|_| rng.random()).collect()
 }
 
-pub(crate) fn normalize_initial_layout(
+/// Normalizes an initial layout against a device's usable physical topology.
+///
+/// The returned layout contains the supplied logical qubits and every usable
+/// physical qubit from `device`. Logical qubits must already be mapped by
+/// `initial_layout`; extra usable physical qubits remain vacant.
+pub fn normalize_initial_layout(
+    logical_qubits: &[LogicalQubit],
+    device: &Device,
+    initial_layout: &Layout,
+) -> Result<Layout, CompilerError> {
+    let physical = build_physical_layout_graph(device)?;
+    let target = RoutingTarget::from_physical(&physical)?;
+    normalize_initial_layout_for_target(logical_qubits, &target, initial_layout)
+}
+
+pub(crate) fn normalize_initial_layout_for_target(
     logical_qubits: &[LogicalQubit],
     target: &RoutingTarget,
     initial_layout: &Layout,
@@ -322,6 +339,30 @@ pub(crate) fn normalize_initial_layout(
     .map_err(|error| {
         CompilerError::InvalidInput(format!("sabre initial layout is invalid: {error}"))
     })
+}
+
+/// Validates that every two-qubit interaction in `circuit` is reachable.
+///
+/// The check uses the usable physical topology of `device` and the logical to
+/// physical mapping in `initial_layout`. It validates reachability, not current
+/// adjacency; non-adjacent but connected interactions can still be routed by
+/// SABRE.
+pub fn validate_reachable_interactions(
+    circuit: &Circuit,
+    device: &Device,
+    initial_layout: &Layout,
+) -> Result<(), CompilerError> {
+    let physical = build_physical_layout_graph(device)?;
+    let target = RoutingTarget::from_physical(&physical)?;
+    let logical_qubits = circuit
+        .qubits()
+        .into_iter()
+        .map(LogicalQubit::from_qubit)
+        .collect::<Vec<_>>();
+    let initial_layout =
+        normalize_initial_layout_for_target(&logical_qubits, &target, initial_layout)?;
+    let sabre = SabreDag::from_operations(circuit.operations())?;
+    validate_reachable_interactions_for_target(&sabre, &target, &initial_layout)
 }
 
 #[derive(Debug, Clone)]
@@ -1136,7 +1177,7 @@ fn physical_for(layout: &Layout, logical: LogicalQubit) -> Result<PhysicalQubit,
     })
 }
 
-pub(crate) fn validate_reachable_interactions(
+pub(crate) fn validate_reachable_interactions_for_target(
     sabre: &SabreDag,
     target: &RoutingTarget,
     layout: &Layout,
@@ -1153,13 +1194,13 @@ pub(crate) fn validate_reachable_interactions(
                 false_body,
                 ..
             }) => {
-                validate_reachable_interactions(true_body, target, layout)?;
+                validate_reachable_interactions_for_target(true_body, target, layout)?;
                 if let Some(false_body) = false_body {
-                    validate_reachable_interactions(false_body, target, layout)?;
+                    validate_reachable_interactions_for_target(false_body, target, layout)?;
                 }
             }
             SabreNodeKind::ControlFlow(SabreControlFlow::WhileLoop { body, .. }) => {
-                validate_reachable_interactions(body, target, layout)?;
+                validate_reachable_interactions_for_target(body, target, layout)?;
             }
             SabreNodeKind::Synchronize => {}
         }

@@ -121,6 +121,118 @@ fn line_device_creates_online_qubits_and_directed_topology() {
 }
 
 #[test]
+fn line_from_qubits_preserves_supplied_physical_ids_and_order() {
+    let p2 = PhysicalQubit::new(2);
+    let p5 = PhysicalQubit::new(5);
+    let p9 = PhysicalQubit::new(9);
+
+    let device = Device::line_from_qubits("line", vec![p5, p2, p9]).unwrap();
+
+    assert_eq!(device.qubits().collect::<Vec<_>>(), vec![p2, p5, p9]);
+    assert!(device.topology().supports_directed_coupling(p5, p2));
+    assert!(device.topology().supports_directed_coupling(p2, p9));
+    assert!(!device.topology().supports_directed_coupling(p2, p5));
+}
+
+#[test]
+fn bidirectional_line_device_adds_both_coupling_directions() {
+    let device = Device::bidirectional_line("line", 3).unwrap();
+
+    assert_eq!(device.topology().num_couplings(), 4);
+    assert!(
+        device
+            .topology()
+            .supports_directed_coupling(PhysicalQubit::new(0), PhysicalQubit::new(1))
+    );
+    assert!(
+        device
+            .topology()
+            .supports_directed_coupling(PhysicalQubit::new(1), PhysicalQubit::new(0))
+    );
+}
+
+#[test]
+fn ring_device_adds_unique_bidirectional_cycle_edges() {
+    let device = Device::ring("ring", 4).unwrap();
+
+    assert_eq!(device.topology().num_couplings(), 8);
+    assert!(
+        device
+            .topology()
+            .supports_directed_coupling(PhysicalQubit::new(3), PhysicalQubit::new(0))
+    );
+    assert!(
+        device
+            .topology()
+            .supports_directed_coupling(PhysicalQubit::new(0), PhysicalQubit::new(3))
+    );
+}
+
+#[test]
+fn star_device_connects_center_bidirectionally() {
+    let device = Device::star("star", 4, 2).unwrap();
+
+    assert_eq!(device.topology().num_couplings(), 6);
+    for leaf in [0, 1, 3] {
+        assert!(
+            device
+                .topology()
+                .supports_directed_coupling(PhysicalQubit::new(2), PhysicalQubit::new(leaf))
+        );
+        assert!(
+            device
+                .topology()
+                .supports_directed_coupling(PhysicalQubit::new(leaf), PhysicalQubit::new(2))
+        );
+    }
+}
+
+#[test]
+fn grid_device_uses_row_major_bidirectional_nearest_neighbors() {
+    let device = Device::grid("grid", 2, 3).unwrap();
+
+    assert_eq!(device.qubits().collect::<Vec<_>>().len(), 6);
+    assert_eq!(device.topology().num_couplings(), 14);
+    assert!(
+        device
+            .topology()
+            .supports_directed_coupling(PhysicalQubit::new(0), PhysicalQubit::new(1))
+    );
+    assert!(
+        device
+            .topology()
+            .supports_directed_coupling(PhysicalQubit::new(1), PhysicalQubit::new(0))
+    );
+    assert!(
+        device
+            .topology()
+            .supports_directed_coupling(PhysicalQubit::new(1), PhysicalQubit::new(4))
+    );
+    assert!(
+        !device
+            .topology()
+            .supports_directed_coupling(PhysicalQubit::new(0), PhysicalQubit::new(2))
+    );
+}
+
+#[test]
+fn from_edges_creates_explicit_directed_couplings() {
+    let device = Device::from_edges("custom", 3, &[(0, 2), (2, 1)]).unwrap();
+
+    assert_eq!(device.topology().num_couplings(), 2);
+    assert!(
+        device
+            .topology()
+            .supports_directed_coupling(PhysicalQubit::new(0), PhysicalQubit::new(2))
+    );
+    assert!(
+        !device
+            .topology()
+            .supports_directed_coupling(PhysicalQubit::new(2), PhysicalQubit::new(0))
+    );
+}
+
+#[test]
 fn test_device_errors() {
     let q0 = PhysicalQubit::new(0);
     let q1 = PhysicalQubit::new(1);

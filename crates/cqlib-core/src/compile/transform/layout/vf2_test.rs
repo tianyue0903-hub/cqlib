@@ -21,7 +21,7 @@ fn vf2_perfect_layout_maps_path_to_line() {
     let p0 = PhysicalQubit::new(0);
     let p1 = PhysicalQubit::new(1);
     let p2 = PhysicalQubit::new(2);
-    let device = line_device(vec![p0, p1, p2]);
+    let device = Device::line_from_qubits("line", vec![p0, p1, p2]).unwrap();
     let objective = LayoutObjective::topology_only();
 
     let mut circuit = Circuit::new(3);
@@ -38,10 +38,7 @@ fn vf2_perfect_layout_maps_path_to_line() {
 
 #[test]
 fn vf2_perfect_layout_uses_non_induced_subgraph_matching() {
-    let p0 = PhysicalQubit::new(0);
-    let p1 = PhysicalQubit::new(1);
-    let p2 = PhysicalQubit::new(2);
-    let device = device_from_couplings(vec![p0, p1, p2], vec![(p0, p1), (p1, p2), (p2, p0)]);
+    let device = Device::from_edges("device", 3, &[(0, 1), (1, 2), (2, 0)]).unwrap();
     let objective = LayoutObjective::topology_only();
 
     let mut circuit = Circuit::new(3);
@@ -60,7 +57,7 @@ fn vf2_perfect_layout_rejects_when_no_perfect_mapping_exists() {
     let p0 = PhysicalQubit::new(0);
     let p1 = PhysicalQubit::new(1);
     let p2 = PhysicalQubit::new(2);
-    let device = line_device(vec![p0, p1, p2]);
+    let device = Device::line_from_qubits("line", vec![p0, p1, p2]).unwrap();
     let objective = LayoutObjective::topology_only();
 
     let mut circuit = Circuit::new(3);
@@ -130,9 +127,7 @@ fn vf2_perfect_layout_uses_fidelity_objective_to_choose_candidate() {
 
 #[test]
 fn vf2_perfect_layout_keeps_direction_as_scoring_penalty() {
-    let p0 = PhysicalQubit::new(0);
-    let p1 = PhysicalQubit::new(1);
-    let device = device_from_couplings(vec![p0, p1], vec![(p1, p0)]);
+    let device = Device::from_edges("device", 2, &[(1, 0)]).unwrap();
     let objective = LayoutObjective::topology_only();
     let config = Vf2LayoutConfig {
         candidate_limit: 1,
@@ -154,7 +149,7 @@ fn vf2_perfect_layout_maps_idle_logical_qubits() {
     let p1 = PhysicalQubit::new(1);
     let p2 = PhysicalQubit::new(2);
     let p3 = PhysicalQubit::new(3);
-    let device = line_device(vec![p0, p1, p2, p3]);
+    let device = Device::line_from_qubits("line", vec![p0, p1, p2, p3]).unwrap();
     let objective = LayoutObjective::topology_only();
 
     let mut circuit = Circuit::new(3);
@@ -202,7 +197,7 @@ fn vf2_perfect_layout_scores_interaction_free_circuit() {
 #[test]
 fn vf2_perfect_layout_rejects_invalid_candidate_limit() {
     let p0 = PhysicalQubit::new(0);
-    let device = line_device(vec![p0]);
+    let device = Device::line_from_qubits("line", vec![p0]).unwrap();
     let objective = LayoutObjective::topology_only();
     let circuit = Circuit::new(1);
     let config = Vf2LayoutConfig {
@@ -222,7 +217,7 @@ fn vf2_perfect_layout_respects_candidate_limit() {
     let p0 = PhysicalQubit::new(0);
     let p1 = PhysicalQubit::new(1);
     let p2 = PhysicalQubit::new(2);
-    let device = line_device(vec![p0, p1, p2]);
+    let device = Device::line_from_qubits("line", vec![p0, p1, p2]).unwrap();
     let objective = LayoutObjective::topology_only();
     let config = Vf2LayoutConfig {
         candidate_limit: 1,
@@ -243,7 +238,7 @@ fn vf2_perfect_layout_reports_call_limit_exhaustion() {
     let p0 = PhysicalQubit::new(0);
     let p1 = PhysicalQubit::new(1);
     let p2 = PhysicalQubit::new(2);
-    let device = line_device(vec![p0, p1, p2]);
+    let device = Device::line_from_qubits("line", vec![p0, p1, p2]).unwrap();
     let objective = LayoutObjective::topology_only();
     let config = Vf2LayoutConfig {
         call_limit: Some(1),
@@ -264,7 +259,7 @@ fn vf2_perfect_layout_reports_call_limit_exhaustion() {
 #[test]
 fn vf2_perfect_layout_rejects_insufficient_physical_qubits() {
     let p0 = PhysicalQubit::new(0);
-    let device = line_device(vec![p0]);
+    let device = Device::line_from_qubits("line", vec![p0]).unwrap();
     let objective = LayoutObjective::topology_only();
     let circuit = Circuit::new(2);
 
@@ -274,29 +269,4 @@ fn vf2_perfect_layout_rejects_insufficient_physical_qubits() {
     assert!(
         matches!(error, CompilerError::InvalidInput(message) if message.contains("2 logical qubits") && message.contains("1 usable physical qubits"))
     );
-}
-
-fn line_device(qubits: Vec<PhysicalQubit>) -> Device {
-    let couplings = qubits
-        .windows(2)
-        .map(|window| (window[0], window[1]))
-        .collect::<Vec<_>>();
-    device_from_couplings(qubits, couplings)
-}
-
-fn device_from_couplings(
-    qubits: Vec<PhysicalQubit>,
-    couplings: Vec<(PhysicalQubit, PhysicalQubit)>,
-) -> Device {
-    let coupling_map = couplings
-        .into_iter()
-        .map(|(control, target)| (control, target, "cx".to_string()))
-        .collect::<Vec<_>>();
-    let topology = Topology::new(qubits.clone(), coupling_map).unwrap();
-    Device::new(
-        "device",
-        qubits.iter().copied().collect::<HashSet<_>>(),
-        topology,
-    )
-    .unwrap()
 }

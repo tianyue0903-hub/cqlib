@@ -237,7 +237,7 @@ fn test_from_circuit_rejects_non_clifford_gate_set() {
                     [Complex64::new(1.0, 0.0), Complex64::new(0.0, 0.0)],
                     [Complex64::new(0.0, 0.0), Complex64::new(0.0, 1.0)]
                 ];
-                let gate = UnitaryGate::new("S_like_custom", 1)
+                let gate = UnitaryGate::new("S_like_custom", 1, 0)
                     .with_matrix(mat)
                     .unwrap();
                 c.unitary(gate, vec![0.into()]).unwrap();

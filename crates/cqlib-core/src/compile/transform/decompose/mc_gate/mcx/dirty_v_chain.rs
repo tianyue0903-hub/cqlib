@@ -12,7 +12,7 @@
 
 //! I15 MCX synthesis using a dirty-ancilla V-chain.
 //!
-//! This module implements the linear-size construction described by Iten et
+//! This module implements the linear-size construction described by Item et
 //! al., *Quantum Circuits for Isometries*, Phys. Rev. A 93, 032318 (2016),
 //! [arXiv:1501.06911](https://arxiv.org/abs/1501.06911). For an MCX with `k >=
 //! 3` controls, the construction consumes `k - 2` borrowed dirty ancillas.
@@ -62,7 +62,7 @@ enum DirtyVChainMode {
 /// ancillary qubits are ignored. Inputs with at most two controls delegate to
 /// [`decompose_mcx_small`] and do not consume ancillas.
 ///
-/// The construction follows Iten et al., *Quantum Circuits for Isometries*,
+/// The construction follows Item et al., *Quantum Circuits for Isometries*,
 /// Phys. Rev. A 93, 032318 (2016),
 /// [arXiv:1501.06911](https://arxiv.org/abs/1501.06911).
 ///
