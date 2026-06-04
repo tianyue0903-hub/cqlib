@@ -14,12 +14,14 @@ extern crate alloc;
 extern crate core;
 
 pub mod circuit;
-// pub mod compile;
+pub mod compile;
 pub mod device;
 pub mod error_mitigation;
 pub mod ir;
 pub mod qis;
 pub(crate) mod util;
+pub mod visualization;
+
 
 pub use error_mitigation::ErrorMitigation;
 pub use error_mitigation::ErrorMitigationError;
@@ -32,7 +34,3 @@ pub use error_mitigation::VirtualDistillation;
 pub use error_mitigation::VirtualDistillationConfig;
 pub use error_mitigation::ZNEMitigation;
 pub use error_mitigation::ZneConfig;
-
-pub mod visualization;
-
-pub mod compiler;

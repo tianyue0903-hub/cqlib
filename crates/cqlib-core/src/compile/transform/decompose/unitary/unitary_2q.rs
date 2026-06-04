@@ -1,0 +1,545 @@
+// This code is part of Cqlib.
+//
+// (C) Copyright China Telecom Quantum Group 2025-2026
+//
+// This code is licensed under the Apache License, Version 2.0. You may
+// obtain a copy of this license in the LICENSE.txt file in the root directory
+// of this source tree or at http://www.apache.org/licenses/LICENSE-2.0.
+//
+// Any modifications or derivative works of this code must retain this
+// copyright notice, and modified files need to carry a notice indicating
+// that they have been altered from the originals.
+
+//! Numeric two-qubit unitary synthesis.
+//!
+//! This module converts a concrete 4x4 unitary matrix into standard-gate
+//! operations over two supplied qubits plus a scalar global phase. The
+//! circuit-agnostic `kak_decompose` primitive first factors the matrix into
+//! local single-qubit matrices and a Cartan interaction. This layer then emits
+//! the factors in the output basis selected by
+//! [`TwoQubitUnitaryDecomposeBasis`].
+//!
+//! Local factors are lowered through the one-qubit synthesizer and emitted as
+//! [`StandardGate::U`] operations. Numerically trivial local gates and
+//! interaction rotations are omitted using `ANGLE_EPS`, while their scalar
+//! phases remain accumulated in the returned phase.
+//!
+//! The `PauliRotations` backend emits the Cartan core directly as
+//! `RXX`/`RYY`/`RZZ`. The `Cx` backend deterministically selects among templates
+//! containing zero through three `CX` gates using an average-fidelity score. A
+//! higher-count template is selected only when its score improves by more than
+//! `1e-12`, so near-boundary inputs may intentionally keep a lower-count
+//! approximation.
+
+use super::two_qubit_kak::{KakDecomposition, kak_decompose};
+use super::unitary_1q::synthesize_numeric_1q_unitary;
+use crate::circuit::gate::gate_matrix::rz_gate;
+use crate::circuit::{CircuitParam, Instruction, Operation, Qubit, StandardGate};
+use crate::compile::CompilerError;
+use crate::util::matrix::{c, dagger, mat2};
+use ndarray::Array2;
+use num_complex::Complex64;
+use smallvec::smallvec;
+use std::f64::consts::{FRAC_1_SQRT_2, FRAC_PI_4, PI};
+
+const ANGLE_EPS: f64 = 1e-12;
+const FIDELITY_IMPROVEMENT_EPS: f64 = 1e-12;
+
+/// Output basis used for two-qubit unitary synthesis.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TwoQubitUnitaryDecomposeBasis {
+    /// Emit local `U` gates plus `RXX/RYY/RZZ` for the Cartan core.
+    PauliRotations,
+    /// Emit local `U` gates plus optimized `CX` templates.
+    Cx,
+}
+
+pub(super) fn synthesize_numeric_2q_unitary(
+    matrix: &Array2<Complex64>,
+    qubits: [Qubit; 2],
+    basis: TwoQubitUnitaryDecomposeBasis,
+) -> Result<(Vec<Operation>, f64), CompilerError> {
+    let decomp = kak_decompose(matrix)?;
+    let mut builder = OperationBuilder::default();
+    match basis {
+        TwoQubitUnitaryDecomposeBasis::PauliRotations => {
+            emit_pauli_rotations(&mut builder, &decomp, qubits[0], qubits[1])?
+        }
+        TwoQubitUnitaryDecomposeBasis::Cx => emit_cx(&mut builder, &decomp, qubits[0], qubits[1])?,
+    }
+    Ok((builder.operations, builder.global_phase))
+}
+
+#[derive(Default)]
+struct OperationBuilder {
+    operations: Vec<Operation>,
+    global_phase: f64,
+}
+
+impl OperationBuilder {
+    fn push_local_u(
+        &mut self,
+        qubit: Qubit,
+        matrix: &Array2<Complex64>,
+    ) -> Result<(), CompilerError> {
+        let ([theta, phi, lambda], global_phase) = synthesize_numeric_1q_unitary(matrix)?;
+        self.global_phase += global_phase;
+        if theta.abs() <= ANGLE_EPS && phi.abs() <= ANGLE_EPS && lambda.abs() <= ANGLE_EPS {
+            return Ok(());
+        }
+
+        self.operations.push(Operation {
+            instruction: Instruction::Standard(StandardGate::U),
+            qubits: smallvec![qubit],
+            params: smallvec![
+                CircuitParam::Fixed(theta),
+                CircuitParam::Fixed(phi),
+                CircuitParam::Fixed(lambda)
+            ],
+            label: None,
+        });
+        Ok(())
+    }
+
+    fn push_rotation(&mut self, gate: StandardGate, first: Qubit, second: Qubit, theta: f64) {
+        if theta.abs() <= ANGLE_EPS {
+            return;
+        }
+
+        self.operations.push(Operation {
+            instruction: Instruction::Standard(gate),
+            qubits: smallvec![first, second],
+            params: smallvec![CircuitParam::Fixed(theta)],
+            label: None,
+        });
+    }
+
+    fn push_cx(&mut self, control: Qubit, target: Qubit) {
+        self.operations.push(Operation {
+            instruction: Instruction::Standard(StandardGate::CX),
+            qubits: smallvec![control, target],
+            params: smallvec![],
+            label: None,
+        });
+    }
+}
+
+fn emit_pauli_rotations(
+    builder: &mut OperationBuilder,
+    decomp: &KakDecomposition,
+    first: Qubit,
+    second: Qubit,
+) -> Result<(), CompilerError> {
+    builder.global_phase += decomp.global_phase;
+    builder.push_local_u(first, &decomp.k2l)?;
+    builder.push_local_u(second, &decomp.k2r)?;
+    builder.push_rotation(StandardGate::RXX, first, second, -2.0 * decomp.a);
+    builder.push_rotation(StandardGate::RYY, first, second, -2.0 * decomp.b);
+    builder.push_rotation(StandardGate::RZZ, first, second, -2.0 * decomp.c);
+    builder.push_local_u(first, &decomp.k1l)?;
+    builder.push_local_u(second, &decomp.k1r)?;
+    Ok(())
+}
+
+fn emit_cx(
+    builder: &mut OperationBuilder,
+    target: &KakDecomposition,
+    first: Qubit,
+    second: Qubit,
+) -> Result<(), CompilerError> {
+    let basis = CxBasisData::new()?;
+    let num_cx = basis.num_basis_gates(target);
+    let locals = basis.local_decomposition(target, num_cx);
+
+    builder.global_phase += target.global_phase - num_cx as f64 * basis.global_phase;
+    if num_cx == 2 {
+        builder.global_phase += PI;
+    }
+
+    for i in 0..num_cx {
+        builder.push_local_u(first, &locals[2 * i + 1])?;
+        builder.push_local_u(second, &locals[2 * i])?;
+        builder.push_cx(first, second);
+    }
+    builder.push_local_u(first, &locals[2 * num_cx + 1])?;
+    builder.push_local_u(second, &locals[2 * num_cx])?;
+    Ok(())
+}
+
+struct CxBasisData {
+    basis: KakDecomposition,
+    u0l: Array2<Complex64>,
+    u0r: Array2<Complex64>,
+    u1l: Array2<Complex64>,
+    u1ra: Array2<Complex64>,
+    u1rb: Array2<Complex64>,
+    u2la: Array2<Complex64>,
+    u2lb: Array2<Complex64>,
+    u2ra: Array2<Complex64>,
+    u2rb: Array2<Complex64>,
+    u3l: Array2<Complex64>,
+    u3r: Array2<Complex64>,
+    q0l: Array2<Complex64>,
+    q0r: Array2<Complex64>,
+    q1la: Array2<Complex64>,
+    q1lb: Array2<Complex64>,
+    q1ra: Array2<Complex64>,
+    q1rb: Array2<Complex64>,
+    q2l: Array2<Complex64>,
+    q2r: Array2<Complex64>,
+    global_phase: f64,
+}
+
+impl CxBasisData {
+    fn new() -> Result<Self, CompilerError> {
+        let cx = StandardGate::CX
+            .matrix(&[])
+            .map_err(|e| CompilerError::InvalidInput(e.to_string()))?;
+        let basis = kak_decompose(cx.as_ref())?;
+        let b = basis.b;
+
+        // Closed-form local-equivalence templates for realizing a target KAK
+        // point with 0, 1, 2, or 3 CX basis gates. The matrices below are the
+        // fixed local corrections around the CX basis KAK coordinates; the
+        // target-specific angles are injected later in `local_decomposition`.
+        let k12r = mat2(
+            c(0.0, FRAC_1_SQRT_2),
+            c(FRAC_1_SQRT_2, 0.0),
+            c(-FRAC_1_SQRT_2, 0.0),
+            c(0.0, -FRAC_1_SQRT_2),
+        );
+        let k12r_dg = dagger(&k12r);
+        let k12l = mat2(c(0.5, 0.5), c(0.5, 0.5), c(-0.5, 0.5), c(0.5, -0.5));
+        let k12l_dg = dagger(&k12l);
+        let k22l = mat2(
+            c(FRAC_1_SQRT_2, 0.0),
+            c(-FRAC_1_SQRT_2, 0.0),
+            c(FRAC_1_SQRT_2, 0.0),
+            c(FRAC_1_SQRT_2, 0.0),
+        );
+        let k22r = mat2(c(0.0, 0.0), c(1.0, 0.0), c(-1.0, 0.0), c(0.0, 0.0));
+        let ipz = mat2(c(0.0, 1.0), c(0.0, 0.0), c(0.0, 0.0), c(0.0, -1.0));
+
+        let exp_pos_b = Complex64::from_polar(1.0, b);
+        let exp_neg_b = Complex64::from_polar(1.0, -b);
+        let exp_pos_2b = Complex64::from_polar(1.0, 2.0 * b);
+        let exp_neg_2b = Complex64::from_polar(1.0, -2.0 * b);
+        let i = c(0.0, 1.0);
+        let minus_i = c(0.0, -1.0);
+
+        let k11l = mat2(
+            c(0.5, -0.5) * minus_i * exp_neg_b,
+            c(0.5, -0.5) * exp_neg_b,
+            c(0.5, -0.5) * minus_i * exp_pos_b,
+            c(0.5, -0.5) * -exp_pos_b,
+        );
+        let k11r = mat2(
+            c(FRAC_1_SQRT_2, 0.0) * i * exp_neg_b,
+            c(FRAC_1_SQRT_2, 0.0) * -exp_neg_b,
+            c(FRAC_1_SQRT_2, 0.0) * exp_pos_b,
+            c(FRAC_1_SQRT_2, 0.0) * minus_i * exp_pos_b,
+        );
+        let k32l_k21l = mat2(
+            c(FRAC_1_SQRT_2, 0.0) * c(1.0, (2.0 * b).cos()),
+            c(FRAC_1_SQRT_2, 0.0) * i * c((2.0 * b).sin(), 0.0),
+            c(FRAC_1_SQRT_2, 0.0) * i * c((2.0 * b).sin(), 0.0),
+            c(FRAC_1_SQRT_2, 0.0) * c(1.0, -(2.0 * b).cos()),
+        );
+        let k21r = mat2(
+            c(0.5, 0.5) * minus_i * exp_neg_2b,
+            c(0.5, 0.5) * exp_neg_2b,
+            c(0.5, 0.5) * i * exp_pos_2b,
+            c(0.5, 0.5) * exp_pos_2b,
+        );
+        let k31l = mat2(
+            c(FRAC_1_SQRT_2, 0.0) * exp_neg_b,
+            c(FRAC_1_SQRT_2, 0.0) * exp_neg_b,
+            c(FRAC_1_SQRT_2, 0.0) * -exp_pos_b,
+            c(FRAC_1_SQRT_2, 0.0) * exp_pos_b,
+        );
+        let k31r = mat2(i * exp_pos_b, c(0.0, 0.0), c(0.0, 0.0), minus_i * exp_neg_b);
+        let k32r = mat2(
+            c(0.5, 0.5) * exp_pos_b,
+            c(0.5, 0.5) * -exp_neg_b,
+            c(0.5, 0.5) * minus_i * exp_pos_b,
+            c(0.5, 0.5) * minus_i * exp_neg_b,
+        );
+
+        let k1ld = dagger(&basis.k1l);
+        let k1rd = dagger(&basis.k1r);
+        let k2ld = dagger(&basis.k2l);
+        let k2rd = dagger(&basis.k2r);
+
+        let u0l = k31l.dot(&k1ld);
+        let u0r = k31r.dot(&k1rd);
+        let u1l = k2ld.dot(&k32l_k21l.dot(&k1ld));
+        let u1ra = k2rd.dot(&k32r);
+        let u1rb = k21r.dot(&k1rd);
+        let u2la = k2ld.dot(&k22l);
+        let u2lb = k11l.dot(&k1ld);
+        let u2ra = k2rd.dot(&k22r);
+        let u2rb = k11r.dot(&k1rd);
+        let u3l = k2ld.dot(&k12l);
+        let u3r = k2rd.dot(&k12r);
+        let q0l = k12l_dg.dot(&k1ld);
+        let q0r = k12r_dg.dot(&ipz.dot(&k1rd));
+        let q1la = k2ld.dot(&dagger(&k11l));
+        let q1lb = k11l.dot(&k1ld);
+        let q1ra = k2rd.dot(&ipz.dot(&dagger(&k11r)));
+        let q1rb = k11r.dot(&k1rd);
+        let q2l = k2ld.dot(&k12l);
+        let q2r = k2rd.dot(&k12r);
+        let global_phase = basis.global_phase;
+
+        Ok(Self {
+            basis,
+            u0l,
+            u0r,
+            u1l,
+            u1ra,
+            u1rb,
+            u2la,
+            u2lb,
+            u2ra,
+            u2rb,
+            u3l,
+            u3r,
+            q0l,
+            q0r,
+            q1la,
+            q1lb,
+            q1ra,
+            q1rb,
+            q2l,
+            q2r,
+            global_phase,
+        })
+    }
+
+    fn num_basis_gates(&self, target: &KakDecomposition) -> usize {
+        let traces = [
+            c(
+                4.0 * target.a.cos() * target.b.cos() * target.c.cos(),
+                4.0 * target.a.sin() * target.b.sin() * target.c.sin(),
+            ),
+            c(
+                4.0 * (FRAC_PI_4 - target.a).cos()
+                    * (self.basis.b - target.b).cos()
+                    * target.c.cos(),
+                4.0 * (FRAC_PI_4 - target.a).sin()
+                    * (self.basis.b - target.b).sin()
+                    * target.c.sin(),
+            ),
+            c(4.0 * target.c.cos(), 0.0),
+            c(4.0, 0.0),
+        ];
+
+        let mut best_index = 0usize;
+        let mut best_fidelity = (4.0 + traces[0].norm_sqr()) / 20.0;
+        for (index, trace) in traces.iter().enumerate().skip(1) {
+            let fidelity = (4.0 + trace.norm_sqr()) / 20.0;
+            if fidelity > best_fidelity + FIDELITY_IMPROVEMENT_EPS {
+                best_index = index;
+                best_fidelity = fidelity;
+            }
+        }
+        best_index
+    }
+
+    fn local_decomposition(
+        &self,
+        target: &KakDecomposition,
+        num_cx: usize,
+    ) -> Vec<Array2<Complex64>> {
+        match num_cx {
+            0 => vec![target.k1r.dot(&target.k2r), target.k1l.dot(&target.k2l)],
+            1 => vec![
+                dagger(&self.basis.k2r).dot(&target.k2r),
+                dagger(&self.basis.k2l).dot(&target.k2l),
+                target.k1r.dot(&dagger(&self.basis.k1r)),
+                target.k1l.dot(&dagger(&self.basis.k1l)),
+            ],
+            2 => vec![
+                self.q2r.dot(&target.k2r),
+                self.q2l.dot(&target.k2l),
+                self.q1ra.dot(&rz_gate(2.0 * target.b).dot(&self.q1rb)),
+                self.q1la.dot(&rz_gate(-2.0 * target.a).dot(&self.q1lb)),
+                target.k1r.dot(&self.q0r),
+                target.k1l.dot(&self.q0l),
+            ],
+            3 => vec![
+                self.u3r.dot(&target.k2r),
+                self.u3l.dot(&target.k2l),
+                self.u2ra.dot(&rz_gate(2.0 * target.b).dot(&self.u2rb)),
+                self.u2la.dot(&rz_gate(-2.0 * target.a).dot(&self.u2lb)),
+                self.u1ra.dot(&rz_gate(-2.0 * target.c).dot(&self.u1rb)),
+                self.u1l.clone(),
+                target.k1r.dot(&self.u0r),
+                target.k1l.dot(&self.u0l),
+            ],
+            _ => unreachable!("CX decomposer supports at most 3 basis gates"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::circuit::{Circuit, Parameter, ParameterValue, UnitaryGate, circuit_to_matrix};
+    use approx::assert_abs_diff_eq;
+    use ndarray::linalg::kron;
+
+    fn synthesized_output(
+        matrix: &Array2<Complex64>,
+        basis: TwoQubitUnitaryDecomposeBasis,
+    ) -> (Circuit, Array2<Complex64>, Array2<Complex64>) {
+        let gate = UnitaryGate::new("source_2q", 2, 0)
+            .with_matrix(matrix.clone())
+            .unwrap();
+        let mut source = Circuit::new(2);
+        source
+            .unitary(gate, vec![Qubit::new(0), Qubit::new(1)])
+            .unwrap();
+        let expected = circuit_to_matrix(&source, None).unwrap();
+
+        let (operations, phase) =
+            synthesize_numeric_2q_unitary(matrix, [Qubit::new(0), Qubit::new(1)], basis).unwrap();
+        let mut circuit = Circuit::new(2);
+        for operation in operations {
+            let params = operation
+                .params
+                .iter()
+                .map(|param| match param {
+                    CircuitParam::Fixed(value) => ParameterValue::Fixed(*value),
+                    CircuitParam::Index(index) => {
+                        panic!("numeric 2q synthesis emitted unexpected parameter index {index}")
+                    }
+                })
+                .collect::<Vec<_>>();
+            circuit
+                .append(
+                    operation.instruction,
+                    operation.qubits,
+                    params,
+                    operation.label.as_deref(),
+                )
+                .unwrap();
+        }
+        circuit.set_global_phase(Parameter::from(phase));
+        let matrix = if circuit.operations().is_empty() {
+            let phase = Complex64::from_polar(1.0, phase);
+            Array2::eye(4).mapv(|value: Complex64| phase * value)
+        } else {
+            circuit_to_matrix(&circuit, None).unwrap()
+        };
+        (circuit, expected, matrix)
+    }
+
+    fn count_gate(circuit: &Circuit, gate: StandardGate) -> usize {
+        circuit
+            .operations()
+            .iter()
+            .filter(|operation| matches!(operation.instruction, Instruction::Standard(actual) if actual == gate))
+            .count()
+    }
+
+    #[test]
+    fn pauli_backend_reconstructs_common_2q_unitaries() {
+        let phase = Complex64::from_polar(1.0, 0.37);
+        let cases = [
+            StandardGate::CX.matrix(&[]).unwrap().into_owned(),
+            StandardGate::CZ.matrix(&[]).unwrap().into_owned(),
+            StandardGate::SWAP.matrix(&[]).unwrap().into_owned(),
+            StandardGate::FSIM
+                .matrix(&[0.2, -0.3])
+                .unwrap()
+                .into_owned(),
+            StandardGate::CX
+                .matrix(&[])
+                .unwrap()
+                .into_owned()
+                .mapv(|value| phase * value),
+        ];
+
+        for matrix in cases {
+            let (decomposed, before, after) =
+                synthesized_output(&matrix, TwoQubitUnitaryDecomposeBasis::PauliRotations);
+
+            assert!(decomposed.operations().iter().all(|operation| matches!(
+                operation.instruction,
+                Instruction::Standard(StandardGate::U)
+                    | Instruction::Standard(StandardGate::RXX)
+                    | Instruction::Standard(StandardGate::RYY)
+                    | Instruction::Standard(StandardGate::RZZ)
+            )));
+            assert_abs_diff_eq!(before, after, epsilon = 1e-8);
+        }
+    }
+
+    #[test]
+    fn cx_backend_uses_expected_exact_cx_counts() {
+        let rxx = StandardGate::RXX.matrix(&[0.7]).unwrap().into_owned();
+        let ryy = StandardGate::RYY.matrix(&[-0.4]).unwrap().into_owned();
+        let two_cx_matrix = rxx.dot(&ryy);
+        let cases = [
+            (Array2::eye(4), 0usize),
+            (StandardGate::CX.matrix(&[]).unwrap().into_owned(), 1usize),
+            (two_cx_matrix, 2usize),
+            (StandardGate::SWAP.matrix(&[]).unwrap().into_owned(), 3usize),
+        ];
+
+        for (matrix, expected_cx) in cases {
+            let (decomposed, before, after) =
+                synthesized_output(&matrix, TwoQubitUnitaryDecomposeBasis::Cx);
+
+            assert_eq!(count_gate(&decomposed, StandardGate::CX), expected_cx);
+            assert!(decomposed.operations().iter().all(|operation| matches!(
+                operation.instruction,
+                Instruction::Standard(StandardGate::U) | Instruction::Standard(StandardGate::CX)
+            )));
+            assert_abs_diff_eq!(before, after, epsilon = 1e-8);
+        }
+    }
+
+    #[test]
+    fn cx_backend_preserves_near_zero_entangling_rotation() {
+        let matrix = StandardGate::RXX.matrix(&[-1.0e-5]).unwrap().into_owned();
+        let (decomposed, before, after) =
+            synthesized_output(&matrix, TwoQubitUnitaryDecomposeBasis::Cx);
+
+        assert_abs_diff_eq!(before, after, epsilon = 1e-8);
+        assert_eq!(count_gate(&decomposed, StandardGate::CX), 2);
+    }
+
+    #[test]
+    fn pauli_backend_preserves_asymmetric_local_product() {
+        let left = StandardGate::U.matrix(&[0.3, -0.4, 0.5]).unwrap();
+        let right = StandardGate::U.matrix(&[0.7, 0.2, -0.6]).unwrap();
+        let matrix = kron(left.as_ref(), right.as_ref());
+        let (_, before, after) =
+            synthesized_output(&matrix, TwoQubitUnitaryDecomposeBasis::PauliRotations);
+
+        assert_abs_diff_eq!(before, after, epsilon = 1e-8);
+    }
+
+    #[test]
+    fn backends_preserve_asymmetric_locals_around_cartan_core() {
+        let k1l = StandardGate::U.matrix(&[0.2, -0.4, 0.9]).unwrap();
+        let k1r = StandardGate::U.matrix(&[1.0, 0.8, -0.7]).unwrap();
+        let k2l = StandardGate::U.matrix(&[0.7, -0.5, 0.1]).unwrap();
+        let k2r = StandardGate::U.matrix(&[0.3, 0.6, -0.2]).unwrap();
+        let rxx = StandardGate::RXX.matrix(&[-0.62]).unwrap();
+        let ryy = StandardGate::RYY.matrix(&[-0.34]).unwrap();
+        let rzz = StandardGate::RZZ.matrix(&[0.16]).unwrap();
+        let matrix = kron(k1l.as_ref(), k1r.as_ref())
+            .dot(&rxx.dot(&ryy.dot(&rzz.dot(&kron(k2l.as_ref(), k2r.as_ref())))));
+
+        for basis in [
+            TwoQubitUnitaryDecomposeBasis::PauliRotations,
+            TwoQubitUnitaryDecomposeBasis::Cx,
+        ] {
+            let (_, before, after) = synthesized_output(&matrix, basis);
+            assert_abs_diff_eq!(before, after, epsilon = 1e-8);
+        }
+    }
+}
