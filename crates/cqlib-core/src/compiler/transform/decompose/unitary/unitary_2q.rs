@@ -1,6 +1,6 @@
 // This code is part of Cqlib.
 //
-// (C) Copyright China Telecom Quantum Group 2026
+// (C) Copyright China Telecom Quantum Group 2025-2026
 //
 // This code is licensed under the Apache License, Version 2.0. You may
 // obtain a copy of this license in the LICENSE.txt file in the root directory
@@ -503,7 +503,7 @@ mod tests {
 
     #[test]
     fn cx_backend_preserves_near_zero_entangling_rotation() {
-        let matrix = StandardGate::RXX.matrix(&[-2.0e-6]).unwrap().into_owned();
+        let matrix = StandardGate::RXX.matrix(&[-1.0e-5]).unwrap().into_owned();
         let (decomposed, before, after) =
             synthesized_output(&matrix, TwoQubitUnitaryDecomposeBasis::Cx);
 

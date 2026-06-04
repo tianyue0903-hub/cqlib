@@ -1,6 +1,6 @@
 // This code is part of Cqlib.
 //
-// (C) Copyright China Telecom Quantum Group 2026
+// (C) Copyright China Telecom Quantum Group 2025-2026
 //
 // This code is licensed under the Apache License, Version 2.0. You may
 // obtain a copy of this license in the LICENSE.txt file in the root directory
@@ -31,5 +31,5 @@ pub use rewrite::{
     KnowledgeRewriteResult, KnowledgeRewriteStats, KnowledgeRewriter, RewriteConfig, RewriteMode,
     rewrite_circuit,
 };
-pub use routing::sabre::{RoutingResult, route_sabre};
+pub use routing::{RoutingResult, route_sabre};
 pub use transformer::{TransformResult, Transformer};

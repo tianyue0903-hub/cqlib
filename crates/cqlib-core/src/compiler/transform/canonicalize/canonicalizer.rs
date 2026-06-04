@@ -1,6 +1,6 @@
 // This code is part of Cqlib.
 //
-// (C) Copyright China Telecom Quantum Group 2026
+// (C) Copyright China Telecom Quantum Group 2025-2026
 //
 // This code is licensed under the Apache License, Version 2.0. You may
 // obtain a copy of this license in the LICENSE.txt file in the root directory
@@ -72,6 +72,21 @@ impl Canonicalizer {
     }
 
     /// Canonicalizes `circuit` and returns the rebuilt circuit plus run metadata.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use cqlib_core::circuit::{Circuit, Qubit};
+    /// use cqlib_core::compiler::transform::Canonicalizer;
+    ///
+    /// let mut circuit = Circuit::new(1);
+    /// circuit.h(Qubit::new(0)).unwrap();
+    ///
+    /// let result = Canonicalizer::production().run(&circuit).unwrap();
+    /// assert_eq!(result.circuit.qubits(), circuit.qubits());
+    /// assert!(result.rounds >= 1);
+    /// let _changed = result.changed;
+    /// ```
     pub fn run(&self, circuit: &Circuit) -> Result<CanonicalizeResult, CompilerError> {
         verify_circuit(circuit, VerifyMode::Input)?;
 
@@ -113,6 +128,8 @@ impl Canonicalizer {
     }
 }
 
+// Transformer integration keeps only the common circuit/changed shape; callers
+// that need canonicalization rounds should use `Canonicalizer::run` directly.
 impl Transformer for Canonicalizer {
     fn transform(&self, circuit: &Circuit) -> Result<TransformResult, CompilerError> {
         let result = self.run(circuit)?;

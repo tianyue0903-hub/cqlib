@@ -97,6 +97,30 @@ fn test_device_creation_and_defaults() {
 }
 
 #[test]
+fn line_device_creates_online_qubits_and_directed_topology() {
+    let device = Device::line("line", 3).unwrap();
+
+    assert_eq!(device.name(), "line");
+    assert_eq!(device.qubits().count(), 3);
+    assert_eq!(device.num_usable_qubits(), 3);
+    assert!(
+        device
+            .topology()
+            .supports_directed_coupling(PhysicalQubit::new(0), PhysicalQubit::new(1))
+    );
+    assert!(
+        device
+            .topology()
+            .supports_directed_coupling(PhysicalQubit::new(1), PhysicalQubit::new(2))
+    );
+    assert!(
+        !device
+            .topology()
+            .supports_directed_coupling(PhysicalQubit::new(1), PhysicalQubit::new(0))
+    );
+}
+
+#[test]
 fn test_device_errors() {
     let q0 = PhysicalQubit::new(0);
     let q1 = PhysicalQubit::new(1);

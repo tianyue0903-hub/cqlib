@@ -1,6 +1,6 @@
 // This code is part of Cqlib.
 //
-// (C) Copyright China Telecom Quantum Group 2026
+// (C) Copyright China Telecom Quantum Group 2025-2026
 //
 // This code is licensed under the Apache License, Version 2.0. You may
 // obtain a copy of this license in the LICENSE.txt file in the root directory
@@ -11,95 +11,19 @@
 // that they have been altered from the originals.
 
 use super::{Su2RotationAxis, decompose_mc_su2_n_clean};
+use crate::circuit::operation::ValueOperation;
 use crate::circuit::{
-    Circuit, Instruction, MCGate, Parameter, ParameterValue, Qubit, StandardGate,
-    circuit_to_matrix, operation::ValueOperation,
+    Instruction, Parameter, ParameterValue, Qubit, StandardGate, circuit_to_matrix,
 };
 use crate::compiler::{
     error::CompilerError, transform::decompose::mc_gate::mcx::decompose_mcx_n_clean,
 };
 use crate::util::test_utils::{
+    EPSILON, assert_fixed_parameter_operation, assert_selected_matrix_columns_approx_eq,
     assert_value_operations_equal, assert_value_operations_only_use_qubits,
-    circuit_from_value_operations,
+    circuit_from_value_operations, controlled_rotation, mc_gate_matrix, rotation,
 };
-use ndarray::Array2;
-use num_complex::Complex64;
 use smallvec::smallvec;
-
-const EPSILON: f64 = 1e-9;
-
-fn rotation(axis: Su2RotationAxis) -> StandardGate {
-    match axis {
-        Su2RotationAxis::X => StandardGate::RX,
-        Su2RotationAxis::Y => StandardGate::RY,
-        Su2RotationAxis::Z => StandardGate::RZ,
-    }
-}
-
-fn controlled_rotation(axis: Su2RotationAxis) -> StandardGate {
-    match axis {
-        Su2RotationAxis::X => StandardGate::CRX,
-        Su2RotationAxis::Y => StandardGate::CRY,
-        Su2RotationAxis::Z => StandardGate::CRZ,
-    }
-}
-
-fn mc_rotation_matrix(
-    num_qubits: usize,
-    controls: &[Qubit],
-    target: Qubit,
-    axis: Su2RotationAxis,
-    theta: f64,
-) -> Array2<Complex64> {
-    let mut circuit = Circuit::new(num_qubits);
-    let mut qubits = controls.to_vec();
-    qubits.push(target);
-    circuit
-        .append(
-            Instruction::McGate(Box::new(MCGate::new(controls.len() as u8, rotation(axis)))),
-            qubits,
-            [ParameterValue::Fixed(theta)],
-            None,
-        )
-        .unwrap();
-    circuit_to_matrix(&circuit, None).unwrap()
-}
-
-fn assert_selected_columns_approx_eq(
-    actual: &Array2<Complex64>,
-    expected: &Array2<Complex64>,
-    columns: impl IntoIterator<Item = usize>,
-) {
-    assert_eq!(actual.shape(), expected.shape());
-    for column in columns {
-        for row in 0..expected.nrows() {
-            assert!(
-                (actual[[row, column]] - expected[[row, column]]).norm() < EPSILON,
-                "matrix mismatch at row {row}, column {column}: actual={}, expected={}",
-                actual[[row, column]],
-                expected[[row, column]]
-            );
-        }
-    }
-}
-
-fn assert_fixed_parameterized_operation(
-    operation: &ValueOperation,
-    expected_gate: StandardGate,
-    expected_qubits: &[Qubit],
-    expected_theta: f64,
-) {
-    assert!(matches!(
-        operation.instruction,
-        Instruction::Standard(gate) if gate == expected_gate
-    ));
-    assert_eq!(operation.qubits.as_slice(), expected_qubits);
-    assert!(matches!(
-        operation.params.as_slice(),
-        [ParameterValue::Fixed(theta)] if theta.to_bits() == expected_theta.to_bits()
-    ));
-    assert!(operation.label.is_none());
-}
 
 fn assert_insufficient_ancilla_error(num_controls: usize, clean_ancillas: &[Qubit]) {
     let controls: Vec<_> = (0..num_controls)
@@ -150,7 +74,7 @@ fn zero_and_one_controls_do_not_consume_ancillas() {
             };
             let mut qubits = controls.clone();
             qubits.push(target);
-            assert_fixed_parameterized_operation(&operations[0], gate, &qubits, 0.731);
+            assert_fixed_parameter_operation(&operations[0], gate, &qubits, 0.731);
         }
     }
 }
@@ -342,10 +266,18 @@ fn clean_subspace_semantics_match_mcgate_and_restore_ancillas() {
             let actual =
                 circuit_to_matrix(&circuit_from_value_operations(num_qubits, operations), None)
                     .unwrap();
-            let expected = mc_rotation_matrix(num_qubits, &controls, target, axis, theta);
+            let mut qubits = controls.clone();
+            qubits.push(target);
+            let expected = mc_gate_matrix(
+                num_qubits,
+                controls.len() as u8,
+                rotation(axis),
+                qubits,
+                [ParameterValue::Fixed(theta)],
+            );
             let clean_columns = (0..expected.ncols()).filter(|state| state & clean_mask == 0);
 
-            assert_selected_columns_approx_eq(&actual, &expected, clean_columns);
+            assert_selected_matrix_columns_approx_eq(&actual, &expected, clean_columns, EPSILON);
         }
     }
 }

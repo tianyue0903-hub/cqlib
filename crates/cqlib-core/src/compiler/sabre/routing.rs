@@ -1,6 +1,6 @@
 // This code is part of Cqlib.
 //
-// (C) Copyright China Telecom Quantum Group 2026
+// (C) Copyright China Telecom Quantum Group 2025-2026
 //
 // This code is licensed under the Apache License, Version 2.0. You may
 // obtain a copy of this license in the LICENSE.txt file in the root directory
@@ -210,7 +210,7 @@ pub(crate) fn route_trial_unchecked(
         &sabre.first_layer,
         None,
     )?;
-    state.populate_extended_set(sabre);
+    state.populate_extended_set(sabre, target)?;
 
     let mut routable_nodes = Vec::with_capacity(2);
     let mut search_steps_since_decay_reset = 0usize;
@@ -218,46 +218,48 @@ pub(crate) fn route_trial_unchecked(
         let mut current_swaps = Vec::new();
         while routable_nodes.is_empty() && current_swaps.len() <= heuristic.attempt_limit {
             let best_swap = state.choose_best_swap(target, heuristic)?;
-            state.apply_swap(best_swap)?;
-            current_swaps.push(best_swap);
+            state.apply_swap(best_swap.physical, target)?;
+            current_swaps.push(best_swap.physical);
+            let adjacent = |left, right| target.are_adjacent_by_index(left, right);
             push_unique(
                 &mut routable_nodes,
                 state
                     .front_layer
-                    .routable_node_on_qubit(best_swap[0], &target.neighbors),
+                    .routable_node_on_index(best_swap.indices[0], &adjacent),
             );
             push_unique(
                 &mut routable_nodes,
                 state
                     .front_layer
-                    .routable_node_on_qubit(best_swap[1], &target.neighbors),
+                    .routable_node_on_index(best_swap.indices[1], &adjacent),
             );
 
             if let Some(increment) = heuristic.decay_increment {
                 search_steps_since_decay_reset += 1;
                 if search_steps_since_decay_reset >= heuristic.decay_reset {
-                    for value in state.decay.values_mut() {
+                    for value in &mut state.decay {
                         *value = 1.0;
                     }
                     search_steps_since_decay_reset = 0;
                 } else {
-                    *state.decay.entry(best_swap[0]).or_insert(1.0) += increment;
-                    *state.decay.entry(best_swap[1]).or_insert(1.0) += increment;
+                    state.decay[best_swap.indices[0]] += increment;
+                    state.decay[best_swap.indices[1]] += increment;
                 }
             }
         }
 
         if routable_nodes.is_empty() {
             for swap in current_swaps.drain(..).rev() {
-                state.apply_swap(swap)?;
+                state.apply_swap(swap, target)?;
             }
             output.fallback_count += 1;
             let forced = state.force_enable_closest_node(target, &mut current_swaps)?;
             routable_nodes.extend(forced);
         }
 
+        let distance = |left, right| target.distance_by_index(left, right);
         for node in &routable_nodes {
-            state.front_layer.remove(*node);
+            state.front_layer.remove(*node, &distance)?;
         }
         state.update_route(
             sabre,
@@ -268,9 +270,9 @@ pub(crate) fn route_trial_unchecked(
             Some(current_swaps),
         )?;
         state.lookahead_layers.iter_mut().for_each(Layer::clear);
-        state.populate_extended_set(sabre);
+        state.populate_extended_set(sabre, target)?;
         if heuristic.decay_increment.is_some() {
-            for value in state.decay.values_mut() {
+            for value in &mut state.decay {
                 *value = 1.0;
             }
         }
@@ -326,7 +328,10 @@ pub(crate) fn normalize_initial_layout(
 pub(crate) struct RoutingTarget {
     pub(crate) physical_qubits: Vec<PhysicalQubit>,
     physical_set: BTreeSet<PhysicalQubit>,
-    neighbors: BTreeMap<PhysicalQubit, Vec<PhysicalQubit>>,
+    physical_index: BTreeMap<PhysicalQubit, usize>,
+    physical_order_indices: Vec<usize>,
+    neighbors_by_index: Vec<Vec<usize>>,
+    adjacent_by_index: Vec<Vec<bool>>,
     distances: Vec<Vec<Option<f64>>>,
     graph: UnGraph<(), ()>,
     graph_index: BTreeMap<PhysicalQubit, NodeIndex>,
@@ -337,24 +342,25 @@ impl RoutingTarget {
     pub(crate) fn from_physical(physical: &PhysicalLayoutGraph) -> Result<Self, CompilerError> {
         let physical_qubits = physical.physical_qubits().to_vec();
         let physical_set = physical_qubits.iter().copied().collect::<BTreeSet<_>>();
-        let mut neighbors = physical_qubits
-            .iter()
-            .copied()
-            .map(|qubit| (qubit, Vec::new()))
-            .collect::<BTreeMap<_, _>>();
         let mut graph = UnGraph::with_capacity(physical_qubits.len(), 0);
         let mut graph_index = BTreeMap::new();
+        let mut physical_index = BTreeMap::new();
         let mut physical_by_index = Vec::with_capacity(physical_qubits.len());
 
-        for physical in &physical_qubits {
-            let index = graph.add_node(());
-            graph_index.insert(*physical, index);
-            physical_by_index.push(*physical);
+        for (dense_index, physical) in physical_qubits.iter().copied().enumerate() {
+            let graph_node = graph.add_node(());
+            graph_index.insert(physical, graph_node);
+            physical_index.insert(physical, dense_index);
+            physical_by_index.push(physical);
         }
         let mut distances = vec![vec![None; physical_qubits.len()]; physical_qubits.len()];
         for (index, row) in distances.iter_mut().enumerate() {
             row[index] = Some(0.0);
         }
+        let mut neighbors_by_index = vec![Vec::new(); physical_qubits.len()];
+        let mut adjacent_by_index = vec![vec![false; physical_qubits.len()]; physical_qubits.len()];
+        let mut physical_order_indices = (0..physical_qubits.len()).collect::<Vec<_>>();
+        physical_order_indices.sort_unstable_by_key(|index| physical_qubits[*index]);
 
         for (left_index, left) in physical_qubits.iter().copied().enumerate() {
             for (right_index, right) in physical_qubits
@@ -368,26 +374,25 @@ impl RoutingTarget {
                     distances[right_index][left_index] = Some(f64::from(distance));
                 }
                 if physical.is_adjacent_undirected(left, right) {
-                    neighbors
-                        .get_mut(&left)
-                        .expect("neighbor map exists")
-                        .push(right);
-                    neighbors
-                        .get_mut(&right)
-                        .expect("neighbor map exists")
-                        .push(left);
+                    neighbors_by_index[left_index].push(right_index);
+                    neighbors_by_index[right_index].push(left_index);
+                    adjacent_by_index[left_index][right_index] = true;
+                    adjacent_by_index[right_index][left_index] = true;
                     graph.add_edge(graph_index[&left], graph_index[&right], ());
                 }
             }
         }
-        for items in neighbors.values_mut() {
-            items.sort_unstable();
+        for items in &mut neighbors_by_index {
+            items.sort_unstable_by_key(|index| physical_qubits[*index]);
         }
 
         Ok(Self {
             physical_qubits,
             physical_set,
-            neighbors,
+            physical_index,
+            physical_order_indices,
+            neighbors_by_index,
+            adjacent_by_index,
             distances,
             graph,
             graph_index,
@@ -396,21 +401,94 @@ impl RoutingTarget {
     }
 
     fn distance(&self, left: PhysicalQubit, right: PhysicalQubit) -> Result<f64, CompilerError> {
-        let Some(left_index) = self.graph_index.get(&left).map(|index| index.index()) else {
-            return Err(CompilerError::InvalidInput(format!(
-                "physical qubit {left} is not usable in the target topology"
-            )));
-        };
-        let Some(right_index) = self.graph_index.get(&right).map(|index| index.index()) else {
-            return Err(CompilerError::InvalidInput(format!(
-                "physical qubit {right} is not usable in the target topology"
-            )));
-        };
+        let left_index = self.physical_index(left)?;
+        let right_index = self.physical_index(right)?;
+        self.distance_by_index(left_index, right_index)
+    }
+
+    fn physical_index(&self, physical: PhysicalQubit) -> Result<usize, CompilerError> {
+        self.physical_index.get(&physical).copied().ok_or_else(|| {
+            CompilerError::InvalidInput(format!(
+                "physical qubit {physical} is not usable in the target topology"
+            ))
+        })
+    }
+
+    fn physical_at(&self, index: usize) -> Result<PhysicalQubit, CompilerError> {
+        self.physical_qubits.get(index).copied().ok_or_else(|| {
+            CompilerError::InvariantViolation(format!(
+                "physical index {index} is outside target topology of length {}",
+                self.physical_qubits.len()
+            ))
+        })
+    }
+
+    fn distance_by_index(
+        &self,
+        left_index: usize,
+        right_index: usize,
+    ) -> Result<f64, CompilerError> {
+        let left = self.physical_at(left_index)?;
+        let right = self.physical_at(right_index)?;
         self.distances[left_index][right_index].ok_or_else(|| {
             CompilerError::InvalidInput(format!(
                 "physical qubits {left} and {right} are disconnected in the usable topology"
             ))
         })
+    }
+
+    fn are_adjacent(
+        &self,
+        left: PhysicalQubit,
+        right: PhysicalQubit,
+    ) -> Result<bool, CompilerError> {
+        let left_index = self.physical_index(left)?;
+        let right_index = self.physical_index(right)?;
+        Ok(self.adjacent_by_index[left_index][right_index])
+    }
+
+    fn are_adjacent_by_index(&self, left_index: usize, right_index: usize) -> bool {
+        self.adjacent_by_index[left_index][right_index]
+    }
+
+    fn shortest_path(
+        &self,
+        start: PhysicalQubit,
+        goal: PhysicalQubit,
+    ) -> Option<Vec<PhysicalQubit>> {
+        if start == goal {
+            return Some(vec![start]);
+        }
+
+        let start_index = self.physical_index(start).ok()?;
+        let goal_index = self.physical_index(goal).ok()?;
+        let mut queue = VecDeque::new();
+        let mut predecessor = vec![None; self.physical_qubits.len()];
+        let mut seen = vec![false; self.physical_qubits.len()];
+        queue.push_back(start_index);
+        seen[start_index] = true;
+
+        while let Some(current) = queue.pop_front() {
+            for &neighbor in &self.neighbors_by_index[current] {
+                if seen[neighbor] {
+                    continue;
+                }
+                seen[neighbor] = true;
+                predecessor[neighbor] = Some(current);
+                if neighbor == goal_index {
+                    let mut path = vec![goal];
+                    let mut cursor = goal_index;
+                    while cursor != start_index {
+                        cursor = predecessor[cursor]?;
+                        path.push(self.physical_qubits[cursor]);
+                    }
+                    path.reverse();
+                    return Some(path);
+                }
+                queue.push_back(neighbor);
+            }
+        }
+        None
     }
 }
 
@@ -420,8 +498,14 @@ struct RoutingState {
     front_layer: Layer,
     lookahead_layers: Vec<Layer>,
     required_predecessors: Vec<u32>,
-    decay: BTreeMap<PhysicalQubit, f64>,
+    decay: Vec<f64>,
     rng: StdRng,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SwapChoice {
+    physical: [PhysicalQubit; 2],
+    indices: [usize; 2],
 }
 
 impl RoutingState {
@@ -439,23 +523,33 @@ impl RoutingState {
 
         Self {
             layout,
-            front_layer: Layer::new(),
-            lookahead_layers: vec![Layer::new(); heuristic.lookahead_weights.len()],
+            front_layer: Layer::new(sabre.graph.node_count(), target.physical_qubits.len()),
+            lookahead_layers: vec![
+                Layer::new(
+                    sabre.graph.node_count(),
+                    target.physical_qubits.len()
+                );
+                heuristic.lookahead_weights.len()
+            ],
             required_predecessors,
-            decay: target
-                .physical_qubits
-                .iter()
-                .copied()
-                .map(|physical| (physical, 1.0))
-                .collect(),
+            decay: vec![1.0; target.physical_qubits.len()],
             rng: StdRng::seed_from_u64(seed),
         }
     }
 
-    fn apply_swap(&mut self, swap: [PhysicalQubit; 2]) -> Result<(), CompilerError> {
-        self.front_layer.apply_swap(swap);
+    fn apply_swap(
+        &mut self,
+        swap: [PhysicalQubit; 2],
+        target: &RoutingTarget,
+    ) -> Result<(), CompilerError> {
+        let swap_indices = [
+            target.physical_index(swap[0])?,
+            target.physical_index(swap[1])?,
+        ];
+        let distance = |left, right| target.distance_by_index(left, right);
+        self.front_layer.apply_swap(swap_indices, &distance)?;
         for layer in &mut self.lookahead_layers {
-            layer.apply_swap(swap);
+            layer.apply_swap(swap_indices, &distance)?;
         }
         self.layout
             .swap_physical(swap[0], swap[1])
@@ -486,12 +580,16 @@ impl RoutingState {
                         physical_for(&self.layout, pair[0])?,
                         physical_for(&self.layout, pair[1])?,
                     ];
-                    if !target
-                        .neighbors
-                        .get(&physical[0])
-                        .is_some_and(|neighbors| neighbors.contains(&physical[1]))
-                    {
-                        self.front_layer.insert(node_id, physical);
+                    if !target.are_adjacent(physical[0], physical[1])? {
+                        let distance = |left, right| target.distance_by_index(left, right);
+                        self.front_layer.insert(
+                            node_id,
+                            [
+                                target.physical_index(physical[0])?,
+                                target.physical_index(physical[1])?,
+                            ],
+                            &distance,
+                        )?;
                         continue;
                     }
                     output.apply_pending_swaps(pending_swaps.take());
@@ -635,7 +733,11 @@ impl RoutingState {
         Ok(())
     }
 
-    fn populate_extended_set(&mut self, sabre: &SabreDag) {
+    fn populate_extended_set(
+        &mut self,
+        sabre: &SabreDag,
+        target: &RoutingTarget,
+    ) -> Result<(), CompilerError> {
         // Build fixed-depth lookahead layers from the current front layer. Synchronize
         // and control-flow nodes are transparent for depth counting because they do
         // not add a parent-level two-qubit adjacency constraint.
@@ -664,7 +766,12 @@ impl RoutingState {
                             physical_for(&self.layout, pair[0]),
                             physical_for(&self.layout, pair[1]),
                         ) {
-                            layer.insert(node, [left, right]);
+                            let distance = |left, right| target.distance_by_index(left, right);
+                            layer.insert(
+                                node,
+                                [target.physical_index(left)?, target.physical_index(right)?],
+                                &distance,
+                            )?;
                             next_visit.push(node);
                         }
                         // Missing physical mappings are ignored defensively here.
@@ -692,27 +799,37 @@ impl RoutingState {
         for (node, amount) in decremented {
             self.required_predecessors[node.index()] += amount;
         }
+        Ok(())
     }
 
     fn choose_best_swap(
         &mut self,
         target: &RoutingTarget,
         heuristic: &SabreHeuristicConfig,
-    ) -> Result<[PhysicalQubit; 2], CompilerError> {
+    ) -> Result<SwapChoice, CompilerError> {
         let mut candidates = Vec::new();
-        for active in self.front_layer.active_qubits() {
-            if let Some(neighbors) = target.neighbors.get(&active) {
-                for neighbor in neighbors {
-                    candidates.push(if active <= *neighbor {
-                        [active, *neighbor]
-                    } else {
-                        [*neighbor, active]
-                    });
-                }
+        for active_index in self
+            .front_layer
+            .active_indices_in_order(&target.physical_order_indices)
+        {
+            let active = target.physical_at(active_index)?;
+            for &neighbor_index in &target.neighbors_by_index[active_index] {
+                let neighbor = target.physical_at(neighbor_index)?;
+                candidates.push(if active <= neighbor {
+                    SwapChoice {
+                        physical: [active, neighbor],
+                        indices: [active_index, neighbor_index],
+                    }
+                } else {
+                    SwapChoice {
+                        physical: [neighbor, active],
+                        indices: [neighbor_index, active_index],
+                    }
+                });
             }
         }
-        candidates.sort_unstable();
-        candidates.dedup();
+        candidates.sort_unstable_by_key(|candidate| candidate.physical);
+        candidates.dedup_by(|left, right| left.physical == right.physical);
         if candidates.is_empty() {
             return Err(CompilerError::TransformFailed {
                 name: "sabre_route",
@@ -723,39 +840,42 @@ impl RoutingState {
         // SABRE score = weighted front-layer distance + weighted lookahead
         // distance, with optional multiplicative decay on recently swapped
         // physical qubits.
-        let distance = |left, right| target.distance(left, right);
-        let mut absolute = heuristic.basic_weight * self.front_layer.total_score(&distance)?;
+        let distance = |left, right| target.distance_by_index(left, right);
+        let mut absolute = heuristic.basic_weight * self.front_layer.total_score();
         for (layer, weight) in self
             .lookahead_layers
             .iter()
             .zip(heuristic.lookahead_weights.iter().copied())
         {
-            absolute += weight * layer.total_score(&distance)?;
+            absolute += weight * layer.total_score();
         }
 
         let mut best_score = f64::INFINITY;
         let mut best_swaps = Vec::new();
-        for swap in candidates {
+        for candidate in candidates {
             let mut score = absolute
-                + heuristic.basic_weight * self.front_layer.swap_delta_score(swap, &distance)?;
+                + heuristic.basic_weight
+                    * self
+                        .front_layer
+                        .swap_delta_score(candidate.indices, &distance)?;
             for (layer, weight) in self
                 .lookahead_layers
                 .iter()
                 .zip(heuristic.lookahead_weights.iter().copied())
             {
-                score += weight * layer.swap_delta_score(swap, &distance)?;
+                score += weight * layer.swap_delta_score(candidate.indices, &distance)?;
             }
             if heuristic.decay_increment.is_some() {
-                let decay = self.decay[&swap[0]].max(self.decay[&swap[1]]);
+                let decay = self.decay[candidate.indices[0]].max(self.decay[candidate.indices[1]]);
                 score *= decay;
             }
 
             if score - best_score < -heuristic.best_epsilon {
                 best_score = score;
                 best_swaps.clear();
-                best_swaps.push(swap);
+                best_swaps.push(candidate);
             } else if (score - best_score).abs() <= heuristic.best_epsilon {
-                best_swaps.push(swap);
+                best_swaps.push(candidate);
             }
         }
 
@@ -777,8 +897,12 @@ impl RoutingState {
             .iter()
             .min_by(|(_, a), (_, b)| {
                 target
-                    .distance(a[0], a[1])
-                    .and_then(|ad| target.distance(b[0], b[1]).map(|bd| ad.total_cmp(&bd)))
+                    .distance_by_index(a[0], a[1])
+                    .and_then(|ad| {
+                        target
+                            .distance_by_index(b[0], b[1])
+                            .map(|bd| ad.total_cmp(&bd))
+                    })
                     .unwrap_or(Ordering::Equal)
             })
             .ok_or_else(|| {
@@ -786,10 +910,11 @@ impl RoutingState {
                     "sabre fallback called with an empty front layer".to_string(),
                 )
             })?;
-        let path = shortest_path(&target.neighbors, qubits[0], qubits[1]).ok_or_else(|| {
+        let path_start = target.physical_at(qubits[0])?;
+        let path_goal = target.physical_at(qubits[1])?;
+        let path = target.shortest_path(path_start, path_goal).ok_or_else(|| {
             CompilerError::InvalidInput(format!(
-                "physical qubits {} and {} are disconnected in the usable topology",
-                qubits[0], qubits[1]
+                "physical qubits {path_start} and {path_goal} are disconnected in the usable topology"
             ))
         })?;
         if path.len() < 3 {
@@ -797,31 +922,32 @@ impl RoutingState {
         }
         for window in path.windows(2).take(path.len() - 2) {
             let swap = [window[0], window[1]];
-            self.apply_swap(swap)?;
+            self.apply_swap(swap, target)?;
             current_swaps.push(swap);
         }
 
         let mut routed = Vec::new();
         if self.front_layer.iter().any(|(node, current)| {
-            node == closest_node
-                && target
-                    .neighbors
-                    .get(&current[0])
-                    .is_some_and(|neighbors| neighbors.contains(&current[1]))
+            node == closest_node && target.are_adjacent_by_index(current[0], current[1])
         }) {
             routed.push(closest_node);
         }
 
+        let adjacent = |left, right| target.are_adjacent_by_index(left, right);
         for swap in current_swaps.iter().copied() {
+            let swap_indices = [
+                target.physical_index(swap[0])?,
+                target.physical_index(swap[1])?,
+            ];
             push_unique(
                 &mut routed,
                 self.front_layer
-                    .routable_node_on_qubit(swap[0], &target.neighbors),
+                    .routable_node_on_index(swap_indices[0], &adjacent),
             );
             push_unique(
                 &mut routed,
                 self.front_layer
-                    .routable_node_on_qubit(swap[1], &target.neighbors),
+                    .routable_node_on_index(swap_indices[1], &adjacent),
             );
         }
 
@@ -1170,40 +1296,4 @@ fn operation_count(operations: &[Operation]) -> usize {
             }
         })
         .sum()
-}
-
-fn shortest_path(
-    neighbors: &BTreeMap<PhysicalQubit, Vec<PhysicalQubit>>,
-    start: PhysicalQubit,
-    goal: PhysicalQubit,
-) -> Option<Vec<PhysicalQubit>> {
-    if start == goal {
-        return Some(vec![start]);
-    }
-    let mut queue = VecDeque::new();
-    let mut predecessor = BTreeMap::new();
-    let mut seen = BTreeSet::new();
-    queue.push_back(start);
-    seen.insert(start);
-
-    while let Some(current) = queue.pop_front() {
-        for neighbor in neighbors.get(&current).into_iter().flatten().copied() {
-            if !seen.insert(neighbor) {
-                continue;
-            }
-            predecessor.insert(neighbor, current);
-            if neighbor == goal {
-                let mut path = vec![goal];
-                let mut cursor = goal;
-                while cursor != start {
-                    cursor = predecessor[&cursor];
-                    path.push(cursor);
-                }
-                path.reverse();
-                return Some(path);
-            }
-            queue.push_back(neighbor);
-        }
-    }
-    None
 }

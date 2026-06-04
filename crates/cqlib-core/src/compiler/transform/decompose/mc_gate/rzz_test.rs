@@ -1,6 +1,6 @@
 // This code is part of Cqlib.
 //
-// (C) Copyright China Telecom Quantum Group 2026
+// (C) Copyright China Telecom Quantum Group 2025-2026
 //
 // This code is licensed under the Apache License, Version 2.0. You may
 // obtain a copy of this license in the LICENSE.txt file in the root directory
@@ -12,68 +12,13 @@
 
 use super::rzz::{decompose_mc_rzz_n_clean, decompose_mc_rzz_no_aux};
 use crate::circuit::{
-    Circuit, Instruction, MCGate, Parameter, ParameterValue, Qubit, StandardGate, circuit_to_matrix,
+    Instruction, Parameter, ParameterValue, Qubit, StandardGate, circuit_to_matrix,
 };
 use crate::compiler::error::CompilerError;
 use crate::util::test_utils::{
-    assert_standard_operation, assert_value_operations_equal, circuit_from_value_operations,
+    EPSILON, assert_selected_matrix_columns_equal_up_to_global_phase, assert_standard_operation,
+    assert_value_operations_equal, circuit_from_value_operations, mc_gate_matrix,
 };
-use ndarray::Array2;
-use num_complex::Complex64;
-
-const EPSILON: f64 = 1e-9;
-
-fn mc_rzz_matrix(
-    num_qubits: usize,
-    num_controls: u8,
-    controls: &[Qubit],
-    first: Qubit,
-    second: Qubit,
-    theta: f64,
-) -> Array2<Complex64> {
-    let mut circuit = Circuit::new(num_qubits);
-    let mut qubits = controls.to_vec();
-    qubits.push(first);
-    qubits.push(second);
-    circuit
-        .append(
-            Instruction::McGate(Box::new(MCGate::new(num_controls, StandardGate::RZZ))),
-            qubits,
-            [ParameterValue::Fixed(theta)],
-            None,
-        )
-        .unwrap();
-    circuit_to_matrix(&circuit, None).unwrap()
-}
-
-fn assert_selected_columns_equal_up_to_global_phase(
-    actual: &Array2<Complex64>,
-    expected: &Array2<Complex64>,
-    columns: impl IntoIterator<Item = usize>,
-) {
-    assert_eq!(actual.shape(), expected.shape());
-    let columns: Vec<_> = columns.into_iter().collect();
-    let (reference_actual, reference_expected) = columns
-        .iter()
-        .flat_map(|column| {
-            (0..expected.nrows()).map(move |row| (actual[[row, *column]], expected[[row, *column]]))
-        })
-        .find(|(_, expected)| expected.norm() > EPSILON)
-        .expect("selected expected columns must contain a nonzero amplitude");
-    let global_phase = reference_actual / reference_expected;
-
-    assert!((global_phase.norm() - 1.0).abs() < EPSILON);
-    for column in columns {
-        for row in 0..expected.nrows() {
-            let expected_amplitude = global_phase * expected[[row, column]];
-            assert!(
-                (actual[[row, column]] - expected_amplitude).norm() < EPSILON,
-                "matrix mismatch at row {row}, column {column}: actual={}, expected={expected_amplitude}",
-                actual[[row, column]]
-            );
-        }
-    }
-}
 
 #[test]
 fn zero_controls_emits_bare_rzz() {
@@ -132,9 +77,22 @@ fn no_ancilla_decompositions_match_mcgate_semantics() {
         let operations = decompose_mc_rzz_no_aux(&theta, &controls, first, second).unwrap();
         let actual =
             circuit_to_matrix(&circuit_from_value_operations(total, operations), None).unwrap();
-        let expected = mc_rzz_matrix(total, num_controls as u8, &controls, first, second, 0.731);
+        let mut qubits = controls.clone();
+        qubits.extend([first, second]);
+        let expected = mc_gate_matrix(
+            total,
+            num_controls as u8,
+            StandardGate::RZZ,
+            qubits,
+            [ParameterValue::Fixed(0.731)],
+        );
 
-        assert_selected_columns_equal_up_to_global_phase(&actual, &expected, 0..expected.ncols());
+        assert_selected_matrix_columns_equal_up_to_global_phase(
+            &actual,
+            &expected,
+            0..expected.ncols(),
+            EPSILON,
+        );
     }
 }
 
@@ -149,13 +107,26 @@ fn clean_decomposition_preserves_ancilla_subspace() {
     let operations =
         decompose_mc_rzz_n_clean(&theta, &controls, first, second, &clean_ancillas).unwrap();
     let actual = circuit_to_matrix(&circuit_from_value_operations(7, operations), None).unwrap();
-    let expected = mc_rzz_matrix(7, 3, &controls, first, second, 0.731);
+    let mut qubits = controls.to_vec();
+    qubits.extend([first, second]);
+    let expected = mc_gate_matrix(
+        7,
+        3,
+        StandardGate::RZZ,
+        qubits,
+        [ParameterValue::Fixed(0.731)],
+    );
     let clean_mask = clean_ancillas
         .iter()
         .fold(0_usize, |mask, qubit| mask | (1 << qubit.index()));
     let clean_columns = (0..expected.ncols()).filter(|state| state & clean_mask == 0);
 
-    assert_selected_columns_equal_up_to_global_phase(&actual, &expected, clean_columns);
+    assert_selected_matrix_columns_equal_up_to_global_phase(
+        &actual,
+        &expected,
+        clean_columns,
+        EPSILON,
+    );
 }
 
 #[test]

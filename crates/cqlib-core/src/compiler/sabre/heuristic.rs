@@ -1,6 +1,6 @@
 // This code is part of Cqlib.
 //
-// (C) Copyright China Telecom Quantum Group 2026
+// (C) Copyright China Telecom Quantum Group 2025-2026
 //
 // This code is licensed under the Apache License, Version 2.0. You may
 // obtain a copy of this license in the LICENSE.txt file in the root directory
@@ -10,18 +10,55 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
+//! SABRE trial and SWAP-selection configuration.
+//!
+//! The router evaluates candidate SWAPs with a weighted distance score:
+//!
+//! ```text
+//! score = decay(swap)
+//!       * (basic_weight * front_layer_distance
+//!          + sum_i lookahead_weights[i] * lookahead_layer_i_distance)
+//! ```
+//!
+//! Lower scores are preferred. The front layer contains currently executable
+//! two-qubit DAG nodes once the layout makes their operands adjacent. Lookahead
+//! layers bias the local decision toward interactions that become relevant
+//! soon after the current front layer is routed.
+//!
+//! Decay is optional. When enabled, physical qubits recently used in heuristic
+//! SWAPs receive a slightly larger multiplier, discouraging repeated movement
+//! around the same area of the device and improving parallelism. The decay
+//! table is reset after [`SabreHeuristicConfig::decay_reset`] heuristic SWAPs.
+//!
+//! [`SabreTrialObjective`] controls how independent routing trials are compared
+//! after they produce complete routed circuits. It does not change the local
+//! SWAP score; it changes only final trial selection and layout refinement
+//! tie-breaking.
+
 use crate::compiler::CompilerError;
 
 /// Objective used to select the best result among independent SABRE trials.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SabreTrialObjective {
     /// Preserve legacy SABRE behavior: minimize inserted SWAP count only.
+    ///
+    /// Use this when reproducibility with older routing results matters more
+    /// than depth-sensitive trial selection.
     SwapCount,
     /// Minimize routed two-qubit depth only.
+    ///
+    /// Use this for depth-sensitive targets where a few extra SWAPs may be
+    /// acceptable if they shorten the two-qubit critical path.
     Depth,
     /// Minimize SWAP count first, then routed two-qubit depth.
+    ///
+    /// This is the production default: prefer lower two-qubit gate overhead,
+    /// then choose the shallower routed circuit among equal-SWAP candidates.
     SwapThenDepth,
     /// Minimize routed two-qubit depth first, then SWAP count.
+    ///
+    /// Use this when depth is the primary objective but SWAP count should still
+    /// break ties deterministically.
     DepthThenSwap,
 }
 

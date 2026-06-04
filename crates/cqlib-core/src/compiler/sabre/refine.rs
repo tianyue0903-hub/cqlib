@@ -1,6 +1,6 @@
 // This code is part of Cqlib.
 //
-// (C) Copyright China Telecom Quantum Group 2026
+// (C) Copyright China Telecom Quantum Group 2025-2026
 //
 // This code is licensed under the Apache License, Version 2.0. You may
 // obtain a copy of this license in the LICENSE.txt file in the root directory
@@ -9,6 +9,27 @@
 // Any modifications or derivative works of this code must retain this
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
+
+//! SABRE forward/backward layout refinement.
+//!
+//! This module searches for an initial logical-to-physical layout by combining
+//! several deterministic and randomized candidates with SABRE trial routing.
+//! Each candidate is refined by repeatedly routing the interaction DAG forward,
+//! reversing the routed interaction order, and routing backward. The layout at
+//! the end of one direction becomes the starting point for the next direction.
+//!
+//! Multiple iterations matter because early SWAP choices can expose a better
+//! placement for later interactions, and the reverse pass feeds that placement
+//! back toward the front of the circuit. This follows the SABRE idea of using
+//! bidirectional trial routing as a layout optimizer rather than only as a
+//! final routing pass.
+//!
+//! Candidate layouts come from the caller-supplied layout, VF2 perfect-layout
+//! search, greedy interaction placement, and seeded random layouts according to
+//! [`SabreConfig`](super::SabreConfig). Candidates are scored by final-route
+//! quality: inserted SWAP count and routed two-qubit depth are compared using
+//! [`SabreTrialObjective`](super::SabreTrialObjective), with the layout
+//! objective used as a deterministic tie-breaker when available.
 
 use super::dag::SabreDag;
 use super::heuristic::SabreConfig;
@@ -46,6 +67,28 @@ pub struct SabreCompileResult {
 /// additional random/heuristic candidates are still evaluated according to
 /// `config`.  The returned layout is selected by final-route SWAP count, with
 /// `objective` used as a deterministic tie-breaker.
+///
+/// # Examples
+///
+/// ```rust
+/// use cqlib_core::circuit::{Circuit, Qubit};
+/// use cqlib_core::compiler::{SabreConfig, sabre_refine_layout};
+/// use cqlib_core::compiler::transform::LayoutObjective;
+/// use cqlib_core::device::Device;
+///
+/// let device = Device::line("line-3", 3).unwrap();
+/// let objective = LayoutObjective::topology_only();
+/// let config = SabreConfig {
+///     seed: Some(11),
+///     ..SabreConfig::default()
+/// };
+///
+/// let mut circuit = Circuit::new(3);
+/// circuit.cx(Qubit::new(0), Qubit::new(2)).unwrap();
+///
+/// let layout = sabre_refine_layout(&circuit, &device, None, &objective, &config).unwrap();
+/// assert_eq!(layout.layout.num_logical(), 3);
+/// ```
 pub fn sabre_refine_layout(
     circuit: &Circuit,
     device: &Device,

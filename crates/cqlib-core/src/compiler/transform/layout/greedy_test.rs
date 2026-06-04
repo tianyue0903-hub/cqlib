@@ -1,6 +1,6 @@
 // This code is part of Cqlib.
 //
-// (C) Copyright China Telecom Quantum Group 2026
+// (C) Copyright China Telecom Quantum Group 2025-2026
 //
 // This code is licensed under the Apache License, Version 2.0. You may
 // obtain a copy of this license in the LICENSE.txt file in the root directory
@@ -78,6 +78,26 @@ fn greedy_layout_maps_idle_logical_qubits_deterministically() {
     assert_eq!(result.layout.get_physical(LogicalQubit::new(1)), Some(p1));
     assert_eq!(result.layout.get_physical(LogicalQubit::new(2)), Some(p2));
     assert_eq!(result.layout.num_vacant_physical(), 1);
+    assert!(result.diagnostics.is_perfect);
+}
+
+#[test]
+fn greedy_layout_prefers_connected_pair_before_disconnected_tie_break() {
+    let p0 = PhysicalQubit::new(0);
+    let p1 = PhysicalQubit::new(1);
+    let p2 = PhysicalQubit::new(2);
+    let p3 = PhysicalQubit::new(3);
+    let topology = Topology::new(vec![p0, p1, p2, p3], vec![(p2, p3, "cx".to_string())]).unwrap();
+    let device = Device::new("sparse", HashSet::from_iter([p0, p1, p2, p3]), topology).unwrap();
+    let objective = LayoutObjective::topology_only();
+
+    let mut circuit = Circuit::new(2);
+    circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
+
+    let result = greedy_layout(&circuit, &device, &objective).unwrap();
+
+    assert_eq!(result.layout.get_physical(LogicalQubit::new(0)), Some(p2));
+    assert_eq!(result.layout.get_physical(LogicalQubit::new(1)), Some(p3));
     assert!(result.diagnostics.is_perfect);
 }
 

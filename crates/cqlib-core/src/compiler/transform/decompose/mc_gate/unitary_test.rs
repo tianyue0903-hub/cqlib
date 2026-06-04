@@ -1,6 +1,6 @@
 // This code is part of Cqlib.
 //
-// (C) Copyright China Telecom Quantum Group 2026
+// (C) Copyright China Telecom Quantum Group 2025-2026
 //
 // This code is licensed under the Apache License, Version 2.0. You may
 // obtain a copy of this license in the LICENSE.txt file in the root directory
@@ -12,77 +12,13 @@
 
 use super::unitary::{decompose_unitary_n_clean, decompose_unitary_no_aux};
 use crate::circuit::{
-    Circuit, Instruction, MCGate, Parameter, ParameterValue, Qubit, StandardGate, circuit_to_matrix,
+    Instruction, Parameter, ParameterValue, Qubit, StandardGate, circuit_to_matrix,
 };
 use crate::compiler::error::CompilerError;
 use crate::util::test_utils::{
-    assert_value_operations_only_use_qubits, circuit_from_value_operations,
+    EPSILON, assert_fixed_parameter_operation, assert_selected_matrix_columns_approx_eq,
+    assert_value_operations_only_use_qubits, circuit_from_value_operations, mc_gate_matrix,
 };
-use ndarray::Array2;
-use num_complex::Complex64;
-
-const EPSILON: f64 = 1e-9;
-
-fn mc_unitary_matrix(
-    num_qubits: usize,
-    controls: &[Qubit],
-    target: Qubit,
-    theta: f64,
-    phi: f64,
-    lambda: f64,
-) -> Array2<Complex64> {
-    let mut circuit = Circuit::new(num_qubits);
-    let mut qubits = controls.to_vec();
-    qubits.push(target);
-    circuit
-        .append(
-            Instruction::McGate(Box::new(MCGate::new(controls.len() as u8, StandardGate::U))),
-            qubits,
-            [
-                ParameterValue::Fixed(theta),
-                ParameterValue::Fixed(phi),
-                ParameterValue::Fixed(lambda),
-            ],
-            None,
-        )
-        .unwrap();
-    circuit_to_matrix(&circuit, None).unwrap()
-}
-
-fn assert_selected_columns_approx_eq(
-    actual: &Array2<Complex64>,
-    expected: &Array2<Complex64>,
-    columns: impl IntoIterator<Item = usize>,
-) {
-    assert_eq!(actual.shape(), expected.shape());
-    for column in columns {
-        for row in 0..expected.nrows() {
-            assert!(
-                (actual[[row, column]] - expected[[row, column]]).norm() < EPSILON,
-                "matrix mismatch at row {row}, column {column}: actual={}, expected={}",
-                actual[[row, column]],
-                expected[[row, column]]
-            );
-        }
-    }
-}
-
-fn assert_fixed_parameter(
-    operation: &crate::circuit::operation::ValueOperation,
-    gate: StandardGate,
-    qubits: &[Qubit],
-    expected: f64,
-) {
-    assert!(matches!(
-        operation.instruction,
-        Instruction::Standard(actual) if actual == gate
-    ));
-    assert_eq!(operation.qubits.as_slice(), qubits);
-    assert!(matches!(
-        operation.params.as_slice(),
-        [ParameterValue::Fixed(actual)] if actual.to_bits() == expected.to_bits()
-    ));
-}
 
 #[test]
 fn zero_controls_emit_original_standard_u() {
@@ -127,10 +63,10 @@ fn one_control_emits_conditional_phase_and_zyz_rotations() {
     .unwrap();
 
     assert_eq!(operations.len(), 4);
-    assert_fixed_parameter(&operations[0], StandardGate::Phase, &[control], 0.5);
-    assert_fixed_parameter(&operations[1], StandardGate::CRZ, &[control, target], 0.6);
-    assert_fixed_parameter(&operations[2], StandardGate::CRY, &[control, target], 0.2);
-    assert_fixed_parameter(&operations[3], StandardGate::CRZ, &[control, target], 0.4);
+    assert_fixed_parameter_operation(&operations[0], StandardGate::Phase, &[control], 0.5);
+    assert_fixed_parameter_operation(&operations[1], StandardGate::CRZ, &[control, target], 0.6);
+    assert_fixed_parameter_operation(&operations[2], StandardGate::CRY, &[control, target], 0.2);
+    assert_fixed_parameter_operation(&operations[3], StandardGate::CRZ, &[control, target], 0.4);
 }
 
 #[test]
@@ -154,9 +90,21 @@ fn no_ancilla_decompositions_match_mcgate_unitary_matrices_exactly() {
             None,
         )
         .unwrap();
-        let expected = mc_unitary_matrix(num_controls + 1, &controls, target, theta, phi, lambda);
+        let mut qubits = controls.clone();
+        qubits.push(target);
+        let expected = mc_gate_matrix(
+            num_controls + 1,
+            controls.len() as u8,
+            StandardGate::U,
+            qubits,
+            [
+                ParameterValue::Fixed(theta),
+                ParameterValue::Fixed(phi),
+                ParameterValue::Fixed(lambda),
+            ],
+        );
 
-        assert_selected_columns_approx_eq(&actual, &expected, 0..expected.ncols());
+        assert_selected_matrix_columns_approx_eq(&actual, &expected, 0..expected.ncols(), EPSILON);
     }
 }
 
@@ -175,13 +123,25 @@ fn clean_decomposition_matches_clean_subspace_and_restores_ancillas() {
     )
     .unwrap();
     let actual = circuit_to_matrix(&circuit_from_value_operations(6, operations), None).unwrap();
-    let expected = mc_unitary_matrix(6, &controls, target, 0.731, -0.418, 0.293);
+    let mut qubits = controls.to_vec();
+    qubits.push(target);
+    let expected = mc_gate_matrix(
+        6,
+        controls.len() as u8,
+        StandardGate::U,
+        qubits,
+        [
+            ParameterValue::Fixed(0.731),
+            ParameterValue::Fixed(-0.418),
+            ParameterValue::Fixed(0.293),
+        ],
+    );
     let clean_mask = clean_ancillas
         .iter()
         .fold(0_usize, |mask, qubit| mask | (1 << qubit.index()));
     let clean_columns = (0..expected.ncols()).filter(|state| state & clean_mask == 0);
 
-    assert_selected_columns_approx_eq(&actual, &expected, clean_columns);
+    assert_selected_matrix_columns_approx_eq(&actual, &expected, clean_columns, EPSILON);
 }
 
 #[test]

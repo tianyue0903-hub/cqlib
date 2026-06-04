@@ -1,6 +1,6 @@
 // This code is part of Cqlib.
 //
-// (C) Copyright China Telecom Quantum Group 2026
+// (C) Copyright China Telecom Quantum Group 2025-2026
 //
 // This code is licensed under the Apache License, Version 2.0. You may
 // obtain a copy of this license in the LICENSE.txt file in the root directory
@@ -11,6 +11,23 @@
 // that they have been altered from the originals.
 
 //! Input and output validation for the canonicalization contract.
+//!
+//! Validation is split into two modes. [`VerifyMode::Input`] checks that the
+//! source circuit is structurally safe to rebuild: qubit references must be
+//! known, operation arity must match the instruction, parameter references must
+//! resolve, fixed numeric parameters must be finite, and non-barrier operations
+//! must not repeat qubits.
+//!
+//! [`VerifyMode::Output`] applies the same structural checks and then enforces
+//! the postconditions promised by the active [`CanonicalizeConfig`]. Production
+//! output must not contain top-level `GPhase` operations, must keep any
+//! control-flow-local `GPhase` as a single leading nonzero marker, must not
+//! retain strict no-ops, must contain canonical barrier scopes, and must have a
+//! parameter table with no unused entries.
+//!
+//! The verifier proves only the representation invariants owned by
+//! canonicalization. It does not prove matrix equivalence, target-basis
+//! validity, routing legality, or hardware direction constraints.
 
 use crate::circuit::{
     Circuit, CircuitParam, ControlFlow, Directive, Instruction, Operation, Parameter, StandardGate,

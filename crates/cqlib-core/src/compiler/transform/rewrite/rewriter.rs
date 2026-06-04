@@ -1,6 +1,6 @@
 // This code is part of Cqlib.
 //
-// (C) Copyright China Telecom Quantum Group 2026
+// (C) Copyright China Telecom Quantum Group 2025-2026
 //
 // This code is licensed under the Apache License, Version 2.0. You may
 // obtain a copy of this license in the LICENSE.txt file in the root directory
@@ -28,7 +28,10 @@ use crate::compiler::transform::rewrite::matcher::{
 
 use crate::compiler::transform::{TransformResult, Transformer};
 use smallvec::SmallVec;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+use std::sync::{Arc, OnceLock};
+
+static BUILTIN_COMPILED_RULES: OnceLock<Result<Arc<CompiledRuleSet>, String>> = OnceLock::new();
 
 /// Aggregate statistics produced by one knowledge rewrite run.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -98,6 +101,22 @@ impl KnowledgeRewriter {
     }
 
     /// Runs knowledge-based local rewrite to a fixpoint or round limit.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use cqlib_core::circuit::{Circuit, Qubit};
+    /// use cqlib_core::compiler::transform::KnowledgeRewriter;
+    ///
+    /// let mut circuit = Circuit::new(1);
+    /// circuit.x(Qubit::new(0)).unwrap();
+    /// circuit.x(Qubit::new(0)).unwrap();
+    ///
+    /// let result = KnowledgeRewriter::production().run(&circuit).unwrap();
+    /// assert!(result.stats.rounds_executed >= 1);
+    /// assert!(result.stats.reached_fixpoint);
+    /// let _rewritten = result.circuit;
+    /// ```
     pub fn run(&self, circuit: &Circuit) -> Result<KnowledgeRewriteResult, CompilerError> {
         if self.config.max_rounds() == 0 {
             return Err(CompilerError::InvalidInput(
@@ -105,10 +124,8 @@ impl KnowledgeRewriter {
             ));
         }
 
-        let library = RuleLibrary::builtin_rules()
-            .map_err(|err| CompilerError::InvariantViolation(err.to_string()))?;
-        let rules = CompiledRuleSet::from_library(library)?;
-        let target_context = TargetContext::from_config(&self.config, &rules)?;
+        let rules = builtin_compiled_rules()?;
+        let target_context = TargetContext::from_config(&self.config, rules.as_ref())?;
 
         let mut current = circuit.clone();
         let mut aggregate = KnowledgeRewriteStats::default();
@@ -116,8 +133,12 @@ impl KnowledgeRewriter {
 
         for round in 1..=self.config.max_rounds() {
             aggregate.rounds_executed = round;
-            let (next, round_stats) =
-                RoundRewriter::run(&current, &rules, &self.config, target_context.as_ref())?;
+            let (next, round_stats) = RoundRewriter::run(
+                &current,
+                rules.as_ref(),
+                &self.config,
+                target_context.as_ref(),
+            )?;
             if !round_stats.changed() {
                 aggregate.reached_fixpoint = true;
                 break;
@@ -138,6 +159,20 @@ impl KnowledgeRewriter {
     }
 }
 
+fn builtin_compiled_rules() -> Result<Arc<CompiledRuleSet>, CompilerError> {
+    match BUILTIN_COMPILED_RULES.get_or_init(|| {
+        let library = RuleLibrary::builtin_rules().map_err(|err| err.to_string())?;
+        CompiledRuleSet::from_library(library)
+            .map(Arc::new)
+            .map_err(|err| err.to_string())
+    }) {
+        Ok(rules) => Ok(Arc::clone(rules)),
+        Err(message) => Err(CompilerError::InvariantViolation(message.clone())),
+    }
+}
+
+// Transformer integration exposes only the generic transform result; direct
+// callers should use `KnowledgeRewriter::run` when rewrite statistics matter.
 impl Transformer for KnowledgeRewriter {
     fn transform(&self, circuit: &Circuit) -> Result<TransformResult, CompilerError> {
         let result = self.run(circuit)?;
@@ -254,10 +289,16 @@ impl<'a> RoundRewriter<'a> {
         target: &mut SequenceTarget<'_>,
     ) -> Result<(), CompilerError> {
         let mut patches_by_start = HashMap::new();
-        let mut skipped_positions = HashSet::new();
+        let mut skipped_positions = vec![false; block.len()];
         for patch in patches {
             for &position in &patch.matched_positions {
-                skipped_positions.insert(position);
+                let Some(skipped) = skipped_positions.get_mut(position) else {
+                    return Err(CompilerError::InvariantViolation(format!(
+                        "rewrite patch matched position {position} outside block of length {}",
+                        block.len()
+                    )));
+                };
+                *skipped = true;
             }
             patches_by_start.insert(patch.first_position, patch);
         }
@@ -270,7 +311,7 @@ impl<'a> RoundRewriter<'a> {
                 }
             }
 
-            if skipped_positions.contains(&position) {
+            if skipped_positions[position] {
                 continue;
             }
 

@@ -26,6 +26,7 @@ pub enum DeviceError {
     QubitNotInDevice(PhysicalQubit),
     QubitNotInTopology(PhysicalQubit),
     EdgeNotInTopology(PhysicalQubit, PhysicalQubit),
+    InvalidTopology(TopologyError),
 }
 
 impl fmt::Display for DeviceError {
@@ -50,6 +51,9 @@ impl fmt::Display for DeviceError {
                     "Edge ({}, {}) is not in the device topology",
                     control, target
                 )
+            }
+            Self::InvalidTopology(error) => {
+                write!(f, "Invalid device topology: {error}")
             }
         }
     }

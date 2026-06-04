@@ -1,6 +1,6 @@
 // This code is part of Cqlib.
 //
-// (C) Copyright China Telecom Quantum Group 2026
+// (C) Copyright China Telecom Quantum Group 2025-2026
 //
 // This code is licensed under the Apache License, Version 2.0. You may
 // obtain a copy of this license in the LICENSE.txt file in the root directory
@@ -31,6 +31,28 @@ const MAX_DEFINITION_DEPTH: usize = 64;
 /// The expansion handles [`Instruction::CircuitGate`] and circuit-backed
 /// [`Instruction::UnitaryGate`] operations. Matrix-only unitary gates are left
 /// unchanged for a later synthesis stage.
+///
+/// # Examples
+///
+/// ```rust
+/// use cqlib_core::circuit::{Circuit, Instruction, Qubit, StandardGate};
+/// use cqlib_core::compiler::transform::decompose::expand_definitions;
+///
+/// let mut definition = Circuit::new(1);
+/// definition.h(Qubit::new(0)).unwrap();
+/// let h_definition = definition.to_gate("h_definition").unwrap();
+///
+/// let mut circuit = Circuit::new(1);
+/// circuit
+///     .append(h_definition, [Qubit::new(0)], [], None)
+///     .unwrap();
+///
+/// let expanded = expand_definitions(&circuit).unwrap();
+/// assert!(matches!(
+///     expanded.operations()[0].instruction,
+///     Instruction::Standard(StandardGate::H),
+/// ));
+/// ```
 pub fn expand_definitions(circuit: &Circuit) -> Result<Circuit, CompilerError> {
     DefinitionExpander::new(circuit)?.run()
 }
@@ -39,6 +61,7 @@ struct DefinitionExpander<'a> {
     source: &'a Circuit,
     target: Circuit,
     top_phase: Parameter,
+    parameter_cache: HashMap<Parameter, CircuitParam>,
 }
 
 impl<'a> DefinitionExpander<'a> {
@@ -47,19 +70,26 @@ impl<'a> DefinitionExpander<'a> {
             source,
             target: Circuit::from_qubits(source.qubits())?,
             top_phase: source.global_phase(),
+            parameter_cache: HashMap::new(),
         })
     }
 
     fn run(mut self) -> Result<Circuit, CompilerError> {
-        let qubit_map: HashMap<Qubit, Qubit> =
-            self.source.qubits().into_iter().map(|q| (q, q)).collect();
+        let qubit_map = QubitMap::Identity;
         let symbol_bindings = HashMap::new();
 
         for operation in self.source.operations() {
-            let expanded =
-                self.expand_operation(operation, self.source, &qubit_map, &symbol_bindings, 0)?;
-            self.top_phase = self.top_phase.clone() + expanded.phase;
-            for operation in expanded.operations {
+            let mut operations = Vec::new();
+            let phase = self.expand_operation(
+                operation,
+                self.source,
+                &qubit_map,
+                &symbol_bindings,
+                0,
+                &mut operations,
+            )?;
+            self.top_phase = self.top_phase.clone() + phase;
+            for operation in operations {
                 self.append_top_level(operation)?;
             }
         }
@@ -72,10 +102,11 @@ impl<'a> DefinitionExpander<'a> {
         &mut self,
         operation: &Operation,
         context: &Circuit,
-        qubit_map: &HashMap<Qubit, Qubit>,
+        qubit_map: &QubitMap<'_>,
         symbol_bindings: &HashMap<String, Parameter>,
         depth: usize,
-    ) -> Result<Expansion, CompilerError> {
+        operations: &mut Vec<Operation>,
+    ) -> Result<Parameter, CompilerError> {
         match &operation.instruction {
             Instruction::CircuitGate(gate) => {
                 let definition = gate.circuit();
@@ -89,6 +120,7 @@ impl<'a> DefinitionExpander<'a> {
                     qubit_map,
                     symbol_bindings,
                     depth,
+                    operations,
                 )
             }
             Instruction::UnitaryGate(gate) => {
@@ -103,9 +135,10 @@ impl<'a> DefinitionExpander<'a> {
                         qubit_map,
                         symbol_bindings,
                         depth,
+                        operations,
                     )
                 } else {
-                    self.keep_operation(operation, context, qubit_map, symbol_bindings)
+                    self.keep_operation(operation, context, qubit_map, symbol_bindings, operations)
                 }
             }
             Instruction::ControlFlowGate(flow) => self.expand_control_flow(
@@ -115,11 +148,16 @@ impl<'a> DefinitionExpander<'a> {
                 qubit_map,
                 symbol_bindings,
                 depth,
+                operations,
             ),
-            _ => self.keep_operation(operation, context, qubit_map, symbol_bindings),
+            _ => self.keep_operation(operation, context, qubit_map, symbol_bindings, operations),
         }
     }
 
+    // Definition expansion carries the recursive source context, qubit map,
+    // symbol bindings, depth counter, and output buffer together. Grouping
+    // them into a one-off context type would hide the dataflow without reducing
+    // the actual contract of this recursive call.
     #[allow(clippy::too_many_arguments)]
     fn expand_definition(
         &mut self,
@@ -129,10 +167,11 @@ impl<'a> DefinitionExpander<'a> {
         expected_params: usize,
         operation: &Operation,
         context: &Circuit,
-        qubit_map: &HashMap<Qubit, Qubit>,
+        qubit_map: &QubitMap<'_>,
         symbol_bindings: &HashMap<String, Parameter>,
         depth: usize,
-    ) -> Result<Expansion, CompilerError> {
+        operations: &mut Vec<Operation>,
+    ) -> Result<Parameter, CompilerError> {
         if depth >= MAX_DEFINITION_DEPTH {
             return Err(CompilerError::InvalidInput(format!(
                 "definition expansion exceeded maximum recursion depth {MAX_DEFINITION_DEPTH} while expanding '{name}'"
@@ -184,24 +223,22 @@ impl<'a> DefinitionExpander<'a> {
         for (inner, callsite) in definition_qubits.iter().zip(operation.qubits.iter()) {
             next_qubit_map.insert(*inner, map_qubit(*callsite, qubit_map)?);
         }
+        let next_qubit_map = QubitMap::Mapped(&next_qubit_map);
 
-        let mut expansion = Expansion::phase(apply_symbol_bindings(
-            definition.global_phase(),
-            &next_symbol_bindings,
-        ));
+        let mut phase = apply_symbol_bindings(definition.global_phase(), &next_symbol_bindings);
         for inner_operation in definition.operations() {
-            let inner_expansion = self.expand_operation(
+            let inner_phase = self.expand_operation(
                 inner_operation,
                 definition,
                 &next_qubit_map,
                 &next_symbol_bindings,
                 depth + 1,
+                operations,
             )?;
-            expansion.phase = expansion.phase + inner_expansion.phase;
-            expansion.operations.extend(inner_expansion.operations);
+            phase = phase + inner_phase;
         }
 
-        Ok(expansion)
+        Ok(phase)
     }
 
     fn expand_control_flow(
@@ -209,10 +246,11 @@ impl<'a> DefinitionExpander<'a> {
         operation: &Operation,
         flow: &ControlFlow,
         context: &Circuit,
-        qubit_map: &HashMap<Qubit, Qubit>,
+        qubit_map: &QubitMap<'_>,
         symbol_bindings: &HashMap<String, Parameter>,
         depth: usize,
-    ) -> Result<Expansion, CompilerError> {
+        operations: &mut Vec<Operation>,
+    ) -> Result<Parameter, CompilerError> {
         let instruction = match flow {
             ControlFlow::IfElse(gate) => {
                 let true_body =
@@ -245,19 +283,20 @@ impl<'a> DefinitionExpander<'a> {
             }
         };
 
-        Ok(Expansion::operations(vec![Operation {
+        operations.push(Operation {
             instruction,
             qubits: map_qubits(&operation.qubits, qubit_map)?,
             params: smallvec![],
             label: operation.label.clone(),
-        }]))
+        });
+        Ok(Parameter::from(0.0))
     }
 
     fn expand_body(
         &mut self,
         body: &[Operation],
         context: &Circuit,
-        qubit_map: &HashMap<Qubit, Qubit>,
+        qubit_map: &QubitMap<'_>,
         symbol_bindings: &HashMap<String, Parameter>,
         depth: usize,
     ) -> Result<Vec<Operation>, CompilerError> {
@@ -265,10 +304,15 @@ impl<'a> DefinitionExpander<'a> {
         let mut phase = Parameter::from(0.0);
 
         for operation in body {
-            let expanded =
-                self.expand_operation(operation, context, qubit_map, symbol_bindings, depth)?;
-            phase = phase + expanded.phase;
-            operations.extend(expanded.operations);
+            let operation_phase = self.expand_operation(
+                operation,
+                context,
+                qubit_map,
+                symbol_bindings,
+                depth,
+                &mut operations,
+            )?;
+            phase = phase + operation_phase;
         }
 
         if !phase.is_zero() {
@@ -291,21 +335,23 @@ impl<'a> DefinitionExpander<'a> {
         &mut self,
         operation: &Operation,
         context: &Circuit,
-        qubit_map: &HashMap<Qubit, Qubit>,
+        qubit_map: &QubitMap<'_>,
         symbol_bindings: &HashMap<String, Parameter>,
-    ) -> Result<Expansion, CompilerError> {
+        operations: &mut Vec<Operation>,
+    ) -> Result<Parameter, CompilerError> {
         let params = self
             .resolve_params(context, &operation.params, symbol_bindings)?
             .into_iter()
             .map(|param| self.intern_parameter(param))
             .collect();
 
-        Ok(Expansion::operations(vec![Operation {
+        operations.push(Operation {
             instruction: operation.instruction.clone(),
             qubits: map_qubits(&operation.qubits, qubit_map)?,
             params,
             label: operation.label.clone(),
-        }]))
+        });
+        Ok(Parameter::from(0.0))
     }
 
     fn resolve_params(
@@ -326,9 +372,13 @@ impl<'a> DefinitionExpander<'a> {
     fn intern_parameter(&mut self, parameter: Parameter) -> CircuitParam {
         if let Ok(value) = parameter.evaluate(&None) {
             CircuitParam::Fixed(if value == 0.0 { 0.0 } else { value })
+        } else if let Some(cached) = self.parameter_cache.get(&parameter) {
+            cached.clone()
         } else {
-            let (index, _) = self.target.add_parameter(parameter);
-            CircuitParam::Index(index as u32)
+            let (index, _) = self.target.add_parameter(parameter.clone());
+            let param = CircuitParam::Index(index as u32);
+            self.parameter_cache.insert(parameter, param.clone());
+            param
         }
     }
 
@@ -349,26 +399,9 @@ impl<'a> DefinitionExpander<'a> {
     }
 }
 
-#[derive(Debug)]
-struct Expansion {
-    operations: Vec<Operation>,
-    phase: Parameter,
-}
-
-impl Expansion {
-    fn operations(operations: Vec<Operation>) -> Self {
-        Self {
-            operations,
-            phase: Parameter::from(0.0),
-        }
-    }
-
-    fn phase(phase: Parameter) -> Self {
-        Self {
-            operations: Vec::new(),
-            phase,
-        }
-    }
+enum QubitMap<'a> {
+    Identity,
+    Mapped(&'a HashMap<Qubit, Qubit>),
 }
 
 fn resolve_param(circuit: &Circuit, param: &CircuitParam) -> Result<Parameter, CompilerError> {
@@ -410,8 +443,12 @@ fn circuit_param_to_value(
 
 fn map_qubits(
     qubits: &[Qubit],
-    qubit_map: &HashMap<Qubit, Qubit>,
+    qubit_map: &QubitMap<'_>,
 ) -> Result<SmallVec<[Qubit; 3]>, CompilerError> {
+    if matches!(qubit_map, QubitMap::Identity) {
+        return Ok(qubits.iter().copied().collect());
+    }
+
     let mut mapped = SmallVec::with_capacity(qubits.len());
     for qubit in qubits {
         mapped.push(map_qubit(*qubit, qubit_map)?);
@@ -419,16 +456,26 @@ fn map_qubits(
     Ok(mapped)
 }
 
-fn map_qubit(qubit: Qubit, qubit_map: &HashMap<Qubit, Qubit>) -> Result<Qubit, CompilerError> {
-    qubit_map.get(&qubit).copied().ok_or_else(|| {
-        CompilerError::InvalidInput(format!(
-            "definition expansion references unmapped qubit {qubit}"
-        ))
-    })
+fn map_qubit(qubit: Qubit, qubit_map: &QubitMap<'_>) -> Result<Qubit, CompilerError> {
+    match qubit_map {
+        QubitMap::Identity => Ok(qubit),
+        QubitMap::Mapped(qubit_map) => qubit_map.get(&qubit).copied().ok_or_else(|| {
+            CompilerError::InvalidInput(format!(
+                "definition expansion references unmapped qubit {qubit}"
+            ))
+        }),
+    }
 }
 
 fn apply_symbol_bindings(mut parameter: Parameter, map: &HashMap<String, Parameter>) -> Parameter {
     if map.is_empty() {
+        return parameter;
+    }
+
+    if !binding_values_reference_bound_symbols(map) {
+        for (symbol, value) in map {
+            parameter = parameter.replace(symbol, value.clone());
+        }
         return parameter;
     }
 
@@ -450,6 +497,12 @@ fn apply_symbol_bindings(mut parameter: Parameter, map: &HashMap<String, Paramet
     }
 
     parameter
+}
+
+fn binding_values_reference_bound_symbols(map: &HashMap<String, Parameter>) -> bool {
+    map.values()
+        .flat_map(Parameter::get_symbols)
+        .any(|symbol| map.contains_key(&symbol))
 }
 
 fn fresh_temp_symbol(index: usize, symbol: &str, occupied: &mut HashSet<String>) -> String {

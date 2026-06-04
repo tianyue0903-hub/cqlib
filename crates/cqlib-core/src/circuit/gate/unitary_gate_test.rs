@@ -1,3 +1,15 @@
+// This code is part of Cqlib.
+//
+// (C) Copyright China Telecom Quantum Group 2026
+//
+// This code is licensed under the Apache License, Version 2.0. You may
+// obtain a copy of this license in the LICENSE.txt file in the root directory
+// of this source tree or at http://www.apache.org/licenses/LICENSE-2.0.
+//
+// Any modifications or derivative works of this code must retain this
+// copyright notice, and modified files need to carry a notice indicating
+// that they have been altered from the originals.
+
 use super::*;
 use crate::circuit::circuit_to_matrix;
 use crate::circuit::gate::StandardGate;
@@ -5,19 +17,10 @@ use crate::circuit::symbolic_matrix::{
     SymbolicComplex, standard_gate_symbolic_matrix, symbolic_eye,
 };
 use crate::circuit::{Circuit, Parameter, Qubit};
+use crate::util::matrix::c;
 use ndarray::array;
 use std::f64::consts::PI;
 use std::sync::Arc;
-
-fn c(re: f64, im: f64) -> Complex<f64> {
-    Complex::new(re, im)
-}
-
-fn symbolic_rx_matrix(symbol: &str) -> crate::circuit::symbolic_matrix::SymbolicMatrix {
-    standard_gate_symbolic_matrix(StandardGate::RX, &[Parameter::symbol(symbol)]).unwrap()
-}
-
-// Construction and basic getters
 
 #[test]
 fn test_new_initializes_all_getters() {
@@ -30,8 +33,6 @@ fn test_new_initializes_all_getters() {
     assert!(gate.matrix_params().is_none());
     assert!(gate.circuit().is_none());
 }
-
-// with_matrix
 
 #[test]
 fn test_with_matrix_success() {
@@ -95,12 +96,13 @@ fn test_with_matrix_rejects_non_square() {
     assert!(matches!(err, CircuitError::InvalidOperation(_)));
 }
 
-// with_symbolic_matrix
-
 #[test]
 fn test_with_symbolic_matrix_success() {
     let gate = UnitaryGate::new("Rx", 1, 1)
-        .with_symbolic_matrix(["theta"], symbolic_rx_matrix("theta"))
+        .with_symbolic_matrix(
+            ["theta"],
+            standard_gate_symbolic_matrix(StandardGate::RX, &[Parameter::symbol("theta")]).unwrap(),
+        )
         .unwrap();
 
     assert!(gate.symbolic_matrix().is_some());
@@ -121,7 +123,10 @@ fn test_symbolic_matrix_rejects_wrong_shape() {
 #[test]
 fn test_symbolic_matrix_rejects_param_count_mismatch() {
     let err = UnitaryGate::new("BadSymbolic", 1, 2)
-        .with_symbolic_matrix(["theta"], symbolic_rx_matrix("theta"))
+        .with_symbolic_matrix(
+            ["theta"],
+            standard_gate_symbolic_matrix(StandardGate::RX, &[Parameter::symbol("theta")]).unwrap(),
+        )
         .unwrap_err();
 
     assert!(matches!(
@@ -136,7 +141,10 @@ fn test_symbolic_matrix_rejects_param_count_mismatch() {
 #[test]
 fn test_symbolic_matrix_rejects_duplicate_params() {
     let err = UnitaryGate::new("BadSymbolic", 1, 2)
-        .with_symbolic_matrix(["theta", "theta"], symbolic_rx_matrix("theta"))
+        .with_symbolic_matrix(
+            ["theta", "theta"],
+            standard_gate_symbolic_matrix(StandardGate::RX, &[Parameter::symbol("theta")]).unwrap(),
+        )
         .unwrap_err();
 
     assert!(matches!(err, CircuitError::InvalidOperation(_)));
@@ -144,14 +152,14 @@ fn test_symbolic_matrix_rejects_duplicate_params() {
 
 #[test]
 fn test_symbolic_matrix_rejects_undeclared_symbol() {
-    let gate = UnitaryGate::new("BadFactory", 1, 1)
-        .with_symbolic_matrix(["phi"], symbolic_rx_matrix("theta"));
+    let gate = UnitaryGate::new("BadFactory", 1, 1).with_symbolic_matrix(
+        ["phi"],
+        standard_gate_symbolic_matrix(StandardGate::RX, &[Parameter::symbol("theta")]).unwrap(),
+    );
 
     let err = gate.unwrap_err();
     assert!(matches!(err, CircuitError::InvalidOperation(_)));
 }
-
-// matrix_for_params – static matrix path
 
 #[test]
 fn test_matrix_for_params_returns_borrowed_for_static_matrix() {
@@ -163,12 +171,13 @@ fn test_matrix_for_params_returns_borrowed_for_static_matrix() {
     assert_eq!(result.nrows(), 2);
 }
 
-// matrix_for_params – symbolic matrix path
-
 #[test]
 fn test_matrix_for_params_returns_owned_for_symbolic_matrix() {
     let gate = UnitaryGate::new("Rx", 1, 1)
-        .with_symbolic_matrix(["theta"], symbolic_rx_matrix("theta"))
+        .with_symbolic_matrix(
+            ["theta"],
+            standard_gate_symbolic_matrix(StandardGate::RX, &[Parameter::symbol("theta")]).unwrap(),
+        )
         .unwrap();
 
     let result = gate.matrix_for_params(&[PI]).unwrap();
@@ -181,8 +190,6 @@ fn test_matrix_for_params_returns_owned_for_symbolic_matrix() {
     assert!((result[[1, 0]].im + 1.0).abs() < 1e-10);
     assert!((result[[1, 1]].re).abs() < 1e-10);
 }
-
-// matrix_for_params – circuit-backed path
 
 #[test]
 fn test_matrix_for_params_circuit_backed_static() {
@@ -223,8 +230,6 @@ fn test_matrix_for_params_circuit_backed_parameterized() {
     assert!((result[[1, 0]].im + 1.0).abs() < 1e-10);
 }
 
-// matrix_for_params – parameter validation
-
 #[test]
 fn test_matrix_for_params_wrong_param_count() {
     let matrix = Array2::eye(2).mapv(|v| c(v, 0.0));
@@ -242,7 +247,10 @@ fn test_matrix_for_params_wrong_param_count() {
 
     // Too few params for a parameterized symbolic gate
     let gate = UnitaryGate::new("Rx", 1, 1)
-        .with_symbolic_matrix(["theta"], symbolic_rx_matrix("theta"))
+        .with_symbolic_matrix(
+            ["theta"],
+            standard_gate_symbolic_matrix(StandardGate::RX, &[Parameter::symbol("theta")]).unwrap(),
+        )
         .unwrap();
 
     let err = gate.matrix_for_params(&[]).unwrap_err();
@@ -258,7 +266,10 @@ fn test_matrix_for_params_wrong_param_count() {
 #[test]
 fn test_matrix_for_params_rejects_nan() {
     let gate = UnitaryGate::new("Rx", 1, 1)
-        .with_symbolic_matrix(["theta"], symbolic_rx_matrix("theta"))
+        .with_symbolic_matrix(
+            ["theta"],
+            standard_gate_symbolic_matrix(StandardGate::RX, &[Parameter::symbol("theta")]).unwrap(),
+        )
         .unwrap();
 
     let err = gate.matrix_for_params(&[f64::NAN]).unwrap_err();
@@ -271,7 +282,10 @@ fn test_matrix_for_params_rejects_nan() {
 #[test]
 fn test_matrix_for_params_rejects_infinity() {
     let gate = UnitaryGate::new("Rx", 1, 1)
-        .with_symbolic_matrix(["theta"], symbolic_rx_matrix("theta"))
+        .with_symbolic_matrix(
+            ["theta"],
+            standard_gate_symbolic_matrix(StandardGate::RX, &[Parameter::symbol("theta")]).unwrap(),
+        )
         .unwrap();
 
     let err = gate.matrix_for_params(&[f64::INFINITY]).unwrap_err();
@@ -293,8 +307,6 @@ fn test_matrix_for_params_no_representation() {
     let err = gate.matrix_for_params(&[]).unwrap_err();
     assert!(matches!(err, CircuitError::NoMatrixRepresentation));
 }
-
-// with_circuit
 
 #[test]
 fn test_with_circuit_success() {
@@ -342,8 +354,6 @@ fn test_with_circuit_validates_signature() {
         }
     ));
 }
-
-// Identity (Eq, Hash, Clone)
 
 #[test]
 fn test_equality_based_on_uuid() {
@@ -401,7 +411,10 @@ fn test_debug_contains_struct_name_and_fields() {
 #[test]
 fn test_debug_symbolic_matrix_shows_params() {
     let gate = UnitaryGate::new("ParamGate", 1, 1)
-        .with_symbolic_matrix(["theta"], symbolic_rx_matrix("theta"))
+        .with_symbolic_matrix(
+            ["theta"],
+            standard_gate_symbolic_matrix(StandardGate::RX, &[Parameter::symbol("theta")]).unwrap(),
+        )
         .unwrap();
     let debug = format!("{:?}", gate);
     assert!(debug.contains("matrix_params: Some([\"theta\"])"));
@@ -455,19 +468,17 @@ fn test_matrix_for_params_rejects_non_unitary_from_symbolic_matrix() {
 
 #[test]
 fn test_matrix_for_params_rejects_invalid_symbolic_expression() {
-    let nan = SymbolicComplex::from_real(f64::NAN);
+    let invalid_at_evaluation = SymbolicComplex::from_real(Parameter::symbol("theta").sqrt());
     let matrix = array![
-        [nan, SymbolicComplex::zero()],
+        [invalid_at_evaluation, SymbolicComplex::zero()],
         [SymbolicComplex::zero(), SymbolicComplex::one()],
     ];
     let gate = UnitaryGate::new("BadFactory", 1, 1)
         .with_symbolic_matrix(["theta"], matrix)
         .unwrap();
-    let err = gate.matrix_for_params(&[0.0]).unwrap_err();
+    let err = gate.matrix_for_params(&[-1.0]).unwrap_err();
     assert!(matches!(err, CircuitError::SymbolicParameterError));
 }
-
-// B. Combination behavior and edge cases
 
 #[test]
 fn test_matrix_and_circuit_both_set_prefers_matrix() {

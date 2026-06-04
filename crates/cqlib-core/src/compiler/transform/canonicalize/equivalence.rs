@@ -1,6 +1,6 @@
 // This code is part of Cqlib.
 //
-// (C) Copyright China Telecom Quantum Group 2026
+// (C) Copyright China Telecom Quantum Group 2025-2026
 //
 // This code is licensed under the Apache License, Version 2.0. You may
 // obtain a copy of this license in the LICENSE.txt file in the root directory
@@ -11,6 +11,20 @@
 // that they have been altered from the originals.
 
 //! Representation equality used for canonicalization fixed-point detection.
+//!
+//! This module defines equivalence only for the canonicalizer's convergence
+//! loop. Two circuits are equivalent here when their compiler IR
+//! representation is identical in every field that canonicalization is allowed
+//! to stabilize: qubit order, symbol and parameter tables, global phase,
+//! operation sequence, labels, operands, and recursively stored control-flow
+//! bodies.
+//!
+//! This is deliberately not unitary equivalence, semantic equivalence, or
+//! control-flow logical equivalence. For example, two different gate sequences
+//! with the same matrix are not equivalent for this module unless the
+//! canonicalizer has already rewritten them to the same representation. Keeping
+//! this predicate representation-based makes fixed-point detection cheap,
+//! deterministic, and aligned with the pass contract.
 
 use crate::circuit::{Circuit, CircuitParam, ControlFlow, Instruction, Operation};
 

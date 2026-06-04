@@ -1,6 +1,6 @@
 // This code is part of Cqlib.
 //
-// (C) Copyright China Telecom Quantum Group 2026
+// (C) Copyright China Telecom Quantum Group 2025-2026
 //
 // This code is licensed under the Apache License, Version 2.0. You may
 // obtain a copy of this license in the LICENSE.txt file in the root directory
@@ -39,6 +39,7 @@ use crate::compiler::CompilerError;
 use crate::util::matrix::{c, det_2x2};
 use faer::Mat;
 use faer::Side::Lower;
+use lazy_static::lazy_static;
 use ndarray::{Array1, Array2, array};
 use num_complex::Complex64;
 use std::f64::consts::{FRAC_PI_2, FRAC_PI_4, PI, TAU};
@@ -66,6 +67,18 @@ static B_DAG_RAW: [[Complex64; 4]; 4] = [
 const IPX: [[Complex64; 2]; 2] = [[c(0.0, 0.0), c(0.0, 1.0)], [c(0.0, 1.0), c(0.0, 0.0)]];
 const IPY: [[Complex64; 2]; 2] = [[c(0.0, 0.0), c(1.0, 0.0)], [c(-1.0, 0.0), c(0.0, 0.0)]];
 const IPZ: [[Complex64; 2]; 2] = [[c(0.0, 1.0), c(0.0, 0.0)], [c(0.0, 0.0), c(0.0, -1.0)]];
+
+lazy_static! {
+    static ref B: Array2<Complex64> = Array2::from_shape_fn((4, 4), |(row, col)| B_RAW[row][col]);
+    static ref B_DAG: Array2<Complex64> =
+        Array2::from_shape_fn((4, 4), |(row, col)| B_DAG_RAW[row][col]);
+    static ref IPX_MATRIX: Array2<Complex64> =
+        Array2::from_shape_fn((2, 2), |(row, col)| IPX[row][col]);
+    static ref IPY_MATRIX: Array2<Complex64> =
+        Array2::from_shape_fn((2, 2), |(row, col)| IPY[row][col]);
+    static ref IPZ_MATRIX: Array2<Complex64> =
+        Array2::from_shape_fn((2, 2), |(row, col)| IPZ[row][col]);
+}
 
 fn kak_failed(reason: impl Into<String>) -> CompilerError {
     CompilerError::TransformFailed {
@@ -125,9 +138,7 @@ pub(super) fn kak_decompose(matrix: &Array2<Complex64>) -> Result<KakDecompositi
     let u_su4 = matrix.mapv(|value| det_pow * value);
     let mut global_phase = det_u.arg() / 4.0;
 
-    let b = Array2::from_shape_fn((4, 4), |(row, col)| B_RAW[row][col]);
-    let b_dag = Array2::from_shape_fn((4, 4), |(row, col)| B_DAG_RAW[row][col]);
-    let u_p = b_dag.dot(&u_su4.dot(&b));
+    let u_p = B_DAG.dot(&u_su4.dot(&*B));
 
     let m2_raw = u_p.t().to_owned().dot(&u_p);
     let max_diff = max_entry_diff(&m2_raw, &m2_raw.t().to_owned());
@@ -196,42 +207,49 @@ pub(super) fn kak_decompose(matrix: &Array2<Complex64>) -> Result<KakDecompositi
     ));
     let u_p_p_d_inv = u_p.dot(&p.dot(&diag_d_inv));
     let p_t = p.t().to_owned();
-    let k1_magic = b.dot(&u_p_p_d_inv.dot(&b_dag));
-    let k2_magic = b.dot(&p_t.dot(&b_dag));
+    let k1_magic = B.dot(&u_p_p_d_inv.dot(&*B_DAG));
+    let k2_magic = B.dot(&p_t.dot(&*B_DAG));
 
     let (mut k1l, mut k1r, phase_l) = decompose_two_qubit_product_gate(&k1_magic)?;
     let (k2l, mut k2r, phase_r) = decompose_two_qubit_product_gate(&k2_magic)?;
     global_phase += phase_l + phase_r;
 
-    let ipx = Array2::from_shape_fn((2, 2), |(row, col)| IPX[row][col]);
-    let ipy = Array2::from_shape_fn((2, 2), |(row, col)| IPY[row][col]);
-    let ipz = Array2::from_shape_fn((2, 2), |(row, col)| IPZ[row][col]);
-
+    // The raw Cartan coordinates are periodic modulo pi/2 under local Pauli
+    // conjugations. If the first coordinate lies beyond the pi/2 boundary,
+    // translate it back by 3pi/2 and absorb the equivalent Y conjugation into
+    // the left local factors. The scalar introduced by the local matrices is
+    // tracked in the global phase.
     if cs[0] > FRAC_PI_2 {
         cs[0] -= 3.0 * FRAC_PI_2;
-        k1l = k1l.dot(&ipy);
-        k1r = k1r.dot(&ipy);
+        k1l = k1l.dot(&*IPY_MATRIX);
+        k1r = k1r.dot(&*IPY_MATRIX);
         global_phase += FRAC_PI_2;
     }
+    // Same periodic-boundary correction for the second coordinate, using the
+    // X local conjugation associated with that Weyl-axis permutation.
     if cs[1] > FRAC_PI_2 {
         cs[1] -= 3.0 * FRAC_PI_2;
-        k1l = k1l.dot(&ipx);
-        k1r = k1r.dot(&ipx);
+        k1l = k1l.dot(&*IPX_MATRIX);
+        k1r = k1r.dot(&*IPX_MATRIX);
         global_phase += FRAC_PI_2;
     }
 
+    // Reflections across the pi/4 chamber walls move the first two
+    // coordinates into the canonical Weyl chamber. `conjs` records whether an
+    // odd number of these reflections occurred; that parity determines the
+    // later correction needed for the third coordinate.
     let mut conjs = 0u32;
     if cs[0] > FRAC_PI_4 {
         cs[0] = FRAC_PI_2 - cs[0];
-        k1l = k1l.dot(&ipy);
-        k2r = ipy.dot(&k2r);
+        k1l = k1l.dot(&*IPY_MATRIX);
+        k2r = IPY_MATRIX.dot(&k2r);
         conjs += 1;
         global_phase -= FRAC_PI_2;
     }
     if cs[1] > FRAC_PI_4 {
         cs[1] = FRAC_PI_2 - cs[1];
-        k1l = k1l.dot(&ipx);
-        k2r = ipx.dot(&k2r);
+        k1l = k1l.dot(&*IPX_MATRIX);
+        k2r = IPX_MATRIX.dot(&k2r);
         conjs += 1;
         global_phase += FRAC_PI_2;
         if conjs == 1 {
@@ -239,25 +257,34 @@ pub(super) fn kak_decompose(matrix: &Array2<Complex64>) -> Result<KakDecompositi
         }
     }
 
+    // The third coordinate first gets the same pi/2 periodic-boundary
+    // correction. When exactly one earlier reflection occurred, the local
+    // conjugation parity contributes an additional scalar sign, represented as
+    // a pi shift in the accumulated global phase.
     if cs[2] > FRAC_PI_2 {
         cs[2] -= 3.0 * FRAC_PI_2;
-        k1l = k1l.dot(&ipz);
-        k1r = k1r.dot(&ipz);
+        k1l = k1l.dot(&*IPZ_MATRIX);
+        k1r = k1r.dot(&*IPZ_MATRIX);
         global_phase += FRAC_PI_2;
         if conjs == 1 {
             global_phase -= PI;
         }
     }
+    // An odd number of earlier chamber reflections flips the orientation of
+    // the third axis. Reflect it through the pi/4 wall and absorb the matching
+    // Z conjugations into the local factors.
     if conjs == 1 {
         cs[2] = FRAC_PI_2 - cs[2];
-        k1l = k1l.dot(&ipz);
-        k2r = ipz.dot(&k2r);
+        k1l = k1l.dot(&*IPZ_MATRIX);
+        k2r = IPZ_MATRIX.dot(&k2r);
         global_phase += FRAC_PI_2;
     }
+    // Finally fold the third coordinate from the outer half of the chamber
+    // into the signed interval used by the emitted XX/YY/ZZ interaction block.
     if cs[2] > FRAC_PI_4 {
         cs[2] -= FRAC_PI_2;
-        k1l = k1l.dot(&ipz);
-        k1r = k1r.dot(&ipz);
+        k1l = k1l.dot(&*IPZ_MATRIX);
+        k1r = k1r.dot(&*IPZ_MATRIX);
         global_phase -= FRAC_PI_2;
     }
 
@@ -484,10 +511,19 @@ fn autonne_decompose(
 
         let width = end - start;
         if width == 1 {
+            // A non-degenerate real eigenvalue already fixes a real Autonne
+            // basis vector, so it can be copied directly from the real-part
+            // eigensystem.
             for row in 0..4 {
                 p_real[row][start] = real_basis[(row, start)];
             }
         } else {
+            // Inside a degenerate eigenspace of Re(M2), any orthonormal basis
+            // diagonalizes the real part. We must diagonalize Im(M2) restricted
+            // to that subspace as well; otherwise P^T M2 P need not be
+            // diagonal even though the real part is. The resulting real basis
+            // simultaneously diagonalizes the commuting real and imaginary
+            // parts of the complex symmetric unitary.
             let imag_block = Mat::from_fn(width, width, |row, col| {
                 let mut value = 0.0_f64;
                 for i in 0..4 {

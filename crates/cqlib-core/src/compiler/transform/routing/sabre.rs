@@ -1,6 +1,6 @@
 // This code is part of Cqlib.
 //
-// (C) Copyright China Telecom Quantum Group 2026
+// (C) Copyright China Telecom Quantum Group 2025-2026
 //
 // This code is licensed under the Apache License, Version 2.0. You may
 // obtain a copy of this license in the LICENSE.txt file in the root directory
@@ -10,17 +10,19 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
-//! Device-aware routing transforms.
+//! SABRE routing transform.
 //!
-//! This module exposes transform-level routing entry points. The SABRE
-//! algorithm itself lives in [`crate::compiler::sabre`]; this layer defines the
-//! routing transform contract and result shape used by compiler callers.
+//! This module adapts the compiler SABRE core into a transform-level routing
+//! entry point. The algorithm implementation remains in
+//! [`crate::compiler::sabre`]; this layer owns only the public transform result
+//! shape and the `route_sabre` API.
 
-use crate::circuit::{Circuit, Instruction, Operation, StandardGate};
+use crate::circuit::{Circuit, CircuitGate, CircuitParam, ControlFlow, Instruction, Operation};
 use crate::compiler::CompilerError;
 use crate::compiler::sabre::{SabreConfig, SabreRoutingDiagnostics, sabre_layout_and_route};
 use crate::compiler::transform::layout::{LayoutObjective, LayoutScore};
-use crate::device::{Device, Layout};
+use crate::device::{Device, Layout, LogicalQubit, PhysicalQubit};
+use std::sync::Arc;
 
 /// Routed circuit and transform-level routing metadata.
 #[derive(Debug, Clone)]
@@ -43,9 +45,20 @@ pub struct RoutingResult {
 
 /// Selects a SABRE initial layout and routes `circuit` for `device`.
 ///
-/// The returned circuit is rebuilt over usable physical qubit identifiers and
-/// includes inserted [`StandardGate::SWAP`] operations when the selected layout
-/// alone cannot satisfy the physical topology.
+/// This function first runs SABRE layout refinement, then routes the original
+/// forward circuit from the selected initial layout. The returned circuit is
+/// rebuilt over usable physical qubit identifiers and includes inserted
+/// [`StandardGate::SWAP`] operations when the selected layout alone cannot
+/// satisfy the physical topology.
+///
+/// Equal deterministic seeds in [`SabreConfig`] produce equal cqlib routing
+/// results for the same circuit and device.
+///
+/// # Limitations
+///
+/// This transform does not perform target-basis lowering, directed native-gate
+/// validation, or compiler workflow selection. Callers should run required
+/// decomposition and basis translation passes explicitly.
 ///
 /// # Errors
 ///
@@ -60,7 +73,12 @@ pub fn route_sabre(
     config: &SabreConfig,
 ) -> Result<RoutingResult, CompilerError> {
     let result = sabre_layout_and_route(circuit, device, objective, config)?;
-    let changed = circuit_changed_by_routing(circuit, &result.routing.circuit);
+    let changed = routing_changed(
+        circuit,
+        &result.routing.circuit,
+        result.routing.swap_count,
+        &result.routing.initial_layout,
+    );
 
     Ok(RoutingResult {
         circuit: result.routing.circuit,
@@ -73,30 +91,126 @@ pub fn route_sabre(
     })
 }
 
-fn circuit_changed_by_routing(input: &Circuit, routed: &Circuit) -> bool {
-    input.qubits() != routed.qubits()
+fn routing_changed(
+    input: &Circuit,
+    routed: &Circuit,
+    swap_count: usize,
+    initial_layout: &Layout,
+) -> bool {
+    // Any inserted SWAP, physical-qubit renumbering, or global-phase change is
+    // observable at the transform-result level even if the operation sequence
+    // would otherwise compare equal.
+    if swap_count > 0
+        || input.qubits() != routed.qubits()
         || input.global_phase() != routed.global_phase()
-        || input.operations().len() != routed.operations().len()
-        || input
-            .operations()
+    {
+        return true;
+    }
+
+    // A no-SWAP route can still change the representation when SABRE selected
+    // a non-identity initial layout: operations are emitted on physical qubit
+    // ids, so the qubit operands differ even without inserted SWAPs.
+    if !initial_layout_is_identity_for_input(input, initial_layout) {
+        return true;
+    }
+
+    // At this point the route claims no SWAPs, identity logical->physical
+    // layout, identical qubit list, and identical global phase. SABRE should
+    // therefore have preserved the ordinary operation representation as well.
+    debug_assert!(
+        operation_slices_equal(input.operations(), routed.operations()),
+        "SABRE reported identity no-swap routing but changed operations"
+    );
+    false
+}
+
+fn initial_layout_is_identity_for_input(input: &Circuit, layout: &Layout) -> bool {
+    input.qubits().into_iter().all(|qubit| {
+        layout.get_physical(LogicalQubit::from_qubit(qubit))
+            == Some(PhysicalQubit::from_qubit(qubit))
+    })
+}
+
+fn operation_slices_equal(lhs: &[Operation], rhs: &[Operation]) -> bool {
+    lhs.len() == rhs.len()
+        && lhs
             .iter()
-            .zip(routed.operations())
-            .any(|(left, right)| operation_changed_by_routing(left, right))
-        || routed.operations().iter().any(is_swap)
+            .zip(rhs)
+            .all(|(left, right)| operations_equal(left, right))
 }
 
-fn operation_changed_by_routing(left: &Operation, right: &Operation) -> bool {
-    left.qubits != right.qubits
-        || format!("{:?}", left.params) != format!("{:?}", right.params)
-        || left.label != right.label
-        || format!("{:?}", left.instruction) != format!("{:?}", right.instruction)
+fn operations_equal(lhs: &Operation, rhs: &Operation) -> bool {
+    lhs.qubits == rhs.qubits
+        && params_equal(&lhs.params, &rhs.params)
+        && lhs.label == rhs.label
+        && instructions_equal(&lhs.instruction, &rhs.instruction)
 }
 
-fn is_swap(operation: &Operation) -> bool {
-    matches!(
-        operation.instruction,
-        Instruction::Standard(StandardGate::SWAP)
-    )
+fn params_equal(lhs: &[CircuitParam], rhs: &[CircuitParam]) -> bool {
+    lhs.len() == rhs.len()
+        && lhs
+            .iter()
+            .zip(rhs)
+            .all(|(left, right)| param_equal(left, right))
+}
+
+fn param_equal(lhs: &CircuitParam, rhs: &CircuitParam) -> bool {
+    match (lhs, rhs) {
+        (CircuitParam::Index(left), CircuitParam::Index(right)) => left == right,
+        (CircuitParam::Fixed(left), CircuitParam::Fixed(right)) => {
+            left.to_bits() == right.to_bits()
+        }
+        _ => false,
+    }
+}
+
+fn instructions_equal(lhs: &Instruction, rhs: &Instruction) -> bool {
+    match (lhs, rhs) {
+        (Instruction::Standard(left), Instruction::Standard(right)) => left == right,
+        (Instruction::McGate(left), Instruction::McGate(right)) => left == right,
+        (Instruction::UnitaryGate(left), Instruction::UnitaryGate(right)) => left == right,
+        (Instruction::CircuitGate(left), Instruction::CircuitGate(right)) => {
+            circuit_gates_equal(left, right)
+        }
+        (Instruction::Directive(left), Instruction::Directive(right)) => left == right,
+        (Instruction::ControlFlowGate(left), Instruction::ControlFlowGate(right)) => {
+            control_flows_equal(left, right)
+        }
+        (Instruction::Delay, Instruction::Delay) => true,
+        _ => false,
+    }
+}
+
+fn circuit_gates_equal(lhs: &CircuitGate, rhs: &CircuitGate) -> bool {
+    let lhs_circuit = lhs.circuit();
+    let rhs_circuit = rhs.circuit();
+    lhs.name() == rhs.name()
+        && lhs.num_qubits() == rhs.num_qubits()
+        && lhs.num_params() == rhs.num_params()
+        && Arc::ptr_eq(&lhs_circuit, &rhs_circuit)
+}
+
+fn control_flows_equal(lhs: &ControlFlow, rhs: &ControlFlow) -> bool {
+    match (lhs, rhs) {
+        (ControlFlow::IfElse(left), ControlFlow::IfElse(right)) => {
+            left.condition() == right.condition()
+                && operation_slices_equal(left.true_body(), right.true_body())
+                && optional_operation_slices_equal(left.false_body(), right.false_body())
+        }
+        (ControlFlow::WhileLoop(left), ControlFlow::WhileLoop(right)) => {
+            left.condition() == right.condition()
+                && operation_slices_equal(left.body(), right.body())
+        }
+        _ => false,
+    }
+}
+
+fn optional_operation_slices_equal(lhs: Option<&[Operation]>, rhs: Option<&[Operation]>) -> bool {
+    match (lhs, rhs) {
+        (Some(left), Some(right)) => operation_slices_equal(left, right),
+        (None, None) => true,
+        _ => false,
+    }
 }
 
 #[cfg(test)]

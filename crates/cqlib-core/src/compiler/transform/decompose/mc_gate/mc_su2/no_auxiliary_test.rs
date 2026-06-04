@@ -1,6 +1,6 @@
 // This code is part of Cqlib.
 //
-// (C) Copyright China Telecom Quantum Group 2026
+// (C) Copyright China Telecom Quantum Group 2025-2026
 //
 // This code is licensed under the Apache License, Version 2.0. You may
 // obtain a copy of this license in the LICENSE.txt file in the root directory
@@ -11,85 +11,15 @@
 // that they have been altered from the originals.
 
 use super::{Su2RotationAxis, decompose_mc_su2_no_aux};
-use crate::circuit::{
-    Circuit, Instruction, MCGate, Parameter, ParameterValue, Qubit, StandardGate,
-    circuit_to_matrix, operation::ValueOperation,
-};
+use crate::circuit::{Parameter, ParameterValue, Qubit, StandardGate, circuit_to_matrix};
 use crate::compiler::error::CompilerError;
 use crate::util::test_utils::{
-    assert_standard_operation, assert_value_operations_only_use_qubits,
-    circuit_from_value_operations,
+    EPSILON, assert_fixed_parameter_operation, assert_matrix_approx_eq, assert_standard_operation,
+    assert_value_operations_only_use_qubits, circuit_from_value_operations, controlled_rotation,
+    mc_gate_matrix, rotation,
 };
-use ndarray::{Array1, Array2};
+use ndarray::Array1;
 use num_complex::Complex64;
-
-const EPSILON: f64 = 1e-9;
-
-fn rotation(axis: Su2RotationAxis) -> StandardGate {
-    match axis {
-        Su2RotationAxis::X => StandardGate::RX,
-        Su2RotationAxis::Y => StandardGate::RY,
-        Su2RotationAxis::Z => StandardGate::RZ,
-    }
-}
-
-fn controlled_rotation(axis: Su2RotationAxis) -> StandardGate {
-    match axis {
-        Su2RotationAxis::X => StandardGate::CRX,
-        Su2RotationAxis::Y => StandardGate::CRY,
-        Su2RotationAxis::Z => StandardGate::CRZ,
-    }
-}
-
-fn mc_rotation_matrix(
-    num_qubits: usize,
-    controls: &[Qubit],
-    target: Qubit,
-    axis: Su2RotationAxis,
-    theta: f64,
-) -> Array2<Complex64> {
-    let mut circuit = Circuit::new(num_qubits);
-    let mut qubits = controls.to_vec();
-    qubits.push(target);
-    circuit
-        .append(
-            Instruction::McGate(Box::new(MCGate::new(controls.len() as u8, rotation(axis)))),
-            qubits,
-            [ParameterValue::Fixed(theta)],
-            None,
-        )
-        .unwrap();
-    circuit_to_matrix(&circuit, None).unwrap()
-}
-
-fn assert_matrix_approx_eq(actual: &Array2<Complex64>, expected: &Array2<Complex64>) {
-    assert_eq!(actual.shape(), expected.shape());
-    for ((row, column), expected_amplitude) in expected.indexed_iter() {
-        assert!(
-            (actual[[row, column]] - expected_amplitude).norm() < EPSILON,
-            "matrix mismatch at row {row}, column {column}: actual={}, expected={expected_amplitude}",
-            actual[[row, column]]
-        );
-    }
-}
-
-fn assert_fixed_parameterized_operation(
-    operation: &ValueOperation,
-    expected_gate: StandardGate,
-    expected_qubits: &[Qubit],
-    expected_theta: f64,
-) {
-    assert!(matches!(
-        operation.instruction,
-        Instruction::Standard(gate) if gate == expected_gate
-    ));
-    assert_eq!(operation.qubits.as_slice(), expected_qubits);
-    assert!(matches!(
-        operation.params.as_slice(),
-        [ParameterValue::Fixed(theta)] if theta.to_bits() == expected_theta.to_bits()
-    ));
-    assert!(operation.label.is_none());
-}
 
 #[test]
 fn zero_controls_emit_standard_rotations() {
@@ -99,7 +29,7 @@ fn zero_controls_emit_standard_rotations() {
             decompose_mc_su2_no_aux(axis, &ParameterValue::Fixed(0.75), &[], target).unwrap();
 
         assert_eq!(operations.len(), 1);
-        assert_fixed_parameterized_operation(&operations[0], rotation(axis), &[target], 0.75);
+        assert_fixed_parameter_operation(&operations[0], rotation(axis), &[target], 0.75);
     }
 }
 
@@ -113,7 +43,7 @@ fn one_control_emits_standard_controlled_rotations() {
                 .unwrap();
 
         assert_eq!(operations.len(), 1);
-        assert_fixed_parameterized_operation(
+        assert_fixed_parameter_operation(
             &operations[0],
             controlled_rotation(axis),
             &[control, target],
@@ -137,13 +67,13 @@ fn two_control_rz_emits_exact_vale_sequence() {
 
     assert_eq!(operations.len(), 8);
     assert_standard_operation(&operations[0], StandardGate::CX, &[first, target]);
-    assert_fixed_parameterized_operation(&operations[1], StandardGate::RZ, &[target], -0.2);
+    assert_fixed_parameter_operation(&operations[1], StandardGate::RZ, &[target], -0.2);
     assert_standard_operation(&operations[2], StandardGate::CX, &[second, target]);
-    assert_fixed_parameterized_operation(&operations[3], StandardGate::RZ, &[target], 0.2);
+    assert_fixed_parameter_operation(&operations[3], StandardGate::RZ, &[target], 0.2);
     assert_standard_operation(&operations[4], StandardGate::CX, &[first, target]);
-    assert_fixed_parameterized_operation(&operations[5], StandardGate::RZ, &[target], -0.2);
+    assert_fixed_parameter_operation(&operations[5], StandardGate::RZ, &[target], -0.2);
     assert_standard_operation(&operations[6], StandardGate::CX, &[second, target]);
-    assert_fixed_parameterized_operation(&operations[7], StandardGate::RZ, &[target], 0.2);
+    assert_fixed_parameter_operation(&operations[7], StandardGate::RZ, &[target], 0.2);
 }
 
 #[test]
@@ -161,13 +91,13 @@ fn two_control_rx_uses_h_conjugation_and_internal_rz_rotations() {
     assert_eq!(operations.len(), 10);
     assert_standard_operation(&operations[0], StandardGate::H, &[target]);
     assert_standard_operation(&operations[1], StandardGate::CX, &[controls[0], target]);
-    assert_fixed_parameterized_operation(&operations[2], StandardGate::RZ, &[target], -0.2);
+    assert_fixed_parameter_operation(&operations[2], StandardGate::RZ, &[target], -0.2);
     assert_standard_operation(&operations[3], StandardGate::CX, &[controls[1], target]);
-    assert_fixed_parameterized_operation(&operations[4], StandardGate::RZ, &[target], 0.2);
+    assert_fixed_parameter_operation(&operations[4], StandardGate::RZ, &[target], 0.2);
     assert_standard_operation(&operations[5], StandardGate::CX, &[controls[0], target]);
-    assert_fixed_parameterized_operation(&operations[6], StandardGate::RZ, &[target], -0.2);
+    assert_fixed_parameter_operation(&operations[6], StandardGate::RZ, &[target], -0.2);
     assert_standard_operation(&operations[7], StandardGate::CX, &[controls[1], target]);
-    assert_fixed_parameterized_operation(&operations[8], StandardGate::RZ, &[target], 0.2);
+    assert_fixed_parameter_operation(&operations[8], StandardGate::RZ, &[target], 0.2);
     assert_standard_operation(&operations[9], StandardGate::H, &[target]);
 }
 
@@ -186,13 +116,13 @@ fn two_control_ry_emits_exact_vale_sequence() {
 
     assert_eq!(operations.len(), 8);
     assert_standard_operation(&operations[0], StandardGate::CX, &[first, target]);
-    assert_fixed_parameterized_operation(&operations[1], StandardGate::RY, &[target], -0.2);
+    assert_fixed_parameter_operation(&operations[1], StandardGate::RY, &[target], -0.2);
     assert_standard_operation(&operations[2], StandardGate::CX, &[second, target]);
-    assert_fixed_parameterized_operation(&operations[3], StandardGate::RY, &[target], 0.2);
+    assert_fixed_parameter_operation(&operations[3], StandardGate::RY, &[target], 0.2);
     assert_standard_operation(&operations[4], StandardGate::CX, &[first, target]);
-    assert_fixed_parameterized_operation(&operations[5], StandardGate::RY, &[target], -0.2);
+    assert_fixed_parameter_operation(&operations[5], StandardGate::RY, &[target], -0.2);
     assert_standard_operation(&operations[6], StandardGate::CX, &[second, target]);
-    assert_fixed_parameterized_operation(&operations[7], StandardGate::RY, &[target], 0.2);
+    assert_fixed_parameter_operation(&operations[7], StandardGate::RY, &[target], 0.2);
 }
 
 #[test]
@@ -212,9 +142,17 @@ fn decompositions_match_mcgate_rotation_matrices() {
                 None,
             )
             .unwrap();
-            let expected = mc_rotation_matrix(num_controls + 1, &controls, target, axis, theta);
+            let mut qubits = controls.clone();
+            qubits.push(target);
+            let expected = mc_gate_matrix(
+                num_controls + 1,
+                controls.len() as u8,
+                rotation(axis),
+                qubits,
+                [ParameterValue::Fixed(theta)],
+            );
 
-            assert_matrix_approx_eq(&actual, &expected);
+            assert_matrix_approx_eq(&actual, &expected, EPSILON);
         }
     }
 }
@@ -231,7 +169,15 @@ fn decomposition_preserves_superposed_control_semantics() {
     )
     .unwrap();
     let actual = circuit_to_matrix(&circuit_from_value_operations(4, operations), None).unwrap();
-    let expected = mc_rotation_matrix(4, &controls, target, Su2RotationAxis::Y, 0.731);
+    let mut qubits = controls.to_vec();
+    qubits.push(target);
+    let expected = mc_gate_matrix(
+        4,
+        controls.len() as u8,
+        rotation(Su2RotationAxis::Y),
+        qubits,
+        [ParameterValue::Fixed(0.731)],
+    );
     let amplitude = Complex64::new(1.0 / 8.0_f64.sqrt(), 0.0);
     let initial = Array1::from(
         (0..16)

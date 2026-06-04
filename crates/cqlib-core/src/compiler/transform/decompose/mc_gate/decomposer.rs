@@ -1,6 +1,6 @@
 // This code is part of Cqlib.
 //
-// (C) Copyright China Telecom Quantum Group 2026
+// (C) Copyright China Telecom Quantum Group 2025-2026
 //
 // This code is licensed under the Apache License, Version 2.0. You may
 // obtain a copy of this license in the LICENSE.txt file in the root directory
@@ -83,6 +83,41 @@ pub struct McGateDecomposeConfig {
 /// Returns [`CompilerError`] when the input circuit is inconsistent, a
 /// multi-controlled gate family is unsupported, all synthesis candidates fail,
 /// or ancillary-resource bookkeeping violates its contract.
+///
+/// # Examples
+///
+/// ```rust
+/// use cqlib_core::circuit::{Circuit, Instruction, MCGate, Qubit, StandardGate};
+/// use cqlib_core::compiler::resource::ResourcePolicy;
+/// use cqlib_core::compiler::transform::decompose::mc_gate::{
+///     McGateDecomposeConfig, decompose_mc_gates,
+/// };
+///
+/// let mut circuit = Circuit::new(3);
+/// circuit
+///     .append(
+///         Instruction::McGate(Box::new(MCGate::new(2, StandardGate::X))),
+///         [Qubit::new(0), Qubit::new(1), Qubit::new(2)],
+///         [],
+///         None,
+///     )
+///     .unwrap();
+///
+/// let result = decompose_mc_gates(
+///     &circuit,
+///     McGateDecomposeConfig {
+///         resource_policy: ResourcePolicy::default(),
+///         ..McGateDecomposeConfig::default()
+///     },
+/// )
+/// .unwrap();
+///
+/// assert!(result.changed);
+/// assert!(matches!(
+///     result.circuit.operations()[0].instruction,
+///     Instruction::Standard(StandardGate::CCX),
+/// ));
+/// ```
 pub fn decompose_mc_gates(
     circuit: &Circuit,
     config: McGateDecomposeConfig,
@@ -140,12 +175,12 @@ impl<'a> McGateDecomposer<'a> {
     }
 
     fn run(mut self) -> Result<TransformResult, CompilerError> {
-        // Clone the top-level sequence so rebuilding may mutably intern target
-        // parameters and allocate logical ancillas without borrowing `source`.
-        let source_operations = self.source.operations().to_vec();
-        let operations = self.rebuild_sequence(&source_operations)?;
-        for operation in operations {
-            self.append_top_level(operation)?;
+        let source = self.source;
+        for operation in source.operations() {
+            let operations = self.rebuild_operation(operation)?;
+            for operation in operations {
+                self.append_top_level(operation)?;
+            }
         }
         self.resources
             .verify_idle(&self.target)
@@ -405,6 +440,12 @@ impl<'a> McGateDecomposer<'a> {
             return decompose_pauli_small(pauli, controls, target);
         }
 
+        // Try exact Pauli/MCX candidates in a fixed two-qubit-cost-oriented
+        // order: 2 clean KG24, 1 clean KG24, n clean V-chain, n dirty V-chain,
+        // 2 dirty KG24, 1 dirty KG24, 1 clean B95, then no-auxiliary fallback.
+        // This keeps selection deterministic while preferring low-cost
+        // ancillary-assisted constructions when the resource policy allows
+        // them.
         if let Some(operations) =
             self.try_resource_candidate(excluded, AncillaRequirement::CleanZero, 2, |ancillas| {
                 decompose_pauli_2_clean(pauli, controls, target, [ancillas[0], ancillas[1]])

@@ -1,6 +1,6 @@
 // This code is part of Cqlib.
 //
-// (C) Copyright China Telecom Quantum Group 2026
+// (C) Copyright China Telecom Quantum Group 2025-2026
 //
 // This code is licensed under the Apache License, Version 2.0. You may
 // obtain a copy of this license in the LICENSE.txt file in the root directory
@@ -18,12 +18,11 @@ use crate::circuit::{
 use crate::compiler::CompilerError;
 use crate::compiler::resource::{ResourceLimits, ResourcePolicy};
 use crate::device::{Device, PhysicalQubit, Topology};
-use ndarray::Array2;
-use num_complex::Complex64;
+use crate::util::test_utils::{
+    EPSILON, assert_matrix_approx_eq, assert_selected_matrix_columns_equal_up_to_global_phase,
+};
 use smallvec::smallvec;
 use std::collections::{HashMap, HashSet};
-
-const EPSILON: f64 = 1e-9;
 
 fn config(max_clean: usize, allow_dirty: bool) -> McGateDecomposeConfig {
     McGateDecomposeConfig {
@@ -62,50 +61,6 @@ fn assert_no_mc_gates(operations: &[Operation]) {
                 assert_no_mc_gates(gate.body());
             }
             _ => {}
-        }
-    }
-}
-
-fn assert_matrix_approx_eq(actual: &Array2<Complex64>, expected: &Array2<Complex64>) {
-    assert_eq!(actual.shape(), expected.shape());
-    for ((row, column), expected) in expected.indexed_iter() {
-        let actual = actual[[row, column]];
-        assert!(
-            (actual - expected).norm() < EPSILON,
-            "matrix mismatch at row {row}, column {column}: actual={actual}, expected={expected}"
-        );
-    }
-}
-
-fn assert_selected_columns_equal_up_to_global_phase(
-    context: &str,
-    actual: &Array2<Complex64>,
-    expected: &Array2<Complex64>,
-    columns: impl IntoIterator<Item = usize>,
-) {
-    assert_eq!(actual.shape(), expected.shape(), "{context}");
-    let columns = columns.into_iter().collect::<Vec<_>>();
-    let (reference_actual, reference_expected) = columns
-        .iter()
-        .flat_map(|column| {
-            (0..expected.nrows()).map(move |row| (actual[[row, *column]], expected[[row, *column]]))
-        })
-        .find(|(_, expected)| expected.norm() > EPSILON)
-        .expect("selected expected columns must contain a nonzero amplitude");
-    let global_phase = reference_actual / reference_expected;
-
-    assert!(
-        (global_phase.norm() - 1.0).abs() < EPSILON,
-        "{context}: invalid global phase {global_phase}"
-    );
-    for column in columns {
-        for row in 0..expected.nrows() {
-            let expected_amplitude = global_phase * expected[[row, column]];
-            assert!(
-                (actual[[row, column]] - expected_amplitude).norm() < EPSILON,
-                "{context}: matrix mismatch at row {row}, column {column}: actual={}, expected={expected_amplitude}",
-                actual[[row, column]]
-            );
         }
     }
 }
@@ -298,7 +253,7 @@ fn ancillary_free_fallback_preserves_mcx_semantics() {
             .iter()
             .all(|operation| operation.label.is_none())
     );
-    assert_matrix_approx_eq(&actual, &expected);
+    assert_matrix_approx_eq(&actual, &expected, EPSILON);
 }
 
 #[test]
@@ -525,11 +480,11 @@ fn supported_gate_families_dispatch_and_preserve_no_aux_semantics() {
             case.name
         );
         assert_no_mc_gates(result.circuit.operations());
-        assert_selected_columns_equal_up_to_global_phase(
-            case.name,
+        assert_selected_matrix_columns_equal_up_to_global_phase(
             &actual,
             &expected,
             0..expected.ncols(),
+            EPSILON,
         );
     }
 }
@@ -614,11 +569,11 @@ fn clean_ancilla_paths_preserve_semantics_on_the_clean_subspace() {
             );
         }
         assert_no_mc_gates(result.circuit.operations());
-        assert_selected_columns_equal_up_to_global_phase(
-            case.name,
+        assert_selected_matrix_columns_equal_up_to_global_phase(
             &actual,
             &expected,
             clean_columns,
+            EPSILON,
         );
     }
 }
@@ -647,11 +602,11 @@ fn dirty_ancilla_path_restores_arbitrary_borrowed_states() {
         Qubit::new(6)
     ));
     assert_no_mc_gates(result.circuit.operations());
-    assert_selected_columns_equal_up_to_global_phase(
-        "dirty borrowed MCX",
+    assert_selected_matrix_columns_equal_up_to_global_phase(
         &actual,
         &expected,
         0..expected.ncols(),
+        EPSILON,
     );
 }
 

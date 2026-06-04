@@ -1,6 +1,6 @@
 // This code is part of Cqlib.
 //
-// (C) Copyright China Telecom Quantum Group 2026
+// (C) Copyright China Telecom Quantum Group 2025-2026
 //
 // This code is licensed under the Apache License, Version 2.0.
 // You may obtain a copy of this license in the LICENSE.txt file in
@@ -17,17 +17,40 @@
 //! It resolves target constraints, runs completed compiler transforms in a
 //! deterministic order, and records only the postconditions it can actually
 //! verify with the compiler capabilities currently implemented.
+//!
+//! The normal workflow follows the stable pass order:
+//! canonicalize input, expand circuit-backed definitions, apply production
+//! knowledge rewrite, decompose unitary and multi-controlled gates,
+//! canonicalize again, optimize the decomposed circuit, optionally route on a
+//! device, optionally translate to the resolved target basis, and canonicalize
+//! the output.
+//!
+//! The enhanced workflow uses the same required correctness stages but raises
+//! rewrite budgets, uses stronger SABRE trial settings, performs a
+//! post-routing cleanup pass, and adds a target-aware cleanup pass after
+//! target-basis translation. This keeps `Normal` suitable for predictable
+//! production compilation while giving `Enhanced` more chances to recover
+//! simplifications exposed by decomposition, routing, and lowering.
+//!
+//! Stages are deliberately ordered around compiler invariants. Early
+//! canonicalization gives later passes a stable representation, definition and
+//! high-level gate decomposition remove operations that routing cannot accept,
+//! routing runs before final target-basis cleanup because it may insert SWAPs,
+//! and the output canonicalizer removes representation noise introduced by
+//! previous stages.
 
 use crate::circuit::{Circuit, ControlFlow, Instruction, Operation};
 use crate::compiler::CompilerError;
 use crate::compiler::resource::ResourceLimits;
+use crate::compiler::sabre::{SabreConfig, SabreHeuristicConfig, SabreTrialObjective};
 use crate::compiler::transform::decompose::expand_definitions;
 use crate::compiler::transform::decompose::mc_gate::{McGateDecomposeConfig, decompose_mc_gates};
 use crate::compiler::transform::decompose::unitary::decompose::{
     UnitaryDecomposeConfig, decompose_unitaries,
 };
 use crate::compiler::transform::{
-    Canonicalizer, KnowledgeRewriter, RewriteConfig, TransformResult, Transformer,
+    Canonicalizer, KnowledgeRewriter, LayoutObjective, RewriteConfig, TransformResult, Transformer,
+    build_physical_layout_graph, route_sabre,
 };
 
 use super::{CompileConfig, CompileMode, CompileResult};
@@ -88,6 +111,14 @@ const STEP_CANONICALIZE_AFTER_DECOMPOSITION: WorkflowStep = WorkflowStep {
 const STEP_OPTIMIZE_POST_DECOMPOSITION: WorkflowStep = WorkflowStep {
     stage: "optimization",
     name: "optimize.post_decomposition",
+};
+const STEP_ROUTE_SABRE: WorkflowStep = WorkflowStep {
+    stage: "routing",
+    name: "route.sabre",
+};
+const STEP_OPTIMIZE_POST_ROUTING: WorkflowStep = WorkflowStep {
+    stage: "optimization",
+    name: "optimize.post_routing",
 };
 const STEP_TRANSLATE_TARGET_BASIS: WorkflowStep = WorkflowStep {
     stage: "translation",
@@ -184,6 +215,7 @@ impl CompilerWorkflow {
             STEP_OPTIMIZE_POST_DECOMPOSITION,
             RewriteConfig::production(),
         )?;
+        self.apply_layout_and_routing(current, changed, steps, CompileMode::Normal)?;
         self.apply_target_translation(
             current,
             changed,
@@ -239,6 +271,8 @@ impl CompilerWorkflow {
             STEP_OPTIMIZE_POST_DECOMPOSITION,
             enhanced_rewrite_config(RewriteConfig::production()),
         )?;
+        self.apply_layout_and_routing(current, changed, steps, CompileMode::Enhanced)?;
+        self.apply_post_routing_cleanup(current, changed, steps)?;
         self.apply_target_translation(
             current,
             changed,
@@ -367,6 +401,80 @@ impl CompilerWorkflow {
                 .map(|capacity| format!("target capacity permits {capacity} total logical qubits")),
         });
         Ok(())
+    }
+
+    fn apply_layout_and_routing(
+        &self,
+        current: &mut Circuit,
+        changed: &mut bool,
+        steps: &mut Vec<WorkflowStepReport>,
+        mode: CompileMode,
+    ) -> Result<(), CompilerError> {
+        let Some(device) = self.config.device.as_ref() else {
+            steps.push(WorkflowStepReport {
+                stage: STEP_ROUTE_SABRE.stage,
+                name: STEP_ROUTE_SABRE.name,
+                changed: false,
+                skipped: true,
+                reason: Some("no target device configured".to_string()),
+            });
+            return Ok(());
+        };
+
+        let physical = build_physical_layout_graph(device)?;
+        let objective = match mode {
+            CompileMode::Normal => LayoutObjective::auto_from_physical(&physical),
+            CompileMode::Enhanced => {
+                if physical.has_fidelity_data() {
+                    LayoutObjective::fidelity_required(&physical)?
+                } else {
+                    LayoutObjective::topology_only()
+                }
+            }
+        };
+        let config = sabre_config_for_mode(mode, self.config.seed);
+        let routed = route_sabre(current, device, &objective, &config)?;
+        let route_changed = routed.changed;
+        *current = routed.circuit;
+        *changed |= route_changed;
+
+        steps.push(WorkflowStepReport {
+            stage: STEP_ROUTE_SABRE.stage,
+            name: STEP_ROUTE_SABRE.name,
+            changed: route_changed,
+            skipped: false,
+            reason: Some(format!(
+                "inserted {} swap operations using {} routing trials",
+                routed.swap_count, routed.diagnostics.trials_evaluated
+            )),
+        });
+        Ok(())
+    }
+
+    fn apply_post_routing_cleanup(
+        &self,
+        current: &mut Circuit,
+        changed: &mut bool,
+        steps: &mut Vec<WorkflowStepReport>,
+    ) -> Result<(), CompilerError> {
+        if self.config.device.is_none() {
+            steps.push(WorkflowStepReport {
+                stage: STEP_OPTIMIZE_POST_ROUTING.stage,
+                name: STEP_OPTIMIZE_POST_ROUTING.name,
+                changed: false,
+                skipped: true,
+                reason: Some("routing was skipped".to_string()),
+            });
+            return Ok(());
+        }
+
+        apply_rewrite(
+            current,
+            changed,
+            steps,
+            STEP_OPTIMIZE_POST_ROUTING,
+            enhanced_rewrite_config(RewriteConfig::production()),
+        )
     }
 
     fn apply_target_translation(
@@ -511,6 +619,27 @@ fn enhanced_rewrite_config(config: RewriteConfig) -> RewriteConfig {
         .with_max_rounds(16)
         .with_max_window_ops(32)
         .with_max_pattern_len(12)
+}
+
+fn sabre_config_for_mode(mode: CompileMode, seed: Option<u32>) -> SabreConfig {
+    let mut config = SabreConfig {
+        seed: seed.map(u64::from),
+        ..SabreConfig::default()
+    };
+
+    if mode == CompileMode::Enhanced {
+        config.layout_trials = 24;
+        config.refinement_iterations = 2;
+        config.layout_scoring_trials = 3;
+        config.routing_trials = 12;
+        config.trial_objective = SabreTrialObjective::SwapThenDepth;
+        config.heuristic = SabreHeuristicConfig {
+            lookahead_weights: vec![0.5, 0.25],
+            ..SabreHeuristicConfig::default()
+        };
+    }
+
+    config
 }
 
 fn contains_circuit_backed_definition(operations: &[Operation]) -> bool {

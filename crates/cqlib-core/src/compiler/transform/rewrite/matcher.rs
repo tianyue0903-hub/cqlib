@@ -1,6 +1,6 @@
 // This code is part of Cqlib.
 //
-// (C) Copyright China Telecom Quantum Group 2026
+// (C) Copyright China Telecom Quantum Group 2025-2026
 //
 // This code is licensed under the Apache License, Version 2.0. You may
 // obtain a copy of this license in the LICENSE.txt file in the root directory
@@ -11,6 +11,23 @@
 // that they have been altered from the originals.
 
 //! Rule compilation and dependency-aware sequence matching.
+//!
+//! The matcher prepares the knowledge-rule library for repeated local scans.
+//! Rules are indexed by their first instruction key, filtered by rewrite mode,
+//! qubit width, target-basis constraints, and static cost before any expensive
+//! matching is attempted.
+//!
+//! Matching is dependency-aware rather than strictly contiguous. A rule item may
+//! be matched after commuting past unrelated operations when the compiler
+//! commutation checker proves that reordering is safe for the candidate block.
+//! This lets local identities apply across independent gates without changing
+//! the relative order of non-commuting operations.
+//!
+//! Every successful match becomes a candidate patch with a before/after local
+//! cost. Candidate patches are sorted by final cost, original cost reduction,
+//! covered span, static size delta, source position, and rule id. The selector
+//! then greedily keeps the first non-overlapping patches, producing a stable
+//! patch set that never rewrites the same operation span twice in one round.
 
 use crate::circuit::{
     Circuit, CircuitParam, Instruction, Operation, Parameter, ParameterValue, Qubit,
@@ -308,6 +325,13 @@ pub(super) fn select_rewrites_in_context(
         }
     }
 
+    // Rank candidate patches by the local objective before taking any patch.
+    // Lower `after` cost is preferred; for equal outputs, higher `before` cost
+    // means the patch removed more expensive work. The remaining keys make the
+    // choice deterministic and prefer broader, smaller replacement patches
+    // near the front of the block. After sorting, the greedy pass below keeps
+    // only non-overlapping spans, so a selected patch owns every operation
+    // position it covers for this rewrite round.
     candidates.sort_by(|lhs, rhs| {
         lhs.after
             .cmp(&rhs.after)
@@ -327,16 +351,25 @@ pub(super) fn select_rewrites_in_context(
             .then_with(|| lhs.patch.rule_id.cmp(&rhs.patch.rule_id))
     });
 
-    let mut occupied_spans = HashSet::new();
+    let mut occupied_spans = vec![false; block.len()];
     let mut patches = Vec::new();
     for candidate in candidates {
-        if (candidate.patch.first_position..=candidate.patch.last_position)
-            .any(|position| occupied_spans.contains(&position))
+        let first_position = candidate.patch.first_position;
+        let last_position = candidate.patch.last_position;
+        if first_position > last_position || last_position >= occupied_spans.len() {
+            return Err(CompilerError::InvariantViolation(format!(
+                "rewrite candidate span {first_position}..={last_position} is outside block of length {}",
+                block.len()
+            )));
+        }
+        if occupied_spans[first_position..=last_position]
+            .iter()
+            .any(|occupied| *occupied)
         {
             continue;
         }
 
-        occupied_spans.extend(candidate.patch.first_position..=candidate.patch.last_position);
+        occupied_spans[first_position..=last_position].fill(true);
         patches.push(candidate.patch);
     }
 
@@ -516,11 +549,19 @@ fn can_skip_between(
         return Ok(true);
     }
 
-    let mut relevant = HashSet::new();
+    let mut relevant = SmallVec::<[Qubit; 4]>::new();
     for &position in matched_positions {
-        relevant.extend(block.operation(position).qubits.iter().copied());
+        for &qubit in &block.operation(position).qubits {
+            if !relevant.contains(&qubit) {
+                relevant.push(qubit);
+            }
+        }
     }
-    relevant.extend(block.operation(candidate_position).qubits.iter().copied());
+    for &qubit in &block.operation(candidate_position).qubits {
+        if !relevant.contains(&qubit) {
+            relevant.push(qubit);
+        }
+    }
 
     for skipped_position in skipped {
         let skipped_operation = block.operation(skipped_position);

@@ -11,9 +11,9 @@
 // that they have been altered from the originals.
 
 use super::*;
+use crate::util::test_utils::assert_is_unitary;
 use std::f64::consts::PI;
 
-/// Helper: Assert two complex matrices are approximately equal
 fn assert_matrix_approx_eq(a: &Array2<Complex<f64>>, b: &Array2<Complex<f64>>) {
     assert_eq!(a.shape(), b.shape(), "Matrix shapes differ");
     for (x, y) in a.iter().zip(b.iter()) {
@@ -22,27 +22,6 @@ fn assert_matrix_approx_eq(a: &Array2<Complex<f64>>, b: &Array2<Complex<f64>>) {
             panic!(
                 "Matrices not equal. Diff: {}, Expected: {}, Actual: {}",
                 diff, y, x
-            );
-        }
-    }
-}
-
-/// Helper: Assert matrix is unitary (U† * U = I)
-fn assert_is_unitary(gate: &Array2<Complex<f64>>) {
-    let rows = gate.nrows();
-    let binding = gate.t().mapv(|x| x.conj()); // Conjugate Transpose
-    let prod = gate.dot(&binding);
-
-    // Verify prod ≈ I
-    for (i, val) in prod.iter().enumerate() {
-        let row = i / rows;
-        let col = i % rows;
-        let expected = if row == col { ONE } else { ZERO };
-        let diff = (val - expected).norm();
-        if diff > 1e-10 {
-            panic!(
-                "Matrix is not unitary at index [{}, {}]. Val: {}, Expected: {}",
-                row, col, val, expected
             );
         }
     }
@@ -74,7 +53,7 @@ fn test_fixed_gates_unitary() {
     ];
 
     for (gate, _) in gates {
-        assert_is_unitary(gate);
+        assert_is_unitary(gate, 1e-10);
     }
 }
 
@@ -84,28 +63,28 @@ fn test_parameterized_gates_unitary() {
     let thetas = vec![0.0, PI / 2.0, PI, 2.0 * PI, -0.5, 1.234];
 
     for &theta in &thetas {
-        assert_is_unitary(&rx_gate(theta));
-        assert_is_unitary(&ry_gate(theta));
-        assert_is_unitary(&rz_gate(theta));
-        assert_is_unitary(&phase_gate(theta));
-        assert_is_unitary(&global_phase_gate(theta));
-        assert_is_unitary(&u_gate(theta, 0.5, -0.5));
+        assert_is_unitary(&rx_gate(theta), 1e-10);
+        assert_is_unitary(&ry_gate(theta), 1e-10);
+        assert_is_unitary(&rz_gate(theta), 1e-10);
+        assert_is_unitary(&phase_gate(theta), 1e-10);
+        assert_is_unitary(&global_phase_gate(theta), 1e-10);
+        assert_is_unitary(&u_gate(theta, 0.5, -0.5), 1e-10);
 
         // Two-qubit parameterized gates
-        assert_is_unitary(&rxx_gate(theta));
-        assert_is_unitary(&ryy_gate(theta));
-        assert_is_unitary(&rzz_gate(theta));
-        assert_is_unitary(&rzx_gate(theta));
-        assert_is_unitary(&rxy_gate(theta, 0.5));
-        assert_is_unitary(&crx_gate(theta));
-        assert_is_unitary(&cry_gate(theta));
-        assert_is_unitary(&crz_gate(theta));
-        assert_is_unitary(&xy_gate(theta));
-        assert_is_unitary(&xy2p_gate(theta));
-        assert_is_unitary(&xy2m_gate(theta));
+        assert_is_unitary(&rxx_gate(theta), 1e-10);
+        assert_is_unitary(&ryy_gate(theta), 1e-10);
+        assert_is_unitary(&rzz_gate(theta), 1e-10);
+        assert_is_unitary(&rzx_gate(theta), 1e-10);
+        assert_is_unitary(&rxy_gate(theta, 0.5), 1e-10);
+        assert_is_unitary(&crx_gate(theta), 1e-10);
+        assert_is_unitary(&cry_gate(theta), 1e-10);
+        assert_is_unitary(&crz_gate(theta), 1e-10);
+        assert_is_unitary(&xy_gate(theta), 1e-10);
+        assert_is_unitary(&xy2p_gate(theta), 1e-10);
+        assert_is_unitary(&xy2m_gate(theta), 1e-10);
 
         // fSim
-        assert_is_unitary(&fsim_gate(theta, theta / 2.0));
+        assert_is_unitary(&fsim_gate(theta, theta / 2.0), 1e-10);
     }
 }
 

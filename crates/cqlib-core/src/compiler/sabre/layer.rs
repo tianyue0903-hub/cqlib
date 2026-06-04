@@ -1,6 +1,6 @@
 // This code is part of Cqlib.
 //
-// (C) Copyright China Telecom Quantum Group 2026
+// (C) Copyright China Telecom Quantum Group 2025-2026
 //
 // This code is licensed under the Apache License, Version 2.0. You may
 // obtain a copy of this license in the LICENSE.txt file in the root directory
@@ -11,46 +11,86 @@
 // that they have been altered from the originals.
 
 use crate::compiler::CompilerError;
-use crate::device::PhysicalQubit;
 use rustworkx_core::petgraph::prelude::NodeIndex;
-use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Layer {
-    nodes: BTreeMap<NodeIndex, [PhysicalQubit; 2]>,
-    active: BTreeMap<PhysicalQubit, (NodeIndex, PhysicalQubit)>,
+    nodes: Vec<Option<[usize; 2]>>,
+    occupied_node_indices: Vec<usize>,
+    active: Vec<Option<(NodeIndex, usize)>>,
+    total_score: f64,
 }
 
 impl Layer {
-    pub(crate) fn new() -> Self {
-        Self::default()
+    pub(crate) fn new(node_count: usize, physical_count: usize) -> Self {
+        Self {
+            nodes: vec![None; node_count],
+            occupied_node_indices: Vec::new(),
+            active: vec![None; physical_count],
+            total_score: 0.0,
+        }
     }
 
     pub(crate) fn is_empty(&self) -> bool {
-        self.nodes.is_empty()
+        self.occupied_node_indices.is_empty()
     }
 
-    pub(crate) fn insert(&mut self, node: NodeIndex, qubits: [PhysicalQubit; 2]) {
-        if let Some(previous) = self.nodes.insert(node, qubits) {
+    pub(crate) fn insert(
+        &mut self,
+        node: NodeIndex,
+        qubits: [usize; 2],
+        distances: &impl Fn(usize, usize) -> Result<f64, CompilerError>,
+    ) -> Result<(), CompilerError> {
+        self.ensure_node_capacity(node);
+        if let Some(previous) = self.nodes[node.index()].replace(qubits) {
+            self.total_score -= distances(previous[0], previous[1])?;
             self.remove_active_entry(node, previous);
+        } else {
+            self.insert_occupied_node_index(node.index());
         }
+        self.total_score += distances(qubits[0], qubits[1])?;
         self.insert_active_entry(node, qubits);
+        Ok(())
     }
 
-    pub(crate) fn remove(&mut self, node: NodeIndex) {
-        if let Some(qubits) = self.nodes.remove(&node) {
-            self.remove_active_entry(node, qubits);
+    pub(crate) fn remove(
+        &mut self,
+        node: NodeIndex,
+        distances: &impl Fn(usize, usize) -> Result<f64, CompilerError>,
+    ) -> Result<(), CompilerError> {
+        if node.index() >= self.nodes.len() {
+            return Ok(());
         }
+        if let Some(qubits) = self.nodes[node.index()].take() {
+            self.total_score -= distances(qubits[0], qubits[1])?;
+            self.remove_active_entry(node, qubits);
+            self.remove_occupied_node_index(node.index());
+        }
+        Ok(())
     }
 
     pub(crate) fn clear(&mut self) {
-        self.nodes.clear();
-        self.active.clear();
+        for index in self.occupied_node_indices.drain(..) {
+            self.nodes[index] = None;
+        }
+        self.active.fill(None);
+        self.total_score = 0.0;
     }
 
-    pub(crate) fn apply_swap(&mut self, swap: [PhysicalQubit; 2]) {
-        for node in self.swap_affected_nodes(swap).into_iter().flatten() {
-            let before = self.nodes[&node];
+    pub(crate) fn apply_swap(
+        &mut self,
+        swap: [usize; 2],
+        distances: &impl Fn(usize, usize) -> Result<f64, CompilerError>,
+    ) -> Result<(), CompilerError> {
+        let affected = self.swap_affected_nodes(swap);
+        let mut updates = Vec::with_capacity(2);
+        for node in affected.into_iter().flatten() {
+            let before = self.nodes[node.index()].ok_or_else(|| {
+                CompilerError::InvariantViolation(format!(
+                    "sabre layer active node {} has no node entry",
+                    node.index()
+                ))
+            })?;
             let after = before.map(|physical| {
                 if physical == swap[0] {
                     swap[1]
@@ -60,55 +100,69 @@ impl Layer {
                     physical
                 }
             });
+            let delta = distances(after[0], after[1])? - distances(before[0], before[1])?;
+            updates.push((node, before, after, delta));
+        }
+
+        for (node, before, after, delta) in updates {
+            self.total_score += delta;
             self.remove_active_entry(node, before);
-            self.nodes.insert(node, after);
+            self.nodes[node.index()] = Some(after);
             self.insert_active_entry(node, after);
         }
+        Ok(())
     }
 
-    pub(crate) fn routable_node_on_qubit(
+    pub(crate) fn routable_node_on_index(
         &self,
-        qubit: PhysicalQubit,
-        neighbors: &BTreeMap<PhysicalQubit, Vec<PhysicalQubit>>,
+        qubit: usize,
+        adjacent: &impl Fn(usize, usize) -> bool,
     ) -> Option<NodeIndex> {
-        let (node, other) = self.active.get(&qubit).copied()?;
-        neighbors
-            .get(&qubit)
-            .is_some_and(|items| items.contains(&other))
-            .then_some(node)
+        let (node, other) = self.active.get(qubit).copied().flatten()?;
+        adjacent(qubit, other).then_some(node)
     }
 
-    pub(crate) fn active_qubits(&self) -> impl Iterator<Item = PhysicalQubit> + '_ {
-        self.active.keys().copied()
+    pub(crate) fn active_indices_in_order<'a>(
+        &'a self,
+        order: &'a [usize],
+    ) -> impl Iterator<Item = usize> + 'a {
+        order
+            .iter()
+            .copied()
+            .filter(|&index| self.active.get(index).is_some_and(Option::is_some))
     }
 
     pub(crate) fn iter_nodes(&self) -> impl Iterator<Item = NodeIndex> + '_ {
-        self.nodes.keys().copied()
+        self.occupied_node_indices
+            .iter()
+            .copied()
+            .map(NodeIndex::new)
     }
 
-    pub(crate) fn iter(&self) -> impl Iterator<Item = (NodeIndex, [PhysicalQubit; 2])> + '_ {
-        self.nodes.iter().map(|(node, qubits)| (*node, *qubits))
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (NodeIndex, [usize; 2])> + '_ {
+        self.occupied_node_indices
+            .iter()
+            .copied()
+            .filter_map(|index| self.nodes[index].map(|qubits| (NodeIndex::new(index), qubits)))
     }
 
-    pub(crate) fn total_score(
-        &self,
-        distances: &impl Fn(PhysicalQubit, PhysicalQubit) -> Result<f64, CompilerError>,
-    ) -> Result<f64, CompilerError> {
-        let mut total = 0.0;
-        for qubits in self.nodes.values() {
-            total += distances(qubits[0], qubits[1])?;
-        }
-        Ok(total)
+    pub(crate) fn total_score(&self) -> f64 {
+        self.total_score
     }
 
     pub(crate) fn swap_delta_score(
         &self,
-        swap: [PhysicalQubit; 2],
-        distances: &impl Fn(PhysicalQubit, PhysicalQubit) -> Result<f64, CompilerError>,
+        swap: [usize; 2],
+        distances: &impl Fn(usize, usize) -> Result<f64, CompilerError>,
     ) -> Result<f64, CompilerError> {
         let mut delta = 0.0;
         for node in self.swap_affected_nodes(swap).into_iter().flatten() {
-            let before = self.nodes[&node];
+            let before = self.nodes[node.index()].ok_or_else(|| {
+                CompilerError::InvariantViolation(format!(
+                    "sabre layer active node {} has no node entry",
+                    node.index()
+                ))
+            })?;
             let after = before.map(|physical| {
                 if physical == swap[0] {
                     swap[1]
@@ -123,25 +177,42 @@ impl Layer {
         Ok(delta)
     }
 
-    fn insert_active_entry(&mut self, node: NodeIndex, [left, right]: [PhysicalQubit; 2]) {
-        self.active.insert(left, (node, right));
-        self.active.insert(right, (node, left));
-    }
-
-    fn remove_active_entry(&mut self, node: NodeIndex, [left, right]: [PhysicalQubit; 2]) {
-        if self.active.get(&left).is_some_and(|entry| entry.0 == node) {
-            self.active.remove(&left);
-        }
-        if self.active.get(&right).is_some_and(|entry| entry.0 == node) {
-            self.active.remove(&right);
+    fn ensure_node_capacity(&mut self, node: NodeIndex) {
+        if node.index() >= self.nodes.len() {
+            self.nodes.resize(node.index() + 1, None);
         }
     }
 
-    fn swap_affected_nodes(&self, swap: [PhysicalQubit; 2]) -> [Option<NodeIndex>; 2] {
-        let first = self.active.get(&swap[0]).map(|entry| entry.0);
-        let second = self
-            .active
-            .get(&swap[1])
+    fn insert_occupied_node_index(&mut self, index: usize) {
+        match self.occupied_node_indices.binary_search(&index) {
+            Ok(_) => {}
+            Err(position) => self.occupied_node_indices.insert(position, index),
+        }
+    }
+
+    fn remove_occupied_node_index(&mut self, index: usize) {
+        if let Ok(position) = self.occupied_node_indices.binary_search(&index) {
+            self.occupied_node_indices.remove(position);
+        }
+    }
+
+    fn insert_active_entry(&mut self, node: NodeIndex, [left, right]: [usize; 2]) {
+        self.active[left] = Some((node, right));
+        self.active[right] = Some((node, left));
+    }
+
+    fn remove_active_entry(&mut self, node: NodeIndex, [left, right]: [usize; 2]) {
+        if self.active[left].is_some_and(|entry| entry.0 == node) {
+            self.active[left] = None;
+        }
+        if self.active[right].is_some_and(|entry| entry.0 == node) {
+            self.active[right] = None;
+        }
+    }
+
+    fn swap_affected_nodes(&self, swap: [usize; 2]) -> [Option<NodeIndex>; 2] {
+        let first = self.active[swap[0]].map(|entry| entry.0);
+        let second = self.active[swap[1]]
             .map(|entry| entry.0)
             .filter(|node| Some(*node) != first);
         [first, second]

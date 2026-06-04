@@ -1,6 +1,6 @@
 // This code is part of Cqlib.
 //
-// (C) Copyright China Telecom Quantum Group 2026
+// (C) Copyright China Telecom Quantum Group 2025-2026
 //
 // This code is licensed under the Apache License, Version 2.0.
 // You may obtain a copy of this license in the LICENSE.txt file in
@@ -18,21 +18,12 @@ use crate::circuit::{
 };
 use crate::compiler::resource::ResourcePolicy;
 use crate::compiler::{CompileConfig, CompileMode, CompilerError, compile};
-use crate::device::{Device, PhysicalQubit, Topology};
+use crate::device::Device;
+use crate::util::test_utils::{
+    contains_high_level_gate, standard_ops, step_changed, two_qubit_device,
+};
 use ndarray::array;
 use num_complex::Complex64;
-use std::collections::HashSet;
-
-fn standard_ops(circuit: &Circuit) -> Vec<StandardGate> {
-    circuit
-        .operations()
-        .iter()
-        .filter_map(|operation| match operation.instruction {
-            Instruction::Standard(gate) => Some(gate),
-            _ => None,
-        })
-        .collect()
-}
 
 fn compile_config(mode: CompileMode) -> CompileConfig {
     CompileConfig {
@@ -48,41 +39,6 @@ fn run_workflow(circuit: &Circuit, mode: CompileMode) -> super::CompileResult {
     CompilerWorkflow::new(compile_config(mode))
         .run(circuit)
         .unwrap()
-}
-
-fn two_qubit_device(native_gates: Vec<Instruction>) -> Device {
-    linear_device(2, native_gates)
-}
-
-fn linear_device(num_qubits: u32, native_gates: Vec<Instruction>) -> Device {
-    let physical_qubits = (0..num_qubits).map(PhysicalQubit::new).collect::<Vec<_>>();
-    let qubits = physical_qubits.iter().copied().collect::<HashSet<_>>();
-    let edges = physical_qubits
-        .windows(2)
-        .enumerate()
-        .map(|(index, pair)| (pair[0], pair[1], format!("q{index}-q{}", index + 1)))
-        .collect::<Vec<_>>();
-    let topology = Topology::new(physical_qubits, edges).unwrap();
-    Device::new("test-device", qubits, topology)
-        .unwrap()
-        .with_native_gates(native_gates)
-}
-
-fn step_changed(result: &super::CompileResult, name: &str) -> bool {
-    result
-        .steps
-        .iter()
-        .find(|step| step.name == name)
-        .is_some_and(|step| step.changed)
-}
-
-fn contains_high_level_gate(circuit: &Circuit) -> bool {
-    circuit.operations().iter().any(|operation| {
-        matches!(
-            operation.instruction,
-            Instruction::CircuitGate(_) | Instruction::UnitaryGate(_) | Instruction::McGate(_)
-        )
-    })
 }
 
 #[test]
@@ -136,11 +92,13 @@ fn normal_workflow_reports_staged_order() {
             "decompose.mc_gates",
             "canonicalize.after_decomposition",
             "optimize.post_decomposition",
+            "route.sabre",
             "translate.target_basis",
             "canonicalize.output",
         ]
     );
     assert!(result.steps[9].skipped);
+    assert!(result.steps[10].skipped);
 }
 
 #[test]
@@ -171,12 +129,16 @@ fn enhanced_workflow_uses_richer_stage_sequence() {
             "decompose.mc_gates",
             "canonicalize.after_decomposition",
             "optimize.post_decomposition",
+            "route.sabre",
+            "optimize.post_routing",
             "translate.target_basis",
             "optimize.target_cleanup",
             "canonicalize.output",
         ]
     );
     assert!(enhanced.steps[9].skipped);
+    assert!(enhanced.steps[10].skipped);
+    assert!(enhanced.steps[11].skipped);
     assert!(enhanced.circuit.operations().is_empty());
 }
 
@@ -369,6 +331,102 @@ fn device_native_gates_are_used_as_target_basis() {
 }
 
 #[test]
+fn device_workflow_routes_circuit_before_target_translation() {
+    let q0 = Qubit::new(0);
+    let q1 = Qubit::new(1);
+    let q2 = Qubit::new(2);
+    let mut circuit = Circuit::new(3);
+    circuit.cx(q0, q1).unwrap();
+    circuit.cx(q1, q2).unwrap();
+    circuit.cx(q0, q2).unwrap();
+    let device = Device::line("test-device", 3).unwrap();
+
+    let result = CompilerWorkflow::new(CompileConfig {
+        mode: CompileMode::Normal,
+        target_basis: None,
+        device: Some(device),
+        resource_policy: ResourcePolicy::default(),
+        seed: Some(7),
+    })
+    .run(&circuit)
+    .unwrap();
+
+    assert!(step_changed(&result, "route.sabre"));
+    assert!(standard_ops(&result.circuit).contains(&StandardGate::SWAP));
+    assert!(
+        result
+            .steps
+            .iter()
+            .find(|step| step.name == "route.sabre")
+            .is_some_and(|step| !step.skipped)
+    );
+}
+
+#[test]
+fn routed_swaps_are_lowered_to_device_native_basis() {
+    let q0 = Qubit::new(0);
+    let q1 = Qubit::new(1);
+    let q2 = Qubit::new(2);
+    let mut circuit = Circuit::new(3);
+    circuit.cx(q0, q1).unwrap();
+    circuit.cx(q1, q2).unwrap();
+    circuit.cx(q0, q2).unwrap();
+    let device = Device::line("test-device", 3)
+        .unwrap()
+        .with_native_gates(vec![
+            Instruction::Standard(StandardGate::H),
+            Instruction::Standard(StandardGate::CZ),
+        ]);
+
+    let result = CompilerWorkflow::new(CompileConfig {
+        mode: CompileMode::Normal,
+        target_basis: None,
+        device: Some(device),
+        resource_policy: ResourcePolicy::default(),
+        seed: Some(7),
+    })
+    .run(&circuit)
+    .unwrap();
+
+    assert!(step_changed(&result, "route.sabre"));
+    assert!(step_changed(&result, "translate.target_basis"));
+    assert!(
+        standard_ops(&result.circuit)
+            .iter()
+            .all(|gate| matches!(gate, StandardGate::H | StandardGate::CZ))
+    );
+}
+
+#[test]
+fn enhanced_device_workflow_runs_post_routing_cleanup() {
+    let q0 = Qubit::new(0);
+    let q1 = Qubit::new(1);
+    let q2 = Qubit::new(2);
+    let mut circuit = Circuit::new(3);
+    circuit.cx(q0, q1).unwrap();
+    circuit.cx(q1, q2).unwrap();
+    circuit.cx(q0, q2).unwrap();
+    let device = Device::line("test-device", 3).unwrap();
+
+    let result = CompilerWorkflow::new(CompileConfig {
+        mode: CompileMode::Enhanced,
+        target_basis: None,
+        device: Some(device),
+        resource_policy: ResourcePolicy::default(),
+        seed: Some(7),
+    })
+    .run(&circuit)
+    .unwrap();
+
+    let post_routing = result
+        .steps
+        .iter()
+        .find(|step| step.name == "optimize.post_routing")
+        .unwrap();
+    assert!(!post_routing.skipped);
+}
+
+#[test]
 fn device_capacity_blocks_clean_ancilla_allocation_but_allows_no_aux_fallback() {
     let qubits = (0..4).map(Qubit::new).collect::<Vec<_>>();
     let mut circuit = Circuit::new(4);
@@ -380,7 +438,7 @@ fn device_capacity_blocks_clean_ancilla_allocation_but_allows_no_aux_fallback() 
             None,
         )
         .unwrap();
-    let device = linear_device(4, Vec::new());
+    let device = Device::line("test-device", 4).unwrap();
 
     let result = CompilerWorkflow::new(CompileConfig {
         mode: CompileMode::Normal,
@@ -404,7 +462,7 @@ fn device_capacity_blocks_clean_ancilla_allocation_but_allows_no_aux_fallback() 
 fn device_capacity_rejects_source_circuit_that_is_too_wide() {
     let mut circuit = Circuit::new(3);
     circuit.h(Qubit::new(0)).unwrap();
-    let device = linear_device(2, Vec::new());
+    let device = Device::line("test-device", 2).unwrap();
 
     let err = CompilerWorkflow::new(CompileConfig {
         mode: CompileMode::Normal,
@@ -434,7 +492,7 @@ fn device_capacity_rejects_too_wide_source_before_mc_decomposition() {
             None,
         )
         .unwrap();
-    let device = linear_device(2, Vec::new());
+    let device = Device::line("test-device", 2).unwrap();
 
     let err = CompilerWorkflow::new(CompileConfig {
         mode: CompileMode::Normal,

@@ -1,6 +1,6 @@
 // This code is part of Cqlib.
 //
-// (C) Copyright China Telecom Quantum Group 2026
+// (C) Copyright China Telecom Quantum Group 2025-2026
 //
 // This code is licensed under the Apache License, Version 2.0. You may
 // obtain a copy of this license in the LICENSE.txt file in the root directory
@@ -12,56 +12,13 @@
 
 use super::phase::{decompose_phase_n_clean, decompose_phase_no_aux};
 use crate::circuit::{
-    Circuit, Instruction, MCGate, Parameter, ParameterValue, Qubit, StandardGate, circuit_to_matrix,
+    Instruction, Parameter, ParameterValue, Qubit, StandardGate, circuit_to_matrix,
 };
 use crate::compiler::error::CompilerError;
 use crate::util::test_utils::{
-    assert_standard_operation, assert_value_operations_only_use_qubits,
-    circuit_from_value_operations,
+    EPSILON, assert_selected_matrix_columns_approx_eq, assert_standard_operation,
+    assert_value_operations_only_use_qubits, circuit_from_value_operations, mc_gate_matrix,
 };
-use ndarray::Array2;
-use num_complex::Complex64;
-
-const EPSILON: f64 = 1e-9;
-
-fn mc_phase_matrix(
-    num_qubits: usize,
-    controls: &[Qubit],
-    target: Qubit,
-    phase: StandardGate,
-    theta: Option<f64>,
-) -> Array2<Complex64> {
-    let mut circuit = Circuit::new(num_qubits);
-    let mut qubits = controls.to_vec();
-    qubits.push(target);
-    circuit
-        .append(
-            Instruction::McGate(Box::new(MCGate::new(controls.len() as u8, phase))),
-            qubits,
-            theta.map(ParameterValue::Fixed),
-            None,
-        )
-        .unwrap();
-    circuit_to_matrix(&circuit, None).unwrap()
-}
-
-fn assert_selected_columns_approx_eq(
-    actual: &Array2<Complex64>,
-    expected: &Array2<Complex64>,
-    columns: impl IntoIterator<Item = usize>,
-) {
-    assert_eq!(actual.shape(), expected.shape());
-    for column in columns {
-        for row in 0..expected.nrows() {
-            assert!(
-                (actual[[row, column]] - expected[[row, column]]).norm() < EPSILON,
-                "matrix mismatch at row {row}, column {column}: actual={}, expected={}",
-                actual[[row, column]],
-                expected[[row, column]]
-            );
-        }
-    }
-}
 
 #[test]
 fn zero_controls_emit_original_standard_phase_gates() {
@@ -150,9 +107,22 @@ fn no_ancilla_decompositions_match_mcgate_phase_matrices_exactly() {
                 None,
             )
             .unwrap();
-            let expected = mc_phase_matrix(num_controls + 1, &controls, target, phase, theta);
+            let mut qubits = controls.clone();
+            qubits.push(target);
+            let expected = mc_gate_matrix(
+                num_controls + 1,
+                controls.len() as u8,
+                phase,
+                qubits,
+                theta.map(ParameterValue::Fixed),
+            );
 
-            assert_selected_columns_approx_eq(&actual, &expected, 0..expected.ncols());
+            assert_selected_matrix_columns_approx_eq(
+                &actual,
+                &expected,
+                0..expected.ncols(),
+                EPSILON,
+            );
         }
     }
 }
@@ -171,13 +141,21 @@ fn clean_decomposition_matches_clean_subspace_and_restores_ancillas() {
     )
     .unwrap();
     let actual = circuit_to_matrix(&circuit_from_value_operations(6, operations), None).unwrap();
-    let expected = mc_phase_matrix(6, &controls, target, StandardGate::Phase, Some(0.731));
+    let mut qubits = controls.to_vec();
+    qubits.push(target);
+    let expected = mc_gate_matrix(
+        6,
+        controls.len() as u8,
+        StandardGate::Phase,
+        qubits,
+        Some(ParameterValue::Fixed(0.731)),
+    );
     let clean_mask = clean_ancillas
         .iter()
         .fold(0_usize, |mask, qubit| mask | (1 << qubit.index()));
     let clean_columns = (0..expected.ncols()).filter(|state| state & clean_mask == 0);
 
-    assert_selected_columns_approx_eq(&actual, &expected, clean_columns);
+    assert_selected_matrix_columns_approx_eq(&actual, &expected, clean_columns, EPSILON);
 }
 
 #[test]

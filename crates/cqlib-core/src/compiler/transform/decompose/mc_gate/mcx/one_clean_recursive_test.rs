@@ -1,6 +1,6 @@
 // This code is part of Cqlib.
 //
-// (C) Copyright China Telecom Quantum Group 2026
+// (C) Copyright China Telecom Quantum Group 2025-2026
 //
 // This code is licensed under the Apache License, Version 2.0. You may
 // obtain a copy of this license in the LICENSE.txt file in the root directory
@@ -13,7 +13,7 @@
 use super::{
     decompose_mcx_1_clean_b95, decompose_mcx_small,
     dirty_v_chain::{decompose_mcx_n_dirty, decompose_relative_phase_mcx_n_dirty},
-    test_utils::{EPSILON, single_nonzero_statevector_output},
+    test_utils::{EPSILON, selected_basis_states, single_nonzero_statevector_output},
     utils::invert_parameter_free_operations,
 };
 use crate::circuit::{
@@ -87,24 +87,6 @@ fn assert_one_clean_ancilla_semantics(num_controls: usize) {
             "input basis state {input_basis_state} has relative phase {amplitude}, expected global phase {expected_phase}"
         );
     }
-}
-
-fn selected_basis_states(total_width: usize) -> Vec<usize> {
-    let mask = (1_usize << total_width) - 1;
-    let alternating_low = (0..total_width)
-        .filter(|index| index % 2 == 0)
-        .fold(0_usize, |state, index| state | (1_usize << index));
-    let mut states = vec![
-        0,
-        1,
-        1_usize << (total_width - 1),
-        mask,
-        alternating_low,
-        mask ^ alternating_low,
-    ];
-    states.sort_unstable();
-    states.dedup();
-    states
 }
 
 fn assert_one_clean_ancilla_selected_basis_semantics(num_controls: usize) {

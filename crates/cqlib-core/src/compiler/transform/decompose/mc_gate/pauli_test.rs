@@ -1,6 +1,6 @@
 // This code is part of Cqlib.
 //
-// (C) Copyright China Telecom Quantum Group 2026
+// (C) Copyright China Telecom Quantum Group 2025-2026
 //
 // This code is licensed under the Apache License, Version 2.0. You may
 // obtain a copy of this license in the LICENSE.txt file in the root directory
@@ -22,20 +22,16 @@ use super::{
         decompose_pauli_n_dirty, decompose_pauli_no_aux, decompose_pauli_small,
     },
 };
-use crate::circuit::{
-    Circuit, Instruction, MCGate, Qubit, StandardGate, circuit_to_matrix, operation::ValueOperation,
-};
+use crate::circuit::{Qubit, StandardGate, circuit_to_matrix, operation::ValueOperation};
 use crate::compiler::error::CompilerError;
 use crate::util::{
     operation::push_standard_gate,
     test_utils::{
+        EPSILON, assert_selected_matrix_columns_equal_up_to_global_phase,
         assert_standard_operation, assert_value_operations_equal, circuit_from_value_operations,
+        mc_gate_matrix,
     },
 };
-use ndarray::Array2;
-use num_complex::Complex64;
-
-const EPSILON: f64 = 1e-9;
 
 fn wrap_exact_mcx(
     pauli: StandardGate,
@@ -54,55 +50,6 @@ fn wrap_exact_mcx(
     operations.extend(mcx_operations);
     push_standard_gate(&mut operations, suffix, [target]);
     operations
-}
-
-fn pauli_matrix(
-    num_qubits: usize,
-    controls: &[Qubit],
-    target: Qubit,
-    pauli: StandardGate,
-) -> Array2<Complex64> {
-    let mut circuit = Circuit::new(num_qubits);
-    let mut qubits = controls.to_vec();
-    qubits.push(target);
-    circuit
-        .append(
-            Instruction::McGate(Box::new(MCGate::new(controls.len() as u8, pauli))),
-            qubits,
-            [],
-            None,
-        )
-        .unwrap();
-    circuit_to_matrix(&circuit, None).unwrap()
-}
-
-fn assert_selected_columns_equal_up_to_global_phase(
-    actual: &Array2<Complex64>,
-    expected: &Array2<Complex64>,
-    columns: impl IntoIterator<Item = usize>,
-) {
-    assert_eq!(actual.shape(), expected.shape());
-    let columns: Vec<_> = columns.into_iter().collect();
-    let (reference_actual, reference_expected) = columns
-        .iter()
-        .flat_map(|column| {
-            (0..expected.nrows()).map(move |row| (actual[[row, *column]], expected[[row, *column]]))
-        })
-        .find(|(_, expected)| expected.norm() > EPSILON)
-        .expect("selected expected columns must contain a nonzero amplitude");
-    let global_phase = reference_actual / reference_expected;
-
-    assert!((global_phase.norm() - 1.0).abs() < EPSILON);
-    for column in columns {
-        for row in 0..expected.nrows() {
-            let expected_amplitude = global_phase * expected[[row, column]];
-            assert!(
-                (actual[[row, column]] - expected_amplitude).norm() < EPSILON,
-                "matrix mismatch at row {row}, column {column}: actual={}, expected={expected_amplitude}",
-                actual[[row, column]]
-            );
-        }
-    }
 }
 
 #[test]
@@ -207,9 +154,16 @@ fn no_ancilla_pauli_decompositions_match_mcgate_semantics() {
         let operations = decompose_pauli_no_aux(pauli, &controls, target).unwrap();
         let actual =
             circuit_to_matrix(&circuit_from_value_operations(4, operations), None).unwrap();
-        let expected = pauli_matrix(4, &controls, target, pauli);
+        let mut qubits = controls.to_vec();
+        qubits.push(target);
+        let expected = mc_gate_matrix(4, controls.len() as u8, pauli, qubits, []);
 
-        assert_selected_columns_equal_up_to_global_phase(&actual, &expected, 0..expected.ncols());
+        assert_selected_matrix_columns_equal_up_to_global_phase(
+            &actual,
+            &expected,
+            0..expected.ncols(),
+            EPSILON,
+        );
     }
 }
 
@@ -307,19 +261,29 @@ fn clean_and_dirty_pauli_decompositions_preserve_ancilla_contracts() {
         decompose_pauli_n_clean(StandardGate::Z, &controls, target, &[ancilla]).unwrap();
     let clean_actual =
         circuit_to_matrix(&circuit_from_value_operations(5, clean_operations), None).unwrap();
-    let clean_expected = pauli_matrix(5, &controls, target, StandardGate::Z);
+    let mut clean_qubits = controls.to_vec();
+    clean_qubits.push(target);
+    let clean_expected = mc_gate_matrix(5, controls.len() as u8, StandardGate::Z, clean_qubits, []);
     let clean_columns = (0..clean_expected.ncols()).filter(|state| state & (1 << 4) == 0);
-    assert_selected_columns_equal_up_to_global_phase(&clean_actual, &clean_expected, clean_columns);
+    assert_selected_matrix_columns_equal_up_to_global_phase(
+        &clean_actual,
+        &clean_expected,
+        clean_columns,
+        EPSILON,
+    );
 
     let dirty_operations =
         decompose_pauli_n_dirty(StandardGate::Y, &controls, target, &[ancilla]).unwrap();
     let dirty_actual =
         circuit_to_matrix(&circuit_from_value_operations(5, dirty_operations), None).unwrap();
-    let dirty_expected = pauli_matrix(5, &controls, target, StandardGate::Y);
-    assert_selected_columns_equal_up_to_global_phase(
+    let mut dirty_qubits = controls.to_vec();
+    dirty_qubits.push(target);
+    let dirty_expected = mc_gate_matrix(5, controls.len() as u8, StandardGate::Y, dirty_qubits, []);
+    assert_selected_matrix_columns_equal_up_to_global_phase(
         &dirty_actual,
         &dirty_expected,
         0..dirty_expected.ncols(),
+        EPSILON,
     );
 }
 

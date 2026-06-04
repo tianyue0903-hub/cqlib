@@ -1,6 +1,6 @@
 // This code is part of Cqlib.
 //
-// (C) Copyright China Telecom Quantum Group 2026
+// (C) Copyright China Telecom Quantum Group 2025-2026
 //
 // This code is licensed under the Apache License, Version 2.0. You may
 // obtain a copy of this license in the LICENSE.txt file in the root directory
@@ -9,6 +9,31 @@
 // Any modifications or derivative works of this code must retain this
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
+
+//! Dependency DAG used by the compiler SABRE implementation.
+//!
+//! The DAG is built from circuit operation order and logical-qubit overlap.
+//! Nodes are intentionally coarser than single operations: consecutive
+//! operations that share the same dependency boundary can be folded together so
+//! routing sees the smallest set of scheduling barriers needed for progress.
+//!
+//! [`SabreNodeKind::TwoQ`] represents a two-logical-qubit interaction that
+//! must be adjacent before it can be emitted. Dependencies are derived from a
+//! per-wire frontier: each new operation depends on the latest node touching
+//! any of its logical qubits, and then becomes the frontier for those qubits.
+//! This is enough for SABRE because layout routing only reasons about
+//! two-qubit interaction readiness.
+//!
+//! [`SabreNodeKind::Synchronize`] is used for zero- and one-qubit operations,
+//! delays, and directives. These operations do not create a routed two-qubit
+//! interaction, but they still preserve sequencing at the current dependency
+//! boundary. Initial synchronize operations that touch no mapped frontier stay
+//! in [`SabreDag::initial`].
+//!
+//! Control-flow operations become recursive DAG nodes. The outer node preserves
+//! the control-flow operation as a scheduling boundary, while each body is
+//! decomposed into its own [`SabreDag`] so routing can restore layouts at block
+//! boundaries.
 
 use crate::circuit::{ControlFlow, Instruction, Operation};
 use crate::compiler::CompilerError;

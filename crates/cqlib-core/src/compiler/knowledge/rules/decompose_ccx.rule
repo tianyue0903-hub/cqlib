@@ -4,7 +4,7 @@
 
 rule decompose_ccx_to_cx {
     match { CCX 0 1 2 }
-    rewrite { H 2, CX 1 2, TDG 2, CX 0 2, T 2, CX 1 2, TDG 2, CX 0 2, T 1, T 2, H 2, CX 0 1 }
+    rewrite { H 2, CX 1 2, TDG 2, CX 0 2, T 2, CX 1 2, TDG 2, CX 0 2, T 1, T 2, H 2, CX 0 1, T 0, TDG 1, CX 0 1 }
 }
 
 rule decompose_ccx_to_cz {

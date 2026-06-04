@@ -1,6 +1,6 @@
 // This code is part of Cqlib.
 //
-// (C) Copyright China Telecom Quantum Group 2026
+// (C) Copyright China Telecom Quantum Group 2025-2026
 //
 // This code is licensed under the Apache License, Version 2.0. You may
 // obtain a copy of this license in the LICENSE.txt file in the root directory
@@ -14,8 +14,8 @@ use super::*;
 use crate::circuit::{Circuit, Qubit};
 use crate::compiler::CompilerError;
 use crate::compiler::sabre::{SabreConfig, SabreHeuristicConfig, SabreTrialObjective};
-use crate::device::{Device, PhysicalQubit, Topology};
-use std::collections::HashSet;
+use crate::device::{Device, Layout, LogicalQubit, PhysicalQubit, Topology};
+use std::collections::{BTreeMap, HashSet};
 
 #[test]
 fn sabre_routing_auto_layout_routes_non_embeddable_interactions() {
@@ -49,6 +49,38 @@ fn sabre_routing_keeps_adjacent_two_qubit_circuit_without_swap() {
     assert_eq!(result.swap_count, 0);
     assert_eq!(result.diagnostics.trials_evaluated, config.routing_trials);
     assert_eq!(result.circuit.operations().len(), 1);
+}
+
+#[test]
+fn sabre_routing_keeps_parameterized_single_qubit_circuit_unchanged() {
+    let device = line_device(1);
+    let objective = LayoutObjective::topology_only();
+    let config = deterministic_config();
+    let mut circuit = Circuit::new(1);
+    circuit.rx(Qubit::new(0), 0.25).unwrap();
+
+    let result = route_sabre(&circuit, &device, &objective, &config).unwrap();
+
+    assert!(!result.changed);
+    assert_eq!(result.swap_count, 0);
+    assert_eq!(result.circuit.operations().len(), 1);
+}
+
+#[test]
+fn sabre_changed_detects_non_identity_layout_without_swaps() {
+    let mut circuit = Circuit::new(2);
+    circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
+    let layout = Layout::new(
+        vec![LogicalQubit::new(0), LogicalQubit::new(1)],
+        vec![PhysicalQubit::new(0), PhysicalQubit::new(1)],
+        Some(BTreeMap::from([
+            (LogicalQubit::new(0), PhysicalQubit::new(1)),
+            (LogicalQubit::new(1), PhysicalQubit::new(0)),
+        ])),
+    )
+    .unwrap();
+
+    assert!(routing_changed(&circuit, &circuit, 0, &layout));
 }
 
 #[test]

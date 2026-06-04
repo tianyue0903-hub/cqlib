@@ -1,6 +1,6 @@
 // This code is part of Cqlib.
 //
-// (C) Copyright China Telecom Quantum Group 2026
+// (C) Copyright China Telecom Quantum Group 2025-2026
 //
 // This code is licensed under the Apache License, Version 2.0. You may
 // obtain a copy of this license in the LICENSE.txt file in the root directory
@@ -17,10 +17,10 @@ use crate::circuit::{
 };
 use crate::compiler::error::CompilerError;
 use crate::util::test_utils::{
-    assert_standard_operation, circuit_from_value_operations, single_nonzero_matrix_output,
+    assert_matrix_approx_eq, assert_standard_operation, circuit_from_value_operations,
+    single_nonzero_matrix_output,
 };
 use ndarray::Array2;
-use num_complex::Complex64;
 use smallvec::smallvec;
 
 fn emit_rccx() -> Vec<ValueOperation> {
@@ -28,18 +28,6 @@ fn emit_rccx() -> Vec<ValueOperation> {
     emit_relative_phase_toffoli(&mut operations, Qubit::new(0), Qubit::new(1), Qubit::new(2))
         .unwrap();
     operations
-}
-
-fn assert_matrix_approx_eq(actual: &Array2<Complex64>, expected: &Array2<Complex64>) {
-    assert_eq!(actual.shape(), expected.shape());
-    for ((row, column), actual_value) in actual.indexed_iter() {
-        let expected_value = expected[[row, column]];
-        let difference = (*actual_value - expected_value).norm();
-        assert!(
-            difference < EPSILON,
-            "matrix mismatch at ({row}, {column}): actual={actual_value}, expected={expected_value}, difference={difference}"
-        );
-    }
 }
 
 fn assert_duplicate_error(
@@ -172,5 +160,5 @@ fn relative_phase_toffoli_is_self_inverse() {
     let matrix = circuit_to_matrix(&circuit_from_value_operations(3, operations), None).unwrap();
     let identity = Array2::eye(8);
 
-    assert_matrix_approx_eq(&matrix, &identity);
+    assert_matrix_approx_eq(&matrix, &identity, EPSILON);
 }

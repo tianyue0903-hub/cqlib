@@ -364,6 +364,18 @@ impl Device {
         })
     }
 
+    /// Creates a device with physical qubits connected as a directed line.
+    ///
+    /// The device contains physical qubits `0..num_qubits`, all of which are
+    /// online. Native gates and calibration data are left unset and may be
+    /// configured with the builder-style setters.
+    pub fn line(name: impl Into<String>, num_qubits: u32) -> Result<Self, DeviceError> {
+        let physical_qubits = (0..num_qubits).map(PhysicalQubit::new).collect::<Vec<_>>();
+        let qubits = physical_qubits.iter().copied().collect::<HashSet<_>>();
+        let topology = Topology::line(physical_qubits).map_err(DeviceError::InvalidTopology)?;
+        Self::new(name, qubits, topology)
+    }
+
     /// Sets the offline or faulty physical qubits using the builder pattern.
     ///
     /// # Errors

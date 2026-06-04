@@ -1,6 +1,6 @@
 // This code is part of Cqlib.
 //
-// (C) Copyright China Telecom Quantum Group 2026
+// (C) Copyright China Telecom Quantum Group 2025-2026
 //
 // This code is licensed under the Apache License, Version 2.0. You may
 // obtain a copy of this license in the LICENSE.txt file in the root directory
@@ -17,18 +17,8 @@ use crate::circuit::{
 };
 use crate::compiler::CompilerError;
 use crate::compiler::knowledge::library::RuleKind;
+use crate::util::test_utils::standard_ops;
 use smallvec::smallvec;
-
-fn standard_ops(circuit: &Circuit) -> Vec<StandardGate> {
-    circuit
-        .operations()
-        .iter()
-        .filter_map(|operation| match operation.instruction {
-            Instruction::Standard(gate) => Some(gate),
-            _ => None,
-        })
-        .collect()
-}
 
 #[test]
 fn cancels_adjacent_self_inverse_gates() {
@@ -441,6 +431,9 @@ fn two_rounds_continue_chain_beyond_first_replacement() {
             StandardGate::T,
             StandardGate::T,
             StandardGate::H,
+            StandardGate::CX,
+            StandardGate::T,
+            StandardGate::TDG,
             StandardGate::CX
         ]
     );

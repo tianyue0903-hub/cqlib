@@ -1,6 +1,6 @@
 // This code is part of Cqlib.
 //
-// (C) Copyright China Telecom Quantum Group 2026
+// (C) Copyright China Telecom Quantum Group 2025-2026
 //
 // This code is licensed under the Apache License, Version 2.0. You may
 // obtain a copy of this license in the LICENSE.txt file in the root directory
@@ -115,6 +115,42 @@ fn refine_layout_is_reproducible_for_same_seed() {
     assert_eq!(
         first.score.as_ref().map(|score| score.total),
         second.score.as_ref().map(|score| score.total)
+    );
+}
+
+#[test]
+fn route_with_decay_is_reproducible_for_same_seed() {
+    let device = line_device(5);
+    let layout = layout(&[(0, 0), (1, 4), (2, 2)], 5);
+    let config = SabreConfig {
+        routing_trials: 4,
+        seed: Some(23),
+        heuristic: SabreHeuristicConfig {
+            decay_increment: Some(0.05),
+            decay_reset: 2,
+            lookahead_weights: vec![0.5, 0.25],
+            attempt_limit: 20,
+            ..SabreHeuristicConfig::default()
+        },
+        ..deterministic_config()
+    };
+    let mut circuit = Circuit::new(3);
+    circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
+    circuit.cx(Qubit::new(1), Qubit::new(2)).unwrap();
+    circuit.cx(Qubit::new(0), Qubit::new(2)).unwrap();
+
+    let first = sabre_route(&circuit, &device, &layout, &config).unwrap();
+    let second = sabre_route(&circuit, &device, &layout, &config).unwrap();
+
+    assert_eq!(first.swap_count, second.swap_count);
+    assert_eq!(first.final_layout.l2p_map(), second.final_layout.l2p_map());
+    assert_eq!(
+        first.diagnostics.selected_trial_index,
+        second.diagnostics.selected_trial_index
+    );
+    assert_eq!(
+        first.diagnostics.operation_count,
+        second.diagnostics.operation_count
     );
 }
 

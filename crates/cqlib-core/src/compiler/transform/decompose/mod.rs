@@ -1,6 +1,6 @@
 // This code is part of Cqlib.
 //
-// (C) Copyright China Telecom Quantum Group 2026
+// (C) Copyright China Telecom Quantum Group 2025-2026
 //
 // This code is licensed under the Apache License, Version 2.0. You may
 // obtain a copy of this license in the LICENSE.txt file in the root directory
@@ -21,8 +21,8 @@
 //! - [`unitary`] synthesizes remaining custom `UnitaryGate` operations from
 //!   fixed numeric matrices. It currently supports one- and two-qubit matrices.
 //! - [`mc_gate`] provides explicit algorithmic synthesis primitives for
-//!   multi-controlled gates. Automatic algorithm selection, ancillary-qubit
-//!   allocation, and circuit rewriting have not yet been integrated.
+//!   multi-controlled gates, plus the circuit-level resource-aware
+//!   `decompose_mc_gates` entry point.
 //!
 //! These are independent decomposition entry points rather than a complete
 //! compiler pipeline. Target-basis lowering, layout, routing, and scheduling

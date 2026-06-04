@@ -1,6 +1,6 @@
 // This code is part of Cqlib.
 //
-// (C) Copyright China Telecom Quantum Group 2026
+// (C) Copyright China Telecom Quantum Group 2025-2026
 //
 // This code is licensed under the Apache License, Version 2.0. You may
 // obtain a copy of this license in the LICENSE.txt file in the root directory
@@ -20,6 +20,8 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 #[derive(Debug, Clone, PartialEq)]
 pub struct PhysicalLayoutGraph {
     physical_qubits: Vec<PhysicalQubit>,
+    physical_index: BTreeMap<PhysicalQubit, usize>,
+    adjacency: Vec<Vec<usize>>,
     distances: DistanceTable,
     directed_couplings: BTreeSet<(PhysicalQubit, PhysicalQubit)>,
     readout_errors: BTreeMap<PhysicalQubit, f64>,
@@ -39,7 +41,10 @@ impl PhysicalLayoutGraph {
         }
 
         let usable: BTreeSet<_> = physical_qubits.iter().copied().collect();
-        let distances = DistanceTable::from_topology(device.topology(), &physical_qubits);
+        let physical_index = build_physical_index(&physical_qubits);
+        let adjacency = build_undirected_adjacency(device.topology(), &physical_qubits, &usable);
+        let distances =
+            DistanceTable::from_adjacency(&physical_qubits, &physical_index, &adjacency);
         let directed_couplings = collect_directed_couplings(device.topology(), &usable);
         let (readout_errors, has_readout_error_data) =
             collect_readout_errors(device, &physical_qubits)?;
@@ -48,6 +53,8 @@ impl PhysicalLayoutGraph {
 
         Ok(Self {
             physical_qubits,
+            physical_index,
+            adjacency,
             distances,
             directed_couplings,
             readout_errors,
@@ -67,19 +74,44 @@ impl PhysicalLayoutGraph {
         &self.distances
     }
 
+    pub(super) fn physical_index(&self, qubit: PhysicalQubit) -> Option<usize> {
+        self.physical_index.get(&qubit).copied()
+    }
+
+    pub(super) fn physical_at(&self, index: usize) -> Option<PhysicalQubit> {
+        self.physical_qubits.get(index).copied()
+    }
+
+    pub(super) fn distance_by_index(&self, a: usize, b: usize) -> Option<u32> {
+        self.distances.distance_by_index(a, b)
+    }
+
     /// Returns the undirected shortest-path distance between two physical qubits.
     pub fn distance(&self, a: PhysicalQubit, b: PhysicalQubit) -> Option<u32> {
-        self.distances.distance(a, b)
+        let a_index = self.physical_index(a)?;
+        let b_index = self.physical_index(b)?;
+        self.distance_by_index(a_index, b_index)
     }
 
     /// Returns whether two physical qubits are adjacent in either direction.
     pub fn is_adjacent_undirected(&self, a: PhysicalQubit, b: PhysicalQubit) -> bool {
-        matches!(self.distance(a, b), Some(1))
+        let Some(a_index) = self.physical_index(a) else {
+            return false;
+        };
+        let Some(b_index) = self.physical_index(b) else {
+            return false;
+        };
+        self.adjacency[a_index].contains(&b_index)
     }
 
     /// Returns the readout error for a physical qubit, if known.
     pub fn readout_error(&self, qubit: PhysicalQubit) -> Option<f64> {
         self.readout_errors.get(&qubit).copied()
+    }
+
+    pub(super) fn readout_error_by_index(&self, index: usize) -> Option<f64> {
+        self.physical_at(index)
+            .and_then(|qubit| self.readout_error(qubit))
     }
 
     /// Returns the directed two-qubit error for a coupling, if known.
@@ -104,6 +136,12 @@ impl PhysicalLayoutGraph {
         }
     }
 
+    pub(super) fn two_qubit_error_undirected_by_index(&self, a: usize, b: usize) -> Option<f64> {
+        let a = self.physical_at(a)?;
+        let b = self.physical_at(b)?;
+        self.two_qubit_error_undirected(a, b)
+    }
+
     /// Returns whether there is a directed coupling from `control` to `target`.
     pub fn supports_directed_coupling(
         &self,
@@ -111,6 +149,17 @@ impl PhysicalLayoutGraph {
         target: PhysicalQubit,
     ) -> bool {
         self.directed_couplings.contains(&(control, target))
+    }
+
+    pub(super) fn supports_directed_coupling_by_index(
+        &self,
+        control: usize,
+        target: usize,
+    ) -> bool {
+        match (self.physical_at(control), self.physical_at(target)) {
+            (Some(control), Some(target)) => self.supports_directed_coupling(control, target),
+            _ => false,
+        }
     }
 
     /// Returns whether any calibration/error data is available.
@@ -138,42 +187,26 @@ pub struct DistanceTable {
 }
 
 impl DistanceTable {
-    fn from_topology(topology: &Topology, qubits: &[PhysicalQubit]) -> Self {
-        let index: BTreeMap<_, _> = qubits
-            .iter()
-            .copied()
-            .enumerate()
-            .map(|(index, qubit)| (qubit, index))
-            .collect();
-        let usable: BTreeSet<_> = qubits.iter().copied().collect();
+    fn from_adjacency(
+        qubits: &[PhysicalQubit],
+        index: &BTreeMap<PhysicalQubit, usize>,
+        adjacency: &[Vec<usize>],
+    ) -> Self {
         let mut distances = vec![vec![None; qubits.len()]; qubits.len()];
 
-        for (start_index, start) in qubits.iter().copied().enumerate() {
+        for start_index in 0..qubits.len() {
             let mut queue = VecDeque::new();
             distances[start_index][start_index] = Some(0);
-            queue.push_back(start);
+            queue.push_back(start_index);
 
-            while let Some(current) = queue.pop_front() {
-                let current_distance = distances[start_index][index[&current]]
+            while let Some(current_index) = queue.pop_front() {
+                let current_distance = distances[start_index][current_index]
                     .expect("queued nodes have assigned distances");
 
-                let mut neighbors = BTreeSet::new();
-                for neighbor in topology.successors(current) {
-                    if usable.contains(&neighbor) {
-                        neighbors.insert(neighbor);
-                    }
-                }
-                for neighbor in topology.predecessors(current) {
-                    if usable.contains(&neighbor) {
-                        neighbors.insert(neighbor);
-                    }
-                }
-
-                for neighbor in neighbors {
-                    let neighbor_index = index[&neighbor];
+                for neighbor_index in adjacency[current_index].iter().copied() {
                     if distances[start_index][neighbor_index].is_none() {
                         distances[start_index][neighbor_index] = Some(current_distance + 1);
-                        queue.push_back(neighbor);
+                        queue.push_back(neighbor_index);
                     }
                 }
             }
@@ -181,7 +214,7 @@ impl DistanceTable {
 
         Self {
             qubits: qubits.to_vec(),
-            index,
+            index: index.clone(),
             distances,
         }
     }
@@ -195,13 +228,56 @@ impl DistanceTable {
     pub fn distance(&self, a: PhysicalQubit, b: PhysicalQubit) -> Option<u32> {
         let a_index = self.index.get(&a)?;
         let b_index = self.index.get(&b)?;
-        self.distances[*a_index][*b_index]
+        self.distance_by_index(*a_index, *b_index)
+    }
+
+    pub(super) fn distance_by_index(&self, a: usize, b: usize) -> Option<u32> {
+        self.distances.get(a)?.get(b).copied().flatten()
     }
 }
 
 /// Builds a physical layout graph from a device.
 pub fn build_physical_layout_graph(device: &Device) -> Result<PhysicalLayoutGraph, CompilerError> {
     PhysicalLayoutGraph::from_device(device)
+}
+
+fn build_physical_index(physical_qubits: &[PhysicalQubit]) -> BTreeMap<PhysicalQubit, usize> {
+    physical_qubits
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(index, qubit)| (qubit, index))
+        .collect()
+}
+
+fn build_undirected_adjacency(
+    topology: &Topology,
+    physical_qubits: &[PhysicalQubit],
+    usable: &BTreeSet<PhysicalQubit>,
+) -> Vec<Vec<usize>> {
+    let index = build_physical_index(physical_qubits);
+    let mut adjacency = vec![Vec::new(); physical_qubits.len()];
+
+    for qubit in physical_qubits {
+        let qubit_index = index[qubit];
+        for neighbor in topology.successors(*qubit) {
+            if usable.contains(&neighbor) {
+                adjacency[qubit_index].push(index[&neighbor]);
+            }
+        }
+        for neighbor in topology.predecessors(*qubit) {
+            if usable.contains(&neighbor) {
+                adjacency[qubit_index].push(index[&neighbor]);
+            }
+        }
+    }
+
+    for neighbors in &mut adjacency {
+        neighbors.sort_unstable_by_key(|index| physical_qubits[*index]);
+        neighbors.dedup();
+    }
+
+    adjacency
 }
 
 fn collect_readout_errors(

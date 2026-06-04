@@ -22,62 +22,12 @@ use crate::circuit::gate::{ConditionView, FrozenCircuit, Instruction, StandardGa
 use crate::circuit::parameter::Parameter;
 use crate::circuit::symbolic_matrix::{SymbolicMatrix, standard_gate_symbolic_matrix};
 use crate::circuit::{Operation, Qubit};
+use crate::util::test_utils::{assert_is_unitary, assert_matrix_approx_eq};
 use ndarray::array;
 use num_complex::Complex64;
 use smallvec::smallvec;
 use std::f64::consts::{PI, SQRT_2};
 use std::sync::Arc;
-
-/// Assert that two complex matrices are approximately equal
-fn assert_matrix_approx_eq(actual: &Array2<Complex64>, expected: &Array2<Complex64>, eps: f64) {
-    assert_eq!(
-        actual.shape(),
-        expected.shape(),
-        "Matrix shapes differ: {:?} vs {:?}",
-        actual.shape(),
-        expected.shape()
-    );
-
-    for (i, (a, e)) in actual.iter().zip(expected.iter()).enumerate() {
-        let diff = (a - e).norm();
-        assert!(
-            diff < eps,
-            "Matrix element [{}] differs: got {}, expected {}, diff = {} > {}",
-            i,
-            a,
-            e,
-            diff,
-            eps
-        );
-    }
-}
-
-/// Assert that a matrix is unitary: U† * U = I
-fn assert_is_unitary(matrix: &Array2<Complex64>, eps: f64) {
-    let n = matrix.nrows();
-    let conj_t = matrix.t().mapv(|x| x.conj());
-    let product = conj_t.dot(matrix);
-
-    for i in 0..n {
-        for j in 0..n {
-            let expected = if i == j {
-                Complex64::new(1.0, 0.0)
-            } else {
-                Complex64::new(0.0, 0.0)
-            };
-            let diff = (product[[i, j]] - expected).norm();
-            assert!(
-                diff < eps,
-                "Matrix not unitary at [{}, {}]: got {}, expected {}, diff = {}",
-                i,
-                j,
-                product[[i, j]],
-                expected,
-                diff
-            );
-        }
-    }
-}
 
 /// Create identity matrix of given dimension
 fn eye(n: usize) -> Array2<Complex64> {
