@@ -132,6 +132,27 @@ impl Instruction {
         }
     }
 
+    /// Returns the fixed `(qubit_count, parameter_count)` for gate-like instructions.
+    ///
+    /// This method describes arity that is intrinsic to the instruction itself.
+    /// It returns `None` for instructions whose qubit count is variable or
+    /// context-dependent, such as barriers and control-flow operations.  Callers
+    /// that need the qubits used by a control-flow body should use
+    /// [`ControlFlow::used_qubits`] or [`ControlFlow::ordered_qubits`] instead.
+    pub fn gate_arity(&self) -> Option<(usize, usize)> {
+        match self {
+            Instruction::Standard(gate) => Some((gate.num_qubits(), gate.num_params())),
+            Instruction::McGate(gate) => Some((gate.num_qubits(), gate.num_params())),
+            Instruction::UnitaryGate(gate) => {
+                Some((gate.num_qubits() as usize, gate.num_params() as usize))
+            }
+            Instruction::CircuitGate(gate) => Some((gate.num_qubits(), gate.num_params())),
+            Instruction::Directive(Directive::Measure | Directive::Reset) => Some((1, 0)),
+            Instruction::Delay => Some((1, 1)),
+            Instruction::Directive(Directive::Barrier) | Instruction::ControlFlowGate(_) => None,
+        }
+    }
+
     /// Computes the unitary matrix representation of the instruction.
     ///
     /// # Arguments
@@ -346,7 +367,11 @@ impl From<ControlFlow> for Instruction {
 #[cfg(test)]
 mod tests {
     use super::Instruction;
-    use crate::circuit::gate::{MCGate, StandardGate};
+    use crate::circuit::gate::{
+        CircuitGate, ConditionView, ControlFlow, Directive, FrozenCircuit, MCGate, StandardGate,
+        UnitaryGate,
+    };
+    use crate::circuit::{Circuit, Qubit};
 
     #[test]
     fn canonicalize_form_collapses_supported_mc_gate_forms() {
@@ -413,5 +438,45 @@ mod tests {
         assert_eq!(actual.base_gate(), &StandardGate::X);
         assert_eq!(actual.num_ctrl_qubits(), 3);
         assert_eq!(actual.num_qubits(), 4);
+    }
+
+    #[test]
+    fn gate_arity_reports_fixed_gate_like_instructions() {
+        let unitary = UnitaryGate::new("custom", 2, 3);
+        let circuit_gate =
+            CircuitGate::new("composite", FrozenCircuit::new(Circuit::new(4))).unwrap();
+
+        let cases = [
+            (Instruction::Standard(StandardGate::H), Some((1, 0))),
+            (Instruction::Standard(StandardGate::RX), Some((1, 1))),
+            (Instruction::Standard(StandardGate::GPhase), Some((0, 1))),
+            (
+                Instruction::McGate(Box::new(MCGate::new(2, StandardGate::RZ))),
+                Some((3, 1)),
+            ),
+            (Instruction::UnitaryGate(Box::new(unitary)), Some((2, 3))),
+            (
+                Instruction::CircuitGate(Box::new(circuit_gate)),
+                Some((4, 0)),
+            ),
+            (Instruction::Directive(Directive::Measure), Some((1, 0))),
+            (Instruction::Directive(Directive::Reset), Some((1, 0))),
+            (Instruction::Delay, Some((1, 1))),
+        ];
+
+        for (instruction, expected) in cases {
+            assert_eq!(instruction.gate_arity(), expected);
+        }
+    }
+
+    #[test]
+    fn gate_arity_excludes_variable_or_contextual_instructions() {
+        let flow = ControlFlow::if_else(ConditionView::new(Qubit::new(0), 1), Vec::new(), None);
+
+        assert_eq!(
+            Instruction::Directive(Directive::Barrier).gate_arity(),
+            None
+        );
+        assert_eq!(Instruction::ControlFlowGate(flow).gate_arity(), None);
     }
 }

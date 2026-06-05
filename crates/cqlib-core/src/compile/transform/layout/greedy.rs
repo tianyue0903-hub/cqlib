@@ -18,7 +18,7 @@ use super::{
 };
 use crate::circuit::Circuit;
 use crate::compile::CompilerError;
-use crate::device::{Device, Layout, LogicalQubit, PhysicalQubit};
+use crate::device::{Device, Layout};
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
@@ -84,8 +84,20 @@ pub fn greedy_layout_prepared(
         )));
     }
 
-    let logical_index = logical_index(analysis);
-    let activity = logical_activity_by_index(analysis, &logical_index);
+    let logical_index = analysis
+        .logical_qubits
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(index, logical)| (logical, index))
+        .collect::<BTreeMap<_, _>>();
+    let mut activity = vec![None; analysis.logical_qubits.len()];
+    for interaction in analysis.interactions.interactions() {
+        for logical in [interaction.left, interaction.right] {
+            let entry = &mut activity[logical_index[&logical]];
+            *entry = Some(entry.unwrap_or(0.0) + interaction.weight);
+        }
+    }
     let pair_candidates = sorted_physical_pair_candidates(physical);
     let mut mapping = vec![None; analysis.logical_qubits.len()];
     let mut vacant = vec![true; physical.physical_qubits().len()];
@@ -177,11 +189,24 @@ pub fn greedy_layout_prepared(
         vacant[physical_qubit] = false;
     }
 
-    let mapping = layout_mapping(analysis, physical, &mapping)?;
+    let mut layout_mapping = BTreeMap::new();
+    for (logical_index, physical_index) in mapping.iter().copied().enumerate() {
+        let physical_index = physical_index.ok_or_else(|| {
+            CompilerError::InvariantViolation(
+                "greedy layout left a logical qubit unmapped".to_string(),
+            )
+        })?;
+        let physical_qubit = physical.physical_at(physical_index).ok_or_else(|| {
+            CompilerError::InvariantViolation(format!(
+                "greedy layout selected physical index {physical_index} outside target topology"
+            ))
+        })?;
+        layout_mapping.insert(analysis.logical_qubits[logical_index], physical_qubit);
+    }
     let layout = Layout::new(
         analysis.logical_qubits.clone(),
         physical.physical_qubits().to_vec(),
-        Some(mapping),
+        Some(layout_mapping),
     )
     .map_err(|error| {
         CompilerError::InvariantViolation(format!(
@@ -310,7 +335,9 @@ fn choose_single_candidate(
         let candidate = (candidate_physical, cost);
         if best.as_ref().is_none_or(|best| {
             compare_cost(candidate.1, best.1)
-                .then_with(|| compare_physical_index(candidate.0, best.0, physical))
+                .then_with(|| {
+                    physical.physical_qubits()[candidate.0].cmp(&physical.physical_qubits()[best.0])
+                })
                 .is_lt()
         }) {
             best = Some(candidate);
@@ -360,7 +387,9 @@ fn choose_idle_candidate(
                 .cmp(&best.1)
                 .then_with(|| candidate.2.cmp(&best.2))
                 .then_with(|| candidate.3.total_cmp(&best.3))
-                .then_with(|| compare_physical_index(candidate.0, best.0, physical))
+                .then_with(|| {
+                    physical.physical_qubits()[candidate.0].cmp(&physical.physical_qubits()[best.0])
+                })
                 .is_lt()
         }) {
             best = Some(candidate);
@@ -403,7 +432,18 @@ impl CandidateCost {
         };
 
         let direction = if distance == 1 {
-            direction_cost(interaction, left_physical, right_physical, physical)
+            let mut direction = 0.0;
+            if interaction.directed_weight_left_to_right > 0.0
+                && !physical.supports_directed_coupling_by_index(left_physical, right_physical)
+            {
+                direction += interaction.directed_weight_left_to_right;
+            }
+            if interaction.directed_weight_right_to_left > 0.0
+                && !physical.supports_directed_coupling_by_index(right_physical, left_physical)
+            {
+                direction += interaction.directed_weight_right_to_left;
+            }
+            direction
         } else {
             0.0
         };
@@ -427,26 +467,6 @@ impl CandidateCost {
                 + objective.readout_error_weight * readout,
         }
     }
-}
-
-fn direction_cost(
-    interaction: &Interaction,
-    left_physical: usize,
-    right_physical: usize,
-    physical: &PhysicalLayoutGraph,
-) -> f64 {
-    let mut direction = 0.0;
-    if interaction.directed_weight_left_to_right > 0.0
-        && !physical.supports_directed_coupling_by_index(left_physical, right_physical)
-    {
-        direction += interaction.directed_weight_left_to_right;
-    }
-    if interaction.directed_weight_right_to_left > 0.0
-        && !physical.supports_directed_coupling_by_index(right_physical, left_physical)
-    {
-        direction += interaction.directed_weight_right_to_left;
-    }
-    direction
 }
 
 fn readout_cost(
@@ -497,8 +517,12 @@ fn update_best_pair(
     let candidate = (left_physical, right_physical, cost);
     if best.as_ref().is_none_or(|best| {
         compare_cost(candidate.2, best.2)
-            .then_with(|| compare_physical_index(candidate.0, best.0, physical))
-            .then_with(|| compare_physical_index(candidate.1, best.1, physical))
+            .then_with(|| {
+                physical.physical_qubits()[candidate.0].cmp(&physical.physical_qubits()[best.0])
+            })
+            .then_with(|| {
+                physical.physical_qubits()[candidate.1].cmp(&physical.physical_qubits()[best.1])
+            })
             .is_lt()
     }) {
         *best = Some(candidate);
@@ -518,60 +542,10 @@ fn sorted_physical_pair_candidates(physical: &PhysicalLayoutGraph) -> Vec<(usize
         physical
             .distance_by_index(a.0, a.1)
             .cmp(&physical.distance_by_index(b.0, b.1))
-            .then_with(|| compare_physical_index(a.0, b.0, physical))
-            .then_with(|| compare_physical_index(a.1, b.1, physical))
+            .then_with(|| physical.physical_qubits()[a.0].cmp(&physical.physical_qubits()[b.0]))
+            .then_with(|| physical.physical_qubits()[a.1].cmp(&physical.physical_qubits()[b.1]))
     });
     candidates
-}
-
-fn compare_physical_index(a: usize, b: usize, physical: &PhysicalLayoutGraph) -> Ordering {
-    physical.physical_qubits()[a].cmp(&physical.physical_qubits()[b])
-}
-
-fn logical_index(analysis: &CircuitLayoutAnalysis) -> BTreeMap<LogicalQubit, usize> {
-    analysis
-        .logical_qubits
-        .iter()
-        .copied()
-        .enumerate()
-        .map(|(index, logical)| (logical, index))
-        .collect()
-}
-
-fn logical_activity_by_index(
-    analysis: &CircuitLayoutAnalysis,
-    logical_index: &BTreeMap<LogicalQubit, usize>,
-) -> Vec<Option<f64>> {
-    let mut activity = vec![None; analysis.logical_qubits.len()];
-    for interaction in analysis.interactions.interactions() {
-        for logical in [interaction.left, interaction.right] {
-            let entry = &mut activity[logical_index[&logical]];
-            *entry = Some(entry.unwrap_or(0.0) + interaction.weight);
-        }
-    }
-    activity
-}
-
-fn layout_mapping(
-    analysis: &CircuitLayoutAnalysis,
-    physical: &PhysicalLayoutGraph,
-    mapping: &[Option<usize>],
-) -> Result<BTreeMap<LogicalQubit, PhysicalQubit>, CompilerError> {
-    let mut layout_mapping = BTreeMap::new();
-    for (logical_index, physical_index) in mapping.iter().copied().enumerate() {
-        let physical_index = physical_index.ok_or_else(|| {
-            CompilerError::InvariantViolation(
-                "greedy layout left a logical qubit unmapped".to_string(),
-            )
-        })?;
-        let physical_qubit = physical.physical_at(physical_index).ok_or_else(|| {
-            CompilerError::InvariantViolation(format!(
-                "greedy layout selected physical index {physical_index} outside target topology"
-            ))
-        })?;
-        layout_mapping.insert(analysis.logical_qubits[logical_index], physical_qubit);
-    }
-    Ok(layout_mapping)
 }
 
 fn is_perfect_layout(

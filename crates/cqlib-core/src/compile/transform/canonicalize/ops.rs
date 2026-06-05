@@ -12,15 +12,11 @@
 
 //! Operation-level canonicalization helpers.
 
-use crate::circuit::{
-    ControlFlow, Directive, Instruction, Operation, Parameter, Qubit, StandardGate,
-};
+use crate::circuit::{Directive, Instruction, Operation, Parameter, Qubit, StandardGate};
 use crate::compile::CompilerError;
 use smallvec::SmallVec;
-use std::collections::BTreeSet;
 
 use super::config::CanonicalizeConfig;
-use super::params::parameter_is_exact_zero;
 
 pub(super) fn is_strict_noop(
     instruction: &Instruction,
@@ -30,12 +26,12 @@ pub(super) fn is_strict_noop(
     Ok(match instruction {
         Instruction::Standard(StandardGate::I) => true,
         Instruction::Standard(StandardGate::GPhase) => match params.first() {
-            Some(param) => parameter_is_exact_zero(param)?,
+            Some(param) => exact_zero(param)?,
             None => false,
         },
         Instruction::Directive(Directive::Barrier) => qubits.is_empty(),
         Instruction::Delay => match params.first() {
-            Some(param) => parameter_is_exact_zero(param)?,
+            Some(param) => exact_zero(param)?,
             None => false,
         },
         Instruction::Standard(
@@ -51,25 +47,29 @@ pub(super) fn is_strict_noop(
             | StandardGate::CRY
             | StandardGate::CRZ,
         ) => match params.first() {
-            Some(param) => parameter_is_exact_zero(param)?,
+            Some(param) => exact_zero(param)?,
             None => false,
         },
         Instruction::Standard(StandardGate::RXY) => match params.first() {
-            Some(param) => parameter_is_exact_zero(param)?,
+            Some(param) => exact_zero(param)?,
             None => false,
         },
         Instruction::Standard(StandardGate::FSIM) => {
-            params.len() == 2
-                && parameter_is_exact_zero(&params[0])?
-                && parameter_is_exact_zero(&params[1])?
+            params.len() == 2 && exact_zero(&params[0])? && exact_zero(&params[1])?
         }
         Instruction::Standard(StandardGate::U) => {
             params.len() == 3
-                && parameter_is_exact_zero(&params[0])?
-                && parameter_is_exact_zero(&params[1])?
-                && parameter_is_exact_zero(&params[2])?
+                && exact_zero(&params[0])?
+                && exact_zero(&params[1])?
+                && exact_zero(&params[2])?
         }
         _ => false,
+    })
+}
+
+fn exact_zero(param: &Parameter) -> Result<bool, CompilerError> {
+    param.is_exact_zero().map_err(|error| {
+        CompilerError::InvalidInput(format!("parameter cannot be evaluated: {error}"))
     })
 }
 
@@ -150,57 +150,5 @@ pub(super) fn barrier_relation(lhs: &[Qubit], rhs: &[Qubit]) -> BarrierRelation 
         (true, false) => BarrierRelation::LeftSuperset,
         (false, true) => BarrierRelation::RightSuperset,
         _ => BarrierRelation::DisjointOrOverlap,
-    }
-}
-
-pub(super) fn canonical_control_flow_qubits_for_operation(
-    instruction: &Instruction,
-    circuit_qubits: &[Qubit],
-) -> SmallVec<[Qubit; 3]> {
-    let mut required = BTreeSet::new();
-    match instruction {
-        Instruction::ControlFlowGate(ControlFlow::IfElse(gate)) => {
-            required.insert(gate.condition().qubit);
-            collect_body_qubits(gate.true_body(), &mut required);
-            if let Some(false_body) = gate.false_body() {
-                collect_body_qubits(false_body, &mut required);
-            }
-        }
-        Instruction::ControlFlowGate(ControlFlow::WhileLoop(gate)) => {
-            required.insert(gate.condition().qubit);
-            collect_body_qubits(gate.body(), &mut required);
-        }
-        _ => {}
-    }
-
-    // Preserve the parent circuit's qubit order rather than the order in which
-    // nested body operations happen to mention qubits. This makes the outer
-    // control-flow operation stable after body cleanup.
-    circuit_qubits
-        .iter()
-        .copied()
-        .filter(|qubit| required.contains(qubit))
-        .collect()
-}
-
-fn collect_body_qubits(operations: &[Operation], out: &mut BTreeSet<Qubit>) {
-    for operation in operations {
-        for &qubit in &operation.qubits {
-            out.insert(qubit);
-        }
-        match &operation.instruction {
-            Instruction::ControlFlowGate(ControlFlow::IfElse(gate)) => {
-                out.insert(gate.condition().qubit);
-                collect_body_qubits(gate.true_body(), out);
-                if let Some(false_body) = gate.false_body() {
-                    collect_body_qubits(false_body, out);
-                }
-            }
-            Instruction::ControlFlowGate(ControlFlow::WhileLoop(gate)) => {
-                out.insert(gate.condition().qubit);
-                collect_body_qubits(gate.body(), out);
-            }
-            _ => {}
-        }
     }
 }

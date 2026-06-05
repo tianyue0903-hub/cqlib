@@ -39,7 +39,7 @@
 //! and the output canonicalizer removes representation noise introduced by
 //! previous stages.
 
-use crate::circuit::{Circuit, ControlFlow, Instruction, Operation};
+use crate::circuit::{Circuit, ControlFlow, Instruction};
 use crate::compile::CompilerError;
 use crate::compile::resource::ResourceLimits;
 use crate::compile::sabre::{SabreConfig, SabreHeuristicConfig, SabreTrialObjective};
@@ -184,36 +184,36 @@ impl CompilerWorkflow {
         steps: &mut Vec<WorkflowStepReport>,
         target_basis: &Option<Vec<Instruction>>,
     ) -> Result<(), CompilerError> {
-        apply_transformer(
+        apply_circuit_transform(
             current,
             changed,
             steps,
             STEP_CANONICALIZE_INPUT,
-            &Canonicalizer::production(),
+            |circuit| Canonicalizer::production().transform(circuit),
         )?;
         self.apply_definition_decomposition(current, changed, steps)?;
-        apply_rewrite(
+        apply_circuit_transform(
             current,
             changed,
             steps,
             STEP_OPTIMIZE_PRE_DECOMPOSITION,
-            RewriteConfig::production(),
+            |circuit| KnowledgeRewriter::new(RewriteConfig::production()).transform(circuit),
         )?;
         self.apply_unitary_decomposition(current, changed, steps)?;
         self.apply_mc_gate_decomposition(current, changed, steps)?;
-        apply_transformer(
+        apply_circuit_transform(
             current,
             changed,
             steps,
             STEP_CANONICALIZE_AFTER_DECOMPOSITION,
-            &Canonicalizer::production(),
+            |circuit| Canonicalizer::production().transform(circuit),
         )?;
-        apply_rewrite(
+        apply_circuit_transform(
             current,
             changed,
             steps,
             STEP_OPTIMIZE_POST_DECOMPOSITION,
-            RewriteConfig::production(),
+            |circuit| KnowledgeRewriter::new(RewriteConfig::production()).transform(circuit),
         )?;
         self.apply_layout_and_routing(current, changed, steps, CompileMode::Normal)?;
         self.apply_target_translation(
@@ -223,12 +223,12 @@ impl CompilerWorkflow {
             target_basis,
             RewriteConfig::lowering(),
         )?;
-        apply_transformer(
+        apply_circuit_transform(
             current,
             changed,
             steps,
             STEP_CANONICALIZE_OUTPUT,
-            &Canonicalizer::production(),
+            |circuit| Canonicalizer::production().transform(circuit),
         )?;
         Ok(())
     }
@@ -240,36 +240,52 @@ impl CompilerWorkflow {
         steps: &mut Vec<WorkflowStepReport>,
         target_basis: &Option<Vec<Instruction>>,
     ) -> Result<(), CompilerError> {
-        apply_transformer(
+        apply_circuit_transform(
             current,
             changed,
             steps,
             STEP_CANONICALIZE_INPUT,
-            &Canonicalizer::production(),
+            |circuit| Canonicalizer::production().transform(circuit),
         )?;
         self.apply_definition_decomposition(current, changed, steps)?;
-        apply_rewrite(
+        apply_circuit_transform(
             current,
             changed,
             steps,
             STEP_OPTIMIZE_PRE_DECOMPOSITION,
-            enhanced_rewrite_config(RewriteConfig::production()),
+            |circuit| {
+                KnowledgeRewriter::new(
+                    RewriteConfig::production()
+                        .with_max_rounds(16)
+                        .with_max_window_ops(32)
+                        .with_max_pattern_len(12),
+                )
+                .transform(circuit)
+            },
         )?;
         self.apply_unitary_decomposition(current, changed, steps)?;
         self.apply_mc_gate_decomposition(current, changed, steps)?;
-        apply_transformer(
+        apply_circuit_transform(
             current,
             changed,
             steps,
             STEP_CANONICALIZE_AFTER_DECOMPOSITION,
-            &Canonicalizer::production(),
+            |circuit| Canonicalizer::production().transform(circuit),
         )?;
-        apply_rewrite(
+        apply_circuit_transform(
             current,
             changed,
             steps,
             STEP_OPTIMIZE_POST_DECOMPOSITION,
-            enhanced_rewrite_config(RewriteConfig::production()),
+            |circuit| {
+                KnowledgeRewriter::new(
+                    RewriteConfig::production()
+                        .with_max_rounds(16)
+                        .with_max_window_ops(32)
+                        .with_max_pattern_len(12),
+                )
+                .transform(circuit)
+            },
         )?;
         self.apply_layout_and_routing(current, changed, steps, CompileMode::Enhanced)?;
         self.apply_post_routing_cleanup(current, changed, steps)?;
@@ -278,26 +294,35 @@ impl CompilerWorkflow {
             changed,
             steps,
             target_basis,
-            enhanced_rewrite_config(RewriteConfig::lowering()),
+            RewriteConfig::lowering()
+                .with_max_rounds(16)
+                .with_max_window_ops(32)
+                .with_max_pattern_len(12),
         )?;
         let cleanup_rewrite_config = match target_basis.as_deref() {
-            Some(target_basis) => enhanced_rewrite_config(RewriteConfig::production())
+            Some(target_basis) => RewriteConfig::production()
+                .with_max_rounds(16)
+                .with_max_window_ops(32)
+                .with_max_pattern_len(12)
                 .with_target_instructions(target_basis.to_vec())?,
-            None => enhanced_rewrite_config(RewriteConfig::production()),
+            None => RewriteConfig::production()
+                .with_max_rounds(16)
+                .with_max_window_ops(32)
+                .with_max_pattern_len(12),
         };
-        apply_rewrite(
+        apply_circuit_transform(
             current,
             changed,
             steps,
             STEP_OPTIMIZE_TARGET_CLEANUP,
-            cleanup_rewrite_config,
+            |circuit| KnowledgeRewriter::new(cleanup_rewrite_config).transform(circuit),
         )?;
-        apply_transformer(
+        apply_circuit_transform(
             current,
             changed,
             steps,
             STEP_CANONICALIZE_OUTPUT,
-            &Canonicalizer::production(),
+            |circuit| Canonicalizer::production().transform(circuit),
         )?;
         Ok(())
     }
@@ -308,8 +333,42 @@ impl CompilerWorkflow {
         changed: &mut bool,
         steps: &mut Vec<WorkflowStepReport>,
     ) -> Result<(), CompilerError> {
-        if !contains_circuit_backed_definition(current.operations()) {
-            record_unchanged_step(steps, STEP_DECOMPOSE_DEFINITIONS);
+        let mut operation_stack = vec![current.operations()];
+        let mut has_circuit_backed_definition = false;
+        while let Some(operations) = operation_stack.pop() {
+            if operations
+                .iter()
+                .any(|operation| match &operation.instruction {
+                    Instruction::CircuitGate(_) => true,
+                    Instruction::UnitaryGate(gate) => gate.circuit().is_some(),
+                    Instruction::ControlFlowGate(flow) => {
+                        match flow {
+                            ControlFlow::IfElse(gate) => {
+                                operation_stack.push(gate.true_body());
+                                if let Some(false_body) = gate.false_body() {
+                                    operation_stack.push(false_body);
+                                }
+                            }
+                            ControlFlow::WhileLoop(gate) => operation_stack.push(gate.body()),
+                        }
+                        false
+                    }
+                    _ => false,
+                })
+            {
+                has_circuit_backed_definition = true;
+                break;
+            }
+        }
+
+        if !has_circuit_backed_definition {
+            steps.push(WorkflowStepReport {
+                stage: STEP_DECOMPOSE_DEFINITIONS.stage,
+                name: STEP_DECOMPOSE_DEFINITIONS.name,
+                changed: false,
+                skipped: false,
+                reason: None,
+            });
             return Ok(());
         }
 
@@ -333,8 +392,41 @@ impl CompilerWorkflow {
         changed: &mut bool,
         steps: &mut Vec<WorkflowStepReport>,
     ) -> Result<(), CompilerError> {
-        if !contains_unitary_gate(current.operations()) {
-            record_unchanged_step(steps, STEP_DECOMPOSE_UNITARY);
+        let mut operation_stack = vec![current.operations()];
+        let mut has_unitary_gate = false;
+        while let Some(operations) = operation_stack.pop() {
+            if operations
+                .iter()
+                .any(|operation| match &operation.instruction {
+                    Instruction::UnitaryGate(_) => true,
+                    Instruction::ControlFlowGate(flow) => {
+                        match flow {
+                            ControlFlow::IfElse(gate) => {
+                                operation_stack.push(gate.true_body());
+                                if let Some(false_body) = gate.false_body() {
+                                    operation_stack.push(false_body);
+                                }
+                            }
+                            ControlFlow::WhileLoop(gate) => operation_stack.push(gate.body()),
+                        }
+                        false
+                    }
+                    _ => false,
+                })
+            {
+                has_unitary_gate = true;
+                break;
+            }
+        }
+
+        if !has_unitary_gate {
+            steps.push(WorkflowStepReport {
+                stage: STEP_DECOMPOSE_UNITARY.stage,
+                name: STEP_DECOMPOSE_UNITARY.name,
+                changed: false,
+                skipped: false,
+                reason: None,
+            });
             return Ok(());
         }
 
@@ -353,8 +445,41 @@ impl CompilerWorkflow {
         steps: &mut Vec<WorkflowStepReport>,
     ) -> Result<(), CompilerError> {
         let config = self.mc_gate_decompose_config();
-        if !contains_mc_gate(current.operations()) {
-            record_unchanged_step(steps, STEP_DECOMPOSE_MC_GATES);
+        let mut operation_stack = vec![current.operations()];
+        let mut has_mc_gate = false;
+        while let Some(operations) = operation_stack.pop() {
+            if operations
+                .iter()
+                .any(|operation| match &operation.instruction {
+                    Instruction::McGate(_) => true,
+                    Instruction::ControlFlowGate(flow) => {
+                        match flow {
+                            ControlFlow::IfElse(gate) => {
+                                operation_stack.push(gate.true_body());
+                                if let Some(false_body) = gate.false_body() {
+                                    operation_stack.push(false_body);
+                                }
+                            }
+                            ControlFlow::WhileLoop(gate) => operation_stack.push(gate.body()),
+                        }
+                        false
+                    }
+                    _ => false,
+                })
+            {
+                has_mc_gate = true;
+                break;
+            }
+        }
+
+        if !has_mc_gate {
+            steps.push(WorkflowStepReport {
+                stage: STEP_DECOMPOSE_MC_GATES.stage,
+                name: STEP_DECOMPOSE_MC_GATES.name,
+                changed: false,
+                skipped: false,
+                reason: None,
+            });
             return Ok(());
         }
 
@@ -390,7 +515,14 @@ impl CompilerWorkflow {
         steps: &mut Vec<WorkflowStepReport>,
     ) -> Result<(), CompilerError> {
         let resource_limits = self.resource_limits();
-        validate_logical_width(circuit, resource_limits)?;
+        if let Some(max_total_qubits) = resource_limits.max_total_qubits {
+            if circuit.qubits().len() > max_total_qubits {
+                return Err(CompilerError::InvalidInput(format!(
+                    "source circuit uses {} logical qubits but target capacity is {max_total_qubits}",
+                    circuit.qubits().len()
+                )));
+            }
+        }
         steps.push(WorkflowStepReport {
             stage: STEP_VALIDATE_RESOURCES.stage,
             name: STEP_VALIDATE_RESOURCES.name,
@@ -468,12 +600,20 @@ impl CompilerWorkflow {
             return Ok(());
         }
 
-        apply_rewrite(
+        apply_circuit_transform(
             current,
             changed,
             steps,
             STEP_OPTIMIZE_POST_ROUTING,
-            enhanced_rewrite_config(RewriteConfig::production()),
+            |circuit| {
+                KnowledgeRewriter::new(
+                    RewriteConfig::production()
+                        .with_max_rounds(16)
+                        .with_max_window_ops(32)
+                        .with_max_pattern_len(12),
+                )
+                .transform(circuit)
+            },
         )
     }
 
@@ -496,12 +636,15 @@ impl CompilerWorkflow {
             return Ok(());
         };
 
-        apply_rewrite(
+        apply_circuit_transform(
             current,
             changed,
             steps,
             STEP_TRANSLATE_TARGET_BASIS,
-            config.with_target_instructions(target_basis.to_vec())?,
+            |circuit| {
+                KnowledgeRewriter::new(config.with_target_instructions(target_basis.to_vec())?)
+                    .transform(circuit)
+            },
         )
     }
 
@@ -556,28 +699,6 @@ impl CompilerWorkflow {
     }
 }
 
-fn record_unchanged_step(steps: &mut Vec<WorkflowStepReport>, step: WorkflowStep) {
-    steps.push(WorkflowStepReport {
-        stage: step.stage,
-        name: step.name,
-        changed: false,
-        skipped: false,
-        reason: None,
-    });
-}
-
-fn apply_transformer(
-    current: &mut Circuit,
-    workflow_changed: &mut bool,
-    steps: &mut Vec<WorkflowStepReport>,
-    step: WorkflowStep,
-    transform: &dyn Transformer,
-) -> Result<(), CompilerError> {
-    apply_circuit_transform(current, workflow_changed, steps, step, |circuit| {
-        transform.transform(circuit)
-    })
-}
-
 fn apply_circuit_transform(
     current: &mut Circuit,
     workflow_changed: &mut bool,
@@ -596,29 +717,6 @@ fn apply_circuit_transform(
         reason: None,
     });
     Ok(())
-}
-
-fn apply_rewrite(
-    current: &mut Circuit,
-    workflow_changed: &mut bool,
-    steps: &mut Vec<WorkflowStepReport>,
-    step: WorkflowStep,
-    config: RewriteConfig,
-) -> Result<(), CompilerError> {
-    apply_transformer(
-        current,
-        workflow_changed,
-        steps,
-        step,
-        &KnowledgeRewriter::new(config),
-    )
-}
-
-fn enhanced_rewrite_config(config: RewriteConfig) -> RewriteConfig {
-    config
-        .with_max_rounds(16)
-        .with_max_window_ops(32)
-        .with_max_pattern_len(12)
 }
 
 fn sabre_config_for_mode(mode: CompileMode, seed: Option<u32>) -> SabreConfig {
@@ -640,83 +738,6 @@ fn sabre_config_for_mode(mode: CompileMode, seed: Option<u32>) -> SabreConfig {
     }
 
     config
-}
-
-fn contains_circuit_backed_definition(operations: &[Operation]) -> bool {
-    operations
-        .iter()
-        .any(|operation| match &operation.instruction {
-            Instruction::CircuitGate(_) => true,
-            Instruction::UnitaryGate(gate) => gate.circuit().is_some(),
-            Instruction::ControlFlowGate(flow) => contains_circuit_backed_definition_in_flow(flow),
-            _ => false,
-        })
-}
-
-fn contains_circuit_backed_definition_in_flow(flow: &ControlFlow) -> bool {
-    match flow {
-        ControlFlow::IfElse(gate) => {
-            contains_circuit_backed_definition(gate.true_body())
-                || gate
-                    .false_body()
-                    .is_some_and(contains_circuit_backed_definition)
-        }
-        ControlFlow::WhileLoop(gate) => contains_circuit_backed_definition(gate.body()),
-    }
-}
-
-fn contains_unitary_gate(operations: &[Operation]) -> bool {
-    operations
-        .iter()
-        .any(|operation| match &operation.instruction {
-            Instruction::UnitaryGate(_) => true,
-            Instruction::ControlFlowGate(flow) => contains_unitary_gate_in_flow(flow),
-            _ => false,
-        })
-}
-
-fn contains_unitary_gate_in_flow(flow: &ControlFlow) -> bool {
-    match flow {
-        ControlFlow::IfElse(gate) => {
-            contains_unitary_gate(gate.true_body())
-                || gate.false_body().is_some_and(contains_unitary_gate)
-        }
-        ControlFlow::WhileLoop(gate) => contains_unitary_gate(gate.body()),
-    }
-}
-
-fn contains_mc_gate(operations: &[Operation]) -> bool {
-    operations
-        .iter()
-        .any(|operation| match &operation.instruction {
-            Instruction::McGate(_) => true,
-            Instruction::ControlFlowGate(flow) => contains_mc_gate_in_flow(flow),
-            _ => false,
-        })
-}
-
-fn contains_mc_gate_in_flow(flow: &ControlFlow) -> bool {
-    match flow {
-        ControlFlow::IfElse(gate) => {
-            contains_mc_gate(gate.true_body()) || gate.false_body().is_some_and(contains_mc_gate)
-        }
-        ControlFlow::WhileLoop(gate) => contains_mc_gate(gate.body()),
-    }
-}
-
-fn validate_logical_width(
-    circuit: &Circuit,
-    resource_limits: ResourceLimits,
-) -> Result<(), CompilerError> {
-    if let Some(max_total_qubits) = resource_limits.max_total_qubits {
-        if circuit.qubits().len() > max_total_qubits {
-            return Err(CompilerError::InvalidInput(format!(
-                "source circuit uses {} logical qubits but target capacity is {max_total_qubits}",
-                circuit.qubits().len()
-            )));
-        }
-    }
-    Ok(())
 }
 
 fn validate_workflow_target_basis_config(

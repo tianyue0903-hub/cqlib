@@ -43,9 +43,11 @@ use alloc::borrow::Cow;
 use ndarray::Array2;
 use num_complex::Complex;
 use smallvec::SmallVec;
-use std::collections::HashSet;
+use std::collections::BTreeSet;
 use std::fmt;
 use std::sync::Arc;
+
+use super::Instruction;
 
 /// Classical condition representing a measurement outcome condition.
 ///
@@ -188,18 +190,21 @@ impl IfElseGate {
     /// This counts all unique qubits referenced in both true and false branches,
     /// plus the condition qubit.
     pub fn num_qubits(&self) -> usize {
-        let mut qubits: HashSet<Qubit> = HashSet::new();
-        // Include the condition qubit
-        qubits.insert(self.condition.qubit);
-        for op in self.true_body.iter() {
-            qubits.extend(op.qubits.iter());
+        self.used_qubits().len()
+    }
+
+    /// Returns all qubits referenced by this gate.
+    ///
+    /// The returned set includes the condition qubit and every qubit used by the
+    /// true and false branch bodies, including nested control-flow bodies.
+    pub fn used_qubits(&self) -> BTreeSet<Qubit> {
+        let mut qubits = BTreeSet::new();
+        qubits.insert(self.condition().qubit);
+        collect_body_qubits(self.true_body(), &mut qubits);
+        if let Some(false_body) = self.false_body() {
+            collect_body_qubits(false_body, &mut qubits);
         }
-        if let Some(false_body) = &self.false_body {
-            for op in false_body.iter() {
-                qubits.extend(op.qubits.iter());
-            }
-        }
-        qubits.len()
+        qubits
     }
 
     /// Returns the number of parameters.
@@ -298,13 +303,18 @@ impl WhileLoopGate {
     /// This counts all unique qubits referenced in the loop body,
     /// plus the condition qubit.
     pub fn num_qubits(&self) -> usize {
-        let mut qubits: HashSet<Qubit> = HashSet::new();
-        // Include the condition qubit
-        qubits.insert(self.condition.qubit);
-        for op in self.body.iter() {
-            qubits.extend(op.qubits.iter());
-        }
-        qubits.len()
+        self.used_qubits().len()
+    }
+
+    /// Returns all qubits referenced by this gate.
+    ///
+    /// The returned set includes the condition qubit and every qubit used by the
+    /// loop body, including nested control-flow bodies.
+    pub fn used_qubits(&self) -> BTreeSet<Qubit> {
+        let mut qubits = BTreeSet::new();
+        qubits.insert(self.condition().qubit);
+        collect_body_qubits(self.body(), &mut qubits);
+        qubits
     }
 
     /// Returns the number of parameters.
@@ -387,10 +397,25 @@ impl ControlFlow {
 
     /// Returns the number of qubits used in this control flow.
     pub fn num_qubits(&self) -> usize {
+        self.used_qubits().len()
+    }
+
+    /// Returns all qubits referenced by this control flow.
+    pub fn used_qubits(&self) -> BTreeSet<Qubit> {
         match self {
-            Self::IfElse(gate) => gate.num_qubits(),
-            Self::WhileLoop(gate) => gate.num_qubits(),
+            Self::IfElse(gate) => gate.used_qubits(),
+            Self::WhileLoop(gate) => gate.used_qubits(),
         }
+    }
+
+    /// Returns used qubits in the enclosing circuit's qubit order.
+    pub fn ordered_qubits(&self, circuit_qubits: &[Qubit]) -> SmallVec<[Qubit; 3]> {
+        let used = self.used_qubits();
+        circuit_qubits
+            .iter()
+            .copied()
+            .filter(|qubit| used.contains(qubit))
+            .collect()
     }
 
     /// Returns the number of parameters.
@@ -427,11 +452,118 @@ impl ControlFlow {
     }
 }
 
+fn collect_body_qubits(operations: &[Operation], out: &mut BTreeSet<Qubit>) {
+    for operation in operations {
+        out.extend(operation.qubits.iter().copied());
+        if let Instruction::ControlFlowGate(flow) = &operation.instruction {
+            out.extend(flow.used_qubits());
+        }
+    }
+}
+
 impl fmt::Display for ControlFlow {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::IfElse(_) => write!(f, "if_else"),
             Self::WhileLoop(_) => write!(f, "while_loop"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ConditionView, ControlFlow, IfElseGate, WhileLoopGate};
+    use crate::circuit::gate::{Instruction, StandardGate};
+    use crate::circuit::{Operation, Qubit};
+    use std::collections::BTreeSet;
+
+    fn op(gate: StandardGate, qubits: &[u32]) -> Operation {
+        Operation {
+            instruction: Instruction::Standard(gate),
+            qubits: qubits.iter().copied().map(Qubit::new).collect(),
+            params: smallvec::smallvec![],
+            label: None,
+        }
+    }
+
+    fn qubits(ids: &[u32]) -> BTreeSet<Qubit> {
+        ids.iter().copied().map(Qubit::new).collect()
+    }
+
+    #[test]
+    fn if_else_used_qubits_includes_condition_and_both_bodies() {
+        let gate = IfElseGate::new(
+            ConditionView::new(Qubit::new(0), 1),
+            vec![op(StandardGate::CX, &[1, 2])],
+            Some(vec![op(StandardGate::RZ, &[2]), op(StandardGate::H, &[3])]),
+        );
+
+        assert_eq!(gate.used_qubits(), qubits(&[0, 1, 2, 3]));
+        assert_eq!(gate.num_qubits(), 4);
+    }
+
+    #[test]
+    fn if_else_used_qubits_handles_missing_false_body() {
+        let gate = IfElseGate::new(
+            ConditionView::new(Qubit::new(4), 0),
+            vec![op(StandardGate::X, &[1])],
+            None,
+        );
+
+        assert_eq!(gate.used_qubits(), qubits(&[1, 4]));
+        assert_eq!(gate.num_qubits(), 2);
+    }
+
+    #[test]
+    fn while_loop_used_qubits_includes_condition_and_body() {
+        let gate = WhileLoopGate::new(
+            ConditionView::new(Qubit::new(5), 1),
+            vec![op(StandardGate::SWAP, &[1, 3]), op(StandardGate::Z, &[3])],
+        );
+
+        assert_eq!(gate.used_qubits(), qubits(&[1, 3, 5]));
+        assert_eq!(gate.num_qubits(), 3);
+    }
+
+    #[test]
+    fn control_flow_used_qubits_delegates_to_gate() {
+        let if_else = IfElseGate::new(
+            ConditionView::new(Qubit::new(0), 1),
+            vec![op(StandardGate::X, &[2])],
+            None,
+        );
+        let while_loop = WhileLoopGate::new(
+            ConditionView::new(Qubit::new(1), 1),
+            vec![op(StandardGate::Y, &[3])],
+        );
+
+        assert_eq!(
+            ControlFlow::IfElse(if_else.clone()).used_qubits(),
+            if_else.used_qubits()
+        );
+        assert_eq!(
+            ControlFlow::WhileLoop(while_loop.clone()).used_qubits(),
+            while_loop.used_qubits()
+        );
+    }
+
+    #[test]
+    fn used_qubits_includes_nested_control_flow_body() {
+        let nested = ControlFlow::while_loop(
+            ConditionView::new(Qubit::new(6), 1),
+            vec![op(StandardGate::H, &[7])],
+        );
+        let gate = IfElseGate::new(
+            ConditionView::new(Qubit::new(0), 1),
+            vec![Operation {
+                instruction: Instruction::ControlFlowGate(nested),
+                qubits: smallvec::smallvec![],
+                params: smallvec::smallvec![],
+                label: None,
+            }],
+            None,
+        );
+
+        assert_eq!(gate.used_qubits(), qubits(&[0, 6, 7]));
     }
 }

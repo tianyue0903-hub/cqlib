@@ -13,8 +13,8 @@
 //! Canonicalizer entry point and round orchestration.
 
 use crate::circuit::{
-    Circuit, CircuitParam, ControlFlow, Directive, IfElseGate, Instruction, Operation, Parameter,
-    StandardGate, WhileLoopGate,
+    Circuit, CircuitError, CircuitParam, ControlFlow, Directive, IfElseGate, Instruction,
+    Operation, Parameter, StandardGate, WhileLoopGate,
 };
 use crate::compile::CompilerError;
 use crate::compile::transform::transformer::{TransformResult, Transformer};
@@ -22,14 +22,7 @@ use smallvec::{SmallVec, smallvec};
 
 use super::config::CanonicalizeConfig;
 use super::equivalence::circuits_equivalent_for_canonicalize;
-use super::ops::{
-    canonical_control_flow_qubits_for_operation, canonicalize_operation_qubits, is_strict_noop,
-    push_operation,
-};
-use super::params::{
-    canonical_parameter, circuit_param_to_value, parameter_is_exact_zero,
-    parameter_to_circuit_param, resolve_parameter,
-};
+use super::ops::{canonicalize_operation_qubits, is_strict_noop, push_operation};
 use super::verify::{VerifyMode, verify_circuit};
 
 /// Result of a canonicalization run.
@@ -163,7 +156,7 @@ impl<'a> CanonicalizeRound<'a> {
     }
 
     fn run(mut self) -> Result<Circuit, CompilerError> {
-        self.top_phase = canonical_parameter(self.top_phase)?;
+        self.top_phase = compiler_parameter(self.top_phase.canonicalized())?;
         let mut top_level = Vec::with_capacity(self.source.operations().len());
 
         // Top-level `GPhase` operations are not retained as operations. Their
@@ -171,7 +164,8 @@ impl<'a> CanonicalizeRound<'a> {
         // `Circuit::global_phase` after all operations have been rebuilt.
         for operation in self.source.operations() {
             let rewritten = self.rewrite_operation(operation, ScopeKind::TopLevel)?;
-            self.top_phase = canonical_parameter(self.top_phase + rewritten.phase)?;
+            self.top_phase =
+                compiler_parameter((self.top_phase + rewritten.phase).canonicalized())?;
             for operation in rewritten.operations {
                 push_operation(&mut top_level, operation, self.config);
             }
@@ -181,7 +175,7 @@ impl<'a> CanonicalizeRound<'a> {
             self.append_top_level(operation)?;
         }
 
-        let phase = canonical_parameter(self.top_phase)?;
+        let phase = compiler_parameter(self.top_phase.canonicalized())?;
         self.target.set_global_phase(phase);
         Ok(self.target)
     }
@@ -190,7 +184,7 @@ impl<'a> CanonicalizeRound<'a> {
         let params = operation
             .params
             .iter()
-            .map(|param| circuit_param_to_value(&self.target, param))
+            .map(|param| self.target.parameter_value(param))
             .collect::<Result<Vec<_>, _>>()?;
 
         self.target.append(
@@ -211,14 +205,14 @@ impl<'a> CanonicalizeRound<'a> {
         // The canonical body representation keeps it as one leading `GPhase`.
         for operation in body {
             let rewritten = self.rewrite_operation(operation, ScopeKind::ControlFlowBody)?;
-            body_phase = canonical_parameter(body_phase + rewritten.phase)?;
+            body_phase = compiler_parameter((body_phase + rewritten.phase).canonicalized())?;
             for operation in rewritten.operations {
                 push_operation(&mut out, operation, self.config);
             }
         }
 
-        body_phase = canonical_parameter(body_phase)?;
-        if !parameter_is_exact_zero(&body_phase)? {
+        body_phase = compiler_parameter(body_phase.canonicalized())?;
+        if !compiler_parameter(body_phase.is_exact_zero())? {
             let param = self.intern_parameter(body_phase)?;
             out.insert(
                 0,
@@ -252,7 +246,7 @@ impl<'a> CanonicalizeRound<'a> {
         let semantic_params = operation
             .params
             .iter()
-            .map(|param| resolve_parameter(self.source, param))
+            .map(|param| self.source.resolve_parameter(param))
             .collect::<Result<Vec<_>, _>>()?;
 
         if self.config.folds_gphase()
@@ -291,17 +285,10 @@ impl<'a> CanonicalizeRound<'a> {
         // The operation-level qubit list is derived from the canonicalized body,
         // not preserved from input. This prevents deleted body no-ops from
         // keeping dead qubits visible to later analysis passes.
-        if matches!(
-            (&operation.instruction, scope),
-            (
-                Instruction::ControlFlowGate(_),
-                ScopeKind::TopLevel | ScopeKind::ControlFlowBody
-            )
-        ) {
-            operation.qubits = canonical_control_flow_qubits_for_operation(
-                &operation.instruction,
-                &self.target.qubits(),
-            );
+        if matches!(scope, ScopeKind::TopLevel | ScopeKind::ControlFlowBody) {
+            if let Instruction::ControlFlowGate(flow) = &operation.instruction {
+                operation.qubits = flow.ordered_qubits(&self.target.qubits());
+            }
         }
 
         Ok(RewriteResult::keep(operation))
@@ -333,8 +320,14 @@ impl<'a> CanonicalizeRound<'a> {
     }
 
     fn intern_parameter(&mut self, param: Parameter) -> Result<CircuitParam, CompilerError> {
-        parameter_to_circuit_param(&mut self.target, param)
+        Ok(self.target.map_param(param)?)
     }
+}
+
+fn compiler_parameter<T>(
+    result: Result<T, crate::circuit::error::ParameterError>,
+) -> Result<T, CompilerError> {
+    result.map_err(|error| CompilerError::Circuit(CircuitError::InvalidParameter(error)))
 }
 
 #[derive(Debug, Clone, Copy)]

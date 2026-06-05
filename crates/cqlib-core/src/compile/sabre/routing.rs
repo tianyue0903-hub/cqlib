@@ -14,7 +14,8 @@ use super::dag::{SabreControlFlow, SabreDag, SabreNodeKind};
 use super::heuristic::{SabreConfig, SabreHeuristicConfig, SabreTrialObjective};
 use super::layer::Layer;
 use crate::circuit::{
-    Circuit, CircuitParam, ControlFlow, Instruction, Operation, ParameterValue, Qubit,
+    Circuit, CircuitParam, ConditionView, ControlFlow, Instruction, Operation, ParameterValue,
+    Qubit, StandardGate,
 };
 use crate::compile::CompilerError;
 use crate::compile::transform::layout::{PhysicalLayoutGraph, build_physical_layout_graph};
@@ -694,7 +695,10 @@ impl RoutingState {
                 true_body,
                 false_body,
             } => {
-                let mapped_condition = map_condition(*condition, &self.layout)?;
+                let mapped_condition = ConditionView::new(
+                    physical_for(&self.layout, LogicalQubit::from_qubit(condition.qubit))?.qubit(),
+                    condition.target,
+                );
                 let true_result = route_control_flow_body(
                     true_body,
                     target,
@@ -718,28 +722,22 @@ impl RoutingState {
                 if let Some(result) = &false_result {
                     output.merge_nested(result);
                 }
-                let qubits = collect_control_flow_qubits(
-                    mapped_condition.qubit,
-                    &true_result.operations,
-                    false_result
-                        .as_ref()
-                        .map(|result| result.operations.as_slice()),
-                );
                 let true_ops = true_result.operations;
                 let false_ops = false_result.map(|result| result.operations);
+                let flow = ControlFlow::if_else(mapped_condition, true_ops, false_ops);
+                let qubits = flow.used_qubits().into_iter().collect();
                 Operation {
-                    instruction: Instruction::ControlFlowGate(ControlFlow::if_else(
-                        mapped_condition,
-                        true_ops,
-                        false_ops,
-                    )),
+                    instruction: Instruction::ControlFlowGate(flow),
                     qubits,
                     params: SmallVec::new(),
                     label: first.label.clone(),
                 }
             }
             SabreControlFlow::WhileLoop { condition, body } => {
-                let mapped_condition = map_condition(*condition, &self.layout)?;
+                let mapped_condition = ConditionView::new(
+                    physical_for(&self.layout, LogicalQubit::from_qubit(condition.qubit))?.qubit(),
+                    condition.target,
+                );
                 let body_result = route_control_flow_body(
                     body,
                     target,
@@ -748,17 +746,11 @@ impl RoutingState {
                     output.next_nested_seed(),
                 )?;
                 output.merge_nested(&body_result);
-                let qubits = collect_control_flow_qubits(
-                    mapped_condition.qubit,
-                    &body_result.operations,
-                    None,
-                );
                 let body_ops = body_result.operations;
+                let flow = ControlFlow::while_loop(mapped_condition, body_ops);
+                let qubits = flow.used_qubits().into_iter().collect();
                 Operation {
-                    instruction: Instruction::ControlFlowGate(ControlFlow::while_loop(
-                        mapped_condition,
-                        body_ops,
-                    )),
+                    instruction: Instruction::ControlFlowGate(flow),
                     qubits,
                     params: SmallVec::new(),
                     label: first.label.clone(),
@@ -1153,20 +1145,10 @@ fn map_operation(operation: &Operation, layout: &Layout) -> Result<Operation, Co
             .map(|qubit| {
                 physical_for(layout, LogicalQubit::from_qubit(qubit)).map(PhysicalQubit::qubit)
             })
-            .collect::<Result<SmallVec<[crate::circuit::Qubit; 3]>, _>>()?,
+            .collect::<Result<SmallVec<[Qubit; 3]>, _>>()?,
         params: operation.params.clone(),
         label: operation.label.clone(),
     })
-}
-
-fn map_condition(
-    condition: crate::circuit::ConditionView,
-    layout: &Layout,
-) -> Result<crate::circuit::ConditionView, CompilerError> {
-    Ok(crate::circuit::ConditionView::new(
-        physical_for(layout, LogicalQubit::from_qubit(condition.qubit))?.qubit(),
-        condition.target,
-    ))
 }
 
 fn physical_for(layout: &Layout, logical: LogicalQubit) -> Result<PhysicalQubit, CompilerError> {
@@ -1210,29 +1192,11 @@ pub(crate) fn validate_reachable_interactions_for_target(
 
 fn swap_operation(swap: [PhysicalQubit; 2]) -> Operation {
     Operation {
-        instruction: Instruction::Standard(crate::circuit::StandardGate::SWAP),
+        instruction: Instruction::Standard(StandardGate::SWAP),
         qubits: smallvec![swap[0].qubit(), swap[1].qubit()],
         params: SmallVec::new(),
         label: None,
     }
-}
-
-fn collect_control_flow_qubits(
-    condition: crate::circuit::Qubit,
-    true_body: &[Operation],
-    false_body: Option<&[Operation]>,
-) -> SmallVec<[crate::circuit::Qubit; 3]> {
-    let mut qubits = BTreeSet::new();
-    qubits.insert(condition);
-    for operation in true_body {
-        qubits.extend(operation.qubits.iter().copied());
-    }
-    if let Some(false_body) = false_body {
-        for operation in false_body {
-            qubits.extend(operation.qubits.iter().copied());
-        }
-    }
-    qubits.into_iter().collect()
 }
 
 fn push_unique(nodes: &mut Vec<NodeIndex>, node: Option<NodeIndex>) {

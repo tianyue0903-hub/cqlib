@@ -65,7 +65,7 @@ impl Rule {
     /// and RHS up to global phase.
     pub fn verify(&self) -> Result<VerifyResult, VerifyError> {
         let (lhs, rhs) = build_simplified_matrices(self)?;
-        if symbolically_equivalent(&lhs, &rhs)? {
+        if symbolic_matrices_equivalent(&lhs, &rhs)? {
             return Ok(VerifyResult::Equivalent);
         }
 
@@ -91,7 +91,7 @@ impl Rule {
         tolerance: f64,
     ) -> Result<VerifyResult, VerifyError> {
         let (lhs, rhs) = build_simplified_matrices(self)?;
-        if symbolically_equivalent(&lhs, &rhs)? {
+        if symbolic_matrices_equivalent(&lhs, &rhs)? {
             return Ok(VerifyResult::Equivalent);
         }
 
@@ -103,8 +103,15 @@ fn build_simplified_matrices(rule: &Rule) -> Result<(SymbolicMatrix, SymbolicMat
     let num_qubits = rule.num_qubits();
 
     let (lhs, rhs) = rayon::join(
-        || rule_items_to_matrix(&rule.operations, num_qubits),
-        || rule_items_to_matrix(&rule.target, num_qubits),
+        || rule_items_to_circuit(&rule.operations, num_qubits),
+        || rule_items_to_circuit(&rule.target, num_qubits),
+    );
+    let lhs = lhs?;
+    let rhs = rhs?;
+
+    let (lhs, rhs) = rayon::join(
+        || circuit_to_symbolic_matrix(&lhs, None),
+        || circuit_to_symbolic_matrix(&rhs, None),
     );
     let lhs = lhs?;
     let rhs = rhs?;
@@ -114,13 +121,6 @@ fn build_simplified_matrices(rule: &Rule) -> Result<(SymbolicMatrix, SymbolicMat
     let rhs = rhs?;
 
     Ok((lhs, rhs))
-}
-
-fn symbolically_equivalent(
-    lhs: &SymbolicMatrix,
-    rhs: &SymbolicMatrix,
-) -> Result<bool, VerifyError> {
-    Ok(symbolic_matrices_equivalent(lhs, rhs)?)
 }
 
 fn verify_by_sampling(
@@ -173,14 +173,6 @@ fn verify_by_sampling(
     Ok(VerifyResult::SampledEqual {
         num_bindings: bindings.len(),
     })
-}
-
-fn rule_items_to_matrix(
-    ops: &[RuleItem],
-    num_qubits: usize,
-) -> Result<SymbolicMatrix, VerifyError> {
-    let circuit = rule_items_to_circuit(ops, num_qubits)?;
-    Ok(circuit_to_symbolic_matrix(&circuit, None)?)
 }
 
 fn rule_items_to_circuit(ops: &[RuleItem], num_qubits: usize) -> Result<Circuit, VerifyError> {

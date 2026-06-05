@@ -18,7 +18,6 @@
 
 use crate::circuit::{Qubit, StandardGate, operation::ValueOperation};
 use crate::compile::error::CompilerError;
-use crate::util::operation::push_standard_gate;
 use crate::util::qubit::find_duplicate_qubit;
 
 use super::DECOMPOSE_MCX_NAME;
@@ -49,15 +48,35 @@ pub(super) fn emit_relative_phase_toffoli(
         });
     }
 
-    push_standard_gate(operations, StandardGate::H, [target]);
-    push_standard_gate(operations, StandardGate::T, [target]);
-    push_standard_gate(operations, StandardGate::CX, [second_control, target]);
-    push_standard_gate(operations, StandardGate::TDG, [target]);
-    push_standard_gate(operations, StandardGate::CX, [first_control, target]);
-    push_standard_gate(operations, StandardGate::T, [target]);
-    push_standard_gate(operations, StandardGate::CX, [second_control, target]);
-    push_standard_gate(operations, StandardGate::TDG, [target]);
-    push_standard_gate(operations, StandardGate::H, [target]);
+    operations.push(ValueOperation::from_standard(StandardGate::H, [target], []));
+    operations.push(ValueOperation::from_standard(StandardGate::T, [target], []));
+    operations.push(ValueOperation::from_standard(
+        StandardGate::CX,
+        [second_control, target],
+        [],
+    ));
+    operations.push(ValueOperation::from_standard(
+        StandardGate::TDG,
+        [target],
+        [],
+    ));
+    operations.push(ValueOperation::from_standard(
+        StandardGate::CX,
+        [first_control, target],
+        [],
+    ));
+    operations.push(ValueOperation::from_standard(StandardGate::T, [target], []));
+    operations.push(ValueOperation::from_standard(
+        StandardGate::CX,
+        [second_control, target],
+        [],
+    ));
+    operations.push(ValueOperation::from_standard(
+        StandardGate::TDG,
+        [target],
+        [],
+    ));
+    operations.push(ValueOperation::from_standard(StandardGate::H, [target], []));
 
     Ok(())
 }

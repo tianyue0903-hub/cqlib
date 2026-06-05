@@ -231,6 +231,87 @@ impl Circuit {
         (index, is_new)
     }
 
+    /// Resolves an operation parameter reference into a high-level parameter.
+    ///
+    /// `CircuitParam::Fixed` values are converted directly into numeric
+    /// [`Parameter`] values after validating that the stored float is finite.
+    /// `CircuitParam::Index` values are resolved through this circuit's
+    /// parameter table.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CircuitError::InvalidParameterValue`] for non-finite fixed
+    /// values and [`CircuitError::InvalidParameterIndex`] for missing parameter
+    /// table entries.
+    pub fn resolve_parameter(&self, param: &CircuitParam) -> Result<Parameter, CircuitError> {
+        match param {
+            CircuitParam::Fixed(value) => {
+                if !value.is_finite() {
+                    return Err(CircuitError::InvalidParameterValue(0, *value));
+                }
+                Ok(Parameter::from(*value))
+            }
+            CircuitParam::Index(index) => self
+                .parameters
+                .get_index(*index as usize)
+                .cloned()
+                .ok_or(CircuitError::InvalidParameterIndex(*index)),
+        }
+    }
+
+    /// Resolves an operation parameter reference into an appendable value.
+    ///
+    /// This is useful when rebuilding operations from an existing circuit:
+    /// fixed values remain fixed, while indexed symbolic parameters are looked
+    /// up in the circuit parameter table and returned as [`ParameterValue::Param`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CircuitError::InvalidParameterIndex`] when an indexed parameter
+    /// does not exist in this circuit's parameter table.
+    pub fn parameter_value(&self, param: &CircuitParam) -> Result<ParameterValue, CircuitError> {
+        match param {
+            CircuitParam::Fixed(value) => Ok(ParameterValue::Fixed(*value)),
+            CircuitParam::Index(index) => self
+                .parameters
+                .get_index(*index as usize)
+                .cloned()
+                .map(ParameterValue::Param)
+                .ok_or(CircuitError::InvalidParameterIndex(*index)),
+        }
+    }
+
+    /// Maps a high-level parameter into the circuit's operation parameter form.
+    ///
+    /// This is not the same as [`Circuit::add_parameter`]. `add_parameter`
+    /// always inserts a [`Parameter`] into the circuit parameter table and
+    /// returns the raw table index. `map_param` first canonicalizes the
+    /// parameter and then chooses how operations should store it:
+    ///
+    /// - constant parameters are simplified, evaluated, finite-checked,
+    ///   normalized from `-0.0` to `0.0`, and returned as
+    ///   [`CircuitParam::Fixed`] without being inserted into the parameter
+    ///   table;
+    /// - symbolic parameters are simplified, interned in the parameter table,
+    ///   and returned as [`CircuitParam::Index`]. The circuit symbol table is
+    ///   updated when a new symbolic parameter is inserted.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CircuitError::InvalidParameter`] if parameter simplification
+    /// or constant evaluation fails.
+    pub fn map_param(&mut self, param: Parameter) -> Result<CircuitParam, CircuitError> {
+        let param = param.canonicalized()?;
+        if param.get_symbols().is_empty() {
+            let value = param.evaluate(&None)?;
+            let value = if value == 0.0 { 0.0 } else { value };
+            Ok(CircuitParam::Fixed(value))
+        } else {
+            let (index, _) = self.add_parameter(param);
+            Ok(CircuitParam::Index(index as u32))
+        }
+    }
+
     /// Returns the number of qubits in the circuit.
     ///
     /// Alias for `num_qubits()`.

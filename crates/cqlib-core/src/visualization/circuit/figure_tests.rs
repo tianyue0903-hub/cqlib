@@ -335,10 +335,10 @@ fn make_module_unitary_fallback() -> Circuit {
         )
         .unwrap();
 
-    let labeled_unitary = UnitaryGate::new("U_DEMO_LABEL", 2);
+    let labeled_unitary = UnitaryGate::new("U_DEMO_LABEL", 2, 0);
     circuit.unitary(labeled_unitary, vec![q(0), q(2)]).unwrap();
 
-    let fallback_unitary = UnitaryGate::new("", 2);
+    let fallback_unitary = UnitaryGate::new("", 2, 0);
     circuit.unitary(fallback_unitary, vec![q(1), q(3)]).unwrap();
     circuit
 }
@@ -632,7 +632,7 @@ fn test_two_qubit_rotation() {
 #[test]
 fn test_unitary() {
     let mut circuit = Circuit::new(4);
-    let unitary = UnitaryGate::new("UNITARY", 3);
+    let unitary = UnitaryGate::new("UNITARY", 3, 0);
     circuit.unitary(unitary, vec![q(0), q(1), q(3)]).unwrap();
     assert_visual_match(&circuit, FigureDrawerOptions::default(), "unitary.png");
 }

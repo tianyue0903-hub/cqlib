@@ -15,7 +15,7 @@
 use super::mcx::{decompose_mcx_n_clean, decompose_mcx_no_aux};
 use crate::circuit::{Qubit, StandardGate, operation::ValueOperation};
 use crate::compile::error::CompilerError;
-use crate::util::{operation::push_standard_gate, qubit::find_duplicate_qubit};
+use crate::util::qubit::find_duplicate_qubit;
 
 const DECOMPOSE_SWAP_NAME: &str = "decompose.swap";
 
@@ -37,7 +37,11 @@ pub fn decompose_swap_no_aux(
     validate_swap_qubits(controls, first, second, &[])?;
     if controls.is_empty() {
         let mut operations = vec![];
-        push_standard_gate(&mut operations, StandardGate::SWAP, [first, second]);
+        operations.push(ValueOperation::from_standard(
+            StandardGate::SWAP,
+            [first, second],
+            [],
+        ));
         return Ok(operations);
     }
 
@@ -107,7 +111,11 @@ fn emit_small_controlled_swap(
 ) -> Result<Vec<ValueOperation>, CompilerError> {
     let mut operations = vec![];
     match controls {
-        [] => push_standard_gate(&mut operations, StandardGate::SWAP, [first, second]),
+        [] => operations.push(ValueOperation::from_standard(
+            StandardGate::SWAP,
+            [first, second],
+            [],
+        )),
         [control] => emit_fredkin(&mut operations, *control, first, second),
         _ => unreachable!("small controlled SWAP supports at most one control"),
     }
@@ -115,9 +123,21 @@ fn emit_small_controlled_swap(
 }
 
 fn emit_fredkin(operations: &mut Vec<ValueOperation>, control: Qubit, first: Qubit, second: Qubit) {
-    push_standard_gate(operations, StandardGate::CCX, [control, first, second]);
-    push_standard_gate(operations, StandardGate::CCX, [control, second, first]);
-    push_standard_gate(operations, StandardGate::CCX, [control, first, second]);
+    operations.push(ValueOperation::from_standard(
+        StandardGate::CCX,
+        [control, first, second],
+        [],
+    ));
+    operations.push(ValueOperation::from_standard(
+        StandardGate::CCX,
+        [control, second, first],
+        [],
+    ));
+    operations.push(ValueOperation::from_standard(
+        StandardGate::CCX,
+        [control, first, second],
+        [],
+    ));
 }
 
 fn validate_swap_qubits(

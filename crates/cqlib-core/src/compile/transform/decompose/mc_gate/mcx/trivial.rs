@@ -12,10 +12,9 @@
 
 //! Trivial MCX decompositions for zero, one, or two controls.
 
-use crate::circuit::{Instruction, Qubit, StandardGate, operation::ValueOperation};
+use crate::circuit::{Qubit, StandardGate, operation::ValueOperation};
 use crate::compile::error::CompilerError;
 use crate::util::qubit::find_duplicate_qubit;
-use smallvec::smallvec;
 
 use super::DECOMPOSE_MCX_NAME;
 
@@ -46,24 +45,13 @@ pub fn decompose_mcx_small(
     }
 
     let operation = match controls {
-        [] => ValueOperation {
-            instruction: Instruction::Standard(StandardGate::X),
-            qubits: smallvec![target],
-            params: smallvec![],
-            label: None,
-        },
-        [control] => ValueOperation {
-            instruction: Instruction::Standard(StandardGate::CX),
-            qubits: smallvec![*control, target],
-            params: smallvec![],
-            label: None,
-        },
-        [first_control, second_control] => ValueOperation {
-            instruction: Instruction::Standard(StandardGate::CCX),
-            qubits: smallvec![*first_control, *second_control, target],
-            params: smallvec![],
-            label: None,
-        },
+        [] => ValueOperation::from_standard(StandardGate::X, [target], []),
+        [control] => ValueOperation::from_standard(StandardGate::CX, [*control, target], []),
+        [first_control, second_control] => ValueOperation::from_standard(
+            StandardGate::CCX,
+            [*first_control, *second_control, target],
+            [],
+        ),
         _ => {
             return Err(CompilerError::TransformFailed {
                 name: DECOMPOSE_MCX_NAME,

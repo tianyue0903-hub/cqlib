@@ -14,14 +14,16 @@ use super::{CanonicalizeConfig, Canonicalizer, canonicalize_circuit};
 use crate::circuit::gate::FrozenCircuit;
 use crate::circuit::{
     Circuit, CircuitGate, CircuitParam, ConditionView, ControlFlow, Directive, Instruction, MCGate,
-    Operation, Parameter, ParameterValue, Qubit, StandardGate, UnitaryGate, circuit_to_matrix,
+    Operation, Parameter, ParameterValue, Qubit, StandardGate, UnitaryGate, ValueOperation,
+    circuit_to_matrix,
 };
 use crate::compile::CompilerError;
 use crate::compile::transform::Transformer;
-use indexmap::IndexSet;
+use crate::util::test_utils::generated_small_matrix_circuit;
 use ndarray::array;
 use num_complex::Complex64;
-use smallvec::{SmallVec, smallvec};
+use proptest::prelude::*;
+use smallvec::smallvec;
 
 #[test]
 fn parameter_table_is_rebuilt_and_unused_params_are_removed() {
@@ -592,74 +594,33 @@ fn control_flow_qubits_are_recomputed_in_global_order() {
 }
 
 #[test]
-fn invalid_parameter_reference_is_rejected() {
-    let circuit = Circuit::from_parts(
-        IndexSet::from_iter([Qubit::new(0)]),
-        IndexSet::new(),
-        IndexSet::new(),
-        vec![Operation {
-            instruction: Instruction::Standard(StandardGate::RX),
-            qubits: smallvec![Qubit::new(0)],
-            params: smallvec![CircuitParam::Index(999)],
-            label: None,
-        }],
-        CircuitParam::Fixed(0.0),
-    );
-
-    let err = canonicalize_circuit(&circuit).unwrap_err();
-    assert!(matches!(err, CompilerError::InvalidInput(_)));
-    assert!(err.to_string().contains("missing parameter index"));
-}
-
-#[test]
-fn invalid_global_phase_reference_is_rejected() {
-    let circuit = Circuit::from_parts(
-        IndexSet::from_iter([Qubit::new(0)]),
-        IndexSet::new(),
-        IndexSet::new(),
-        Vec::new(),
-        CircuitParam::Index(3),
-    );
-
-    let err = canonicalize_circuit(&circuit).unwrap_err();
-    assert!(matches!(err, CompilerError::InvalidInput(_)));
-    assert!(err.to_string().contains("global phase references"));
-}
-
-#[test]
 fn unknown_qubit_is_rejected() {
-    let circuit = Circuit::from_parts(
-        IndexSet::from_iter([Qubit::new(0)]),
-        IndexSet::new(),
-        IndexSet::new(),
-        vec![Operation {
+    let result = Circuit::from_operations(
+        vec![Qubit::new(0)],
+        vec![ValueOperation {
             instruction: Instruction::Standard(StandardGate::H),
             qubits: smallvec![Qubit::new(1)],
             params: smallvec![],
             label: None,
         }],
-        CircuitParam::Fixed(0.0),
     );
 
-    let err = canonicalize_circuit(&circuit).unwrap_err();
-    assert!(matches!(err, CompilerError::InvalidInput(_)));
-    assert!(err.to_string().contains("unknown qubit"));
+    assert!(result.is_err());
+    assert!(result.unwrap_err().to_string().contains("not found"));
 }
 
 #[test]
 fn duplicate_non_barrier_qubit_is_rejected() {
-    let circuit = Circuit::from_parts(
-        IndexSet::from_iter([Qubit::new(0)]),
-        IndexSet::new(),
-        IndexSet::new(),
-        vec![Operation {
+    let circuit = Circuit::from_operations(
+        vec![Qubit::new(0)],
+        vec![ValueOperation {
             instruction: Instruction::Standard(StandardGate::CX),
             qubits: smallvec![Qubit::new(0), Qubit::new(0)],
             params: smallvec![],
             label: None,
         }],
-        CircuitParam::Fixed(0.0),
-    );
+    )
+    .unwrap();
 
     let err = canonicalize_circuit(&circuit).unwrap_err();
     assert!(matches!(err, CompilerError::InvalidInput(_)));
@@ -668,18 +629,16 @@ fn duplicate_non_barrier_qubit_is_rejected() {
 
 #[test]
 fn invalid_arity_is_rejected() {
-    let circuit = Circuit::from_parts(
-        IndexSet::from_iter([Qubit::new(0)]),
-        IndexSet::new(),
-        IndexSet::new(),
-        vec![Operation {
+    let circuit = Circuit::from_operations(
+        vec![Qubit::new(0)],
+        vec![ValueOperation {
             instruction: Instruction::Standard(StandardGate::CX),
             qubits: smallvec![Qubit::new(0)],
             params: smallvec![],
             label: None,
         }],
-        CircuitParam::Fixed(0.0),
-    );
+    )
+    .unwrap();
 
     let err = canonicalize_circuit(&circuit).unwrap_err();
     assert!(matches!(err, CompilerError::InvalidInput(_)));
@@ -688,18 +647,16 @@ fn invalid_arity_is_rejected() {
 
 #[test]
 fn parameter_count_mismatch_is_rejected() {
-    let circuit = Circuit::from_parts(
-        IndexSet::from_iter([Qubit::new(0)]),
-        IndexSet::new(),
-        IndexSet::new(),
-        vec![Operation {
+    let circuit = Circuit::from_operations(
+        vec![Qubit::new(0)],
+        vec![ValueOperation {
             instruction: Instruction::Standard(StandardGate::RX),
             qubits: smallvec![Qubit::new(0)],
             params: smallvec![],
             label: None,
         }],
-        CircuitParam::Fixed(0.0),
-    );
+    )
+    .unwrap();
 
     let err = canonicalize_circuit(&circuit).unwrap_err();
     assert!(matches!(err, CompilerError::InvalidInput(_)));
@@ -708,18 +665,16 @@ fn parameter_count_mismatch_is_rejected() {
 
 #[test]
 fn non_finite_fixed_parameter_is_rejected() {
-    let circuit = Circuit::from_parts(
-        IndexSet::from_iter([Qubit::new(0)]),
-        IndexSet::new(),
-        IndexSet::new(),
-        vec![Operation {
+    let circuit = Circuit::from_operations(
+        vec![Qubit::new(0)],
+        vec![ValueOperation {
             instruction: Instruction::Standard(StandardGate::RX),
             qubits: smallvec![Qubit::new(0)],
-            params: SmallVec::from_buf([CircuitParam::Fixed(f64::NAN)]),
+            params: smallvec![ParameterValue::Fixed(f64::NAN)],
             label: None,
         }],
-        CircuitParam::Fixed(0.0),
-    );
+    )
+    .unwrap();
 
     let err = canonicalize_circuit(&circuit).unwrap_err();
     assert!(matches!(err, CompilerError::InvalidInput(_)));
@@ -819,4 +774,95 @@ fn canonicalization_is_idempotent() {
 
     assert!(first.changed);
     assert!(!second.changed);
+}
+
+#[test]
+fn canonicalization_is_idempotent_for_mixed_production_input() {
+    let mut circuit = Circuit::new(3);
+    circuit.set_global_phase(Parameter::from(0.25));
+    circuit
+        .append(
+            Instruction::Standard(StandardGate::GPhase),
+            Vec::<Qubit>::new(),
+            [ParameterValue::Fixed(0.5)],
+            None,
+        )
+        .unwrap();
+    circuit.i(Qubit::new(0)).unwrap();
+    circuit.rx(Qubit::new(1), 0.0).unwrap();
+    circuit
+        .barrier(vec![Qubit::new(2), Qubit::new(0), Qubit::new(2)])
+        .unwrap();
+    circuit.barrier(vec![Qubit::new(0), Qubit::new(2)]).unwrap();
+    circuit.h(Qubit::new(2)).unwrap();
+    circuit
+        .if_else(
+            ConditionView::new(Qubit::new(0), 1),
+            vec![
+                Operation {
+                    instruction: Instruction::Standard(StandardGate::H),
+                    qubits: smallvec![Qubit::new(1)],
+                    params: smallvec![],
+                    label: None,
+                },
+                Operation {
+                    instruction: Instruction::Standard(StandardGate::GPhase),
+                    qubits: smallvec![],
+                    params: smallvec![CircuitParam::Fixed(0.125)],
+                    label: None,
+                },
+            ],
+            Some(vec![
+                Operation {
+                    instruction: Instruction::Standard(StandardGate::GPhase),
+                    qubits: smallvec![],
+                    params: smallvec![CircuitParam::Fixed(0.25)],
+                    label: None,
+                },
+                Operation {
+                    instruction: Instruction::Standard(StandardGate::I),
+                    qubits: smallvec![Qubit::new(2)],
+                    params: smallvec![],
+                    label: None,
+                },
+            ]),
+        )
+        .unwrap();
+
+    let first = canonicalize_circuit(&circuit).unwrap();
+    let second = canonicalize_circuit(&first.circuit).unwrap();
+
+    assert!(first.changed);
+    assert!(!second.changed);
+    assert_eq!(
+        format!("{:?}", first.circuit),
+        format!("{:?}", second.circuit)
+    );
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(96))]
+
+    #[test]
+    fn canonicalization_is_idempotent_for_generated_small_circuits(
+        circuit in generated_small_matrix_circuit()
+    ) {
+        let before = circuit_to_matrix(&circuit, None).unwrap();
+        let first = canonicalize_circuit(&circuit).unwrap();
+        let second = canonicalize_circuit(&first.circuit).unwrap();
+        let after = circuit_to_matrix(&first.circuit, None).unwrap();
+
+        prop_assert_eq!(format!("{:?}", first.circuit), format!("{:?}", second.circuit));
+        prop_assert!(!second.changed);
+        let before = before.as_slice().expect("matrix storage is contiguous");
+        let after = after.as_slice().expect("matrix storage is contiguous");
+        prop_assert_eq!(before.len(), after.len());
+        for (index, (before, after)) in before.iter().zip(after).enumerate() {
+            let diff = (*before - *after).norm();
+            prop_assert!(
+                diff <= 1e-10,
+                "matrix entry {index} differs: before={before}, after={after}, diff={diff}"
+            );
+        }
+    }
 }

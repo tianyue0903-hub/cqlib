@@ -24,13 +24,9 @@ use super::{
 };
 use crate::circuit::{Qubit, StandardGate, circuit_to_matrix, operation::ValueOperation};
 use crate::compile::error::CompilerError;
-use crate::util::{
-    operation::push_standard_gate,
-    test_utils::{
-        EPSILON, assert_selected_matrix_columns_equal_up_to_global_phase,
-        assert_standard_operation, assert_value_operations_equal, circuit_from_value_operations,
-        mc_gate_matrix,
-    },
+use crate::util::test_utils::{
+    EPSILON, assert_selected_matrix_columns_equal_up_to_global_phase, assert_standard_operation,
+    assert_value_operations_equal, circuit_from_value_operations, mc_gate_matrix,
 };
 
 fn wrap_exact_mcx(
@@ -46,9 +42,9 @@ fn wrap_exact_mcx(
     };
 
     let mut operations = vec![];
-    push_standard_gate(&mut operations, prefix, [target]);
+    operations.push(ValueOperation::from_standard(prefix, [target], []));
     operations.extend(mcx_operations);
-    push_standard_gate(&mut operations, suffix, [target]);
+    operations.push(ValueOperation::from_standard(suffix, [target], []));
     operations
 }
 

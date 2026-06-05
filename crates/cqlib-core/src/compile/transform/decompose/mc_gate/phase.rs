@@ -24,10 +24,8 @@
 //! multi-controlled `RZ` to [`super::rotation`].
 
 use super::rotation::{decompose_rotation_n_clean, decompose_rotation_no_aux};
-use crate::circuit::{Instruction, ParameterValue, Qubit, StandardGate, operation::ValueOperation};
+use crate::circuit::{ParameterValue, Qubit, StandardGate, operation::ValueOperation};
 use crate::compile::error::CompilerError;
-use crate::util::operation::push_standard_gate;
-use smallvec::smallvec;
 use std::f64::consts::PI;
 
 const DECOMPOSE_PHASE_NAME: &str = "decompose.phase";
@@ -92,15 +90,16 @@ fn decompose_phase_with(
 ) -> Result<Vec<ValueOperation>, CompilerError> {
     let theta = normalized_theta(phase, theta)?;
     if controls.is_empty() {
-        let mut operations = vec![];
-        match phase {
-            StandardGate::Phase => push_parameterized_phase(&mut operations, target, &theta),
+        let operation = match phase {
+            StandardGate::Phase => {
+                ValueOperation::from_standard(StandardGate::Phase, [target], [theta])
+            }
             StandardGate::S | StandardGate::SDG | StandardGate::T | StandardGate::TDG => {
-                push_standard_gate(&mut operations, phase, [target]);
+                ValueOperation::from_standard(phase, [target], [])
             }
             _ => unreachable!("phase gate was normalized before emission"),
-        }
-        return Ok(operations);
+        };
+        return Ok(vec![operation]);
     }
 
     decompose_normalized_phase_with(&theta, controls, target, &mut decompose_mcrz)
@@ -117,9 +116,11 @@ fn decompose_normalized_phase_with(
     ) -> Result<Vec<ValueOperation>, CompilerError>,
 ) -> Result<Vec<ValueOperation>, CompilerError> {
     let Some((phase_target, phase_controls)) = controls.split_last() else {
-        let mut operations = vec![];
-        push_parameterized_phase(&mut operations, target, theta);
-        return Ok(operations);
+        return Ok(vec![ValueOperation::from_standard(
+            StandardGate::Phase,
+            [target],
+            [theta.clone()],
+        )]);
     };
 
     let half_theta = match theta {
@@ -165,17 +166,4 @@ fn invalid_phase(reason: impl Into<String>) -> CompilerError {
         name: DECOMPOSE_PHASE_NAME,
         reason: reason.into(),
     }
-}
-
-fn push_parameterized_phase(
-    operations: &mut Vec<ValueOperation>,
-    target: Qubit,
-    theta: &ParameterValue,
-) {
-    operations.push(ValueOperation {
-        instruction: Instruction::Standard(StandardGate::Phase),
-        qubits: smallvec![target],
-        params: smallvec![theta.clone()],
-        label: None,
-    });
 }

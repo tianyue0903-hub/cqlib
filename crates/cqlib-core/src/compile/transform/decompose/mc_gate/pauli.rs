@@ -34,7 +34,6 @@ use super::mcx::{
 };
 use crate::circuit::{Qubit, StandardGate, operation::ValueOperation};
 use crate::compile::error::CompilerError;
-use crate::util::operation::push_standard_gate;
 use crate::util::qubit::find_duplicate_qubit;
 
 const DECOMPOSE_PAULI_NAME: &str = "decompose.pauli";
@@ -268,13 +267,11 @@ fn decompose_pauli_with(
             });
         }
 
-        let mut operations = vec![];
-        push_standard_gate(
-            &mut operations,
+        return Ok(vec![ValueOperation::from_standard(
             standard_gate,
             controls.iter().copied().chain([target]),
-        );
-        return Ok(operations);
+            [],
+        )]);
     }
 
     let mcx_operations = synthesize_mcx()?;
@@ -286,8 +283,8 @@ fn decompose_pauli_with(
     };
 
     let mut operations = Vec::with_capacity(mcx_operations.len() + 2);
-    push_standard_gate(&mut operations, prefix, [target]);
+    operations.push(ValueOperation::from_standard(prefix, [target], []));
     operations.extend(mcx_operations);
-    push_standard_gate(&mut operations, suffix, [target]);
+    operations.push(ValueOperation::from_standard(suffix, [target], []));
     Ok(operations)
 }

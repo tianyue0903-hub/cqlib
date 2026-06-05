@@ -502,6 +502,22 @@ mod tests {
     }
 
     #[test]
+    fn backends_handle_identity_without_entangling_operations() {
+        for basis in [
+            TwoQubitUnitaryDecomposeBasis::PauliRotations,
+            TwoQubitUnitaryDecomposeBasis::Cx,
+        ] {
+            let (decomposed, before, after) = synthesized_output(&Array2::eye(4), basis);
+
+            assert_eq!(count_gate(&decomposed, StandardGate::CX), 0);
+            assert_eq!(count_gate(&decomposed, StandardGate::RXX), 0);
+            assert_eq!(count_gate(&decomposed, StandardGate::RYY), 0);
+            assert_eq!(count_gate(&decomposed, StandardGate::RZZ), 0);
+            assert_abs_diff_eq!(before, after, epsilon = 1e-8);
+        }
+    }
+
+    #[test]
     fn cx_backend_preserves_near_zero_entangling_rotation() {
         let matrix = StandardGate::RXX.matrix(&[-1.0e-5]).unwrap().into_owned();
         let (decomposed, before, after) =
@@ -541,5 +557,88 @@ mod tests {
             let (_, before, after) = synthesized_output(&matrix, basis);
             assert_abs_diff_eq!(before, after, epsilon = 1e-8);
         }
+    }
+
+    #[test]
+    fn backends_reconstruct_controlled_and_cartan_rotation_family() {
+        let phase = Complex64::from_polar(1.0, -0.28);
+        let cases = [
+            StandardGate::CRX.matrix(&[0.31]).unwrap().into_owned(),
+            StandardGate::CRY.matrix(&[-0.47]).unwrap().into_owned(),
+            StandardGate::CRZ.matrix(&[0.83]).unwrap().into_owned(),
+            StandardGate::RXX.matrix(&[0.19]).unwrap().into_owned(),
+            StandardGate::RYY.matrix(&[-0.23]).unwrap().into_owned(),
+            StandardGate::RZZ
+                .matrix(&[0.41])
+                .unwrap()
+                .into_owned()
+                .mapv(|value| phase * value),
+        ];
+
+        for matrix in cases {
+            for basis in [
+                TwoQubitUnitaryDecomposeBasis::PauliRotations,
+                TwoQubitUnitaryDecomposeBasis::Cx,
+            ] {
+                let (_, before, after) = synthesized_output(&matrix, basis);
+                assert_abs_diff_eq!(before, after, epsilon = 1e-8);
+            }
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_shape_and_non_unitary_matrix() {
+        let bad_shape = Array2::<Complex64>::eye(3);
+        let err = synthesize_numeric_2q_unitary(
+            &bad_shape,
+            [Qubit::new(0), Qubit::new(1)],
+            TwoQubitUnitaryDecomposeBasis::PauliRotations,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("4x4"));
+
+        let non_unitary = ndarray::array![
+            [
+                Complex64::new(1.0, 0.0),
+                Complex64::new(0.0, 0.0),
+                Complex64::new(0.0, 0.0),
+                Complex64::new(0.0, 0.0)
+            ],
+            [
+                Complex64::new(0.0, 0.0),
+                Complex64::new(2.0, 0.0),
+                Complex64::new(0.0, 0.0),
+                Complex64::new(0.0, 0.0)
+            ],
+            [
+                Complex64::new(0.0, 0.0),
+                Complex64::new(0.0, 0.0),
+                Complex64::new(1.0, 0.0),
+                Complex64::new(0.0, 0.0)
+            ],
+            [
+                Complex64::new(0.0, 0.0),
+                Complex64::new(0.0, 0.0),
+                Complex64::new(0.0, 0.0),
+                Complex64::new(1.0, 0.0)
+            ]
+        ];
+        let err = synthesize_numeric_2q_unitary(
+            &non_unitary,
+            [Qubit::new(0), Qubit::new(1)],
+            TwoQubitUnitaryDecomposeBasis::Cx,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("not unitary"));
+
+        let mut non_finite = Array2::<Complex64>::eye(4);
+        non_finite[[1, 2]] = Complex64::new(f64::INFINITY, 0.0);
+        let err = synthesize_numeric_2q_unitary(
+            &non_finite,
+            [Qubit::new(0), Qubit::new(1)],
+            TwoQubitUnitaryDecomposeBasis::PauliRotations,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("non-finite"));
     }
 }

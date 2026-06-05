@@ -30,10 +30,8 @@
 //! interaction (matches the standard definition `exp(-i θ/2 · Z⊗X)`).
 
 use super::rzz::{decompose_mc_rzz_n_clean, decompose_mc_rzz_no_aux};
-use crate::circuit::{Instruction, ParameterValue, Qubit, StandardGate, operation::ValueOperation};
+use crate::circuit::{ParameterValue, Qubit, StandardGate, operation::ValueOperation};
 use crate::compile::error::CompilerError;
-use crate::util::operation::push_standard_gate;
-use smallvec::smallvec;
 use std::f64::consts::PI;
 
 const DECOMPOSE_PAULI_ROTATION_NAME: &str = "decompose.pauli_rotation";
@@ -108,9 +106,11 @@ fn decompose_pauli_rotation_with(
     let basis = basis_change_for(rotation)?;
 
     if controls.is_empty() {
-        let mut operations = vec![];
-        push_pauli_rotation_gate(&mut operations, rotation, theta, first, second);
-        return Ok(operations);
+        return Ok(vec![ValueOperation::from_standard(
+            rotation,
+            [first, second],
+            [theta.clone()],
+        )]);
     }
 
     let mut operations = Vec::new();
@@ -220,33 +220,23 @@ fn emit_conjugations(
             WhichQubit::Second => second,
         };
         match conjugation.gate {
-            ConjugationGate::H => push_standard_gate(operations, StandardGate::H, [qubit]),
-            ConjugationGate::RxPi2 => push_rx(operations, qubit, PI / 2.0),
-            ConjugationGate::RxNegPi2 => push_rx(operations, qubit, -PI / 2.0),
+            ConjugationGate::H => {
+                operations.push(ValueOperation::from_standard(StandardGate::H, [qubit], []));
+            }
+            ConjugationGate::RxPi2 => {
+                operations.push(ValueOperation::from_standard(
+                    StandardGate::RX,
+                    [qubit],
+                    [ParameterValue::Fixed(PI / 2.0)],
+                ));
+            }
+            ConjugationGate::RxNegPi2 => {
+                operations.push(ValueOperation::from_standard(
+                    StandardGate::RX,
+                    [qubit],
+                    [ParameterValue::Fixed(-PI / 2.0)],
+                ));
+            }
         }
     }
-}
-
-fn push_rx(operations: &mut Vec<ValueOperation>, qubit: Qubit, angle: f64) {
-    operations.push(ValueOperation {
-        instruction: Instruction::Standard(StandardGate::RX),
-        qubits: smallvec![qubit],
-        params: smallvec![ParameterValue::Fixed(angle)],
-        label: None,
-    });
-}
-
-fn push_pauli_rotation_gate(
-    operations: &mut Vec<ValueOperation>,
-    rotation: StandardGate,
-    theta: &ParameterValue,
-    first: Qubit,
-    second: Qubit,
-) {
-    operations.push(ValueOperation {
-        instruction: Instruction::Standard(rotation),
-        qubits: smallvec![first, second],
-        params: smallvec![theta.clone()],
-        label: None,
-    });
 }

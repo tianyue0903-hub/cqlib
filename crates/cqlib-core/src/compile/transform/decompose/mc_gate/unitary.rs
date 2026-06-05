@@ -29,9 +29,8 @@ use super::{
     rotation::{decompose_rotation_n_clean, decompose_rotation_no_aux},
 };
 use crate::circuit::operation::ValueOperation;
-use crate::circuit::{Instruction, Parameter, ParameterValue, Qubit, StandardGate};
+use crate::circuit::{Parameter, ParameterValue, Qubit, StandardGate};
 use crate::compile::error::CompilerError;
-use smallvec::smallvec;
 
 /// Decomposes a multi-controlled standard `U(theta, phi, lambda)` gate
 /// without ancillary qubits.
@@ -127,12 +126,11 @@ fn decompose_unitary_with(
     ) -> Result<Vec<ValueOperation>, CompilerError>,
 ) -> Result<Vec<ValueOperation>, CompilerError> {
     if controls.is_empty() {
-        return Ok(vec![ValueOperation {
-            instruction: Instruction::Standard(StandardGate::U),
-            qubits: smallvec![target],
-            params: smallvec![theta.clone(), phi.clone(), lambda.clone()],
-            label: None,
-        }]);
+        return Ok(vec![ValueOperation::from_standard(
+            StandardGate::U,
+            [target],
+            [theta.clone(), phi.clone(), lambda.clone()],
+        )]);
     }
 
     let Some((phase_target, phase_controls)) = controls.split_last() else {

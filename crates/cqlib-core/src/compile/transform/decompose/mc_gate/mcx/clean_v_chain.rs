@@ -12,10 +12,9 @@
 
 //! MCX synthesis using a clean-ancilla V-chain.
 
-use crate::circuit::{Instruction, Qubit, StandardGate, operation::ValueOperation};
+use crate::circuit::{Qubit, StandardGate, operation::ValueOperation};
 use crate::compile::error::CompilerError;
 use crate::util::qubit::find_duplicate_qubit;
-use smallvec::smallvec;
 
 use super::{
     DECOMPOSE_MCX_NAME, relative_phase::emit_relative_phase_toffoli, trivial::decompose_mcx_small,
@@ -82,16 +81,15 @@ pub fn decompose_mcx_n_clean(
         )?;
     }
 
-    operations.push(ValueOperation {
-        instruction: Instruction::Standard(StandardGate::CCX),
-        qubits: smallvec![
+    operations.push(ValueOperation::from_standard(
+        StandardGate::CCX,
+        [
             controls[controls.len() - 1],
             used_ancillas[required_ancillas - 1],
-            target
+            target,
         ],
-        params: smallvec![],
-        label: None,
-    });
+        [],
+    ));
 
     for i in (1..required_ancillas).rev() {
         emit_relative_phase_toffoli(

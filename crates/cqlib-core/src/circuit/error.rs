@@ -126,6 +126,10 @@ pub enum CircuitError {
     #[error("Parameter count mismatch: expected {expected}, got {actual}")]
     ParameterCountMismatch { expected: usize, actual: usize },
 
+    /// Wraps errors raised while simplifying or evaluating symbolic parameters.
+    #[error("Invalid parameter: {0}")]
+    InvalidParameter(#[from] ParameterError),
+
     /// Thrown when an operation is requested to provide a unitary matrix, but none exists.
     ///
     /// This typically happens when calling `.matrix()` on non-unitary instructions such as:

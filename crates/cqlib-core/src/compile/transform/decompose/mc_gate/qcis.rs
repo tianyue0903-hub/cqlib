@@ -25,11 +25,8 @@
 //! changes. Only the central rotation receives the caller-provided controls.
 
 use super::rotation::{decompose_rotation_n_clean, decompose_rotation_no_aux};
-use crate::circuit::{
-    Instruction, Parameter, ParameterValue, Qubit, StandardGate, operation::ValueOperation,
-};
+use crate::circuit::{Parameter, ParameterValue, Qubit, StandardGate, operation::ValueOperation};
 use crate::compile::error::CompilerError;
-use smallvec::smallvec;
 use std::f64::consts::PI;
 
 const DECOMPOSE_QCIS_NAME: &str = "decompose.qcis";
@@ -90,7 +87,11 @@ fn decompose_qcis_with(
 ) -> Result<Vec<ValueOperation>, CompilerError> {
     validate_params(gate, params)?;
     if controls.is_empty() {
-        return Ok(vec![parameterized_operation(gate, target, params)]);
+        return Ok(vec![ValueOperation::from_standard(
+            gate,
+            [target],
+            params.iter().cloned(),
+        )]);
     }
 
     let (rotation, theta) = match gate {
@@ -120,19 +121,19 @@ fn decompose_xy_with(
     ) -> Result<Vec<ValueOperation>, CompilerError>,
 ) -> Result<Vec<ValueOperation>, CompilerError> {
     let phi = Parameter::from(phi);
-    let mut operations = vec![parameterized_operation(
+    let mut operations = vec![ValueOperation::from_standard(
         StandardGate::RZ,
-        target,
-        &[ParameterValue::from(-phi.clone())],
+        [target],
+        [ParameterValue::from(-phi.clone())],
     )];
     operations.extend(decompose_rotation(
         StandardGate::RX,
         &ParameterValue::Fixed(theta),
     )?);
-    operations.push(parameterized_operation(
+    operations.push(ValueOperation::from_standard(
         StandardGate::RZ,
-        target,
-        &[ParameterValue::from(phi)],
+        [target],
+        [ParameterValue::from(phi)],
     ));
     Ok(operations)
 }
@@ -160,18 +161,5 @@ fn invalid_qcis(reason: impl Into<String>) -> CompilerError {
     CompilerError::TransformFailed {
         name: DECOMPOSE_QCIS_NAME,
         reason: reason.into(),
-    }
-}
-
-fn parameterized_operation(
-    gate: StandardGate,
-    target: Qubit,
-    params: &[ParameterValue],
-) -> ValueOperation {
-    ValueOperation {
-        instruction: Instruction::Standard(gate),
-        qubits: smallvec![target],
-        params: params.iter().cloned().collect(),
-        label: None,
     }
 }

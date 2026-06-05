@@ -30,7 +30,6 @@
 use super::rotation::{decompose_rotation_n_clean, decompose_rotation_no_aux};
 use crate::circuit::{ParameterValue, Qubit, StandardGate, operation::ValueOperation};
 use crate::compile::error::CompilerError;
-use crate::util::operation::push_standard_gate;
 
 const DECOMPOSE_RZZ_NAME: &str = "decompose.rzz";
 
@@ -59,7 +58,11 @@ pub fn decompose_mc_rzz_no_aux(
             });
         }
         let mut operations = vec![];
-        push_standard_gate(&mut operations, StandardGate::RZZ, [first, second]);
+        operations.push(ValueOperation::from_standard(
+            StandardGate::RZZ,
+            [first, second],
+            [],
+        ));
         operations[0].params.push(theta.clone());
         return Ok(operations);
     }
@@ -67,14 +70,22 @@ pub fn decompose_mc_rzz_no_aux(
     check_rzz_qubits(controls, first, second, &[])?;
 
     let mut operations = Vec::new();
-    push_standard_gate(&mut operations, StandardGate::CX, [first, second]);
+    operations.push(ValueOperation::from_standard(
+        StandardGate::CX,
+        [first, second],
+        [],
+    ));
     operations.extend(decompose_rotation_no_aux(
         StandardGate::RZ,
         theta,
         controls,
         second,
     )?);
-    push_standard_gate(&mut operations, StandardGate::CX, [first, second]);
+    operations.push(ValueOperation::from_standard(
+        StandardGate::CX,
+        [first, second],
+        [],
+    ));
     Ok(operations)
 }
 
@@ -99,7 +110,11 @@ pub fn decompose_mc_rzz_n_clean(
     check_rzz_qubits(controls, first, second, clean_ancillas)?;
 
     let mut operations = Vec::new();
-    push_standard_gate(&mut operations, StandardGate::CX, [first, second]);
+    operations.push(ValueOperation::from_standard(
+        StandardGate::CX,
+        [first, second],
+        [],
+    ));
     operations.extend(decompose_rotation_n_clean(
         StandardGate::RZ,
         theta,
@@ -107,7 +122,11 @@ pub fn decompose_mc_rzz_n_clean(
         second,
         clean_ancillas,
     )?);
-    push_standard_gate(&mut operations, StandardGate::CX, [first, second]);
+    operations.push(ValueOperation::from_standard(
+        StandardGate::CX,
+        [first, second],
+        [],
+    ));
     Ok(operations)
 }
 

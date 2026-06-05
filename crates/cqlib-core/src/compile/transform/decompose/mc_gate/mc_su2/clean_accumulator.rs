@@ -19,10 +19,7 @@
 
 use super::{
     DECOMPOSE_MC_SU2_NAME, Su2RotationAxis,
-    utils::{
-        push_parameterized_gate, standard_controlled_rotation, standard_rotation,
-        validate_distinct_qubits,
-    },
+    utils::{standard_controlled_rotation, standard_rotation, validate_distinct_qubits},
 };
 use crate::circuit::{ParameterValue, Qubit, operation::ValueOperation};
 use crate::compile::error::CompilerError;
@@ -53,19 +50,16 @@ pub fn decompose_mc_su2_n_clean(
     let target_group = [target];
     if controls.len() <= 1 {
         validate_distinct_qubits(&[controls, &target_group])?;
-        let mut operations = vec![];
         let gate = if controls.is_empty() {
             standard_rotation(axis)
         } else {
             standard_controlled_rotation(axis)
         };
-        push_parameterized_gate(
-            &mut operations,
+        return Ok(vec![ValueOperation::from_standard(
             gate,
             controls.iter().copied().chain([target]),
-            theta,
-        );
-        return Ok(operations);
+            [theta.clone()],
+        )]);
     }
 
     let required_ancillas = controls.len() - 1;
@@ -88,12 +82,11 @@ pub fn decompose_mc_su2_n_clean(
     let mcx = decompose_mcx_n_clean(controls, accumulator, workspace)?;
     let mut operations = Vec::with_capacity(2 * mcx.len() + 1);
     operations.extend(mcx.iter().cloned());
-    push_parameterized_gate(
-        &mut operations,
+    operations.push(ValueOperation::from_standard(
         standard_controlled_rotation(axis),
         [accumulator, target],
-        theta,
-    );
+        [theta.clone()],
+    ));
     operations.extend(mcx);
 
     Ok(operations)

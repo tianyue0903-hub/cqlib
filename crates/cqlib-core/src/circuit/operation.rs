@@ -33,7 +33,7 @@
 use crate::circuit::bit::Qubit;
 use crate::circuit::circuit_param::{CircuitParam, ParameterValue};
 use crate::circuit::error::CircuitError;
-use crate::circuit::gate::instruction::Instruction;
+use crate::circuit::gate::{StandardGate, instruction::Instruction};
 use alloc::borrow::Cow;
 use ndarray::Array2;
 use num_complex::Complex64;
@@ -110,4 +110,20 @@ pub struct ValueOperation {
     pub params: SmallVec<[ParameterValue; 1]>,
     /// Optional metadata label.
     pub label: Option<Box<str>>,
+}
+
+impl ValueOperation {
+    /// Creates a standard gate operation.
+    pub fn from_standard(
+        gate: StandardGate,
+        qubits: impl IntoIterator<Item = Qubit>,
+        params: impl IntoIterator<Item = ParameterValue>,
+    ) -> Self {
+        Self {
+            instruction: Instruction::Standard(gate),
+            qubits: qubits.into_iter().collect(),
+            params: params.into_iter().collect(),
+            label: None,
+        }
+    }
 }

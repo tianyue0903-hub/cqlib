@@ -15,6 +15,10 @@ use crate::circuit::{Circuit, Qubit};
 use crate::compile::CompilerError;
 use crate::compile::sabre::SabreConfig;
 use crate::device::{Device, Layout, LogicalQubit, PhysicalQubit, Topology};
+use crate::util::test_utils::{
+    assert_two_qubit_operations_supported_by_topology, generated_small_routable_circuit,
+};
+use proptest::prelude::*;
 use std::collections::{BTreeMap, HashSet};
 
 #[test]
@@ -33,6 +37,7 @@ fn sabre_routing_auto_layout_routes_non_embeddable_interactions() {
     assert!(result.swap_count > 0);
     assert_eq!(result.circuit.qubits().len(), 3);
     assert_all_two_qubit_operations_are_adjacent_on_line(&result.circuit);
+    assert_two_qubit_operations_supported_by_topology(&result.circuit, device.topology());
 }
 
 #[test]
@@ -64,6 +69,92 @@ fn sabre_routing_keeps_parameterized_single_qubit_circuit_unchanged() {
     assert!(!result.changed);
     assert_eq!(result.swap_count, 0);
     assert_eq!(result.circuit.operations().len(), 1);
+}
+
+#[test]
+fn sabre_routing_keeps_empty_and_interaction_free_circuits_topology_valid() {
+    let device = Device::star("star", 5, 0).unwrap();
+    let objective = LayoutObjective::topology_only();
+    let config = SabreConfig::deterministic_seeded(7);
+    let empty = Circuit::new(0);
+    let mut single_qubit_layers = Circuit::new(5);
+    for index in 0..5 {
+        single_qubit_layers.h(Qubit::new(index)).unwrap();
+        single_qubit_layers
+            .rz(Qubit::new(index), index as f64 * 0.125)
+            .unwrap();
+    }
+
+    for circuit in [&empty, &single_qubit_layers] {
+        let result = route_sabre(circuit, &device, &objective, &config).unwrap();
+
+        assert_eq!(result.swap_count, 0);
+        assert_two_qubit_operations_supported_by_topology(&result.circuit, device.topology());
+    }
+}
+
+#[test]
+fn sabre_routing_outputs_only_supported_edges_on_star_device() {
+    let device = Device::star("star", 5, 0).unwrap();
+    let objective = LayoutObjective::topology_only();
+    let config = SabreConfig::deterministic_seeded(17);
+    let mut circuit = Circuit::new(5);
+    circuit.cx(Qubit::new(1), Qubit::new(2)).unwrap();
+    circuit.cx(Qubit::new(3), Qubit::new(4)).unwrap();
+    circuit.cx(Qubit::new(1), Qubit::new(4)).unwrap();
+
+    let result = route_sabre(&circuit, &device, &objective, &config).unwrap();
+
+    assert!(result.changed);
+    assert_two_qubit_operations_supported_by_topology(&result.circuit, device.topology());
+}
+
+#[test]
+fn sabre_routing_preserves_adjacent_line_circuit_without_swaps() {
+    let device = Device::line("line", 4).unwrap();
+    let objective = LayoutObjective::topology_only();
+    let config = SabreConfig::deterministic_seeded(29);
+    let mut circuit = Circuit::new(4);
+    circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
+    circuit.cz(Qubit::new(1), Qubit::new(2)).unwrap();
+    circuit.swap(Qubit::new(2), Qubit::new(3)).unwrap();
+
+    let result = route_sabre(&circuit, &device, &objective, &config).unwrap();
+
+    assert_eq!(result.swap_count, 0);
+    assert_two_qubit_operations_supported_by_topology(&result.circuit, device.topology());
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(64))]
+
+    #[test]
+    fn sabre_routed_generated_circuits_use_only_supported_topology_edges(
+        circuit in generated_small_routable_circuit()
+    ) {
+        let device = Device::line("property-line", 5).unwrap();
+        let objective = LayoutObjective::topology_only();
+        let config = SabreConfig::deterministic_seeded(31);
+
+        let result = route_sabre(&circuit, &device, &objective, &config).unwrap();
+
+        assert_two_qubit_operations_supported_by_topology(&result.circuit, device.topology());
+    }
+}
+
+#[test]
+fn sabre_identity_no_swap_rebuild_should_report_changed_instead_of_panicking() {
+    let device = Device::ring("regression-ring", 5).unwrap();
+    let objective = LayoutObjective::topology_only();
+    let config = SabreConfig::deterministic_seeded(31);
+    let mut circuit = Circuit::new(5);
+    circuit.crx(Qubit::new(4), Qubit::new(0), 0.0).unwrap();
+    circuit.i(Qubit::new(1)).unwrap();
+
+    let result = route_sabre(&circuit, &device, &objective, &config).unwrap();
+
+    assert!(result.changed);
+    assert_two_qubit_operations_supported_by_topology(&result.circuit, device.topology());
 }
 
 #[test]

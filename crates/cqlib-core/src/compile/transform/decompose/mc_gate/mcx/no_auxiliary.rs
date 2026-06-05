@@ -27,11 +27,9 @@
 //! inputs use the two-dirty-qubit increment from Figure 8. Both paths emit a
 //! number of low-level operations linear in the number of MCX qubits.
 
-use crate::circuit::{Instruction, ParameterValue, Qubit, StandardGate, operation::ValueOperation};
+use crate::circuit::{ParameterValue, Qubit, StandardGate, operation::ValueOperation};
 use crate::compile::error::CompilerError;
-use crate::util::operation::push_standard_gate;
 use crate::util::qubit::find_duplicate_qubit;
-use smallvec::smallvec;
 use std::f64::consts::PI;
 
 use super::{
@@ -121,7 +119,7 @@ pub fn decompose_mcx_no_aux(
     }
 
     let mut operations = vec![];
-    push_standard_gate(&mut operations, StandardGate::H, [target]);
+    operations.push(ValueOperation::from_standard(StandardGate::H, [target], []));
 
     match select_hp24_path(total_qubits) {
         Hp24Path::OneDirty => {
@@ -138,7 +136,7 @@ pub fn decompose_mcx_no_aux(
         }
     }
 
-    push_standard_gate(&mut operations, StandardGate::H, [target]);
+    operations.push(ValueOperation::from_standard(StandardGate::H, [target], []));
     Ok(operations)
 }
 
@@ -291,7 +289,11 @@ fn emit_increment_n_dirty_small(
         )?;
         append_cloned_operations(operations, &carry)?;
     }
-    push_standard_gate(operations, StandardGate::X, [data_qubits[0]]);
+    operations.push(ValueOperation::from_standard(
+        StandardGate::X,
+        [data_qubits[0]],
+        [],
+    ));
     Ok(())
 }
 
@@ -305,11 +307,23 @@ fn emit_increment_n_dirty_large(
     dirty_workspace: &[Qubit],
 ) -> Result<(), CompilerError> {
     let first_dirty = dirty_workspace[0];
-    push_standard_gate(operations, StandardGate::X, [first_dirty]);
+    operations.push(ValueOperation::from_standard(
+        StandardGate::X,
+        [first_dirty],
+        [],
+    ));
     for data in data_qubits {
-        push_standard_gate(operations, StandardGate::CX, [first_dirty, *data]);
+        operations.push(ValueOperation::from_standard(
+            StandardGate::CX,
+            [first_dirty, *data],
+            [],
+        ));
     }
-    push_standard_gate(operations, StandardGate::X, [first_dirty]);
+    operations.push(ValueOperation::from_standard(
+        StandardGate::X,
+        [first_dirty],
+        [],
+    ));
 
     for index in 0..data_qubits.len() - 1 {
         emit_ux(
@@ -319,11 +333,11 @@ fn emit_increment_n_dirty_large(
             data_qubits[index],
         );
     }
-    push_standard_gate(
-        operations,
+    operations.push(ValueOperation::from_standard(
         StandardGate::CX,
         [first_dirty, data_qubits[data_qubits.len() - 1]],
-    );
+        [],
+    ));
     for index in (0..data_qubits.len() - 1).rev() {
         emit_uz(
             operations,
@@ -334,7 +348,7 @@ fn emit_increment_n_dirty_large(
     }
 
     for dirty in &dirty_workspace[1..] {
-        push_standard_gate(operations, StandardGate::X, [*dirty]);
+        operations.push(ValueOperation::from_standard(StandardGate::X, [*dirty], []));
     }
 
     for index in 0..data_qubits.len() - 1 {
@@ -345,11 +359,11 @@ fn emit_increment_n_dirty_large(
             data_qubits[index],
         );
     }
-    push_standard_gate(
-        operations,
+    operations.push(ValueOperation::from_standard(
         StandardGate::CX,
         [first_dirty, data_qubits[data_qubits.len() - 1]],
-    );
+        [],
+    ));
     for index in (0..data_qubits.len() - 1).rev() {
         emit_uz(
             operations,
@@ -359,19 +373,31 @@ fn emit_increment_n_dirty_large(
         );
     }
     for dirty in &dirty_workspace[1..] {
-        push_standard_gate(operations, StandardGate::X, [*dirty]);
+        operations.push(ValueOperation::from_standard(StandardGate::X, [*dirty], []));
     }
 
-    push_standard_gate(
-        operations,
+    operations.push(ValueOperation::from_standard(
         StandardGate::X,
         [data_qubits[data_qubits.len() - 1]],
-    );
-    push_standard_gate(operations, StandardGate::X, [first_dirty]);
+        [],
+    ));
+    operations.push(ValueOperation::from_standard(
+        StandardGate::X,
+        [first_dirty],
+        [],
+    ));
     for data in data_qubits {
-        push_standard_gate(operations, StandardGate::CX, [first_dirty, *data]);
+        operations.push(ValueOperation::from_standard(
+            StandardGate::CX,
+            [first_dirty, *data],
+            [],
+        ));
     }
-    push_standard_gate(operations, StandardGate::X, [first_dirty]);
+    operations.push(ValueOperation::from_standard(
+        StandardGate::X,
+        [first_dirty],
+        [],
+    ));
     Ok(())
 }
 
@@ -434,9 +460,17 @@ fn emit_increment_one_dirty_add_one(
         &first_mapping,
     )?;
 
-    push_standard_gate(operations, StandardGate::X, [internal_dirty]);
+    operations.push(ValueOperation::from_standard(
+        StandardGate::X,
+        [internal_dirty],
+        [],
+    ));
     for data in &data_qubits[middle..] {
-        push_standard_gate(operations, StandardGate::CX, [internal_dirty, *data]);
+        operations.push(ValueOperation::from_standard(
+            StandardGate::CX,
+            [internal_dirty, *data],
+            [],
+        ));
     }
 
     let mut relative_mcx = vec![];
@@ -453,11 +487,19 @@ fn emit_increment_one_dirty_add_one(
         &template_layout,
         &first_mapping,
     )?;
-    push_standard_gate(operations, StandardGate::X, [internal_dirty]);
+    operations.push(ValueOperation::from_standard(
+        StandardGate::X,
+        [internal_dirty],
+        [],
+    ));
     append_cloned_operations(operations, &relative_mcx)?;
 
     for data in &data_qubits[middle..] {
-        push_standard_gate(operations, StandardGate::CX, [internal_dirty, *data]);
+        operations.push(ValueOperation::from_standard(
+            StandardGate::CX,
+            [internal_dirty, *data],
+            [],
+        ));
     }
 
     let last_nested_workspace = collect_qubits(&[&data_qubits[middle..], &internal_dirty_group])?;
@@ -554,9 +596,17 @@ fn emit_increment_two_dirty_add_one(
         &first_mapping,
     )?;
 
-    push_standard_gate(operations, StandardGate::X, [first_internal_dirty]);
+    operations.push(ValueOperation::from_standard(
+        StandardGate::X,
+        [first_internal_dirty],
+        [],
+    ));
     for data in &data_qubits[middle..] {
-        push_standard_gate(operations, StandardGate::CX, [first_internal_dirty, *data]);
+        operations.push(ValueOperation::from_standard(
+            StandardGate::CX,
+            [first_internal_dirty, *data],
+            [],
+        ));
     }
 
     let relative_workspace = collect_qubits(&[&data_qubits[middle..], &internal_dirty_group[1..]])?;
@@ -574,11 +624,19 @@ fn emit_increment_two_dirty_add_one(
         &first_template_layout,
         &first_mapping,
     )?;
-    push_standard_gate(operations, StandardGate::X, [first_internal_dirty]);
+    operations.push(ValueOperation::from_standard(
+        StandardGate::X,
+        [first_internal_dirty],
+        [],
+    ));
     append_cloned_operations(operations, &relative_mcx)?;
 
     for data in &data_qubits[middle..] {
-        push_standard_gate(operations, StandardGate::CX, [first_internal_dirty, *data]);
+        operations.push(ValueOperation::from_standard(
+            StandardGate::CX,
+            [first_internal_dirty, *data],
+            [],
+        ));
     }
 
     let (last_nested_increment, last_template_layout) =
@@ -659,7 +717,11 @@ fn emit_relative_mcx_recursive(
             reason: "HP24 relative MCX requires at least one control qubit".to_string(),
         }),
         [control] => {
-            push_standard_gate(operations, StandardGate::CX, [*control, target]);
+            operations.push(ValueOperation::from_standard(
+                StandardGate::CX,
+                [*control, target],
+                [],
+            ));
             Ok(())
         }
         [first_control, second_control] => {
@@ -679,24 +741,56 @@ fn emit_relative_mcx_recursive(
             let mut third_block = vec![];
             emit_relative_mcx_recursive(&mut third_block, third_controls, target)?;
 
-            push_standard_gate(operations, StandardGate::H, [target]);
-            push_fixed_parameter_gate(operations, StandardGate::Phase, [target], PI / 8.0);
+            operations.push(ValueOperation::from_standard(StandardGate::H, [target], []));
+            operations.push(ValueOperation::from_standard(
+                StandardGate::Phase,
+                [target],
+                [ParameterValue::Fixed(PI / 8.0)],
+            ));
             append_cloned_operations(operations, &third_block)?;
-            push_fixed_parameter_gate(operations, StandardGate::Phase, [target], -PI / 8.0);
+            operations.push(ValueOperation::from_standard(
+                StandardGate::Phase,
+                [target],
+                [ParameterValue::Fixed(-PI / 8.0)],
+            ));
             append_cloned_operations(operations, &second_block)?;
-            push_fixed_parameter_gate(operations, StandardGate::Phase, [target], PI / 8.0);
+            operations.push(ValueOperation::from_standard(
+                StandardGate::Phase,
+                [target],
+                [ParameterValue::Fixed(PI / 8.0)],
+            ));
             append_cloned_operations(operations, &third_block)?;
-            push_fixed_parameter_gate(operations, StandardGate::Phase, [target], -PI / 8.0);
+            operations.push(ValueOperation::from_standard(
+                StandardGate::Phase,
+                [target],
+                [ParameterValue::Fixed(-PI / 8.0)],
+            ));
             append_cloned_operations(operations, &first_block)?;
-            push_fixed_parameter_gate(operations, StandardGate::Phase, [target], PI / 8.0);
+            operations.push(ValueOperation::from_standard(
+                StandardGate::Phase,
+                [target],
+                [ParameterValue::Fixed(PI / 8.0)],
+            ));
             append_cloned_operations(operations, &third_block)?;
-            push_fixed_parameter_gate(operations, StandardGate::Phase, [target], -PI / 8.0);
+            operations.push(ValueOperation::from_standard(
+                StandardGate::Phase,
+                [target],
+                [ParameterValue::Fixed(-PI / 8.0)],
+            ));
             append_cloned_operations(operations, &second_block)?;
-            push_fixed_parameter_gate(operations, StandardGate::Phase, [target], PI / 8.0);
+            operations.push(ValueOperation::from_standard(
+                StandardGate::Phase,
+                [target],
+                [ParameterValue::Fixed(PI / 8.0)],
+            ));
             append_cloned_operations(operations, &third_block)?;
-            push_fixed_parameter_gate(operations, StandardGate::Phase, [target], -PI / 8.0);
+            operations.push(ValueOperation::from_standard(
+                StandardGate::Phase,
+                [target],
+                [ParameterValue::Fixed(-PI / 8.0)],
+            ));
             append_cloned_operations(operations, &first_block)?;
-            push_standard_gate(operations, StandardGate::H, [target]);
+            operations.push(ValueOperation::from_standard(StandardGate::H, [target], []));
             Ok(())
         }
     }
@@ -840,23 +934,47 @@ fn emit_subtract_wrapper_prefix(
 ) {
     if direction == IncrementDirection::SubtractOne {
         for data in data_qubits {
-            push_standard_gate(operations, StandardGate::X, [*data]);
+            operations.push(ValueOperation::from_standard(StandardGate::X, [*data], []));
         }
     }
 }
 
 /// Emits the three-qubit `Ux` increment ladder component.
 fn emit_ux(operations: &mut Vec<ValueOperation>, first: Qubit, second: Qubit, third: Qubit) {
-    push_standard_gate(operations, StandardGate::CX, [first, third]);
-    push_standard_gate(operations, StandardGate::CX, [first, second]);
-    push_standard_gate(operations, StandardGate::CCX, [second, third, first]);
+    operations.push(ValueOperation::from_standard(
+        StandardGate::CX,
+        [first, third],
+        [],
+    ));
+    operations.push(ValueOperation::from_standard(
+        StandardGate::CX,
+        [first, second],
+        [],
+    ));
+    operations.push(ValueOperation::from_standard(
+        StandardGate::CCX,
+        [second, third, first],
+        [],
+    ));
 }
 
 /// Emits the three-qubit `Uz` increment ladder component.
 fn emit_uz(operations: &mut Vec<ValueOperation>, first: Qubit, second: Qubit, third: Qubit) {
-    push_standard_gate(operations, StandardGate::CCX, [second, third, first]);
-    push_standard_gate(operations, StandardGate::CX, [first, second]);
-    push_standard_gate(operations, StandardGate::CX, [second, third]);
+    operations.push(ValueOperation::from_standard(
+        StandardGate::CCX,
+        [second, third, first],
+        [],
+    ));
+    operations.push(ValueOperation::from_standard(
+        StandardGate::CX,
+        [first, second],
+        [],
+    ));
+    operations.push(ValueOperation::from_standard(
+        StandardGate::CX,
+        [second, third],
+        [],
+    ));
 }
 
 /// Emits the exact low-level decomposition of `CP(theta)`.
@@ -866,11 +984,31 @@ fn emit_controlled_phase(
     target: Qubit,
     theta: f64,
 ) {
-    push_fixed_parameter_gate(operations, StandardGate::Phase, [control], theta / 2.0);
-    push_fixed_parameter_gate(operations, StandardGate::Phase, [target], theta / 2.0);
-    push_standard_gate(operations, StandardGate::CX, [control, target]);
-    push_fixed_parameter_gate(operations, StandardGate::Phase, [target], -theta / 2.0);
-    push_standard_gate(operations, StandardGate::CX, [control, target]);
+    operations.push(ValueOperation::from_standard(
+        StandardGate::Phase,
+        [control],
+        [ParameterValue::Fixed(theta / 2.0)],
+    ));
+    operations.push(ValueOperation::from_standard(
+        StandardGate::Phase,
+        [target],
+        [ParameterValue::Fixed(theta / 2.0)],
+    ));
+    operations.push(ValueOperation::from_standard(
+        StandardGate::CX,
+        [control, target],
+        [],
+    ));
+    operations.push(ValueOperation::from_standard(
+        StandardGate::Phase,
+        [target],
+        [ParameterValue::Fixed(-theta / 2.0)],
+    ));
+    operations.push(ValueOperation::from_standard(
+        StandardGate::CX,
+        [control, target],
+        [],
+    ));
 }
 
 /// Emits the exact low-level decomposition of `CCP(theta)`.
@@ -881,57 +1019,71 @@ fn emit_double_controlled_phase(
     target: Qubit,
     theta: f64,
 ) {
-    push_standard_gate(operations, StandardGate::CX, [first_control, target]);
-    push_fixed_parameter_gate(operations, StandardGate::Phase, [target], -theta / 4.0);
-    push_standard_gate(operations, StandardGate::CX, [second_control, target]);
-    push_fixed_parameter_gate(operations, StandardGate::Phase, [target], theta / 4.0);
-    push_standard_gate(operations, StandardGate::CX, [first_control, target]);
-    push_fixed_parameter_gate(operations, StandardGate::Phase, [target], -theta / 4.0);
-    push_standard_gate(operations, StandardGate::CX, [second_control, target]);
-    push_fixed_parameter_gate(operations, StandardGate::Phase, [target], theta / 4.0);
-    push_fixed_parameter_gate(
-        operations,
+    operations.push(ValueOperation::from_standard(
+        StandardGate::CX,
+        [first_control, target],
+        [],
+    ));
+    operations.push(ValueOperation::from_standard(
+        StandardGate::Phase,
+        [target],
+        [ParameterValue::Fixed(-theta / 4.0)],
+    ));
+    operations.push(ValueOperation::from_standard(
+        StandardGate::CX,
+        [second_control, target],
+        [],
+    ));
+    operations.push(ValueOperation::from_standard(
+        StandardGate::Phase,
+        [target],
+        [ParameterValue::Fixed(theta / 4.0)],
+    ));
+    operations.push(ValueOperation::from_standard(
+        StandardGate::CX,
+        [first_control, target],
+        [],
+    ));
+    operations.push(ValueOperation::from_standard(
+        StandardGate::Phase,
+        [target],
+        [ParameterValue::Fixed(-theta / 4.0)],
+    ));
+    operations.push(ValueOperation::from_standard(
+        StandardGate::CX,
+        [second_control, target],
+        [],
+    ));
+    operations.push(ValueOperation::from_standard(
+        StandardGate::Phase,
+        [target],
+        [ParameterValue::Fixed(theta / 4.0)],
+    ));
+    operations.push(ValueOperation::from_standard(
         StandardGate::Phase,
         [first_control],
-        theta / 4.0,
-    );
-    push_fixed_parameter_gate(
-        operations,
+        [ParameterValue::Fixed(theta / 4.0)],
+    ));
+    operations.push(ValueOperation::from_standard(
         StandardGate::Phase,
         [second_control],
-        theta / 4.0,
-    );
-    push_standard_gate(
-        operations,
+        [ParameterValue::Fixed(theta / 4.0)],
+    ));
+    operations.push(ValueOperation::from_standard(
         StandardGate::CX,
         [first_control, second_control],
-    );
-    push_fixed_parameter_gate(
-        operations,
+        [],
+    ));
+    operations.push(ValueOperation::from_standard(
         StandardGate::Phase,
         [second_control],
-        -theta / 4.0,
-    );
-    push_standard_gate(
-        operations,
+        [ParameterValue::Fixed(-theta / 4.0)],
+    ));
+    operations.push(ValueOperation::from_standard(
         StandardGate::CX,
         [first_control, second_control],
-    );
-}
-
-/// Appends a one-parameter standard gate operation.
-fn push_fixed_parameter_gate(
-    operations: &mut Vec<ValueOperation>,
-    gate: StandardGate,
-    qubits: impl IntoIterator<Item = Qubit>,
-    parameter: f64,
-) {
-    operations.push(ValueOperation {
-        instruction: Instruction::Standard(gate),
-        qubits: qubits.into_iter().collect(),
-        params: smallvec![ParameterValue::Fixed(parameter)],
-        label: None,
-    });
+        [],
+    ));
 }
 
 /// Collects explicit qubit groups using checked capacity arithmetic.

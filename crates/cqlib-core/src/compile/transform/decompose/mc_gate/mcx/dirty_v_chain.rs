@@ -36,7 +36,6 @@
 
 use crate::circuit::{Qubit, StandardGate, operation::ValueOperation};
 use crate::compile::error::CompilerError;
-use crate::util::operation::push_standard_gate;
 use crate::util::qubit::find_duplicate_qubit;
 
 use super::{
@@ -172,11 +171,11 @@ fn decompose_dirty_v_chain(
         let last_ancilla = used_ancillas[required_ancillas - 1];
         match (mode, round) {
             (DirtyVChainMode::Exact, _) => {
-                push_standard_gate(
-                    &mut operations,
+                operations.push(ValueOperation::from_standard(
                     StandardGate::CCX,
                     [last_control, last_ancilla, target],
-                );
+                    [],
+                ));
             }
             (DirtyVChainMode::RelativePhase, 0) => {
                 emit_action_gadget(&mut operations, last_control, last_ancilla, target);
@@ -217,11 +216,23 @@ fn emit_action_gadget(
     second_control: Qubit,
     target: Qubit,
 ) {
-    push_standard_gate(operations, StandardGate::H, [target]);
-    push_standard_gate(operations, StandardGate::T, [target]);
-    push_standard_gate(operations, StandardGate::CX, [first_control, target]);
-    push_standard_gate(operations, StandardGate::TDG, [target]);
-    push_standard_gate(operations, StandardGate::CX, [second_control, target]);
+    operations.push(ValueOperation::from_standard(StandardGate::H, [target], []));
+    operations.push(ValueOperation::from_standard(StandardGate::T, [target], []));
+    operations.push(ValueOperation::from_standard(
+        StandardGate::CX,
+        [first_control, target],
+        [],
+    ));
+    operations.push(ValueOperation::from_standard(
+        StandardGate::TDG,
+        [target],
+        [],
+    ));
+    operations.push(ValueOperation::from_standard(
+        StandardGate::CX,
+        [second_control, target],
+        [],
+    ));
 }
 
 /// Appends the inverse of [`emit_action_gadget`].
@@ -231,9 +242,21 @@ fn emit_reset_gadget(
     second_control: Qubit,
     target: Qubit,
 ) {
-    push_standard_gate(operations, StandardGate::CX, [second_control, target]);
-    push_standard_gate(operations, StandardGate::T, [target]);
-    push_standard_gate(operations, StandardGate::CX, [first_control, target]);
-    push_standard_gate(operations, StandardGate::TDG, [target]);
-    push_standard_gate(operations, StandardGate::H, [target]);
+    operations.push(ValueOperation::from_standard(
+        StandardGate::CX,
+        [second_control, target],
+        [],
+    ));
+    operations.push(ValueOperation::from_standard(StandardGate::T, [target], []));
+    operations.push(ValueOperation::from_standard(
+        StandardGate::CX,
+        [first_control, target],
+        [],
+    ));
+    operations.push(ValueOperation::from_standard(
+        StandardGate::TDG,
+        [target],
+        [],
+    ));
+    operations.push(ValueOperation::from_standard(StandardGate::H, [target], []));
 }

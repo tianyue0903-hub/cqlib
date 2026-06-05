@@ -1140,6 +1140,32 @@ fn test_is_zero() {
 }
 
 #[test]
+fn test_canonicalized_folds_constant_expression() {
+    let theta = Parameter::symbol("theta");
+    let canonical = (theta.clone() - theta).canonicalized().unwrap();
+
+    assert!(canonical.get_symbols().is_empty());
+    assert_eq!(canonical.evaluate(&None).unwrap(), 0.0);
+}
+
+#[test]
+fn test_canonicalized_normalizes_negative_zero() {
+    let canonical = Parameter::from(-0.0).canonicalized().unwrap();
+
+    assert_eq!(
+        canonical.evaluate(&None).unwrap().to_bits(),
+        0.0f64.to_bits()
+    );
+}
+
+#[test]
+fn test_is_exact_zero() {
+    assert!(Parameter::from(0.0).is_exact_zero().unwrap());
+    assert!(!Parameter::from(f64::EPSILON / 2.0).is_exact_zero().unwrap());
+    assert!(!Parameter::symbol("x").is_exact_zero().unwrap());
+}
+
+#[test]
 fn test_is_one() {
     let one = Parameter::from(1.0);
     assert!(one.is_one());

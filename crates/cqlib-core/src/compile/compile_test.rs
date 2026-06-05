@@ -12,16 +12,17 @@
 // that they have been altered from the originals.
 
 use super::{CompileConfig, CompileMode, compile};
-use crate::circuit::{
-    Circuit, Instruction, MCGate, ParameterValue, Qubit, StandardGate, circuit_to_matrix,
-};
+use crate::circuit::{Circuit, Instruction, MCGate, ParameterValue, Qubit, StandardGate};
 use crate::compile::CompilerError;
 use crate::compile::resource::ResourcePolicy;
-use crate::device::{Device, PhysicalQubit, Topology};
+use crate::device::Device;
 use crate::util::test_utils::{
-    EPSILON, assert_circuits_equivalent_up_to_global_phase,
-    assert_matrices_equal_up_to_global_phase, contains_high_level_gate, standard_ops, step_changed,
+    assert_compiled_circuit_equivalent, assert_only_standard_gates,
+    assert_two_qubit_operations_supported_by_topology, bell_circuit, contains_high_level_gate,
+    generated_small_matrix_circuit, generated_small_routable_circuit, ghz_circuit, qft3_circuit,
+    standard_ops, step_changed,
 };
+use proptest::prelude::*;
 
 fn compile_normal(circuit: &Circuit) -> super::CompileResult {
     compile(
@@ -38,10 +39,7 @@ fn compile_normal(circuit: &Circuit) -> super::CompileResult {
 }
 
 fn assert_compiled_matrix_equivalent(actual: &Circuit, expected: &Circuit) {
-    let actual_matrix = circuit_to_matrix(actual, None).unwrap();
-    let expected_matrix = circuit_to_matrix(expected, None).unwrap();
-    assert_matrices_equal_up_to_global_phase(&actual_matrix, &expected_matrix, EPSILON);
-    assert_circuits_equivalent_up_to_global_phase(actual, expected, EPSILON);
+    assert_compiled_circuit_equivalent(actual, expected);
 }
 
 fn compile_to_basis(circuit: &Circuit, basis: Vec<StandardGate>) -> super::CompileResult {
@@ -101,31 +99,9 @@ fn compile_on_device_checked(
         "routing step should run"
     );
     assert_only_standard_gates(&result.circuit, allowed);
-    assert_all_two_qubit_operations_supported_by_topology(&result.circuit, &topology);
+    assert_two_qubit_operations_supported_by_topology(&result.circuit, &topology);
     assert!(result.circuit.qubits().len() <= topology.num_qubits());
     result
-}
-
-fn assert_only_standard_gates(circuit: &Circuit, allowed: &[StandardGate]) {
-    for op in circuit.operations() {
-        assert!(
-            matches!(op.instruction, Instruction::Standard(gate) if allowed.contains(&gate)),
-            "unexpected operation in compiled circuit: {op:?}"
-        );
-    }
-}
-
-fn assert_all_two_qubit_operations_supported_by_topology(circuit: &Circuit, topology: &Topology) {
-    for op in circuit.operations() {
-        if op.qubits.len() == 2 {
-            let a = PhysicalQubit::new(op.qubits[0].id());
-            let b = PhysicalQubit::new(op.qubits[1].id());
-            assert!(
-                topology.supports_coupling_either_direction(a, b),
-                "operation {op:?} is not supported by topology"
-            );
-        }
-    }
 }
 
 fn native_basis(gates: &[StandardGate]) -> Vec<Instruction> {
@@ -157,42 +133,6 @@ fn qcis_cz_basis() -> Vec<StandardGate> {
         StandardGate::CZ,
         StandardGate::GPhase,
     ]
-}
-
-fn bell_circuit() -> Circuit {
-    let q0 = Qubit::new(0);
-    let q1 = Qubit::new(1);
-    let mut circuit = Circuit::new(2);
-    circuit.h(q0).unwrap();
-    circuit.cx(q0, q1).unwrap();
-    circuit
-}
-
-fn ghz_circuit(num_qubits: usize) -> Circuit {
-    assert!(num_qubits >= 2);
-    let mut circuit = Circuit::new(num_qubits);
-    circuit.h(Qubit::new(0)).unwrap();
-    for i in 0..num_qubits - 1 {
-        circuit
-            .cx(Qubit::new(i as u32), Qubit::new(i as u32 + 1))
-            .unwrap();
-    }
-    circuit
-}
-
-fn qft3_circuit() -> Circuit {
-    let q0 = Qubit::new(0);
-    let q1 = Qubit::new(1);
-    let q2 = Qubit::new(2);
-    let mut circuit = Circuit::new(3);
-    circuit.h(q2).unwrap();
-    circuit.crz(q1, q2, std::f64::consts::FRAC_PI_2).unwrap();
-    circuit.h(q1).unwrap();
-    circuit.crz(q0, q2, std::f64::consts::FRAC_PI_4).unwrap();
-    circuit.crz(q0, q1, std::f64::consts::FRAC_PI_2).unwrap();
-    circuit.h(q0).unwrap();
-    circuit.swap(q0, q2).unwrap();
-    circuit
 }
 
 fn toffoli_circuit() -> Circuit {
@@ -489,6 +429,97 @@ fn compile_qft3_without_target_basis_preserves_unitary() {
 
     assert_compiled_matrix_equivalent(&result.circuit, &circuit);
     assert!(!contains_high_level_gate(&result.circuit));
+}
+
+#[test]
+fn compile_preserves_unitary_for_varied_logical_inputs() {
+    let mut controlled_rotation = Circuit::new(3);
+    controlled_rotation.h(Qubit::new(0)).unwrap();
+    controlled_rotation
+        .crx(Qubit::new(0), Qubit::new(1), 0.31)
+        .unwrap();
+    controlled_rotation
+        .cry(Qubit::new(1), Qubit::new(2), -0.27)
+        .unwrap();
+    controlled_rotation
+        .crz(Qubit::new(2), Qubit::new(0), 0.19)
+        .unwrap();
+
+    for circuit in [
+        bell_circuit(),
+        qft3_circuit(),
+        controlled_rotation,
+        toffoli_circuit(),
+        fsim_circuit(),
+    ] {
+        let result = compile_normal(&circuit);
+
+        assert_compiled_matrix_equivalent(&result.circuit, &circuit);
+        assert!(!contains_high_level_gate(&result.circuit));
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(64))]
+
+    #[test]
+    fn compile_preserves_unitary_for_generated_small_circuits(circuit in generated_small_matrix_circuit()) {
+        let result = compile_normal(&circuit);
+
+        assert_compiled_matrix_equivalent(&result.circuit, &circuit);
+        prop_assert!(!contains_high_level_gate(&result.circuit));
+    }
+
+    #[test]
+    fn compile_with_same_seed_is_deterministic_for_generated_routable_circuits(
+        circuit in generated_small_routable_circuit()
+    ) {
+        let basis = qcis_cz_basis();
+        let device = Device::line("property-line", 5)
+            .unwrap()
+            .with_native_gates(native_basis(&basis));
+        let config = CompileConfig {
+            mode: CompileMode::Enhanced,
+            target_basis: None,
+            device: Some(device),
+            resource_policy: ResourcePolicy::default(),
+            seed: Some(2026),
+        };
+
+        let first = compile(&circuit, config.clone()).unwrap();
+        let second = compile(&circuit, config).unwrap();
+
+        prop_assert_eq!(format!("{:?}", first.circuit), format!("{:?}", second.circuit));
+        prop_assert_eq!(first.changed, second.changed);
+        prop_assert_eq!(first.steps, second.steps);
+    }
+}
+
+#[test]
+fn compile_with_same_seed_is_deterministic() {
+    let circuit = dense_four_qubit_device_circuit();
+    let basis = qcis_cz_basis();
+    let device = Device::ring("deterministic-ring", 4)
+        .unwrap()
+        .with_native_gates(native_basis(&basis));
+    let config = CompileConfig {
+        mode: CompileMode::Enhanced,
+        target_basis: None,
+        device: Some(device),
+        resource_policy: ResourcePolicy::default(),
+        seed: Some(1234),
+    };
+
+    let first = compile(&circuit, config.clone()).unwrap();
+    let second = compile(&circuit, config).unwrap();
+
+    assert_eq!(
+        format!("{:?}", first.circuit),
+        format!("{:?}", second.circuit)
+    );
+    assert_eq!(first.changed, second.changed);
+    assert_eq!(first.mode, second.mode);
+    assert_eq!(first.steps, second.steps);
 }
 
 #[test]

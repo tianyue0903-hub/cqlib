@@ -457,7 +457,7 @@ fn best_route_quality(
 }
 
 fn is_perfect_layout(
-    analysis: &crate::compile::transform::layout::CircuitLayoutAnalysis,
+    analysis: &CircuitLayoutAnalysis,
     physical: &PhysicalLayoutGraph,
     layout: &Layout,
 ) -> bool {

@@ -17,12 +17,9 @@ use super::{
     phase::{decompose_phase_n_clean, decompose_phase_no_aux},
     rotation::{decompose_rotation_n_clean, decompose_rotation_no_aux},
 };
-use crate::circuit::{
-    Instruction, Parameter, ParameterValue, Qubit, StandardGate, operation::ValueOperation,
-};
+use crate::circuit::{Parameter, ParameterValue, Qubit, StandardGate, operation::ValueOperation};
 use crate::compile::error::CompilerError;
 use crate::util::qubit::find_duplicate_qubit;
-use smallvec::smallvec;
 
 const DECOMPOSE_FSIM_NAME: &str = "decompose.fsim";
 
@@ -138,12 +135,11 @@ fn decompose_fsim_with(
         )));
     }
     if controls.is_empty() {
-        return Ok(vec![ValueOperation {
-            instruction: Instruction::Standard(StandardGate::FSIM),
-            qubits: smallvec![first, second],
-            params: params.iter().cloned().collect(),
-            label: None,
-        }]);
+        return Ok(vec![ValueOperation::from_standard(
+            StandardGate::FSIM,
+            [first, second],
+            params.iter().cloned(),
+        )]);
     }
 
     let theta = &params[0];

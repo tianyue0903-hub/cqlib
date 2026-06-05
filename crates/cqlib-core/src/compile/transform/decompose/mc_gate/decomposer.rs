@@ -246,7 +246,10 @@ impl<'a> McGateDecomposer<'a> {
                 )))
             }
         };
-        let qubits = control_flow_qubits(&instruction, &self.target.qubits());
+        let qubits = match &instruction {
+            Instruction::ControlFlowGate(flow) => flow.ordered_qubits(&self.target.qubits()),
+            _ => SmallVec::new(),
+        };
         Ok(Operation {
             instruction,
             qubits,
@@ -303,12 +306,11 @@ impl<'a> McGateDecomposer<'a> {
         targets: &[Qubit],
     ) -> Result<Vec<ValueOperation>, CompilerError> {
         if controls.is_empty() {
-            return Ok(vec![ValueOperation {
-                instruction: Instruction::Standard(gate),
-                qubits: targets.iter().copied().collect(),
-                params: params.iter().cloned().collect(),
-                label: None,
-            }]);
+            return Ok(vec![ValueOperation::from_standard(
+                gate,
+                targets.iter().copied(),
+                params.iter().cloned(),
+            )]);
         }
 
         let excluded = controls
@@ -772,51 +774,5 @@ fn target_param_to_value(
                     "multi-controlled-gate decomposition produced missing target parameter index {index}"
                 ))
             }),
-    }
-}
-
-fn control_flow_qubits(
-    instruction: &Instruction,
-    circuit_qubits: &[Qubit],
-) -> SmallVec<[Qubit; 3]> {
-    let mut required = BTreeSet::new();
-    match instruction {
-        Instruction::ControlFlowGate(ControlFlow::IfElse(gate)) => {
-            required.insert(gate.condition().qubit);
-            collect_body_qubits(gate.true_body(), &mut required);
-            if let Some(false_body) = gate.false_body() {
-                collect_body_qubits(false_body, &mut required);
-            }
-        }
-        Instruction::ControlFlowGate(ControlFlow::WhileLoop(gate)) => {
-            required.insert(gate.condition().qubit);
-            collect_body_qubits(gate.body(), &mut required);
-        }
-        _ => {}
-    }
-    circuit_qubits
-        .iter()
-        .copied()
-        .filter(|qubit| required.contains(qubit))
-        .collect()
-}
-
-fn collect_body_qubits(operations: &[Operation], out: &mut BTreeSet<Qubit>) {
-    for operation in operations {
-        out.extend(operation.qubits.iter().copied());
-        match &operation.instruction {
-            Instruction::ControlFlowGate(ControlFlow::IfElse(gate)) => {
-                out.insert(gate.condition().qubit);
-                collect_body_qubits(gate.true_body(), out);
-                if let Some(false_body) = gate.false_body() {
-                    collect_body_qubits(false_body, out);
-                }
-            }
-            Instruction::ControlFlowGate(ControlFlow::WhileLoop(gate)) => {
-                out.insert(gate.condition().qubit);
-                collect_body_qubits(gate.body(), out);
-            }
-            _ => {}
-        }
     }
 }

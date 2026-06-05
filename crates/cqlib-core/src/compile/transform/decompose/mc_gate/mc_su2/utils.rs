@@ -13,25 +13,9 @@
 //! Shared MC-SU(2) synthesis helpers.
 
 use super::{DECOMPOSE_MC_SU2_NAME, Su2RotationAxis};
-use crate::circuit::{Instruction, ParameterValue, Qubit, StandardGate, operation::ValueOperation};
+use crate::circuit::{ParameterValue, Qubit, StandardGate};
 use crate::compile::error::CompilerError;
 use crate::util::qubit::find_duplicate_qubit;
-use smallvec::smallvec;
-
-/// Appends a single-parameter standard gate operation.
-pub(super) fn push_parameterized_gate(
-    operations: &mut Vec<ValueOperation>,
-    gate: StandardGate,
-    qubits: impl IntoIterator<Item = Qubit>,
-    theta: &ParameterValue,
-) {
-    operations.push(ValueOperation {
-        instruction: Instruction::Standard(gate),
-        qubits: qubits.into_iter().collect(),
-        params: smallvec![theta.clone()],
-        label: None,
-    });
-}
 
 /// Returns a scaled clone while preserving symbolic expressions.
 pub(super) fn scale_parameter(theta: &ParameterValue, factor: f64) -> ParameterValue {

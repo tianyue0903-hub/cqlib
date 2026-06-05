@@ -31,7 +31,6 @@
 
 use crate::circuit::{Qubit, StandardGate, operation::ValueOperation};
 use crate::compile::error::CompilerError;
-use crate::util::operation::push_standard_gate;
 use crate::util::qubit::find_duplicate_qubit;
 
 use super::{
@@ -254,11 +253,11 @@ fn append_linear_target_action(
     target: Qubit,
 ) {
     operations.extend(ladder.operations.iter().cloned());
-    push_standard_gate(
-        operations,
+    operations.push(ValueOperation::from_standard(
         StandardGate::CCX,
         [ancilla, ladder.final_control, target],
-    );
+        [],
+    ));
     operations.extend(inverse_ladder.iter().cloned());
 }
 
@@ -432,13 +431,11 @@ fn build_log_depth_middle_action(
     secondary_ancilla: Qubit,
 ) -> Result<Vec<ValueOperation>, CompilerError> {
     if let [remaining_control] = remaining_controls {
-        let mut operations = vec![];
-        push_standard_gate(
-            &mut operations,
+        return Ok(vec![ValueOperation::from_standard(
             StandardGate::CCX,
             [primary_ancilla, *remaining_control, target],
-        );
-        return Ok(operations);
+            [],
+        )]);
     }
 
     let mut middle_controls = Vec::with_capacity(remaining_controls.len() + 1);
@@ -510,11 +507,11 @@ pub(super) fn build_log_depth_ladder(
                 }
             } else {
                 for target_index in targets {
-                    push_standard_gate(
-                        &mut operations,
+                    operations.push(ValueOperation::from_standard(
                         StandardGate::X,
                         [ladder_qubits[*target_index]],
-                    );
+                        [],
+                    ));
                 }
                 for ((first_control, second_control), target_index) in
                     first_controls.iter().zip(second_controls).zip(targets)
@@ -564,7 +561,7 @@ fn append_conditional_workspace_step(
     target: Qubit,
 ) -> Result<(), CompilerError> {
     emit_relative_phase_toffoli(operations, first_control, second_control, target)?;
-    push_standard_gate(operations, StandardGate::X, [target]);
+    operations.push(ValueOperation::from_standard(StandardGate::X, [target], []));
     Ok(())
 }
 

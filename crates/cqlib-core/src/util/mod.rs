@@ -14,7 +14,6 @@
 
 pub mod aligned;
 pub mod matrix;
-pub mod operation;
 pub mod qubit;
 
 #[cfg(test)]

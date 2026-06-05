@@ -24,6 +24,13 @@ categories = [
     "science::physics",
     "data-structures"
 ]
+include = [
+    "src/**/*.rs",
+    "src/compile/knowledge/rule_dsl/*.rule",
+    "Cargo.toml",
+    "README.md",
+]
+
 
 [dependencies]
 approx.workspace = true
@@ -50,3 +57,6 @@ uuid.workspace = true
 
 [build-dependencies]
 lalrpop.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true

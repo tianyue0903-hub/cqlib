@@ -368,6 +368,29 @@ impl StandardGate {
         }
     }
 
+    /// Returns whether this gate is diagonal in the computational basis.
+    ///
+    /// Diagonal standard gates preserve computational basis states and only
+    /// change their phases. This is a structural property of the gate family,
+    /// independent of concrete parameter values.
+    pub fn is_diagonal(&self) -> bool {
+        matches!(
+            self,
+            Self::I
+                | Self::RZ
+                | Self::RZZ
+                | Self::S
+                | Self::SDG
+                | Self::T
+                | Self::TDG
+                | Self::Z
+                | Self::Phase
+                | Self::GPhase
+                | Self::CZ
+                | Self::CRZ
+        )
+    }
+
     /// Returns the number of control qubits defined for this gate.
     ///
     /// For example:

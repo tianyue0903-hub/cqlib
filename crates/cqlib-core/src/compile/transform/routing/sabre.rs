@@ -17,12 +17,11 @@
 //! [`crate::compile::sabre`]; this layer owns only the public transform result
 //! shape and the `route_sabre` API.
 
-use crate::circuit::{Circuit, CircuitGate, CircuitParam, ControlFlow, Instruction, Operation};
+use crate::circuit::Circuit;
 use crate::compile::CompilerError;
 use crate::compile::sabre::{SabreConfig, SabreRoutingDiagnostics, sabre_layout_and_route};
 use crate::compile::transform::layout::{LayoutObjective, LayoutScore};
 use crate::device::{Device, Layout, LogicalQubit, PhysicalQubit};
-use std::sync::Arc;
 
 /// Routed circuit and transform-level routing metadata.
 #[derive(Debug, Clone)]
@@ -107,110 +106,16 @@ fn routing_changed(
         return true;
     }
 
-    // A no-SWAP route can still change the representation when SABRE selected
-    // a non-identity initial layout: operations are emitted on physical qubit
-    // ids, so the qubit operands differ even without inserted SWAPs.
-    if !initial_layout_is_identity_for_input(input, initial_layout) {
+    // A no-SWAP route can still change the representation when SABRE selected a
+    // non-identity initial layout: operations are emitted on physical qubit ids.
+    if !input.qubits().into_iter().all(|qubit| {
+        initial_layout.get_physical(LogicalQubit::from_qubit(qubit))
+            == Some(PhysicalQubit::from_qubit(qubit))
+    }) {
         return true;
     }
 
-    // At this point the route claims no SWAPs, identity logical->physical
-    // layout, identical qubit list, and identical global phase. SABRE should
-    // therefore have preserved the ordinary operation representation as well.
-    debug_assert!(
-        operation_slices_equal(input.operations(), routed.operations()),
-        "SABRE reported identity no-swap routing but changed operations"
-    );
-    false
-}
-
-fn initial_layout_is_identity_for_input(input: &Circuit, layout: &Layout) -> bool {
-    input.qubits().into_iter().all(|qubit| {
-        layout.get_physical(LogicalQubit::from_qubit(qubit))
-            == Some(PhysicalQubit::from_qubit(qubit))
-    })
-}
-
-fn operation_slices_equal(lhs: &[Operation], rhs: &[Operation]) -> bool {
-    lhs.len() == rhs.len()
-        && lhs
-            .iter()
-            .zip(rhs)
-            .all(|(left, right)| operations_equal(left, right))
-}
-
-fn operations_equal(lhs: &Operation, rhs: &Operation) -> bool {
-    lhs.qubits == rhs.qubits
-        && params_equal(&lhs.params, &rhs.params)
-        && lhs.label == rhs.label
-        && instructions_equal(&lhs.instruction, &rhs.instruction)
-}
-
-fn params_equal(lhs: &[CircuitParam], rhs: &[CircuitParam]) -> bool {
-    lhs.len() == rhs.len()
-        && lhs
-            .iter()
-            .zip(rhs)
-            .all(|(left, right)| param_equal(left, right))
-}
-
-fn param_equal(lhs: &CircuitParam, rhs: &CircuitParam) -> bool {
-    match (lhs, rhs) {
-        (CircuitParam::Index(left), CircuitParam::Index(right)) => left == right,
-        (CircuitParam::Fixed(left), CircuitParam::Fixed(right)) => {
-            left.to_bits() == right.to_bits()
-        }
-        _ => false,
-    }
-}
-
-fn instructions_equal(lhs: &Instruction, rhs: &Instruction) -> bool {
-    match (lhs, rhs) {
-        (Instruction::Standard(left), Instruction::Standard(right)) => left == right,
-        (Instruction::McGate(left), Instruction::McGate(right)) => left == right,
-        (Instruction::UnitaryGate(left), Instruction::UnitaryGate(right)) => left == right,
-        (Instruction::CircuitGate(left), Instruction::CircuitGate(right)) => {
-            circuit_gates_equal(left, right)
-        }
-        (Instruction::Directive(left), Instruction::Directive(right)) => left == right,
-        (Instruction::ControlFlowGate(left), Instruction::ControlFlowGate(right)) => {
-            control_flows_equal(left, right)
-        }
-        (Instruction::Delay, Instruction::Delay) => true,
-        _ => false,
-    }
-}
-
-fn circuit_gates_equal(lhs: &CircuitGate, rhs: &CircuitGate) -> bool {
-    let lhs_circuit = lhs.circuit();
-    let rhs_circuit = rhs.circuit();
-    lhs.name() == rhs.name()
-        && lhs.num_qubits() == rhs.num_qubits()
-        && lhs.num_params() == rhs.num_params()
-        && Arc::ptr_eq(&lhs_circuit, &rhs_circuit)
-}
-
-fn control_flows_equal(lhs: &ControlFlow, rhs: &ControlFlow) -> bool {
-    match (lhs, rhs) {
-        (ControlFlow::IfElse(left), ControlFlow::IfElse(right)) => {
-            left.condition() == right.condition()
-                && operation_slices_equal(left.true_body(), right.true_body())
-                && optional_operation_slices_equal(left.false_body(), right.false_body())
-        }
-        (ControlFlow::WhileLoop(left), ControlFlow::WhileLoop(right)) => {
-            left.condition() == right.condition()
-                && operation_slices_equal(left.body(), right.body())
-        }
-        _ => false,
-    }
-}
-
-fn optional_operation_slices_equal(lhs: Option<&[Operation]>, rhs: Option<&[Operation]>) -> bool {
-    match (lhs, rhs) {
-        (Some(left), Some(right)) => operation_slices_equal(left, right),
-        (None, None) => true,
-        _ => false,
-    }
+    format!("{:?}", input.operations()) != format!("{:?}", routed.operations())
 }
 
 #[cfg(test)]

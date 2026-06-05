@@ -96,7 +96,6 @@ mod canonicalizer;
 mod config;
 mod equivalence;
 mod ops;
-mod params;
 mod verify;
 
 pub use canonicalizer::{CanonicalizeResult, Canonicalizer, canonicalize_circuit};

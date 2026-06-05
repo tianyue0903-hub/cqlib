@@ -152,7 +152,7 @@ fn test_swap_gate_has_dedicated_style() {
 #[test]
 fn test_unitary_gate_with_label() {
     let mut circuit = Circuit::new(2);
-    let unitary = crate::circuit::UnitaryGate::new("MY_UNITARY", 2);
+    let unitary = crate::circuit::UnitaryGate::new("MY_UNITARY", 2, 0);
     circuit.unitary(unitary, vec![q(0), q(1)]).unwrap();
 
     let visual = build_visual_circuit(&circuit, &VisualBuildOptions::default()).unwrap();
@@ -164,7 +164,7 @@ fn test_unitary_gate_with_label() {
 #[test]
 fn test_unitary_gate_fallback_to_default_label() {
     let mut circuit = Circuit::new(2);
-    let unitary = crate::circuit::UnitaryGate::new("", 2);
+    let unitary = crate::circuit::UnitaryGate::new("", 2, 0);
     circuit.unitary(unitary, vec![q(0), q(1)]).unwrap();
 
     let visual = build_visual_circuit(&circuit, &VisualBuildOptions::default()).unwrap();

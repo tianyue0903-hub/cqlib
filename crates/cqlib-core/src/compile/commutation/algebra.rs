@@ -268,27 +268,11 @@ fn standard_is_identity(gate: StandardGate, params: &[Parameter]) -> bool {
 /// Two diagonal operators commute exactly even when their parameters are
 /// symbolic.
 fn instruction_is_diagonal(instruction: &Instruction) -> bool {
-    let gate = match instruction {
-        Instruction::Standard(gate) => *gate,
-        Instruction::McGate(gate) => *gate.base_gate(),
-        _ => return false,
-    };
-
-    matches!(
-        gate,
-        StandardGate::I
-            | StandardGate::RZ
-            | StandardGate::RZZ
-            | StandardGate::S
-            | StandardGate::SDG
-            | StandardGate::T
-            | StandardGate::TDG
-            | StandardGate::Z
-            | StandardGate::Phase
-            | StandardGate::GPhase
-            | StandardGate::CZ
-            | StandardGate::CRZ
-    )
+    match instruction {
+        Instruction::Standard(gate) => gate.is_diagonal(),
+        Instruction::McGate(gate) => gate.base_gate().is_diagonal(),
+        _ => false,
+    }
 }
 
 /// Applies Pauli-string parity commutation to two axis operations.

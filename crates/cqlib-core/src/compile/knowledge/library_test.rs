@@ -13,7 +13,10 @@
 use super::*;
 use crate::circuit::{Instruction, MCGate, Parameter, ParameterValue, StandardGate};
 use crate::compile::knowledge::rule::{Condition, RuleItem};
+use crate::compile::knowledge::rule_dsl::dump::dump_rule_to_string;
+use crate::compile::knowledge::rule_dsl::load::load_rules_from_str;
 use smallvec::smallvec;
+use std::collections::{BTreeSet, HashSet};
 
 #[test]
 fn empty_library_can_be_created() {
@@ -853,4 +856,127 @@ fn builtin_rules_build_candidate_index() {
             .iter()
             .any(|&id| library.get(id).is_some_and(|rule| rule.name == "cancel_h"))
     );
+}
+
+#[test]
+fn builtin_rule_sources_parse_validate_and_have_unique_names() {
+    let mut seen = HashSet::new();
+    let mut total = 0usize;
+
+    for (source, _kind) in BUILTIN_RULE_SOURCES {
+        let rules = load_rules_from_str(source).unwrap();
+        assert!(!rules.is_empty());
+        for rule in rules {
+            rule.validate().unwrap();
+            assert!(
+                seen.insert(rule.name.clone()),
+                "duplicate builtin rule name {}",
+                rule.name
+            );
+            assert!(!rule.operations.is_empty(), "empty match in {}", rule.name);
+            total += 1;
+        }
+    }
+
+    assert_eq!(total, RuleLibrary::builtin_rules().unwrap().len());
+}
+
+#[test]
+fn builtin_rule_metadata_matches_rule_contents() {
+    let library = RuleLibrary::builtin_rules().unwrap();
+
+    for id in (0..library.len()).map(RuleId) {
+        let rule = library.get(id).unwrap();
+        let metadata = library.metadata(id).unwrap();
+        let qubit_count = rule
+            .operations
+            .iter()
+            .chain(&rule.target)
+            .flat_map(|item| item.qubits.iter().copied())
+            .collect::<BTreeSet<_>>()
+            .len();
+
+        assert_eq!(metadata.id, id);
+        assert_eq!(metadata.pattern_len, rule.operations.len(), "{}", rule.name);
+        assert_eq!(metadata.rewrite_len, rule.target.len(), "{}", rule.name);
+        assert_eq!(metadata.qubit_count, qubit_count, "{}", rule.name);
+        assert_eq!(
+            format!("{:?}", metadata.first_instruction),
+            format!("{:?}", rule.operations[0].instruction),
+            "{}",
+            rule.name
+        );
+        assert_eq!(
+            metadata.has_conditions,
+            rule.conditions
+                .as_ref()
+                .is_some_and(|conditions| !conditions.is_empty()),
+            "{}",
+            rule.name
+        );
+    }
+}
+
+#[test]
+fn builtin_rules_cover_required_rule_families() {
+    let library = RuleLibrary::builtin_rules().unwrap();
+
+    for kind in [
+        RuleKind::Canonicalize,
+        RuleKind::Cancel,
+        RuleKind::Merge,
+        RuleKind::Simplify,
+        RuleKind::Commute,
+        RuleKind::Decompose,
+    ] {
+        assert!(
+            !library.rules_by_kind(kind).is_empty(),
+            "missing builtin rules for {kind:?}"
+        );
+    }
+
+    for name in [
+        "decompose_mcz2_to_ccx",
+        "decompose_mcx3_to_parity_phase",
+        "decompose_u_to_zyz",
+        "decompose_u_to_xy_basis",
+        "decompose_fsim_to_rzz_phase",
+        "decompose_swap_to_cx",
+    ] {
+        assert!(library.get_by_name(name).is_some(), "missing {name}");
+    }
+}
+
+#[test]
+fn dumped_builtin_rules_load_back_to_equivalent_shape() {
+    let library = RuleLibrary::builtin_rules().unwrap();
+
+    for name in [
+        "cancel_h",
+        "merge_rz",
+        "comm_s_sdg",
+        "decompose_mcx3_to_parity_phase",
+        "decompose_u_to_zyz",
+        "decompose_swap_to_cx",
+    ] {
+        let rule = library.get_by_name(name).unwrap();
+        let source = dump_rule_to_string(rule);
+        let loaded = load_rules_from_str(&source).unwrap();
+
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].name, rule.name);
+        assert_eq!(loaded[0].operations.len(), rule.operations.len());
+        assert_eq!(loaded[0].target.len(), rule.target.len());
+        assert_eq!(
+            loaded[0]
+                .conditions
+                .as_ref()
+                .map(|conditions| conditions.len())
+                .unwrap_or(0),
+            rule.conditions
+                .as_ref()
+                .map(|conditions| conditions.len())
+                .unwrap_or(0)
+        );
+    }
 }

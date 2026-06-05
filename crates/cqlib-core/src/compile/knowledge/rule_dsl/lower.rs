@@ -184,7 +184,9 @@ struct LoweredGate {
 fn lower_gate_pattern(pattern: GatePattern) -> Result<LoweredGate, LowerError> {
     let display_name = pattern.gate.display_name();
     let instruction = lower_gate_spec(pattern.gate)?;
-    let (expected_qubits, expected_params) = instruction_arity(&instruction);
+    let (expected_qubits, expected_params) = instruction
+        .gate_arity()
+        .expect("rule DSL lowering emits only fixed-arity gates");
 
     if pattern.qubits.len() != expected_qubits {
         return Err(LowerError::WrongQubitCount {
@@ -228,14 +230,6 @@ fn lower_gate_spec(gate: GateSpec) -> Result<Instruction, LowerError> {
                 base_gate,
             ))))
         }
-    }
-}
-
-fn instruction_arity(instruction: &Instruction) -> (usize, usize) {
-    match instruction {
-        Instruction::Standard(gate) => (gate.num_qubits(), gate.num_params()),
-        Instruction::McGate(gate) => (gate.num_qubits(), gate.num_params()),
-        _ => unreachable!("rule DSL lowering emits only standard gates and MCGates"),
     }
 }
 

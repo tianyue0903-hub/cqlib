@@ -92,8 +92,15 @@ pub(super) fn synthesize_numeric_1q_unitary(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::circuit::gate::gate_matrix;
+    use crate::circuit::{StandardGate, gate::gate_matrix};
     use approx::assert_abs_diff_eq;
+
+    fn assert_reconstructs(source: &Array2<Complex64>) {
+        let ([theta, phi, lambda], global_phase) = synthesize_numeric_1q_unitary(source).unwrap();
+        let reconstructed =
+            gate_matrix::u_gate(theta, phi, lambda) * Complex64::from_polar(1.0, global_phase);
+        assert_abs_diff_eq!(source, &reconstructed, epsilon = 1e-10);
+    }
 
     #[test]
     fn numeric_synthesis_reconstructs_matrix() {
@@ -134,5 +141,62 @@ mod tests {
 
         let err = synthesize_numeric_1q_unitary(&matrix).unwrap_err();
         assert!(err.to_string().contains("not unitary"));
+    }
+
+    #[test]
+    fn reconstructs_identity_with_global_phase() {
+        let source =
+            Array2::eye(2).mapv(|value: Complex64| value * Complex64::from_polar(1.0, 0.73));
+
+        assert_reconstructs(&source);
+    }
+
+    #[test]
+    fn reconstructs_common_standard_gate_matrices() {
+        for matrix in [
+            StandardGate::I.matrix(&[]).unwrap().into_owned(),
+            StandardGate::X.matrix(&[]).unwrap().into_owned(),
+            StandardGate::Y.matrix(&[]).unwrap().into_owned(),
+            StandardGate::Z.matrix(&[]).unwrap().into_owned(),
+            StandardGate::H.matrix(&[]).unwrap().into_owned(),
+            StandardGate::S.matrix(&[]).unwrap().into_owned(),
+            StandardGate::SDG.matrix(&[]).unwrap().into_owned(),
+            StandardGate::T.matrix(&[]).unwrap().into_owned(),
+            StandardGate::TDG.matrix(&[]).unwrap().into_owned(),
+            StandardGate::RX.matrix(&[0.37]).unwrap().into_owned(),
+            StandardGate::RY.matrix(&[-0.91]).unwrap().into_owned(),
+            StandardGate::RZ.matrix(&[1.23]).unwrap().into_owned(),
+            StandardGate::Phase.matrix(&[-0.44]).unwrap().into_owned(),
+        ] {
+            assert_reconstructs(&matrix);
+        }
+    }
+
+    #[test]
+    fn reconstructs_u_gate_angle_grid_with_global_phase() {
+        for (theta, phi, lambda, phase) in [
+            (1.0e-12, 0.2, -0.3, 0.4),
+            (0.3, 0.0, 0.0, -0.5),
+            (1.2, -0.8, 0.6, 0.75),
+            (std::f64::consts::PI - 1.0e-12, 0.9, -1.1, -0.2),
+        ] {
+            let source =
+                gate_matrix::u_gate(theta, phi, lambda) * Complex64::from_polar(1.0, phase);
+            assert_reconstructs(&source);
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_shape_and_non_finite_elements() {
+        let bad_shape = Array2::<Complex64>::eye(3);
+        let err = synthesize_numeric_1q_unitary(&bad_shape).unwrap_err();
+        assert!(err.to_string().contains("expects a 2x2 matrix"));
+
+        let non_finite = ndarray::array![
+            [Complex64::new(f64::NAN, 0.0), Complex64::new(0.0, 0.0)],
+            [Complex64::new(0.0, 0.0), Complex64::new(1.0, 0.0)]
+        ];
+        let err = synthesize_numeric_1q_unitary(&non_finite).unwrap_err();
+        assert!(err.to_string().contains("non-finite element"));
     }
 }

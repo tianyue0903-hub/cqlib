@@ -33,13 +33,11 @@ use crate::circuit::{
     Circuit, CircuitParam, ControlFlow, Directive, Instruction, Operation, Parameter, StandardGate,
 };
 use crate::compile::CompilerError;
+use smallvec::SmallVec;
 use std::collections::{BTreeSet, HashSet};
 
 use super::config::CanonicalizeConfig;
-use super::ops::{
-    BarrierRelation, barrier_relation, canonical_control_flow_qubits_for_operation, is_strict_noop,
-};
-use super::params::{parameter_is_exact_zero, resolve_parameter};
+use super::ops::{BarrierRelation, barrier_relation, is_strict_noop};
 
 #[derive(Debug, Clone, Copy)]
 pub enum VerifyMode<'a> {
@@ -142,8 +140,7 @@ fn verify_operations(
                             "{op_scope} has malformed GPhase parameters"
                         )));
                     }
-                    if parameter_is_exact_zero(&resolve_parameter(circuit, &operation.params[0])?)?
-                    {
+                    if exact_zero(&circuit.resolve_parameter(&operation.params[0])?)? {
                         return Err(CompilerError::InvariantViolation(format!(
                             "{op_scope} contains zero GPhase"
                         )));
@@ -162,7 +159,7 @@ fn verify_operations(
             let params = operation
                 .params
                 .iter()
-                .map(|param| resolve_parameter(circuit, param))
+                .map(|param| circuit.resolve_parameter(param))
                 .collect::<Result<Vec<_>, _>>()?;
             if is_strict_noop(&operation.instruction, &params, &operation.qubits)? {
                 return Err(CompilerError::InvariantViolation(format!(
@@ -173,6 +170,12 @@ fn verify_operations(
     }
 
     Ok(())
+}
+
+fn exact_zero(param: &Parameter) -> Result<bool, CompilerError> {
+    param.is_exact_zero().map_err(|error| {
+        CompilerError::InvalidInput(format!("parameter cannot be evaluated: {error}"))
+    })
 }
 
 fn verify_no_duplicate_qubits(operation: &Operation, scope: &str) -> Result<(), CompilerError> {
@@ -196,43 +199,17 @@ fn verify_no_duplicate_qubits(operation: &Operation, scope: &str) -> Result<(), 
 }
 
 fn verify_instruction_arity(operation: &Operation, scope: &str) -> Result<(), CompilerError> {
+    if let Some((expected_qubits, expected_params)) = operation.instruction.gate_arity() {
+        return verify_fixed_arity(
+            expected_qubits,
+            operation.qubits.len(),
+            expected_params,
+            operation.params.len(),
+            scope,
+        );
+    }
+
     match &operation.instruction {
-        Instruction::Standard(gate) => {
-            verify_fixed_arity(
-                gate.num_qubits(),
-                operation.qubits.len(),
-                gate.num_params(),
-                operation.params.len(),
-                scope,
-            )?;
-        }
-        Instruction::McGate(gate) => {
-            verify_fixed_arity(
-                gate.num_qubits(),
-                operation.qubits.len(),
-                gate.num_params(),
-                operation.params.len(),
-                scope,
-            )?;
-        }
-        Instruction::UnitaryGate(gate) => {
-            verify_fixed_arity(
-                gate.num_qubits() as usize,
-                operation.qubits.len(),
-                gate.num_params() as usize,
-                operation.params.len(),
-                scope,
-            )?;
-        }
-        Instruction::CircuitGate(gate) => {
-            verify_fixed_arity(
-                gate.num_qubits(),
-                operation.qubits.len(),
-                gate.num_params(),
-                operation.params.len(),
-                scope,
-            )?;
-        }
         Instruction::Directive(Directive::Barrier) => {
             if !operation.params.is_empty() {
                 return Err(CompilerError::InvalidInput(format!(
@@ -240,12 +217,6 @@ fn verify_instruction_arity(operation: &Operation, scope: &str) -> Result<(), Co
                     operation.params.len()
                 )));
             }
-        }
-        Instruction::Directive(Directive::Measure | Directive::Reset) => {
-            verify_fixed_arity(1, operation.qubits.len(), 0, operation.params.len(), scope)?;
-        }
-        Instruction::Delay => {
-            verify_fixed_arity(1, operation.qubits.len(), 1, operation.params.len(), scope)?;
         }
         Instruction::ControlFlowGate(_) => {
             if !operation.params.is_empty() {
@@ -255,6 +226,7 @@ fn verify_instruction_arity(operation: &Operation, scope: &str) -> Result<(), Co
                 )));
             }
         }
+        _ => unreachable!("fixed-arity instructions are handled by Instruction::gate_arity"),
     }
     Ok(())
 }
@@ -326,8 +298,10 @@ fn verify_control_flow_qubits(
     mode: VerifyMode<'_>,
     scope: &str,
 ) -> Result<(), CompilerError> {
-    let expected =
-        canonical_control_flow_qubits_for_operation(&operation.instruction, &circuit.qubits());
+    let expected = match &operation.instruction {
+        Instruction::ControlFlowGate(flow) => flow.ordered_qubits(&circuit.qubits()),
+        _ => SmallVec::new(),
+    };
     match mode {
         VerifyMode::Input => {
             for qubit in &expected {

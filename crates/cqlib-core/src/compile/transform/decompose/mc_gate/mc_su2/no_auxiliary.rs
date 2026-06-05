@@ -22,14 +22,12 @@
 use super::{
     Su2RotationAxis,
     utils::{
-        push_parameterized_gate, scale_parameter, standard_controlled_rotation, standard_rotation,
-        validate_distinct_qubits,
+        scale_parameter, standard_controlled_rotation, standard_rotation, validate_distinct_qubits,
     },
 };
 use crate::circuit::{ParameterValue, Qubit, StandardGate, operation::ValueOperation};
 use crate::compile::error::CompilerError;
 use crate::compile::transform::decompose::mc_gate::mcx::decompose_mcx_n_dirty;
-use crate::util::operation::push_standard_gate;
 
 /// Decomposes a multi-controlled single-qubit rotation without ancillary
 /// qubits.
@@ -57,19 +55,18 @@ pub fn decompose_mc_su2_no_aux(
 
     match controls {
         [] => {
-            let mut operations = vec![];
-            push_parameterized_gate(&mut operations, standard_rotation(axis), [target], theta);
-            return Ok(operations);
+            return Ok(vec![ValueOperation::from_standard(
+                standard_rotation(axis),
+                [target],
+                [theta.clone()],
+            )]);
         }
         [control] => {
-            let mut operations = vec![];
-            push_parameterized_gate(
-                &mut operations,
+            return Ok(vec![ValueOperation::from_standard(
                 standard_controlled_rotation(axis),
                 [*control, target],
-                theta,
-            );
-            return Ok(operations);
+                [theta.clone()],
+            )]);
         }
         _ => {}
     }
@@ -87,26 +84,24 @@ pub fn decompose_mc_su2_no_aux(
     let mut operations = Vec::with_capacity(2 * (first_mcx.len() + second_mcx.len()) + 6);
 
     if axis == Su2RotationAxis::X {
-        push_standard_gate(&mut operations, StandardGate::H, [target]);
+        operations.push(ValueOperation::from_standard(StandardGate::H, [target], []));
     }
     for _ in 0..2 {
         operations.extend(first_mcx.iter().cloned());
-        push_parameterized_gate(
-            &mut operations,
+        operations.push(ValueOperation::from_standard(
             inner_rotation,
             [target],
-            &negative_quarter_theta,
-        );
+            [negative_quarter_theta.clone()],
+        ));
         operations.extend(second_mcx.iter().cloned());
-        push_parameterized_gate(
-            &mut operations,
+        operations.push(ValueOperation::from_standard(
             inner_rotation,
             [target],
-            &positive_quarter_theta,
-        );
+            [positive_quarter_theta.clone()],
+        ));
     }
     if axis == Su2RotationAxis::X {
-        push_standard_gate(&mut operations, StandardGate::H, [target]);
+        operations.push(ValueOperation::from_standard(StandardGate::H, [target], []));
     }
 
     Ok(operations)

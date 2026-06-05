@@ -17,8 +17,8 @@
 //! unitaries or lower standard gates to a target basis.
 
 use crate::circuit::{
-    Circuit, CircuitParam, ControlFlow, IfElseGate, Instruction, Operation, Parameter,
-    ParameterValue, Qubit, StandardGate, WhileLoopGate,
+    Circuit, CircuitParam, ControlFlow, IfElseGate, Instruction, Operation, Parameter, Qubit,
+    StandardGate, WhileLoopGate,
 };
 use crate::compile::CompilerError;
 use smallvec::{SmallVec, smallvec};
@@ -61,7 +61,6 @@ struct DefinitionExpander<'a> {
     source: &'a Circuit,
     target: Circuit,
     top_phase: Parameter,
-    parameter_cache: HashMap<Parameter, CircuitParam>,
 }
 
 impl<'a> DefinitionExpander<'a> {
@@ -70,7 +69,6 @@ impl<'a> DefinitionExpander<'a> {
             source,
             target: Circuit::from_qubits(source.qubits())?,
             top_phase: source.global_phase(),
-            parameter_cache: HashMap::new(),
         })
     }
 
@@ -316,7 +314,7 @@ impl<'a> DefinitionExpander<'a> {
         }
 
         if !phase.is_zero() {
-            let param = self.intern_parameter(phase);
+            let param = self.intern_parameter(phase)?;
             operations.insert(
                 0,
                 Operation {
@@ -343,7 +341,7 @@ impl<'a> DefinitionExpander<'a> {
             .resolve_params(context, &operation.params, symbol_bindings)?
             .into_iter()
             .map(|param| self.intern_parameter(param))
-            .collect();
+            .collect::<Result<SmallVec<[CircuitParam; 1]>, _>>()?;
 
         operations.push(Operation {
             instruction: operation.instruction.clone(),
@@ -363,30 +361,21 @@ impl<'a> DefinitionExpander<'a> {
         params
             .iter()
             .map(|param| {
-                let resolved = resolve_param(context, param)?;
+                let resolved = context.resolve_parameter(param)?;
                 Ok(apply_symbol_bindings(resolved, symbol_bindings))
             })
             .collect()
     }
 
-    fn intern_parameter(&mut self, parameter: Parameter) -> CircuitParam {
-        if let Ok(value) = parameter.evaluate(&None) {
-            CircuitParam::Fixed(if value == 0.0 { 0.0 } else { value })
-        } else if let Some(cached) = self.parameter_cache.get(&parameter) {
-            cached.clone()
-        } else {
-            let (index, _) = self.target.add_parameter(parameter.clone());
-            let param = CircuitParam::Index(index as u32);
-            self.parameter_cache.insert(parameter, param.clone());
-            param
-        }
+    fn intern_parameter(&mut self, parameter: Parameter) -> Result<CircuitParam, CompilerError> {
+        Ok(self.target.map_param(parameter)?)
     }
 
     fn append_top_level(&mut self, operation: Operation) -> Result<(), CompilerError> {
         let params = operation
             .params
             .iter()
-            .map(|param| circuit_param_to_value(&self.target, param))
+            .map(|param| self.target.parameter_value(param))
             .collect::<Result<Vec<_>, _>>()?;
 
         self.target.append(
@@ -402,43 +391,6 @@ impl<'a> DefinitionExpander<'a> {
 enum QubitMap<'a> {
     Identity,
     Mapped(&'a HashMap<Qubit, Qubit>),
-}
-
-fn resolve_param(circuit: &Circuit, param: &CircuitParam) -> Result<Parameter, CompilerError> {
-    match param {
-        CircuitParam::Fixed(value) => {
-            if !value.is_finite() {
-                return Err(CompilerError::InvalidInput(format!(
-                    "non-finite fixed parameter {value}"
-                )));
-            }
-            Ok(Parameter::from(*value))
-        }
-        CircuitParam::Index(index) => circuit
-            .parameters()
-            .get_index(*index as usize)
-            .cloned()
-            .ok_or_else(|| CompilerError::InvalidInput(format!("missing parameter index {index}"))),
-    }
-}
-
-fn circuit_param_to_value(
-    circuit: &Circuit,
-    param: &CircuitParam,
-) -> Result<ParameterValue, CompilerError> {
-    match param {
-        CircuitParam::Fixed(value) => Ok(ParameterValue::Fixed(*value)),
-        CircuitParam::Index(index) => circuit
-            .parameters()
-            .get_index(*index as usize)
-            .cloned()
-            .map(ParameterValue::Param)
-            .ok_or_else(|| {
-                CompilerError::InvariantViolation(format!(
-                    "definition expansion produced missing parameter index {index}"
-                ))
-            }),
-    }
 }
 
 fn map_qubits(
@@ -519,6 +471,7 @@ fn fresh_temp_symbol(index: usize, symbol: &str, occupied: &mut HashSet<String>)
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::circuit::ParameterValue;
     use crate::circuit::gate::{FrozenCircuit, UnitaryGate};
     use ndarray::array;
     use num_complex::Complex;

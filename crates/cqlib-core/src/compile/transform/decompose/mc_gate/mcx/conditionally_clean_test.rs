@@ -22,13 +22,10 @@ use crate::circuit::{
 };
 use crate::compile::error::CompilerError;
 use crate::qis::Statevector;
-use crate::util::{
-    operation::push_standard_gate,
-    test_utils::{
-        assert_statevectors_equal_up_to_global_phase, assert_value_operations_equal,
-        assert_value_operations_only_use_qubits, circuit_from_value_operations,
-        single_nonzero_matrix_output, statevector_after_value_operations,
-    },
+use crate::util::test_utils::{
+    assert_statevectors_equal_up_to_global_phase, assert_value_operations_equal,
+    assert_value_operations_only_use_qubits, circuit_from_value_operations,
+    single_nonzero_matrix_output, statevector_after_value_operations,
 };
 use num_complex::Complex64;
 use std::collections::{BTreeMap, HashMap};
@@ -443,7 +440,7 @@ fn append_expected_workspace_step(
     target: Qubit,
 ) {
     emit_relative_phase_toffoli(operations, first_control, second_control, target).unwrap();
-    push_standard_gate(operations, StandardGate::X, [target]);
+    operations.push(ValueOperation::from_standard(StandardGate::X, [target], []));
 }
 
 #[test]

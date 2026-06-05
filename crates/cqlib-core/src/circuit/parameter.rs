@@ -271,6 +271,58 @@ impl Parameter {
         Ok(Self { expr })
     }
 
+    /// Returns the canonical storage form of this parameter expression.
+    ///
+    /// The parameter is first simplified. If the simplified expression has no
+    /// free symbols, it is evaluated to a concrete finite value and rebuilt as
+    /// a numeric parameter. This also normalizes `-0.0` to `0.0`, giving circuit
+    /// operation storage a stable representation for equivalent constants.
+    ///
+    /// Symbolic expressions are returned in their simplified form. This method
+    /// does not intern symbolic parameters into any circuit; use
+    /// [`Circuit::map_param`](crate::circuit::Circuit::map_param) when a
+    /// [`CircuitParam`](crate::circuit::CircuitParam) is needed for operation
+    /// storage.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParameterError`] if simplification fails, a constant expression
+    /// cannot be evaluated, or the evaluated constant is not finite.
+    pub fn canonicalized(&self) -> Result<Self, ParameterError> {
+        let simplified = self.simplify()?;
+
+        if simplified.get_symbols().is_empty() {
+            let value = simplified.evaluate(&None)?;
+            if !value.is_finite() {
+                return Err(ParameterError::DomainError(format!(
+                    "constant parameter evaluates to non-finite value {value}"
+                )));
+            }
+            let value = if value == 0.0 { 0.0 } else { value };
+            Ok(Parameter::from(value))
+        } else {
+            Ok(simplified)
+        }
+    }
+
+    /// Returns whether this parameter is exactly the numeric constant `0.0`.
+    ///
+    /// This is stricter than [`Parameter::is_zero`]: symbolic parameters return
+    /// `false`, and constants are compared exactly after evaluation rather than
+    /// with an epsilon tolerance. Compiler canonicalization uses this predicate
+    /// when deciding whether a no-op is represented exactly as zero.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParameterError`] if a constant parameter cannot be evaluated.
+    pub fn is_exact_zero(&self) -> Result<bool, ParameterError> {
+        if self.get_symbols().is_empty() {
+            Ok(self.evaluate(&None)? == 0.0)
+        } else {
+            Ok(false)
+        }
+    }
+
     /// Computes the symbolic partial derivative of this expression with
     /// respect to the variable `var`.
     ///

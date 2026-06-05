@@ -160,6 +160,71 @@ fn from_operations_rejects_unknown_operation_qubits() {
 }
 
 #[test]
+fn map_param_keeps_constants_out_of_parameter_table() {
+    let mut circuit = Circuit::new(1);
+
+    let param = circuit
+        .map_param(Parameter::from(-0.0))
+        .expect("constant parameter should map");
+
+    assert!(matches!(
+        param,
+        CircuitParam::Fixed(value) if value.to_bits() == 0.0f64.to_bits()
+    ));
+    assert!(circuit.parameters().is_empty());
+}
+
+#[test]
+fn map_param_interns_symbolic_parameters() {
+    let mut circuit = Circuit::new(1);
+    let theta = Parameter::symbol("theta");
+
+    let first = circuit
+        .map_param(theta.clone())
+        .expect("symbolic parameter should map");
+    let second = circuit
+        .map_param(theta.clone())
+        .expect("symbolic parameter should map");
+
+    assert!(matches!(first, CircuitParam::Index(0)));
+    assert!(matches!(second, CircuitParam::Index(0)));
+    assert_eq!(circuit.parameters().len(), 1);
+    assert!(circuit.parameters().contains(&theta));
+    assert!(circuit.symbols().contains("theta"));
+}
+
+#[test]
+fn resolve_parameter_and_parameter_value_report_missing_index() {
+    let circuit = Circuit::new(1);
+    let missing = CircuitParam::Index(3);
+
+    assert!(matches!(
+        circuit.resolve_parameter(&missing),
+        Err(CircuitError::InvalidParameterIndex(3))
+    ));
+    assert!(matches!(
+        circuit.parameter_value(&missing),
+        Err(CircuitError::InvalidParameterIndex(3))
+    ));
+}
+
+#[test]
+fn parameter_value_resolves_fixed_and_indexed_values() {
+    let mut circuit = Circuit::new(1);
+    let theta = Parameter::symbol("theta");
+    let indexed = circuit.map_param(theta.clone()).unwrap();
+
+    assert!(matches!(
+        circuit.parameter_value(&CircuitParam::Fixed(0.5)).unwrap(),
+        ParameterValue::Fixed(value) if value.to_bits() == 0.5f64.to_bits()
+    ));
+    assert!(matches!(
+        circuit.parameter_value(&indexed).unwrap(),
+        ParameterValue::Param(param) if param == theta
+    ));
+}
+
+#[test]
 fn test_multi_control_logic() {
     let mut circuit = Circuit::new(4);
     let q0 = Qubit::new(0);

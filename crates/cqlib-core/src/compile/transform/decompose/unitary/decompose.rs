@@ -529,6 +529,33 @@ mod tests {
     }
 
     #[test]
+    fn accumulates_top_level_synthesized_global_phase() {
+        let phase = 0.62;
+        let matrix = StandardGate::X
+            .matrix(&[])
+            .unwrap()
+            .into_owned()
+            .mapv(|value| Complex64::from_polar(1.0, phase) * value);
+        let gate = UnitaryGate::new("phase_x", 1, 0)
+            .with_matrix(matrix)
+            .unwrap();
+        let mut circuit = Circuit::new(1);
+        circuit.set_global_phase(Parameter::from(0.13));
+        circuit.unitary(gate, vec![Qubit::new(0)]).unwrap();
+
+        let before = circuit_to_matrix(&circuit, None).unwrap();
+        let decomposed = decompose_unitaries(&circuit, UnitaryDecomposeConfig::default()).unwrap();
+        let after = circuit_to_matrix(&decomposed, None).unwrap();
+
+        assert!(decomposed.operations().iter().all(|operation| matches!(
+            operation.instruction,
+            Instruction::Standard(StandardGate::U)
+        )));
+        assert!(decomposed.global_phase().evaluate(&None).unwrap().abs() > 0.1);
+        assert_abs_diff_eq!(before, after, epsilon = 1e-8);
+    }
+
+    #[test]
     fn decomposes_numeric_2q_unitary_gate_with_pauli_backend() {
         let matrix = StandardGate::FSIM
             .matrix(&[0.2, -0.3])
@@ -924,6 +951,39 @@ mod tests {
                 .contains("parameter 0 must be fixed numeric")
         );
         assert!(err.to_string().contains("unresolved symbols: alpha"));
+    }
+
+    #[test]
+    fn rejects_unitary_gate_without_matrix_representation() {
+        let gate = UnitaryGate::new("opaque", 1, 0);
+        let mut circuit = Circuit::new(1);
+        circuit.unitary(gate, vec![Qubit::new(0)]).unwrap();
+
+        let err = decompose_unitaries(&circuit, UnitaryDecomposeConfig::default()).unwrap_err();
+
+        assert!(matches!(err, CompilerError::TransformFailed { .. }));
+        assert!(err.to_string().contains("no matrix representation"));
+    }
+
+    #[test]
+    fn rejects_non_finite_unitary_parameter() {
+        let theta = Parameter::symbol("theta");
+        let matrix: SymbolicMatrix = array![
+            [SymbolicComplex::one(), SymbolicComplex::zero()],
+            [SymbolicComplex::zero(), SymbolicComplex::exp_i(theta)]
+        ];
+        let gate = UnitaryGate::new("parameterized_phase", 1, 1)
+            .with_symbolic_matrix(["theta"], matrix)
+            .unwrap();
+        let mut circuit = Circuit::new(1);
+        circuit
+            .unitary_with_params(gate, vec![Qubit::new(0)], vec![f64::NAN.into()])
+            .unwrap();
+
+        let err = decompose_unitaries(&circuit, UnitaryDecomposeConfig::default()).unwrap_err();
+
+        assert!(matches!(err, CompilerError::InvalidInput(_)));
+        assert!(err.to_string().contains("non-finite") || err.to_string().contains("NaN"));
     }
 
     #[test]

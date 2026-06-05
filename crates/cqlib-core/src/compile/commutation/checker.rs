@@ -171,10 +171,10 @@ impl CommutationChecker {
         rhs_qubits: &[Qubit],
         rhs_params: &[Parameter],
     ) -> CommutationResult {
-        let Some((lhs_expected_qubits, lhs_expected_params)) = instruction_arity(lhs_inst) else {
+        let Some((lhs_expected_qubits, lhs_expected_params)) = lhs_inst.gate_arity() else {
             return None;
         };
-        let Some((rhs_expected_qubits, rhs_expected_params)) = instruction_arity(rhs_inst) else {
+        let Some((rhs_expected_qubits, rhs_expected_params)) = rhs_inst.gate_arity() else {
             return None;
         };
         if lhs_qubits.len() != lhs_expected_qubits
@@ -236,23 +236,6 @@ impl CommutationChecker {
         }
 
         None
-    }
-}
-
-/// Returns the `(qubit_count, parameter_count)` expected by a commutation query.
-///
-/// Only concrete gate-like instructions have a stable arity here.  Runtime
-/// directives and control-flow operations are deliberately excluded because
-/// reordering them requires pass-specific semantics.
-fn instruction_arity(instruction: &Instruction) -> Option<(usize, usize)> {
-    match instruction {
-        Instruction::Standard(gate) => Some((gate.num_qubits(), gate.num_params())),
-        Instruction::McGate(gate) => Some((gate.num_qubits(), gate.num_params())),
-        Instruction::UnitaryGate(gate) => {
-            Some((gate.num_qubits() as usize, gate.num_params() as usize))
-        }
-        Instruction::CircuitGate(gate) => Some((gate.num_qubits(), gate.num_params())),
-        Instruction::Directive(_) | Instruction::Delay | Instruction::ControlFlowGate(_) => None,
     }
 }
 

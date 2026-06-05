@@ -28,7 +28,6 @@ use super::{
 };
 use crate::circuit::{ParameterValue, Qubit, StandardGate, operation::ValueOperation};
 use crate::compile::error::CompilerError;
-use crate::util::operation::push_standard_gate;
 use std::f64::consts::PI;
 
 /// Decomposes a multi-controlled Hadamard gate without ancillary qubits.
@@ -107,7 +106,7 @@ fn decompose_hadamard_with(
 ) -> Result<Vec<ValueOperation>, CompilerError> {
     if controls.is_empty() {
         let mut operations = vec![];
-        push_standard_gate(&mut operations, StandardGate::H, [target]);
+        operations.push(ValueOperation::from_standard(StandardGate::H, [target], []));
         return Ok(operations);
     }
 
