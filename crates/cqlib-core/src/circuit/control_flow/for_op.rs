@@ -1,0 +1,178 @@
+// This code is part of Cqlib.
+//
+// (C) Copyright China Telecom Quantum Group 2026
+//
+// This code is licensed under the Apache License, Version 2.0. You may
+// obtain a copy of this license in the LICENSE.txt file in the root directory
+// of this source tree or at http://www.apache.org/licenses/LICENSE-2.0.
+//
+// Any modifications or derivative works of this code must retain this
+// copyright notice, and modified files need to carry a notice indicating
+// that they have been altered from the originals.
+
+use super::{ClassicalExpr, ControlBody};
+use crate::circuit::{CircuitError, ClassicalType, ClassicalVar, Qubit};
+use std::collections::BTreeSet;
+
+/// Unsigned runtime range loop with half-open `[start, stop)` semantics.
+#[derive(Debug, Clone)]
+pub struct ForOp {
+    var: ClassicalVar,
+    start: ClassicalExpr,
+    stop: ClassicalExpr,
+    step: ClassicalExpr,
+    body: ControlBody,
+}
+
+impl ForOp {
+    /// Creates an unsigned runtime range loop.
+    pub fn new(
+        var: ClassicalVar,
+        start: ClassicalExpr,
+        stop: ClassicalExpr,
+        step: ClassicalExpr,
+        body: ControlBody,
+    ) -> Result<Self, CircuitError> {
+        if !matches!(var.ty(), ClassicalType::UInt(_)) {
+            return Err(CircuitError::InvalidOperation(format!(
+                "for loop variable must be UInt, got {:?}",
+                var.ty()
+            )));
+        }
+        if start.ty() != var.ty() {
+            return Err(CircuitError::InvalidOperation(format!(
+                "for start type must match loop variable {:?}, got {:?}",
+                var.ty(),
+                start.ty()
+            )));
+        }
+        if stop.ty() != var.ty() {
+            return Err(CircuitError::InvalidOperation(format!(
+                "for stop type must match loop variable {:?}, got {:?}",
+                var.ty(),
+                stop.ty()
+            )));
+        }
+        if step.ty() != var.ty() {
+            return Err(CircuitError::InvalidOperation(format!(
+                "for step type must match loop variable {:?}, got {:?}",
+                var.ty(),
+                step.ty()
+            )));
+        }
+
+        Ok(Self {
+            var,
+            start,
+            stop,
+            step,
+            body,
+        })
+    }
+
+    pub fn var(&self) -> ClassicalVar {
+        self.var
+    }
+
+    pub fn start(&self) -> &ClassicalExpr {
+        &self.start
+    }
+
+    pub fn stop(&self) -> &ClassicalExpr {
+        &self.stop
+    }
+
+    pub fn step(&self) -> &ClassicalExpr {
+        &self.step
+    }
+
+    pub fn body(&self) -> &ControlBody {
+        &self.body
+    }
+
+    pub fn classical_reads(&self) -> BTreeSet<ClassicalVar> {
+        let mut vars = self.start.vars();
+        vars.extend(self.stop.vars());
+        vars.extend(self.step.vars());
+        vars
+    }
+
+    pub fn classical_writes(&self) -> BTreeSet<ClassicalVar> {
+        let mut vars = BTreeSet::new();
+        vars.insert(self.var);
+        vars
+    }
+
+    pub fn used_qubits(&self) -> BTreeSet<Qubit> {
+        self.body.used_qubits()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ForOp;
+    use crate::circuit::{ClassicalExpr, ClassicalType, ClassicalVar, ControlBody};
+
+    #[test]
+    fn for_requires_matching_uint_types() {
+        let var = ClassicalVar::new(0, ClassicalType::uint(8).unwrap());
+        assert!(
+            ForOp::new(
+                var,
+                ClassicalExpr::uint_literal(8, 0).unwrap(),
+                ClassicalExpr::uint_literal(8, 10).unwrap(),
+                ClassicalExpr::uint_literal(8, 1).unwrap(),
+                ControlBody::new(vec![]),
+            )
+            .is_ok()
+        );
+
+        assert!(
+            ForOp::new(
+                ClassicalVar::new(1, ClassicalType::Bit),
+                ClassicalExpr::uint_literal(8, 0).unwrap(),
+                ClassicalExpr::uint_literal(8, 10).unwrap(),
+                ClassicalExpr::uint_literal(8, 1).unwrap(),
+                ControlBody::new(vec![]),
+            )
+            .is_err()
+        );
+
+        assert!(
+            ForOp::new(
+                var,
+                ClassicalExpr::uint_literal(4, 0).unwrap(),
+                ClassicalExpr::uint_literal(8, 10).unwrap(),
+                ClassicalExpr::uint_literal(8, 1).unwrap(),
+                ControlBody::new(vec![]),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn for_reports_range_reads_and_loop_variable_write() {
+        let var = ClassicalVar::new(0, ClassicalType::uint(8).unwrap());
+        let start_var = ClassicalVar::new(1, ClassicalType::uint(8).unwrap());
+        let stop_var = ClassicalVar::new(2, ClassicalType::uint(8).unwrap());
+        let step_var = ClassicalVar::new(3, ClassicalType::uint(8).unwrap());
+        let op = ForOp::new(
+            var,
+            ClassicalExpr::var(start_var),
+            ClassicalExpr::var(stop_var),
+            ClassicalExpr::var(step_var),
+            ControlBody::new(vec![]),
+        )
+        .unwrap();
+
+        let reads = op.classical_reads();
+        assert_eq!(reads.len(), 3);
+        assert!(reads.contains(&start_var));
+        assert!(reads.contains(&stop_var));
+        assert!(reads.contains(&step_var));
+        assert_eq!(
+            op.classical_writes().into_iter().collect::<Vec<_>>(),
+            vec![var]
+        );
+    }
+}

@@ -1,0 +1,155 @@
+// This code is part of Cqlib.
+//
+// (C) Copyright China Telecom Quantum Group 2026
+//
+// This code is licensed under the Apache License, Version 2.0. You may
+// obtain a copy of this license in the LICENSE.txt file in the root directory
+// of this source tree or at http://www.apache.org/licenses/LICENSE-2.0.
+//
+// Any modifications or derivative works of this code must retain this
+// copyright notice, and modified files need to carry a notice indicating
+// that they have been altered from the originals.
+
+use super::{ClassicalExpr, ControlBody};
+use crate::circuit::{CircuitError, ClassicalType, ClassicalVar, Qubit};
+use std::collections::BTreeSet;
+
+/// Exact-value switch case.
+#[derive(Debug, Clone)]
+pub struct SwitchCase {
+    value: u128,
+    body: ControlBody,
+}
+
+impl SwitchCase {
+    pub fn new(value: u128, body: ControlBody) -> Self {
+        Self { value, body }
+    }
+
+    pub fn value(&self) -> u128 {
+        self.value
+    }
+
+    pub fn body(&self) -> &ControlBody {
+        &self.body
+    }
+}
+
+/// Exact-value switch over an unsigned classical expression.
+#[derive(Debug, Clone)]
+pub struct SwitchOp {
+    target: ClassicalExpr,
+    cases: Box<[SwitchCase]>,
+    default: Option<ControlBody>,
+}
+
+impl SwitchOp {
+    /// Creates a switch without fallthrough.
+    pub fn new(
+        target: ClassicalExpr,
+        cases: Vec<SwitchCase>,
+        default: Option<ControlBody>,
+    ) -> Result<Self, CircuitError> {
+        let width = match target.ty() {
+            ClassicalType::UInt(width) => width.get(),
+            ty => {
+                return Err(CircuitError::InvalidOperation(format!(
+                    "switch target must be UInt, got {ty:?}"
+                )));
+            }
+        };
+
+        let mut values = BTreeSet::new();
+        for case in &cases {
+            if width < 128 && case.value >= (1u128 << width) {
+                return Err(CircuitError::InvalidOperation(format!(
+                    "switch case value {} does not fit in target width {width}",
+                    case.value
+                )));
+            }
+            if !values.insert(case.value) {
+                return Err(CircuitError::InvalidOperation(format!(
+                    "duplicate switch case value {}",
+                    case.value
+                )));
+            }
+        }
+
+        Ok(Self {
+            target,
+            cases: cases.into_boxed_slice(),
+            default,
+        })
+    }
+
+    pub fn target(&self) -> &ClassicalExpr {
+        &self.target
+    }
+
+    pub fn cases(&self) -> &[SwitchCase] {
+        &self.cases
+    }
+
+    pub fn default(&self) -> Option<&ControlBody> {
+        self.default.as_ref()
+    }
+
+    pub fn classical_reads(&self) -> BTreeSet<ClassicalVar> {
+        self.target.vars()
+    }
+
+    pub fn used_qubits(&self) -> BTreeSet<Qubit> {
+        let mut qubits = BTreeSet::new();
+        for case in self.cases.iter() {
+            qubits.extend(case.body.used_qubits());
+        }
+        if let Some(default) = &self.default {
+            qubits.extend(default.used_qubits());
+        }
+        qubits
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SwitchCase, SwitchOp};
+    use crate::circuit::{ClassicalExpr, ControlBody};
+
+    #[test]
+    fn switch_requires_uint_target_and_valid_unique_cases() {
+        assert!(
+            SwitchOp::new(
+                ClassicalExpr::uint_literal(3, 0).unwrap(),
+                vec![
+                    SwitchCase::new(1, ControlBody::new(vec![])),
+                    SwitchCase::new(7, ControlBody::new(vec![])),
+                ],
+                None,
+            )
+            .is_ok()
+        );
+
+        assert!(
+            SwitchOp::new(ClassicalExpr::bit_vec_literal(3, 0).unwrap(), vec![], None,).is_err()
+        );
+        assert!(
+            SwitchOp::new(
+                ClassicalExpr::uint_literal(3, 0).unwrap(),
+                vec![SwitchCase::new(8, ControlBody::new(vec![]))],
+                None,
+            )
+            .is_err()
+        );
+        assert!(
+            SwitchOp::new(
+                ClassicalExpr::uint_literal(3, 0).unwrap(),
+                vec![
+                    SwitchCase::new(1, ControlBody::new(vec![])),
+                    SwitchCase::new(1, ControlBody::new(vec![])),
+                ],
+                None,
+            )
+            .is_err()
+        );
+    }
+}
