@@ -1275,6 +1275,119 @@ fn test_sample_shots_with_readout_noise_model() {
 }
 
 #[test]
+fn test_measurement_interfaces_keep_readout_noise_explicit() {
+    use crate::device::Outcome;
+
+    let mut noise_model = NoiseModel::new();
+    noise_model
+        .add_readout_error(
+            Qubit::new(0),
+            ReadoutError {
+                p_0_given_1: 1.0,
+                p_1_given_0: 0.0,
+            },
+        )
+        .unwrap();
+
+    let mut circuit = Circuit::new(1);
+    circuit.x(0.into()).unwrap();
+    let out = circuit.measure(0.into()).unwrap();
+
+    let sim = DensityMatrixNoise::from_circuit(&circuit, Some(noise_model)).unwrap();
+    let ideal = sim.probs(&out).unwrap();
+    let with_readout = sim.probs_with_readout(&out).unwrap();
+
+    assert!((ideal[&Outcome::from_bitstring("1").unwrap()] - 1.0).abs() < 1e-10);
+    assert!((with_readout[&Outcome::from_bitstring("0").unwrap()] - 1.0).abs() < 1e-10);
+}
+
+#[test]
+fn test_sample_uses_measurement_qubit_order_without_readout_noise() {
+    use crate::device::{Outcome, Status};
+
+    let mut noise_model = NoiseModel::new();
+    noise_model
+        .add_readout_error(
+            Qubit::new(0),
+            ReadoutError {
+                p_0_given_1: 1.0,
+                p_1_given_0: 0.0,
+            },
+        )
+        .unwrap();
+
+    let mut circuit = Circuit::new(2);
+    circuit.x(0.into()).unwrap();
+    let out = circuit
+        .measure_bits([Qubit::new(1), Qubit::new(0)])
+        .unwrap();
+
+    let sim = DensityMatrixNoise::from_circuit(&circuit, Some(noise_model)).unwrap();
+    let result = sim.sample(&out, 16).unwrap();
+
+    assert_eq!(result.shots(), 16);
+    assert_eq!(result.num_qubits(), 2);
+    assert_eq!(result.qubits(), &vec![Qubit::new(1), Qubit::new(0)]);
+    assert_eq!(result.status(), &Status::Completed);
+    assert_eq!(
+        result.counts().get(&Outcome::from_bitstring("10").unwrap()),
+        Some(&16)
+    );
+}
+
+#[test]
+fn test_from_circuit_ignores_terminal_measurement_declarations() {
+    use crate::device::Outcome;
+
+    let mut circuit = Circuit::new(2);
+    circuit.h(0.into()).unwrap();
+    circuit.cx(0.into(), 1.into()).unwrap();
+    let out = circuit
+        .measure_bits([Qubit::new(1), Qubit::new(0)])
+        .unwrap();
+
+    let sim = DensityMatrixNoise::from_circuit(&circuit, None).unwrap();
+    let probs = sim.probs(&out).unwrap();
+
+    assert_eq!(probs.len(), 2);
+    assert!((probs[&Outcome::from_bitstring("00").unwrap()] - 0.5).abs() < 1e-10);
+    assert!((probs[&Outcome::from_bitstring("11").unwrap()] - 0.5).abs() < 1e-10);
+}
+
+#[test]
+fn test_apply_circuit_reset_directive() {
+    let mut circuit = Circuit::new(1);
+    circuit.x(0.into()).unwrap();
+    circuit.reset(0.into()).unwrap();
+
+    let mut sim = DensityMatrixNoise::new(1, None);
+    sim.apply_circuit(&circuit).unwrap();
+
+    let probs = sim.probabilities();
+    assert!((probs[0] - 1.0).abs() < 1e-10);
+    assert!(probs[1].abs() < 1e-10);
+}
+
+#[test]
+fn test_apply_circuit_classical_control_flow_error() {
+    use crate::circuit::ClassicalExpr;
+
+    let mut circuit = Circuit::new(1);
+    circuit
+        .if_(ClassicalExpr::bool_literal(true), |body| {
+            body.x(0.into())?;
+            Ok(())
+        })
+        .unwrap();
+
+    let mut sim = DensityMatrixNoise::new(1, None);
+    assert!(matches!(
+        sim.apply_circuit(&circuit),
+        Err(QisError::UnsupportedOperation(_))
+    ));
+}
+
+#[test]
 fn test_unitary_gate_fallback_applies_noise() {
     use crate::circuit::gate::UnitaryGate;
 

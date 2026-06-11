@@ -1527,6 +1527,26 @@ fn test_from_circuit_3qubit_ghz() {
 }
 
 #[test]
+fn test_from_circuit_ignores_terminal_measurement_declarations() {
+    use crate::circuit::{Circuit, Qubit};
+    use crate::device::Outcome;
+
+    let mut circuit = Circuit::new(2);
+    circuit.h(0.into()).unwrap();
+    circuit.cx(0.into(), 1.into()).unwrap();
+    let out = circuit
+        .measure_bits([Qubit::new(1), Qubit::new(0)])
+        .unwrap();
+
+    let sv = Statevector::from_circuit(&circuit).unwrap();
+    let probs = sv.probs(&out).unwrap();
+
+    assert_eq!(probs.len(), 2);
+    assert!((probs[&Outcome::from_bitstring("00").unwrap()] - 0.5).abs() < EPSILON);
+    assert!((probs[&Outcome::from_bitstring("11").unwrap()] - 0.5).abs() < EPSILON);
+}
+
+#[test]
 fn test_ccx_target_middle() {
     // Case B: Target is Middle (Min=Control, Mid=Target, Max=Control)
     // Test CCX(0, 2, 1): Controls are 0 and 2, Target is 1
@@ -1898,33 +1918,35 @@ fn test_apply_circuit_dimension_mismatch() {
 }
 
 #[test]
-fn test_apply_circuit_control_flow_error() {
-    use crate::circuit::{ConditionView, Instruction, Operation, StandardGate};
-    use smallvec::smallvec;
+fn test_apply_circuit_reset_directive() {
+    let mut circuit = Circuit::new(1);
+    circuit.x(0.into()).unwrap();
+    circuit.reset(0.into()).unwrap();
 
-    let true_body = vec![Operation {
-        instruction: Instruction::Standard(StandardGate::X),
-        qubits: smallvec![0.into()],
-        params: smallvec![],
-        label: None,
-    }];
+    let mut sv = Statevector::new(1);
+    sv.apply_circuit(&circuit).unwrap();
+
+    assert_complex_eq(sv.data[0], c(1.0, 0.0), "X then reset should return |0>");
+    assert_complex_eq(sv.data[1], c(0.0, 0.0), "X then reset should clear |1>");
+}
+
+#[test]
+fn test_apply_circuit_classical_control_flow_error() {
+    use crate::circuit::ClassicalExpr;
 
     let mut circuit = Circuit::new(1);
     circuit
-        .if_else(ConditionView::new(0.into(), 1), true_body, None)
+        .if_(ClassicalExpr::bool_literal(true), |body| {
+            body.x(0.into())?;
+            Ok(())
+        })
         .unwrap();
 
     let mut sv = Statevector::new(1);
-    let result = sv.apply_circuit(&circuit);
-
-    assert!(
-        matches!(
-            result,
-            Err(QisError::UnsupportedOperation(ref msg)) if msg.contains("Control flow")
-        ),
-        "Should error on control-flow gates, got {:?}",
-        result
-    );
+    assert!(matches!(
+        sv.apply_circuit(&circuit),
+        Err(QisError::UnsupportedOperation(_))
+    ));
 }
 
 #[test]
@@ -2063,6 +2085,66 @@ fn test_sample_shots_zero_and_bell_distribution() {
         (350..=650).contains(&ones),
         "Bell samples should be near 50/50 between 00 and 11; ones={ones}"
     );
+}
+
+#[test]
+fn test_sample_uses_measurement_qubit_order() {
+    use crate::circuit::{Circuit, Qubit};
+    use crate::device::{Outcome, Status};
+
+    let mut circuit = Circuit::new(2);
+    circuit.x(0.into()).unwrap();
+    let out = circuit
+        .measure_bits([Qubit::new(1), Qubit::new(0)])
+        .unwrap();
+
+    let sv = Statevector::from_circuit(&circuit).unwrap();
+    let result = sv.sample(&out, 16).unwrap();
+
+    assert_eq!(result.shots(), 16);
+    assert_eq!(result.num_qubits(), 2);
+    assert_eq!(result.qubits(), &vec![Qubit::new(1), Qubit::new(0)]);
+    assert_eq!(result.status(), &Status::Completed);
+    assert_eq!(
+        result.counts().get(&Outcome::from_bitstring("10").unwrap()),
+        Some(&16)
+    );
+    assert_eq!(
+        result.probabilities().as_ref().unwrap()[&Outcome::from_bitstring("10").unwrap()],
+        1.0
+    );
+}
+
+#[test]
+fn test_probs_marginalizes_unmeasured_qubits() {
+    use crate::circuit::Circuit;
+    use crate::device::Outcome;
+
+    let mut circuit = Circuit::new(2);
+    circuit.h(0.into()).unwrap();
+    circuit.cx(0.into(), 1.into()).unwrap();
+    let out = circuit.measure(0.into()).unwrap();
+
+    let sv = Statevector::from_circuit(&circuit).unwrap();
+    let probs = sv.probs(&out).unwrap();
+
+    assert_eq!(probs.len(), 2);
+    assert!((probs[&Outcome::from_bitstring("0").unwrap()] - 0.5).abs() < EPSILON);
+    assert!((probs[&Outcome::from_bitstring("1").unwrap()] - 0.5).abs() < EPSILON);
+}
+
+#[test]
+fn test_sample_rejects_measurement_qubit_outside_state() {
+    use crate::circuit::Circuit;
+
+    let sv = Statevector::new(1);
+    let mut circuit = Circuit::new(3);
+    let measurement = circuit.measure(2.into()).unwrap();
+
+    assert!(matches!(
+        sv.sample(&measurement, 1),
+        Err(QisError::IndexOutOfBounds { index: 2, max: 0 })
+    ));
 }
 
 #[test]

@@ -40,12 +40,14 @@
 //! assert!((probs[3] - 0.5).abs() < 1e-10);
 //! ```
 
+use crate::circuit::Measurement;
 use crate::circuit::circuit_impl::Circuit;
 use crate::circuit::circuit_param::CircuitParam;
 use crate::circuit::error::CircuitError;
 use crate::circuit::gate::StandardGate;
+use crate::circuit::gate::directive::Directive;
 use crate::circuit::gate::instruction::Instruction;
-use crate::device::Outcome;
+use crate::device::{ExecutionResult, Outcome};
 use crate::qis::error::QisError;
 use crate::qis::observable::Observable;
 use crate::util::aligned::AlignedBuffer;
@@ -53,6 +55,7 @@ use num_complex::Complex64;
 use rand::Rng;
 use rayon::prelude::*;
 use smallvec::SmallVec;
+use std::collections::HashMap;
 use std::f64::consts::FRAC_1_SQRT_2;
 
 // Statevector gates reduce to: for each (α, β) pair separated by `dist`,
@@ -447,7 +450,7 @@ impl Statevector {
     ///
     /// # Errors
     /// - [`QisError::InvalidStateDimension`] if `circuit.num_qubits() != self.num_qubits`
-    /// - [`QisError::UnsupportedOperation`] if the circuit contains control-flow gates
+    /// - [`QisError::UnsupportedOperation`] if the circuit contains classical control flow
     /// - [`QisError::CircuitError`] if a gate lacks a matrix representation, contains
     ///   unresolved symbolic parameters, or a referenced qubit is not found
     ///
@@ -456,10 +459,21 @@ impl Statevector {
     /// - Controlled gates (CX, CY, CZ, CRX, CRY, CRZ)
     /// - Multi-controlled gates (CCX / Toffoli)
     /// - Unitary gates with an explicit matrix representation
+    /// - `Reset`
     /// - Barriers and delays (ignored)
+    /// - Measurement output declarations from `Circuit::measure*` (ignored)
     pub fn apply_circuit(&mut self, circuit: &Circuit) -> Result<(), QisError> {
         if circuit.num_qubits() != self.num_qubits {
             return Err(QisError::InvalidStateDimension(circuit.num_qubits()));
+        }
+        if circuit
+            .operations()
+            .iter()
+            .any(|op| matches!(op.instruction, Instruction::ClassicalControl(_)))
+        {
+            return Err(QisError::UnsupportedOperation(
+                "classical control flow is not supported in statevector simulation".to_string(),
+            ));
         }
         // Decompose circuit to basic gates
         let circuit = circuit.decompose()?;
@@ -567,19 +581,29 @@ impl Statevector {
                         "CircuitGate should have been decomposed".to_string(),
                     )));
                 }
-                Instruction::Directive(_) => {
-                    // Ignore barriers
-                    continue;
-                }
+                Instruction::Directive(directive) => match directive {
+                    Directive::Barrier => {}
+                    Directive::Measure => {
+                        return Err(QisError::UnsupportedOperation(
+                            "legacy Measure directive is not supported by statevector circuit evolution; use Circuit::measure as an output declaration".to_string(),
+                        ));
+                    }
+                    Directive::Reset => {
+                        let qubit = qubit_indices[0];
+                        sv.reset(qubit)?;
+                    }
+                },
                 Instruction::Delay => {
                     // Ignore delays
                     continue;
                 }
-                Instruction::ControlFlowGate(_) => {
+                Instruction::ClassicalControl(_) => {
                     return Err(QisError::UnsupportedOperation(
-                        "Control flow gates not supported in statevector simulation".to_string(),
+                        "classical control flow is not supported in statevector simulation"
+                            .to_string(),
                     ));
                 }
+                Instruction::ClassicalData(_) => {}
             }
         }
 
@@ -2614,6 +2638,18 @@ impl Statevector {
         Ok(outcome)
     }
 
+    /// Resets `qubit` to the |0⟩ state.
+    ///
+    /// Reset is modeled as a Z-basis measurement followed by an X correction
+    /// when the measured outcome is |1⟩. This is destructive, matching circuit
+    /// reset semantics.
+    pub fn reset(&mut self, qubit: usize) -> Result<(), QisError> {
+        if self.measure(qubit)? {
+            self.apply_x(qubit)?;
+        }
+        Ok(())
+    }
+
     /// Copies amplitude data from `source` into `self` without allocating.
     ///
     /// Both statevectors must have the same `num_qubits`. Used by
@@ -2667,6 +2703,81 @@ impl Statevector {
                 work.measure_all()
             })
             .collect()
+    }
+
+    /// Samples the state using a circuit [`Measurement`] as the output contract.
+    ///
+    /// `measurement.qubits()[i]` becomes bit `i` in each [`Outcome`]. The returned
+    /// [`ExecutionResult`] reuses the device result shape, with counts projected
+    /// to only the qubits named by the measurement.
+    pub fn sample(
+        &self,
+        measurement: &Measurement,
+        shots: usize,
+    ) -> Result<ExecutionResult, QisError> {
+        for qubit in measurement.qubits() {
+            let index = qubit.index();
+            if index >= self.num_qubits {
+                return Err(QisError::IndexOutOfBounds {
+                    index,
+                    max: self.num_qubits.saturating_sub(1),
+                });
+            }
+        }
+
+        let mut counts = HashMap::new();
+        for full in self.sample_shots(shots) {
+            let mut chunks = SmallVec::from_elem(0u64, measurement.width().div_ceil(64));
+            for (bit, qubit) in measurement.qubits().iter().enumerate() {
+                if full.is_one(qubit.index()) {
+                    chunks[bit / 64] |= 1u64 << (bit % 64);
+                }
+            }
+            *counts.entry(Outcome::new(chunks)).or_insert(0usize) += 1;
+        }
+
+        let mut result = ExecutionResult::new(
+            "statevector-sample".to_string(),
+            measurement.qubits().to_vec(),
+            shots,
+            measurement.width(),
+            Some("statevector".to_string()),
+            None,
+        );
+        result.start(None).finish(counts, None).calc_probabilities();
+        Ok(result)
+    }
+
+    /// Returns the marginal probability distribution selected by a circuit [`Measurement`].
+    ///
+    /// This method does not execute circuit IR. It treats the [`Measurement`] as
+    /// a self-contained output contract and aggregates the full statevector
+    /// computational-basis probabilities over unmeasured qubits.
+    pub fn probs(&self, measurement: &Measurement) -> Result<HashMap<Outcome, f64>, QisError> {
+        for qubit in measurement.qubits() {
+            let index = qubit.index();
+            if index >= self.num_qubits {
+                return Err(QisError::IndexOutOfBounds {
+                    index,
+                    max: self.num_qubits.saturating_sub(1),
+                });
+            }
+        }
+
+        let mut marginal = HashMap::new();
+        for (basis, prob) in self.probabilities().into_iter().enumerate() {
+            if prob == 0.0 {
+                continue;
+            }
+            let mut chunks = SmallVec::from_elem(0u64, measurement.width().div_ceil(64));
+            for (bit, qubit) in measurement.qubits().iter().enumerate() {
+                if (basis >> qubit.index()) & 1 == 1 {
+                    chunks[bit / 64] |= 1u64 << (bit % 64);
+                }
+            }
+            *marginal.entry(Outcome::new(chunks)).or_insert(0.0) += prob;
+        }
+        Ok(marginal)
     }
 }
 

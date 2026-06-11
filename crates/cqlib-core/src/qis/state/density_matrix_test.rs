@@ -86,6 +86,26 @@ fn test_from_circuit_bell_state() {
 }
 
 #[test]
+fn test_from_circuit_ignores_terminal_measurement_declarations() {
+    use crate::circuit::Qubit;
+    use crate::device::Outcome;
+
+    let mut circuit = Circuit::new(2);
+    circuit.h(0.into()).unwrap();
+    circuit.cx(0.into(), 1.into()).unwrap();
+    let out = circuit
+        .measure_bits([Qubit::new(1), Qubit::new(0)])
+        .unwrap();
+
+    let dm = DensityMatrix::from_circuit(&circuit).unwrap();
+    let probs = dm.probs(&out).unwrap();
+
+    assert_eq!(probs.len(), 2);
+    assert_relative_eq!(probs[&Outcome::from_bitstring("00").unwrap()], 0.5);
+    assert_relative_eq!(probs[&Outcome::from_bitstring("11").unwrap()], 0.5);
+}
+
+#[test]
 fn test_apply_circuit_bell_state() {
     let mut circuit = Circuit::new(2);
     circuit.h(0.into()).unwrap();
@@ -112,6 +132,39 @@ fn test_apply_circuit_dimension_mismatch() {
     circuit.h(0.into()).unwrap();
 
     assert!(dm.apply_circuit(&circuit).is_err());
+}
+
+#[test]
+fn test_apply_circuit_reset_directive() {
+    let mut circuit = Circuit::new(1);
+    circuit.x(0.into()).unwrap();
+    circuit.reset(0.into()).unwrap();
+
+    let mut dm = DensityMatrix::new(1);
+    dm.apply_circuit(&circuit).unwrap();
+
+    let probs = dm.probabilities();
+    assert_relative_eq!(probs[0], 1.0);
+    assert_relative_eq!(probs[1], 0.0);
+}
+
+#[test]
+fn test_apply_circuit_classical_control_flow_error() {
+    use crate::circuit::ClassicalExpr;
+
+    let mut circuit = Circuit::new(1);
+    circuit
+        .if_(ClassicalExpr::bool_literal(true), |body| {
+            body.x(0.into())?;
+            Ok(())
+        })
+        .unwrap();
+
+    let mut dm = DensityMatrix::new(1);
+    assert!(matches!(
+        dm.apply_circuit(&circuit),
+        Err(crate::qis::QisError::UnsupportedOperation(_))
+    ));
 }
 
 #[test]
@@ -737,6 +790,65 @@ fn test_sample_shots_zero_and_bell_distribution() {
         (350..=650).contains(&ones),
         "Bell samples should be near 50/50 between 00 and 11; ones={ones}"
     );
+}
+
+#[test]
+fn test_sample_uses_measurement_qubit_order() {
+    use crate::circuit::Qubit;
+    use crate::device::{Outcome, Status};
+
+    let mut circuit = Circuit::new(2);
+    circuit.x(0.into()).unwrap();
+    let out = circuit
+        .measure_bits([Qubit::new(1), Qubit::new(0)])
+        .unwrap();
+
+    let dm = DensityMatrix::from_circuit(&circuit).unwrap();
+    let result = dm.sample(&out, 16).unwrap();
+
+    assert_eq!(result.shots(), 16);
+    assert_eq!(result.num_qubits(), 2);
+    assert_eq!(result.qubits(), &vec![Qubit::new(1), Qubit::new(0)]);
+    assert_eq!(result.status(), &Status::Completed);
+    assert_eq!(
+        result.counts().get(&Outcome::from_bitstring("10").unwrap()),
+        Some(&16)
+    );
+    assert_eq!(
+        result.probabilities().as_ref().unwrap()[&Outcome::from_bitstring("10").unwrap()],
+        1.0
+    );
+}
+
+#[test]
+fn test_probs_marginalizes_unmeasured_qubits() {
+    use crate::device::Outcome;
+
+    let mut circuit = Circuit::new(2);
+    circuit.h(0.into()).unwrap();
+    circuit.cx(0.into(), 1.into()).unwrap();
+    let out = circuit.measure(0.into()).unwrap();
+
+    let dm = DensityMatrix::from_circuit(&circuit).unwrap();
+    let probs = dm.probs(&out).unwrap();
+
+    assert_eq!(probs.len(), 2);
+    assert_relative_eq!(probs[&Outcome::from_bitstring("0").unwrap()], 0.5);
+    assert_relative_eq!(probs[&Outcome::from_bitstring("1").unwrap()], 0.5);
+}
+
+#[test]
+fn test_sample_rejects_measurement_qubit_outside_state() {
+    use crate::circuit::Circuit;
+
+    let dm = DensityMatrix::new(1);
+    let mut circuit = Circuit::new(3);
+    let measurement = circuit.measure(2.into()).unwrap();
+
+    assert!(matches!(
+        dm.sample(&measurement, 1),
+        Err(crate::qis::QisError::IndexOutOfBounds { index: 2, max: 0 })
+    ));
 }
 
 #[test]

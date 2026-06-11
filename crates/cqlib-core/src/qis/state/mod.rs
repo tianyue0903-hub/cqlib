@@ -58,24 +58,31 @@
 //! assert!((probs_sv[0] - probs_dm[0]).abs() < 1e-10);
 //! ```
 //!
-//! Stabilizer simulation of a large Bell state:
+//! Stabilizer sampling with aggregated measurement counts:
 //!
 //! ```rust
 //! use cqlib_core::qis::StabilizerState;
+//! use std::collections::HashMap;
 //!
-//! let mut s = StabilizerState::new(2);
-//! s.apply_h(0).unwrap();
-//! s.apply_cx(0, 1).unwrap();
-//! // Measure: outcomes are always correlated (both 0 or both 1)
-//! let shots = s.sample_shots(1000);
-//! assert!(shots.iter().all(|v| v.is_one(0) == v.is_one(1)));
+//! let mut state = StabilizerState::new(2);
+//! state.apply_h(0).unwrap();
+//! state.apply_cx(0, 1).unwrap();
+//!
+//! let mut counts = HashMap::new();
+//! for outcome in state.sample_shots(1000) {
+//!     *counts.entry(outcome.to_string(2)).or_insert(0usize) += 1;
+//! }
+//!
+//! assert!(counts.keys().all(|bits| bits == "00" || bits == "11"));
 //! ```
 
+pub mod classical;
 pub mod density_matrix;
 pub mod density_matrix_noise;
 pub mod stabilizer;
 pub mod statevector;
 
+pub use classical::{ClassicalState, RuntimeValue};
 pub use density_matrix::DensityMatrix;
 pub use density_matrix_noise::DensityMatrixNoise;
 pub use stabilizer::StabilizerState;

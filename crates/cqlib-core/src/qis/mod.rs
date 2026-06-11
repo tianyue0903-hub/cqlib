@@ -50,16 +50,19 @@
 //!
 //! ```rust
 //! use cqlib_core::qis::StabilizerState;
+//! use std::collections::HashMap;
 //!
-//! // 1000-qubit GHZ state preparation
-//! let mut s = StabilizerState::new(1000);
-//! s.apply_h(0).unwrap();
-//! for q in 0..999 {
-//!     s.apply_cx(q, q + 1).unwrap();
+//! let mut state = StabilizerState::new(2);
+//! state.apply_h(0).unwrap();
+//! state.apply_cx(0, 1).unwrap();
+//!
+//! let mut counts = HashMap::new();
+//! for outcome in state.sample_shots(1000) {
+//!     *counts.entry(outcome.to_string(2)).or_insert(0usize) += 1;
 //! }
-//! // Sample 100 measurement shots in parallel (via Rayon)
-//! let shots = s.sample_shots(100);
-//! assert_eq!(shots.len(), 100);
+//!
+//! // Bell-state samples only contain the correlated outcomes.
+//! assert!(counts.keys().all(|bits| bits == "00" || bits == "11"));
 //! ```
 //!
 //! Working with observables:
@@ -91,3 +94,4 @@ pub use state::density_matrix::DensityMatrix;
 pub use state::density_matrix_noise::DensityMatrixNoise;
 pub use state::stabilizer::StabilizerState;
 pub use state::statevector::Statevector;
+pub use state::{ClassicalState, RuntimeValue};

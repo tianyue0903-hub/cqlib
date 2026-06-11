@@ -1109,53 +1109,327 @@ fn test_reset_from_superposition() {
     }
 }
 
-/// Mid-circuit Measure directive is executed (not a no-op) and result recorded.
+/// Mid-circuit measurement records the result by `ClassicalValue`.
 #[test]
-fn test_apply_circuit_measure_directive() {
+fn test_apply_circuit_measure_bit_result() {
     use crate::circuit::circuit_impl::Circuit;
+    use crate::qis::RuntimeValue;
 
     // |1⟩: X then Measure should always record true.
     let mut c = Circuit::new(1);
     c.x(0.into()).unwrap();
-    c.measure(0.into()).unwrap();
+    let measured = c.measure(0.into()).unwrap();
 
     let result = StabilizerState::apply_circuit(&c).unwrap();
     assert_eq!(
-        result.measurements[0],
-        Some(true),
+        result.classical.value(measured.value()),
+        Some(&RuntimeValue::Bit(true)),
         "X → Measure should record |1⟩"
     );
+}
+
+#[test]
+fn test_apply_circuit_classical_result_rejects_other_circuit_handles() {
+    use crate::circuit::{Circuit, ClassicalType};
+
+    let mut circuit = Circuit::new(1);
+    let target = circuit.var(ClassicalType::Bit);
+    let measured = circuit.measure_into(0.into(), target).unwrap();
+
+    let mut other = Circuit::new(1);
+    let other_target = other.var(ClassicalType::Bit);
+    let other_measured = other.measure_into(0.into(), other_target).unwrap();
+
+    let result = StabilizerState::apply_circuit(&circuit).unwrap();
+    assert!(result.classical.value(measured.value()).is_some());
+    assert!(result.classical.var(target).is_some());
+    assert_eq!(result.classical.value(other_measured.value()), None);
+    assert_eq!(result.classical.var(other_target), None);
+}
+
+/// Repeated measurements of the same qubit are separate `ClassicalValue`s.
+#[test]
+fn test_apply_circuit_repeated_measurements_keep_distinct_values() {
+    use crate::circuit::circuit_impl::Circuit;
+    use crate::qis::RuntimeValue;
+
+    let mut c = Circuit::new(1);
+    c.x(0.into()).unwrap();
+    let first = c.measure(0.into()).unwrap();
+    c.reset(0.into()).unwrap();
+    let second = c.measure(0.into()).unwrap();
+
+    let result = StabilizerState::apply_circuit(&c).unwrap();
+    assert_eq!(
+        result.classical.value(first.value()),
+        Some(&RuntimeValue::Bit(true))
+    );
+    assert_eq!(
+        result.classical.value(second.value()),
+        Some(&RuntimeValue::Bit(false))
+    );
+}
+
+/// Entangled measurements are written as separate values, but their quantum
+/// correlation must still be visible through the recorded classical data.
+#[test]
+fn test_apply_circuit_bell_measurements_are_correlated_in_classical_state() {
+    use crate::circuit::circuit_impl::Circuit;
+    use crate::qis::RuntimeValue;
+
+    let mut c = Circuit::new(2);
+    c.h(0.into()).unwrap();
+    c.cx(0.into(), 1.into()).unwrap();
+    let left = c.measure(0.into()).unwrap();
+    let right = c.measure(1.into()).unwrap();
+
+    let result = StabilizerState::apply_circuit(&c).unwrap();
+    let Some(RuntimeValue::Bit(left)) = result.classical.value(left.value()) else {
+        panic!("expected first Bell measurement to produce a bit");
+    };
+    let Some(RuntimeValue::Bit(right)) = result.classical.value(right.value()) else {
+        panic!("expected second Bell measurement to produce a bit");
+    };
+
+    assert_eq!(
+        left, right,
+        "Bell-state measurements must remain correlated after being stored"
+    );
+}
+
+/// A circuit measurement is not just metadata: it collapses the stabilizer
+/// state immediately, so later quantum operations must see the collapsed state.
+#[test]
+fn test_apply_circuit_measurement_collapse_affects_later_gates() {
+    use crate::circuit::circuit_impl::Circuit;
+    use crate::qis::RuntimeValue;
+
+    let mut c = Circuit::new(2);
+    c.h(0.into()).unwrap();
+    c.cx(0.into(), 1.into()).unwrap();
+    let first = c.measure(0.into()).unwrap();
+    c.x(1.into()).unwrap();
+    let second = c.measure(1.into()).unwrap();
+
+    let result = StabilizerState::apply_circuit(&c).unwrap();
+    let Some(RuntimeValue::Bit(first)) = result.classical.value(first.value()) else {
+        panic!("expected first measurement to produce a bit");
+    };
+    let Some(RuntimeValue::Bit(second)) = result.classical.value(second.value()) else {
+        panic!("expected second measurement to produce a bit");
+    };
+
+    assert_ne!(
+        first, second,
+        "after measuring one Bell qubit, X on the other qubit must flip the correlated value"
+    );
+}
+
+/// Multi-qubit measurement follows `measure_bits` little-endian input order.
+#[test]
+fn test_apply_circuit_measure_bits_result_order() {
+    use crate::circuit::{Circuit, Qubit};
+    use crate::qis::RuntimeValue;
+
+    let mut c = Circuit::new(3);
+    c.x(0.into()).unwrap();
+    c.x(2.into()).unwrap();
+    let measured = c
+        .measure_bits([Qubit::new(2), Qubit::new(1), Qubit::new(0)])
+        .unwrap();
+
+    let result = StabilizerState::apply_circuit(&c).unwrap();
+    let Some(RuntimeValue::BitVec { width, bits }) = result.classical.value(measured.value())
+    else {
+        panic!("expected BitVec measurement result");
+    };
+    assert_eq!(*width, 3);
+    assert_eq!(bits.to_string(*width as usize), "101");
+    assert!(bits.is_one(0), "first measured qubit maps to bit 0");
+    assert!(!bits.is_one(1));
+    assert!(bits.is_one(2));
+}
+
+/// `measure_bits_into` keeps the immutable measurement result and stores an
+/// identical `BitVec` copy in the target variable.
+#[test]
+fn test_apply_circuit_measure_bits_into_keeps_result_and_var_copy() {
+    use crate::circuit::{Circuit, ClassicalType, Qubit};
+    use crate::qis::RuntimeValue;
+
+    let mut c = Circuit::new(3);
+    c.x(0.into()).unwrap();
+    c.x(2.into()).unwrap();
+    let target = c.var(ClassicalType::bit_vec(3).unwrap());
+    let measured = c
+        .measure_bits_into([Qubit::new(0), Qubit::new(1), Qubit::new(2)], target)
+        .unwrap();
+
+    let result = StabilizerState::apply_circuit(&c).unwrap();
+    let Some(RuntimeValue::BitVec { width, bits }) = result.classical.value(measured.value())
+    else {
+        panic!("expected BitVec measurement result");
+    };
+    let value = RuntimeValue::BitVec {
+        width: *width,
+        bits: bits.clone(),
+    };
+
+    assert_eq!(*width, 3);
+    assert_eq!(
+        value.to_bitstring().as_deref(),
+        Some("101"),
+        "display order is MSB-left, while measured qubits map to bit indexes 0.."
+    );
+    assert_eq!(result.classical.var(target), Some(&value));
+}
+
+/// `measure_into` records the immutable measurement and the mutable variable copy.
+#[test]
+fn test_apply_circuit_measure_into_updates_classical_variable() {
+    use crate::circuit::{Circuit, ClassicalType};
+    use crate::qis::RuntimeValue;
+
+    let mut c = Circuit::new(1);
+    c.x(0.into()).unwrap();
+    let var = c.var(ClassicalType::Bit);
+    let measured = c.measure_into(0.into(), var).unwrap();
+
+    let result = StabilizerState::apply_circuit(&c).unwrap();
+    assert_eq!(
+        result.classical.value(measured.value()),
+        Some(&RuntimeValue::Bit(true))
+    );
+    assert_eq!(result.classical.var(var), Some(&RuntimeValue::Bit(true)));
+}
+
+/// Store expressions are evaluated against runtime measurement values.
+#[test]
+fn test_apply_circuit_store_expression_updates_classical_variable() {
+    use crate::circuit::{Circuit, ClassicalExpr, ClassicalType};
+    use crate::qis::RuntimeValue;
+
+    let mut c = Circuit::new(1);
+    c.x(0.into()).unwrap();
+    let measured = c.measure(0.into()).unwrap();
+    let flag = c.var(ClassicalType::Bool);
+    c.store(flag, ClassicalExpr::bit_to_bool(measured.expr()).unwrap())
+        .unwrap();
+
+    let result = StabilizerState::apply_circuit(&c).unwrap();
+    assert_eq!(result.classical.var(flag), Some(&RuntimeValue::Bool(true)));
 }
 
 /// Reset directive in circuit actually resets the qubit.
 #[test]
 fn test_apply_circuit_reset_directive() {
     use crate::circuit::circuit_impl::Circuit;
+    use crate::qis::RuntimeValue;
 
     // X then Reset: final state should be |0⟩.
     let mut c = Circuit::new(1);
     c.x(0.into()).unwrap();
     c.reset(0.into()).unwrap();
-    c.measure(0.into()).unwrap();
+    let measured = c.measure(0.into()).unwrap();
 
     let result = StabilizerState::apply_circuit(&c).unwrap();
     assert_eq!(
-        result.measurements[0],
-        Some(false),
+        result.classical.value(measured.value()),
+        Some(&RuntimeValue::Bit(false)),
         "X → Reset → Measure should yield |0⟩"
     );
 }
 
-/// from_circuit() backward-compat: still returns just the state.
+/// from_circuit() is a state-construction API: measurement declarations are
+/// ignored and do not collapse the final quantum state.
 #[test]
-fn test_from_circuit_with_measure_collapses_state() {
-    use crate::circuit::circuit_impl::Circuit;
+fn test_from_circuit_ignores_terminal_measurement_declarations() {
+    use crate::circuit::{Circuit, Qubit};
+    use crate::device::Outcome;
 
     let mut c = Circuit::new(2);
     c.h(0.into()).unwrap();
     c.cx(0.into(), 1.into()).unwrap();
-    c.measure(0.into()).unwrap(); // mid-circuit collapse
+    let out = c.measure_bits([Qubit::new(1), Qubit::new(0)]).unwrap();
 
-    // Should not error; state is in a definite product state after measurement.
-    let _state = StabilizerState::from_circuit(&c).unwrap();
+    let state = StabilizerState::from_circuit(&c).unwrap();
+    let probs = state.probs(&out).unwrap();
+
+    assert_eq!(probs.len(), 2);
+    assert!((probs[&Outcome::from_bitstring("00").unwrap()] - 0.5).abs() < 1e-12);
+    assert!((probs[&Outcome::from_bitstring("11").unwrap()] - 0.5).abs() < 1e-12);
+}
+
+#[test]
+fn test_sample_uses_measurement_qubit_order() {
+    use crate::circuit::{Circuit, Qubit};
+    use crate::device::{Outcome, Status};
+
+    let mut c = Circuit::new(2);
+    c.x(0.into()).unwrap();
+    let out = c.measure_bits([Qubit::new(1), Qubit::new(0)]).unwrap();
+
+    let state = StabilizerState::from_circuit(&c).unwrap();
+    let result = state.sample(&out, 16).unwrap();
+
+    assert_eq!(result.shots(), 16);
+    assert_eq!(result.num_qubits(), 2);
+    assert_eq!(result.qubits(), &vec![Qubit::new(1), Qubit::new(0)]);
+    assert_eq!(result.status(), &Status::Completed);
+    assert_eq!(
+        result.counts().get(&Outcome::from_bitstring("10").unwrap()),
+        Some(&16)
+    );
+    assert_eq!(
+        result.probabilities().as_ref().unwrap()[&Outcome::from_bitstring("10").unwrap()],
+        1.0
+    );
+}
+
+#[test]
+fn test_probs_marginalizes_unmeasured_qubits() {
+    use crate::circuit::Circuit;
+    use crate::device::Outcome;
+
+    let mut c = Circuit::new(2);
+    c.h(0.into()).unwrap();
+    c.cx(0.into(), 1.into()).unwrap();
+    let out = c.measure(0.into()).unwrap();
+
+    let state = StabilizerState::from_circuit(&c).unwrap();
+    let probs = state.probs(&out).unwrap();
+
+    assert_eq!(probs.len(), 2);
+    assert!((probs[&Outcome::from_bitstring("0").unwrap()] - 0.5).abs() < 1e-12);
+    assert!((probs[&Outcome::from_bitstring("1").unwrap()] - 0.5).abs() < 1e-12);
+}
+
+#[test]
+fn test_sample_rejects_measurement_qubit_outside_state() {
+    use crate::circuit::Circuit;
+
+    let state = StabilizerState::new(1);
+    let mut circuit = Circuit::new(3);
+    let measurement = circuit.measure(2.into()).unwrap();
+
+    assert!(matches!(
+        state.sample(&measurement, 1),
+        Err(QisError::IndexOutOfBounds { index: 2, max: 0 })
+    ));
+}
+
+#[test]
+fn test_apply_circuit_rejects_classical_control_flow() {
+    use crate::circuit::{Circuit, ClassicalExpr};
+    use crate::qis::QisError;
+
+    let mut c = Circuit::new(1);
+    c.if_(ClassicalExpr::bool_literal(true), |body| {
+        body.x(0.into())?;
+        Ok(())
+    })
+    .unwrap();
+
+    let error = StabilizerState::apply_circuit(&c).unwrap_err();
+    assert!(matches!(error, QisError::UnsupportedOperation(_)));
 }

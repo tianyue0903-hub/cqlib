@@ -10,14 +10,17 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
-use crate::circuit::{Qubit, StandardGate};
-use crate::device::Outcome;
+use crate::circuit::gate::directive::Directive;
+use crate::circuit::{CircuitParam, Instruction, Measurement, Qubit, StandardGate};
 use crate::device::noise::{NoiseModel, OperationKey};
+use crate::device::{ExecutionResult, Outcome};
 use crate::qis::error::QisError;
 use crate::qis::state::density_matrix::DensityMatrix;
 use ndarray::Array2;
 use num_complex::Complex64;
 use rayon::prelude::*;
+use smallvec::SmallVec;
+use std::collections::HashMap;
 
 /// A density matrix quantum simulator with noise modeling capabilities.
 ///
@@ -159,11 +162,24 @@ impl DensityMatrixNoise {
     /// * `Err(QisError)` - If the circuit cannot be simulated
     ///
     /// # Errors
-    /// - [`QisError::UnsupportedOperation`] if the circuit contains control-flow gates
+    /// - [`QisError::InvalidStateDimension`] if `circuit.num_qubits()` does not match
+    /// - [`QisError::UnsupportedOperation`] if the circuit contains classical control flow
     /// - [`QisError::CircuitError`] if a gate lacks a matrix representation, contains
     ///   unresolved symbolic parameters, or a referenced qubit is not found
     pub fn apply_circuit(&mut self, circuit: &crate::circuit::Circuit) -> Result<(), QisError> {
-        use crate::circuit::{CircuitParam, Instruction};
+        if circuit.num_qubits() != self.state.num_qubits {
+            return Err(QisError::InvalidStateDimension(circuit.num_qubits()));
+        }
+        if circuit
+            .operations()
+            .iter()
+            .any(|op| matches!(op.instruction, Instruction::ClassicalControl(_)))
+        {
+            return Err(QisError::UnsupportedOperation(
+                "classical control flow is not supported in noisy density matrix simulation"
+                    .to_string(),
+            ));
+        }
         let circuit = circuit.decompose()?;
         let sim = self;
 
@@ -264,12 +280,26 @@ impl DensityMatrixNoise {
                         ),
                     ));
                 }
-                Instruction::Directive(_) | Instruction::Delay => continue,
-                Instruction::ControlFlowGate(_) => {
+                Instruction::Directive(directive) => match directive {
+                    Directive::Barrier => {}
+                    Directive::Measure => {
+                        return Err(QisError::UnsupportedOperation(
+                            "legacy Measure directive is not supported by noisy density matrix circuit evolution; use Circuit::measure as an output declaration".to_string(),
+                        ));
+                    }
+                    Directive::Reset => {
+                        let qubit = qs[0];
+                        sim.reset(qubit)?;
+                    }
+                },
+                Instruction::Delay => continue,
+                Instruction::ClassicalControl(_) => {
                     return Err(QisError::UnsupportedOperation(
-                        "Control flow gates not supported in density matrix simulation".to_string(),
+                        "classical control flow is not supported in noisy density matrix simulation"
+                            .to_string(),
                     ));
                 }
+                Instruction::ClassicalData(_) => {}
             }
         }
         Ok(())
@@ -968,6 +998,56 @@ impl DensityMatrixNoise {
         probs
     }
 
+    /// Returns the ideal marginal probability distribution selected by a circuit [`Measurement`].
+    ///
+    /// Gate noise already applied to the density matrix is included, but readout
+    /// noise is not. Use [`probs_with_readout`](Self::probs_with_readout) when
+    /// readout error modeling should affect the reported distribution.
+    pub fn probs(&self, measurement: &Measurement) -> Result<HashMap<Outcome, f64>, QisError> {
+        self.state.probs(measurement)
+    }
+
+    /// Returns the marginal probability distribution with readout noise applied.
+    ///
+    /// This preserves the existing simulator convention: [`probabilities`](Self::probabilities)
+    /// and [`probs`](Self::probs) describe the noisy quantum state before readout
+    /// error, while this method additionally applies readout errors configured
+    /// for `measurement.qubits()`.
+    pub fn probs_with_readout(
+        &self,
+        measurement: &Measurement,
+    ) -> Result<HashMap<Outcome, f64>, QisError> {
+        for qubit in measurement.qubits() {
+            let index = qubit.index();
+            if index >= self.state.num_qubits {
+                return Err(QisError::IndexOutOfBounds {
+                    index,
+                    max: self.state.num_qubits.saturating_sub(1),
+                });
+            }
+        }
+
+        let qubits: Vec<usize> = measurement.qubits().iter().map(Qubit::index).collect();
+        let mut marginal = HashMap::new();
+        for (basis, prob) in self
+            .probabilities_with_readout(&qubits)
+            .into_iter()
+            .enumerate()
+        {
+            if prob == 0.0 {
+                continue;
+            }
+            let mut chunks = SmallVec::from_elem(0u64, measurement.width().div_ceil(64));
+            for (bit, qubit) in measurement.qubits().iter().enumerate() {
+                if (basis >> qubit.index()) & 1 == 1 {
+                    chunks[bit / 64] |= 1u64 << (bit % 64);
+                }
+            }
+            *marginal.entry(Outcome::new(chunks)).or_insert(0.0) += prob;
+        }
+        Ok(marginal)
+    }
+
     /// Computes the expectation value of an observable.
     ///
     /// Calculates Tr(ρ * O) for the current noisy density matrix ρ and a given
@@ -1014,6 +1094,14 @@ impl DensityMatrixNoise {
         self.state.measure(qubit)
     }
 
+    /// Resets `qubit` to the |0⟩ state.
+    ///
+    /// Reset is delegated to the underlying density matrix. Readout noise is not
+    /// applied to reset.
+    pub fn reset(&mut self, qubit: usize) -> Result<(), QisError> {
+        self.state.reset(qubit)
+    }
+
     /// Measures all qubits sequentially, returning a bit-packed [`Outcome`].
     ///
     /// Equivalent to calling `measure(q)` for each qubit `q` in order `0..num_qubits`.
@@ -1049,6 +1137,48 @@ impl DensityMatrixNoise {
                 work.state.measure_all()
             })
             .collect()
+    }
+
+    /// Samples the noisy quantum state using a circuit [`Measurement`] as the output contract.
+    ///
+    /// This method does not apply readout noise, matching [`sample_shots`](Self::sample_shots).
+    /// Gate noise already applied to the underlying density matrix is included.
+    pub fn sample(
+        &self,
+        measurement: &Measurement,
+        shots: usize,
+    ) -> Result<ExecutionResult, QisError> {
+        for qubit in measurement.qubits() {
+            let index = qubit.index();
+            if index >= self.state.num_qubits {
+                return Err(QisError::IndexOutOfBounds {
+                    index,
+                    max: self.state.num_qubits.saturating_sub(1),
+                });
+            }
+        }
+
+        let mut counts = HashMap::new();
+        for full in self.sample_shots(shots) {
+            let mut chunks = SmallVec::from_elem(0u64, measurement.width().div_ceil(64));
+            for (bit, qubit) in measurement.qubits().iter().enumerate() {
+                if full.is_one(qubit.index()) {
+                    chunks[bit / 64] |= 1u64 << (bit % 64);
+                }
+            }
+            *counts.entry(Outcome::new(chunks)).or_insert(0usize) += 1;
+        }
+
+        let mut result = ExecutionResult::new(
+            "density-matrix-noise-sample".to_string(),
+            measurement.qubits().to_vec(),
+            shots,
+            measurement.width(),
+            Some("density-matrix-noise".to_string()),
+            None,
+        );
+        result.start(None).finish(counts, None).calc_probabilities();
+        Ok(result)
     }
 }
 

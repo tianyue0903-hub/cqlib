@@ -113,56 +113,90 @@
 //!
 //! **From a Clifford circuit:**
 //! ```rust
-//! use cqlib_core::circuit::circuit_impl::Circuit;
+//! use cqlib_core::circuit::Circuit;
 //! use cqlib_core::qis::StabilizerState;
 //!
 //! let mut c = Circuit::new(2);
-//! c.h(0.into());
-//! c.cx(0.into(), 1.into());
+//! c.h(0.into()).unwrap();
+//! c.cx(0.into(), 1.into()).unwrap();
 //! let stab = StabilizerState::from_circuit(&c).unwrap();
 //! let stabilizers = stab.get_stabilizers();
 //! // Bell state is stabilized by +XX and +ZZ
 //! assert_eq!(stabilizers.len(), 2);
 //! ```
 //!
+//! **Circuit measurement results:**
+//! ```rust
+//! use cqlib_core::circuit::{Circuit, ClassicalType, Qubit};
+//! use cqlib_core::qis::{RuntimeValue, StabilizerState};
+//!
+//! let mut c = Circuit::new(3);
+//! c.x(0.into()).unwrap();
+//! c.x(2.into()).unwrap();
+//!
+//! // The returned measurement carries both the IR value and measured qubit order.
+//! let bit = c.measure(0.into()).unwrap();
+//!
+//! // `measure_bits_into` also writes a mutable variable copy for later classical use.
+//! let latest = c.var(ClassicalType::bit_vec(3).unwrap());
+//! let bits = c
+//!     .measure_bits_into([Qubit::new(0), Qubit::new(1), Qubit::new(2)], latest)
+//!     .unwrap();
+//!
+//! let execution = StabilizerState::apply_circuit(&c).unwrap();
+//! assert_eq!(execution.classical.value(bit.value()), Some(&RuntimeValue::Bit(true)));
+//! assert_eq!(
+//!     execution.classical.value(bits.value()).and_then(RuntimeValue::to_bitstring).as_deref(),
+//!     Some("101")
+//! );
+//! assert_eq!(execution.classical.var(latest), execution.classical.value(bits.value()));
+//! ```
+//!
 //! **Non-Clifford gate returns an error:**
 //! ```rust
-//! use cqlib_core::circuit::circuit_impl::Circuit;
+//! use cqlib_core::circuit::Circuit;
 //! use cqlib_core::qis::{StabilizerState, QisError};
 //!
 //! let mut c = Circuit::new(1);
-//! c.t(0.into()); // T gate is not Clifford
+//! c.t(0.into()).unwrap(); // T gate is not Clifford
 //! let result = StabilizerState::from_circuit(&c);
 //! assert!(matches!(result, Err(QisError::NonCliffordGate(_))));
 //! ```
 
-use crate::circuit::Qubit;
 use crate::circuit::circuit_impl::Circuit;
 use crate::circuit::circuit_param::CircuitParam;
 use crate::circuit::error::CircuitError;
 use crate::circuit::gate::directive::Directive;
-use crate::circuit::gate::{Instruction, StandardGate};
+use crate::circuit::gate::{ClassicalDataOp, Instruction, StandardGate};
 use crate::circuit::operation::Operation;
-use crate::device::Outcome;
+use crate::circuit::{Measurement, Qubit};
+use crate::device::{ExecutionResult, Outcome};
 use crate::qis::error::QisError;
 use crate::qis::pauli::{Pauli, PauliString, Phase};
+use crate::qis::state::{ClassicalState, RuntimeValue};
 use crate::util::aligned::AlignedBuffer;
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 use rayon::prelude::*;
 use smallvec::SmallVec;
+use std::collections::HashMap;
 
 /// Result returned by [`StabilizerState::apply_circuit`].
 ///
-/// Contains both the final quantum state and the classical bit register
-/// populated by mid-circuit [`Directive::Measure`] operations.
+/// Contains both the final quantum state and runtime classical data produced
+/// while executing measurement and store operations.
 #[derive(Debug)]
 pub struct CircuitExecutionResult {
     /// Final stabilizer state after all circuit operations.
     pub state: StabilizerState,
-    /// Classical bit register: `measurements[q]` is the last Z-basis measurement
-    /// result for physical qubit `q`, or `None` if qubit `q` was never measured.
-    pub measurements: Vec<Option<bool>>,
+    /// Runtime classical values and variables indexed by circuit-local handles.
+    pub classical: ClassicalState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CircuitClassicalMode {
+    Ignore,
+    Execute,
 }
 
 /// Stabilizer state simulator based on the Aaronson-Gottesman symplectic tableau.
@@ -1296,18 +1330,125 @@ impl StabilizerState {
             .collect()
     }
 
+    /// Samples the state using a circuit [`Measurement`] as the output contract.
+    ///
+    /// Unlike [`apply_circuit`](Self::apply_circuit), this method does not read
+    /// or execute the circuit IR. The [`Measurement`] already carries the qubits
+    /// and their result bit order:
+    /// - `measurement.qubits()[i]` becomes bit `i` in each [`Outcome`].
+    /// - [`Outcome::to_string`] displays the most-significant result bit first,
+    ///   so string order is the reverse of `measurement.qubits()`.
+    ///
+    /// # Example
+    /// ```rust
+    /// use cqlib_core::circuit::{Circuit, Qubit};
+    /// use cqlib_core::qis::StabilizerState;
+    ///
+    /// let mut c = Circuit::new(2);
+    /// c.h(0.into()).unwrap();
+    /// c.cx(0.into(), 1.into()).unwrap();
+    /// let out = c.measure_bits([Qubit::new(1), Qubit::new(0)]).unwrap();
+    ///
+    /// // `from_circuit` ignores terminal measurements and keeps the Bell state.
+    /// let state = StabilizerState::from_circuit(&c).unwrap();
+    /// let result = state.sample(&out, 1000).unwrap();
+    ///
+    /// assert_eq!(result.shots(), 1000);
+    /// assert!(result
+    ///     .counts()
+    ///     .keys()
+    ///     .all(|bits| bits.to_string(out.width()) == "00" || bits.to_string(out.width()) == "11"));
+    /// ```
+    pub fn sample(
+        &self,
+        measurement: &Measurement,
+        shots: usize,
+    ) -> Result<ExecutionResult, QisError> {
+        for qubit in measurement.qubits() {
+            let index = qubit.index();
+            if index >= self.num_qubits {
+                return Err(QisError::IndexOutOfBounds {
+                    index,
+                    max: self.num_qubits.saturating_sub(1),
+                });
+            }
+        }
+
+        let mut counts = HashMap::new();
+        for full in self.sample_shots(shots) {
+            let mut chunks = SmallVec::from_elem(0u64, measurement.width().div_ceil(64));
+            for (bit, qubit) in measurement.qubits().iter().enumerate() {
+                if full.is_one(qubit.index()) {
+                    chunks[bit / 64] |= 1u64 << (bit % 64);
+                }
+            }
+            let projected = Outcome::new(chunks);
+            *counts.entry(projected).or_insert(0usize) += 1;
+        }
+
+        let mut result = ExecutionResult::new(
+            "stabilizer-sample".to_string(),
+            measurement.qubits().to_vec(),
+            shots,
+            measurement.width(),
+            Some("stabilizer".to_string()),
+            None,
+        );
+        result.start(None).finish(counts, None).calc_probabilities();
+        Ok(result)
+    }
+
+    /// Returns the probability distribution selected by a circuit [`Measurement`].
+    ///
+    /// This is a marginal distribution over `measurement.qubits()`, not the full
+    /// `2^n` state distribution. The returned [`Outcome`] keys use the same bit
+    /// order as [`sample`](Self::sample).
+    ///
+    /// v1 intentionally reuses [`probabilities`](Self::probabilities), so it has
+    /// the same `n <= 20` limit. Use [`sample`](Self::sample) for larger states.
+    pub fn probs(&self, measurement: &Measurement) -> Result<HashMap<Outcome, f64>, QisError> {
+        for qubit in measurement.qubits() {
+            let index = qubit.index();
+            if index >= self.num_qubits {
+                return Err(QisError::IndexOutOfBounds {
+                    index,
+                    max: self.num_qubits.saturating_sub(1),
+                });
+            }
+        }
+
+        let mut marginal = HashMap::new();
+        for (basis, prob) in self.probabilities()?.into_iter().enumerate() {
+            if prob == 0.0 {
+                continue;
+            }
+            let mut chunks = SmallVec::from_elem(0u64, measurement.width().div_ceil(64));
+            for (bit, qubit) in measurement.qubits().iter().enumerate() {
+                if (basis >> qubit.index()) & 1 == 1 {
+                    chunks[bit / 64] |= 1u64 << (bit % 64);
+                }
+            }
+            *marginal.entry(Outcome::new(chunks)).or_insert(0.0) += prob;
+        }
+        Ok(marginal)
+    }
+
     /// Constructs a `StabilizerState` by simulating a Clifford circuit.
     ///
-    /// Executes all gates in the circuit sequentially, including
-    /// [`Directive::Measure`] and [`Directive::Reset`] operations.
-    /// Control-flow gates are not supported.
-    /// Non-Clifford gates return `Err(QisError::NonCliffordGate)`.
+    /// This state-level entry point only performs quantum state evolution.
+    /// Measurement and store operations produced by `Circuit::measure*` are
+    /// treated as output declarations and ignored here: they do not collapse
+    /// the state and do not populate runtime classical data.
     ///
-    /// For mid-circuit measurement results, use [`apply_circuit`] instead.
+    /// Use [`sample`](Self::sample) or [`probs`](Self::probs) with the returned
+    /// [`Measurement`] to query measurement distributions from the final state.
+    /// Use [`apply_circuit`](Self::apply_circuit) when you need execution
+    /// semantics where measurements collapse the state and write classical data.
     ///
     /// # Supported instructions
     /// - Gates: `I, H, X, Y, Z, S, SDG, X2P, X2M, Y2P, Y2M, CX, CY, CZ, SWAP`
-    /// - Directives: `Measure` (collapses state), `Reset` (returns qubit to |0⟩), `Barrier`/`Delay` (no-op)
+    /// - Classical data: `MeasureBit`, `MeasureBits`, `Store` are ignored
+    /// - Directives: `Reset` (returns qubit to |0⟩), `Barrier`/`Delay` (no-op)
     ///
     /// [`apply_circuit`]: StabilizerState::apply_circuit
     ///
@@ -1317,41 +1458,74 @@ impl StabilizerState {
     /// use cqlib_core::qis::StabilizerState;
     ///
     /// let mut c = Circuit::new(2);
-    /// c.h(0.into());
-    /// c.cx(0.into(), 1.into());
+    /// c.h(0.into()).unwrap();
+    /// c.cx(0.into(), 1.into()).unwrap();
+    /// let out = c.measure_bits([1.into(), 0.into()]).unwrap();
+    ///
+    /// // The measurement above is an output declaration for state sampling.
+    /// // It does not collapse the Bell state during `from_circuit`.
     /// let stab = StabilizerState::from_circuit(&c).unwrap();
+    /// let probs = stab.probs(&out).unwrap();
+    /// assert!((probs.values().sum::<f64>() - 1.0).abs() < 1e-10);
     /// ```
     pub fn from_circuit(circuit: &Circuit) -> Result<Self, QisError> {
-        Ok(StabilizerState::apply_circuit(circuit)?.state)
+        Ok(StabilizerState::run_circuit(circuit, CircuitClassicalMode::Ignore)?.state)
     }
 
-    /// Executes a Clifford circuit and returns both the final state and mid-circuit
-    /// measurement results.
+    /// Executes a Clifford circuit and returns both the final state and runtime
+    /// classical data.
     ///
     /// Returns a [`CircuitExecutionResult`] containing:
     /// - `state`: the final [`StabilizerState`] after all operations
-    /// - `measurements`: per-qubit last measurement results (indexed by physical qubit index)
+    /// - `classical`: measurement results and mutable variables indexed by
+    ///   [`crate::circuit::ClassicalValue`] and [`crate::circuit::ClassicalVar`]
     ///
     /// # Supported instructions
-    /// Same as [`from_circuit`]. Control-flow gates are not supported.
+    /// Same quantum gates as [`from_circuit`]. Unlike `from_circuit`, this
+    /// method executes `MeasureBit`, `MeasureBits`, and `Store`: measurements
+    /// collapse the state immediately and write runtime classical data.
+    /// Control-flow gates are not supported.
     ///
     /// [`from_circuit`]: StabilizerState::from_circuit
     ///
     /// # Example
     /// ```rust
-    /// use cqlib_core::circuit::Circuit;
-    /// use cqlib_core::qis::StabilizerState;
+    /// use cqlib_core::circuit::{Circuit, ClassicalExpr, ClassicalType};
+    /// use cqlib_core::qis::{RuntimeValue, StabilizerState};
     ///
     /// let mut c = Circuit::new(1);
-    /// c.h(0.into());
-    /// c.measure(0.into()).unwrap(); // mid-circuit measurement
+    /// c.x(0.into()).unwrap();
+    ///
+    /// // `measure` creates an immutable runtime value.
+    /// let measured = c.measure(0.into()).unwrap();
+    ///
+    /// // `store` can copy or transform measured values into mutable variables.
+    /// let flag = c.var(ClassicalType::Bool);
+    /// c.store(flag, ClassicalExpr::bit_to_bool(measured.expr()).unwrap()).unwrap();
     ///
     /// let result = StabilizerState::apply_circuit(&c).unwrap();
-    /// // result.measurements[0] is Some(true) or Some(false)
-    /// assert!(result.measurements[0].is_some());
+    /// assert_eq!(result.classical.value(measured.value()), Some(&RuntimeValue::Bit(true)));
+    /// assert_eq!(result.classical.var(flag), Some(&RuntimeValue::Bool(true)));
     /// ```
     pub fn apply_circuit(circuit: &Circuit) -> Result<CircuitExecutionResult, QisError> {
-        let circuit = circuit.decompose()?;
+        StabilizerState::run_circuit(circuit, CircuitClassicalMode::Execute)
+    }
+
+    fn run_circuit(
+        input_circuit: &Circuit,
+        classical_mode: CircuitClassicalMode,
+    ) -> Result<CircuitExecutionResult, QisError> {
+        if input_circuit
+            .operations()
+            .iter()
+            .any(|op| matches!(op.instruction, Instruction::ClassicalControl(_)))
+        {
+            return Err(QisError::UnsupportedOperation(
+                "classical control flow is not supported in stabilizer simulation".to_string(),
+            ));
+        }
+
+        let circuit = input_circuit.decompose()?;
         let mut state = StabilizerState::new(circuit.num_qubits());
 
         let qubits = circuit.qubits();
@@ -1367,26 +1541,25 @@ impl StabilizerState {
             .map(|p| p.evaluate(&None).ok())
             .collect();
 
-        let mut classical_bits = vec![None::<bool>; circuit.num_qubits()];
+        let mut classical = ClassicalState::for_circuit(&circuit);
 
         StabilizerState::execute_operations(
             &mut state,
             circuit.operations(),
             &qubit_map,
             &parameter_values,
-            &mut classical_bits,
+            &mut classical,
+            classical_mode,
         )?;
+        classical.rebind_to_circuit(input_circuit)?;
 
-        Ok(CircuitExecutionResult {
-            state,
-            measurements: classical_bits,
-        })
+        Ok(CircuitExecutionResult { state, classical })
     }
 
     /// Recursive operation executor used by [`apply_circuit`].
     ///
-    /// Processes a slice of operations, updating the state and the classical bit
-    /// register in place.
+    /// Processes a slice of operations, updating the quantum state and runtime
+    /// classical state in place.
     ///
     /// [`apply_circuit`]: StabilizerState::apply_circuit
     fn execute_operations(
@@ -1394,7 +1567,8 @@ impl StabilizerState {
         ops: &[Operation],
         qubit_map: &std::collections::HashMap<Qubit, usize>,
         parameter_values: &[Option<f64>],
-        classical_bits: &mut [Option<bool>],
+        classical: &mut ClassicalState,
+        classical_mode: CircuitClassicalMode,
     ) -> Result<(), QisError> {
         for op in ops {
             let qubit_indices: Vec<usize> =
@@ -1447,9 +1621,9 @@ impl StabilizerState {
                 Instruction::Directive(directive) => match directive {
                     Directive::Barrier => {} // no-op
                     Directive::Measure => {
-                        let q = qubit_indices[0];
-                        let bit = state.measure(q)?;
-                        classical_bits[q] = Some(bit);
+                        return Err(QisError::UnsupportedOperation(
+                            "legacy Measure directive is not supported by stabilizer circuit execution; use Circuit::measure".to_string(),
+                        ));
                     }
                     Directive::Reset => {
                         let q = qubit_indices[0];
@@ -1467,10 +1641,33 @@ impl StabilizerState {
                         "CircuitGate should have been decomposed".to_string(),
                     )));
                 }
-                Instruction::ControlFlowGate(_) => {
+                Instruction::ClassicalControl(_) => {
                     return Err(QisError::UnsupportedOperation(
-                        "ControlFlowGate are not supported".to_string(),
+                        "classical control flow is not supported in stabilizer simulation"
+                            .to_string(),
                     ));
+                }
+                Instruction::ClassicalData(data) => {
+                    if classical_mode == CircuitClassicalMode::Ignore {
+                        continue;
+                    }
+                    match data {
+                        ClassicalDataOp::MeasureBit { result } => {
+                            let bit = state.measure(qubit_indices[0])?;
+                            classical.set_value(*result, RuntimeValue::Bit(bit))?;
+                        }
+                        ClassicalDataOp::MeasureBits { result } => {
+                            let bits = qubit_indices
+                                .iter()
+                                .copied()
+                                .map(|q| state.measure(q))
+                                .collect::<Result<Vec<_>, _>>()?;
+                            classical.set_value(*result, RuntimeValue::bit_vec_from_lsb(&bits))?;
+                        }
+                        ClassicalDataOp::Store { target, value } => {
+                            classical.store(*target, value)?;
+                        }
+                    }
                 }
             }
         }
