@@ -10,38 +10,95 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
-//! Shared foundations for compiler layout algorithms.
+//! Initial-layout algorithms for quantum compilation.
 //!
-//! This module provides the stable support code needed by concrete layout
-//! methods: circuit interaction analysis, a compiler-local physical graph view,
-//! objective scoring, and result diagnostics.
+//! A layout maps each logical circuit qubit to one usable physical qubit on a
+//! target device. This module only chooses that initial mapping. It does not
+//! insert SWAP operations, rewrite instructions, or produce a fully routed
+//! physical circuit; routing is handled by later compiler stages such as the
+//! SABRE routing core.
 //!
-//! Concrete algorithms — `trivial_layout`, `greedy_layout`, `vf2_perfect_layout`,
-//! `sabre_layout` — are implemented as independent functions on top of these
-//! pieces, with workflow-level code deciding which function to call.
+//! The shared pipeline is:
+//!
+//! 1. [`analyze_circuit_for_layout`] extracts weighted logical interactions
+//!    from a [`Circuit`](crate::circuit::Circuit).
+//! 2. [`build_physical_layout_graph`] turns a [`Device`](crate::device::Device)
+//!    into a compiler-local physical topology and calibration view.
+//! 3. A concrete algorithm, such as [`trivial_layout`], [`greedy_layout`],
+//!    [`vf2_perfect_layout`], or [`sabre_layout`], returns a [`LayoutResult`].
+//!
+//! Mixed quantum/classical circuits are analyzed structurally. Layout analysis
+//! recursively visits `if`, `while`, `for`, and `switch` bodies so interactions
+//! hidden behind classical control still influence the initial mapping. It does
+//! not estimate branch probabilities, loop trip counts, or runtime paths.
+//!
+//! # Examples
+//!
+//! ```rust
+//! use cqlib_core::circuit::{Circuit, Qubit};
+//! use cqlib_core::compile::transform::{LayoutObjective, trivial_layout};
+//! use cqlib_core::device::Device;
+//!
+//! let mut circuit = Circuit::new(2);
+//! circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
+//! let device = Device::line("line-2", 2).unwrap();
+//!
+//! let result = trivial_layout(&circuit, &device, &LayoutObjective::topology_only()).unwrap();
+//! assert!(result.score.is_some());
+//! ```
 
 mod analysis;
 mod greedy;
 mod objective;
-mod physical;
 mod result;
 mod sabre;
 mod trivial;
 mod vf2;
 mod vf2_engine;
 
+pub use crate::compile::physical_target::{
+    DistanceTable, PhysicalLayoutGraph, build_physical_layout_graph,
+};
 pub use analysis::{
     CircuitLayoutAnalysis, Interaction, InteractionGraph, analyze_circuit_for_layout,
 };
 pub use greedy::{greedy_layout, greedy_layout_prepared};
 pub use objective::{LayoutObjective, LayoutScore};
-pub use physical::{DistanceTable, PhysicalLayoutGraph, build_physical_layout_graph};
 pub use result::{LayoutDiagnostics, LayoutResult};
 pub use sabre::{sabre_layout, sabre_layout_prepared};
 pub use trivial::{trivial_layout, trivial_layout_prepared};
 pub use vf2::{
     Vf2EdgeRequirement, Vf2LayoutConfig, vf2_perfect_layout, vf2_perfect_layout_prepared,
 };
+
+/// Returns whether a layout realizes all positive-weight interactions directly.
+///
+/// This shared helper is intentionally topology-only. Direction mismatch and
+/// calibration quality are represented by [`LayoutObjective`] rather than by
+/// the perfect-layout diagnostic.
+fn is_perfect_layout(
+    analysis: &CircuitLayoutAnalysis,
+    physical: &PhysicalLayoutGraph,
+    layout: &crate::device::Layout,
+) -> bool {
+    // "Perfect" is a topology property: every positive-weight logical
+    // interaction is already adjacent on the device. Coupling direction and
+    // calibration quality are intentionally scored elsewhere.
+    analysis
+        .interactions
+        .interactions()
+        .iter()
+        .filter(|interaction| interaction.weight > 0.0)
+        .all(|interaction| {
+            let Some(left) = layout.get_physical(interaction.left) else {
+                return false;
+            };
+            let Some(right) = layout.get_physical(interaction.right) else {
+                return false;
+            };
+            physical.is_adjacent_undirected(left, right)
+        })
+}
 
 #[cfg(test)]
 mod greedy_test;

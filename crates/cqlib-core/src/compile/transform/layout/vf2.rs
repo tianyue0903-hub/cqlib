@@ -11,6 +11,12 @@
 // that they have been altered from the originals.
 
 //! VF2++ perfect initial layout.
+//!
+//! VF2 layout searches for a topology-perfect initial mapping: every required
+//! logical interaction must land on an adjacent physical edge. The search is
+//! non-induced, so the physical topology may contain extra edges that are not
+//! present in the logical interaction graph. This matches the compiler use
+//! case: extra device connectivity is harmless and can help later routing.
 
 use super::vf2_engine::{Vf2Graph, Vf2SearchConfig, find_non_induced_mappings};
 use super::{
@@ -24,15 +30,20 @@ use rustworkx_core::petgraph::graph::NodeIndex;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Selects which logical interaction edges must be matched by VF2.
+///
+/// This controls only the hard topology constraint. Coupling direction and
+/// calibration quality are still handled by [`LayoutObjective`] after complete
+/// topology candidates are found.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Vf2EdgeRequirement {
-    /// Require only interactions with positive weight.
+    /// Require only interactions with positive accumulated weight.
     PositiveInteractions,
     /// Require every interaction stored in the interaction graph.
     AllInteractions,
 }
 
 impl Vf2EdgeRequirement {
+    /// Returns whether `interaction` is part of the VF2 hard topology graph.
     fn requires(self, interaction: &Interaction) -> bool {
         match self {
             Self::PositiveInteractions => interaction.weight > 0.0,
@@ -45,8 +56,14 @@ impl Vf2EdgeRequirement {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Vf2LayoutConfig {
     /// Maximum number of complete perfect candidates to score.
+    ///
+    /// Larger values can improve calibration-aware ranking but increase search
+    /// and scoring cost. A value of zero is invalid.
     pub candidate_limit: usize,
     /// Maximum number of partial mapping extensions attempted by the search.
+    ///
+    /// `None` means no explicit extension limit. When the limit is reached,
+    /// diagnostics record that the search was truncated.
     pub call_limit: Option<usize>,
     /// Selects which logical interaction edges are hard topology constraints.
     pub edge_requirement: Vf2EdgeRequirement,
@@ -68,12 +85,38 @@ impl Default for Vf2LayoutConfig {
 /// physical qubits. Physical extra edges are allowed, matching Qiskit's
 /// non-induced `VF2Layout` semantics. Coupling direction is not a hard
 /// feasibility constraint; direction mismatch is scored by [`LayoutObjective`].
+/// Logical qubits that do not participate in required interactions are filled
+/// deterministically after the VF2 match is found.
 ///
 /// # Errors
 ///
 /// Returns [`CompilerError::InvalidInput`] if physical capacity is insufficient,
 /// `candidate_limit` is zero, no perfect mapping is found, or scoring rejects
 /// all complete candidates.
+///
+/// # Examples
+///
+/// ```rust
+/// use cqlib_core::circuit::{Circuit, Qubit};
+/// use cqlib_core::compile::transform::{
+///     LayoutObjective, Vf2LayoutConfig, vf2_perfect_layout,
+/// };
+/// use cqlib_core::device::Device;
+///
+/// let mut circuit = Circuit::new(3);
+/// circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
+/// circuit.cx(Qubit::new(1), Qubit::new(2)).unwrap();
+/// let device = Device::line("line-3", 3).unwrap();
+///
+/// let result = vf2_perfect_layout(
+///     &circuit,
+///     &device,
+///     &LayoutObjective::topology_only(),
+///     &Vf2LayoutConfig::default(),
+/// )
+/// .unwrap();
+/// assert!(result.diagnostics.is_perfect);
+/// ```
 pub fn vf2_perfect_layout(
     circuit: &Circuit,
     device: &Device,
@@ -117,6 +160,9 @@ pub fn vf2_perfect_layout_prepared(
         .collect::<Vec<_>>();
 
     if required_interactions.is_empty() {
+        // Interaction-free circuits are trivially topology-perfect. We still
+        // complete and score the mapping so fidelity-aware objectives can rank
+        // physical qubits by readout quality.
         let mapping = complete_mapping(BTreeMap::new(), analysis, physical, objective, &activity);
         let layout = layout_from_mapping(analysis, physical, mapping, "vf2 perfect layout")?;
         let score = objective.score_layout(analysis, physical, &layout)?;
@@ -132,6 +178,8 @@ pub fn vf2_perfect_layout_prepared(
         });
     }
 
+    // Build a compact graph containing only logical qubits that participate in
+    // hard VF2 constraints. Idle qubits are handled by complete_mapping.
     let mut logical_index = BTreeMap::new();
     for interaction in &required_interactions {
         if !logical_index.contains_key(&interaction.left) {
@@ -163,6 +211,8 @@ pub fn vf2_perfect_layout_prepared(
         }
     }
 
+    // The matching graph is undirected: direction is not a feasibility
+    // condition for perfect layout, only a scoring term.
     let mut physical_graph = Vf2Graph::with_capacity(physical.physical_qubits().len(), 0);
     for _ in physical.physical_qubits() {
         physical_graph.add_node(());
@@ -262,6 +312,12 @@ pub fn vf2_perfect_layout_prepared(
     })
 }
 
+/// Completes a partial VF2 mapping with deterministic assignments.
+///
+/// VF2 only maps logical qubits that participate in hard interaction
+/// constraints. This function assigns the remaining logical qubits to unused
+/// physical qubits, preferring high logical activity and low readout error when
+/// the objective asks for readout-aware scoring.
 fn complete_mapping(
     mut mapping: BTreeMap<LogicalQubit, PhysicalQubit>,
     analysis: &CircuitLayoutAnalysis,
@@ -276,6 +332,8 @@ fn complete_mapping(
         .copied()
         .filter(|qubit| !occupied.contains(qubit))
         .collect::<Vec<_>>();
+    // Remaining physical qubits are deterministic. If readout fidelity is part
+    // of the objective, prefer lower readout error before qubit ID.
     free_physical.sort_by(|left, right| {
         if objective.readout_error_weight != 0.0 {
             physical
@@ -288,6 +346,8 @@ fn complete_mapping(
         }
     });
 
+    // Busier logical qubits get first choice among the remaining physical
+    // qubits. Interaction-free qubits all get activity 1.0 and fall back to ID.
     let mut unmapped_logical = analysis
         .logical_qubits
         .iter()
@@ -309,6 +369,11 @@ fn complete_mapping(
     mapping
 }
 
+/// Converts a complete logical-to-physical map into a validated [`Layout`].
+///
+/// The `algorithm` label is included in invariant-violation messages so caller
+/// diagnostics identify which layout implementation produced invalid internal
+/// state.
 fn layout_from_mapping(
     analysis: &CircuitLayoutAnalysis,
     physical: &PhysicalLayoutGraph,

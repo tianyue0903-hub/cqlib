@@ -11,7 +11,7 @@
 // that they have been altered from the originals.
 
 use super::*;
-use crate::circuit::{Circuit, Instruction, Qubit, StandardGate};
+use crate::circuit::{Circuit, ClassicalExpr, Instruction, Qubit, StandardGate};
 use crate::compile::CompilerError;
 use crate::compile::sabre::SabreConfig;
 use crate::device::{Device, EdgeProp, InstructionProp, PhysicalQubit, Topology};
@@ -89,6 +89,22 @@ fn sabre_layout_rejects_zero_layout_trials() {
 }
 
 #[test]
+fn sabre_layout_rejects_zero_layout_scoring_trials() {
+    let device = Device::line("line", 2).unwrap();
+    let objective = LayoutObjective::topology_only();
+    let mut config = SabreConfig::deterministic_seeded(7);
+    config.layout_scoring_trials = 0;
+    let mut circuit = Circuit::new(2);
+    circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
+
+    let error = sabre_layout(&circuit, &device, &objective, &config).unwrap_err();
+
+    assert!(
+        matches!(error, CompilerError::InvalidInput(message) if message.contains("layout_scoring_trials"))
+    );
+}
+
+#[test]
 fn sabre_layout_rejects_insufficient_physical_qubits() {
     let p0 = PhysicalQubit::new(0);
     let topology = Topology::new(vec![p0], vec![]).unwrap();
@@ -102,6 +118,25 @@ fn sabre_layout_rejects_insufficient_physical_qubits() {
     assert!(
         matches!(error, CompilerError::InvalidInput(message) if message.contains("2 logical qubits") && message.contains("1 usable physical qubits"))
     );
+}
+
+#[test]
+fn sabre_layout_scores_control_flow_body_interactions() {
+    let device = Device::line("line", 3).unwrap();
+    let objective = LayoutObjective::topology_only();
+    let config = SabreConfig::deterministic_seeded(7);
+    let mut circuit = Circuit::new(3);
+    circuit
+        .if_(ClassicalExpr::bool_literal(true), |body| {
+            body.cx(Qubit::new(0), Qubit::new(2))?;
+            Ok(())
+        })
+        .unwrap();
+
+    let result = sabre_layout(&circuit, &device, &objective, &config).unwrap();
+
+    assert!(result.diagnostics.is_perfect);
+    assert_eq!(result.score.unwrap().distance, 1.0);
 }
 
 #[test]

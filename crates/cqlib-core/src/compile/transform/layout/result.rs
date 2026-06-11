@@ -11,16 +11,25 @@
 // that they have been altered from the originals.
 
 //! Result types for concrete layout algorithms.
+//!
+//! Layout algorithms return both the selected mapping and enough metadata for
+//! compiler pipelines to explain why that mapping was chosen. Diagnostics are
+//! intentionally lightweight and human-readable; they are not a stable machine
+//! protocol.
 
 use super::objective::LayoutScore;
 use crate::device::Layout;
 
 /// Candidate or selected layout produced by a concrete layout algorithm.
+///
+/// Most production layout entries return a scored result. The score remains
+/// optional so simple adapters or future algorithms can report a valid layout
+/// before a final objective has been evaluated.
 #[derive(Debug, Clone)]
 pub struct LayoutResult {
-    /// Logical-to-physical layout.
+    /// Selected logical-to-physical mapping.
     pub layout: Layout,
-    /// Optional score used to rank this layout.
+    /// Optional score used to rank this layout against other candidates.
     pub score: Option<LayoutScore>,
     /// Diagnostics describing search and scoring behavior.
     pub diagnostics: LayoutDiagnostics,
@@ -33,10 +42,14 @@ pub struct LayoutDiagnostics {
     /// adjacent hardware edge.
     pub is_perfect: bool,
     /// Number of candidate layouts considered by the method.
+    ///
+    /// Algorithms count this according to their own search unit: for example,
+    /// greedy placement counts local placement candidates, while VF2 and SABRE
+    /// count complete layouts that were evaluated.
     pub candidates_evaluated: usize,
-    /// Whether fidelity/error data contributed to scoring.
+    /// Whether fidelity/error data contributed to the selected score.
     pub used_fidelity: bool,
-    /// Human-readable notes for debug reports.
+    /// Human-readable notes for debug reports and compiler logs.
     pub notes: Vec<String>,
 }
 
@@ -46,7 +59,7 @@ impl LayoutDiagnostics {
         Self::default()
     }
 
-    /// Adds one diagnostic note.
+    /// Adds one diagnostic note and returns the updated diagnostics.
     pub fn with_note(mut self, note: impl Into<String>) -> Self {
         self.notes.push(note.into());
         self

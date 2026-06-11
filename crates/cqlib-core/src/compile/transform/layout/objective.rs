@@ -11,29 +11,52 @@
 // that they have been altered from the originals.
 
 //! Layout scoring objective shared by layout algorithms.
+//!
+//! A layout objective assigns lower scores to better candidate mappings. The
+//! score combines topology distance, directed-coupling mismatch, optional
+//! two-qubit error rates, and optional readout error rates. Algorithms may use
+//! this objective either as a final ranking function or as a local tie-breaker
+//! while constructing a candidate.
 
 use super::analysis::CircuitLayoutAnalysis;
-use super::physical::PhysicalLayoutGraph;
 use crate::compile::CompilerError;
+use crate::compile::physical_target::PhysicalLayoutGraph;
 use crate::device::Layout;
 use std::collections::BTreeMap;
 
 /// Weighted scoring objective used to rank candidate layouts.
+///
+/// All weights must be finite and non-negative. Setting a weight to `0.0`
+/// removes that component from the total score. The raw components are still
+/// reported in [`LayoutScore`] when they can be computed.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LayoutObjective {
     /// Weight for weighted logical interaction distance.
+    ///
+    /// Each interaction contributes `interaction.weight * physical_distance`.
     pub distance_weight: f64,
     /// Weight for directly adjacent interactions whose observed operation
     /// direction is unsupported by the directed coupling graph.
     pub direction_weight: f64,
     /// Weight for known two-qubit gate error rates.
+    ///
+    /// Missing calibration entries contribute `0.0`; use
+    /// [`LayoutObjective::fidelity_required`] when missing calibration data
+    /// should reject fidelity-aware layout selection.
     pub two_qubit_error_weight: f64,
     /// Weight for known readout error rates.
+    ///
+    /// Readout error is scaled by logical activity. Interaction-free circuits
+    /// assign activity `1.0` to each logical qubit so idle layouts can still be
+    /// ranked by readout fidelity.
     pub readout_error_weight: f64,
 }
 
 impl LayoutObjective {
     /// Creates a topology-only objective.
+    ///
+    /// This ranks by interaction distance and directed-coupling mismatch only,
+    /// ignoring all calibration data even if the target device provides it.
     pub fn topology_only() -> Self {
         Self {
             distance_weight: 1.0,
@@ -43,8 +66,10 @@ impl LayoutObjective {
         }
     }
 
-    /// Creates a fidelity-aware objective when the physical graph has useful
-    /// calibration data, otherwise falls back to topology-only scoring.
+    /// Creates a fidelity-aware objective when useful calibration data exists.
+    ///
+    /// If the physical graph has no usable error-rate data, this falls back to
+    /// [`LayoutObjective::topology_only`] instead of failing.
     pub fn auto_from_physical(physical: &PhysicalLayoutGraph) -> Self {
         if physical.has_fidelity_data() {
             Self::fidelity_aware()
@@ -53,8 +78,10 @@ impl LayoutObjective {
         }
     }
 
-    /// Creates a fidelity-aware objective and rejects physical graphs that do
-    /// not contain usable calibration data.
+    /// Creates a fidelity-aware objective and requires calibration data.
+    ///
+    /// Use this for workflows where silently falling back to topology-only
+    /// scoring would hide a device-data configuration problem.
     pub fn fidelity_required(physical: &PhysicalLayoutGraph) -> Result<Self, CompilerError> {
         if physical.has_fidelity_data() {
             Ok(Self::fidelity_aware())
@@ -67,6 +94,10 @@ impl LayoutObjective {
     }
 
     /// Creates the default fidelity-aware objective.
+    ///
+    /// The default weights keep topology distance and direction mismatch active
+    /// while making known two-qubit error rates a stronger tie-breaker than
+    /// readout error.
     pub fn fidelity_aware() -> Self {
         Self {
             distance_weight: 1.0,
@@ -82,6 +113,17 @@ impl LayoutObjective {
     }
 
     /// Scores a candidate layout against circuit and physical-graph analysis.
+    ///
+    /// The layout must map every logical qubit in `analysis`. Interactions
+    /// whose mapped physical qubits are disconnected are rejected because the
+    /// resulting mapping cannot be routed within the usable topology.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CompilerError::InvalidInput`] for invalid objective weights or
+    /// disconnected mapped interactions. Returns
+    /// [`CompilerError::InvariantViolation`] if the layout omits a logical
+    /// qubit present in the analysis.
     pub fn score_layout(
         &self,
         analysis: &CircuitLayoutAnalysis,
@@ -120,6 +162,9 @@ impl LayoutObjective {
             distance += interaction.weight * f64::from(pair_distance);
 
             if pair_distance == 1 {
+                // Direction and two-qubit error are meaningful only for a
+                // concrete adjacent hardware edge. Non-adjacent interactions
+                // are handled through the distance term and later routing.
                 if interaction.directed_weight_left_to_right > 0.0
                     && !physical.supports_directed_coupling(left_physical, right_physical)
                 {
@@ -169,6 +214,10 @@ impl Default for LayoutObjective {
 }
 
 /// Breakdown of one layout score.
+///
+/// Raw component fields are unweighted except for the interaction weights
+/// already present in the circuit analysis. The [`LayoutScore::total`] field
+/// applies the objective weights.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LayoutScore {
     /// Weighted sum according to [`LayoutObjective`].
@@ -185,6 +234,11 @@ pub struct LayoutScore {
     pub used_fidelity: bool,
 }
 
+/// Computes the raw readout-error component for a complete layout.
+///
+/// Logical qubit activity scales the contribution of each mapped physical
+/// readout error. Interaction-free circuits use one unit of activity per
+/// logical qubit so readout data can still rank idle mappings.
 fn score_readout_error(
     analysis: &CircuitLayoutAnalysis,
     physical: &PhysicalLayoutGraph,
@@ -192,6 +246,9 @@ fn score_readout_error(
 ) -> Result<f64, CompilerError> {
     let mut activity = analysis.interactions.logical_activity();
     if activity.is_empty() {
+        // Without two-qubit interactions there is no natural activity signal.
+        // Assigning one unit to each logical qubit lets readout calibration
+        // still rank otherwise equivalent interaction-free layouts.
         activity = analysis
             .logical_qubits
             .iter()
@@ -214,6 +271,7 @@ fn score_readout_error(
     Ok(readout_error)
 }
 
+/// Validates that one objective weight can participate in total ordering.
 fn validate_objective_weight(value: f64, name: &str) -> Result<(), CompilerError> {
     if value.is_finite() && value >= 0.0 {
         Ok(())

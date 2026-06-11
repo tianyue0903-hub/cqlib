@@ -12,7 +12,7 @@
 
 use super::*;
 use crate::circuit::gate::Directive;
-use crate::circuit::{Circuit, Instruction, Operation, Qubit, StandardGate};
+use crate::circuit::{Circuit, ClassicalExpr, ClassicalType, Instruction, Qubit, StandardGate};
 use crate::compile::CompilerError;
 use crate::device::{
     Device, EdgeProp, InstructionProp, Layout, LogicalQubit, PhysicalQubit, QubitProp, Topology,
@@ -56,29 +56,82 @@ fn analyze_circuit_builds_weighted_interaction_graph() {
 }
 
 #[test]
-fn analyze_skips_control_flow_operations() {
+fn analyze_recurses_into_control_flow_operations() {
     let q0 = Qubit::new(0);
     let q1 = Qubit::new(1);
-    // Two-qubit gate inside a while-loop body — should be skipped because
-    // layout only analyzes top-level operations.
     let mut circuit = Circuit::new(2);
     circuit.cx(q0, q1).unwrap();
     circuit
-        .while_loop(
-            crate::circuit::ConditionView::new(q0, 1),
-            vec![Operation {
-                instruction: Instruction::Standard(StandardGate::CX),
-                qubits: smallvec::smallvec![q0, q1],
-                params: smallvec::smallvec![],
-                label: None,
-            }],
-        )
+        .while_(ClassicalExpr::bool_literal(true), |body| {
+            body.cx(q0, q1)?;
+            Ok(())
+        })
         .unwrap();
 
     let analysis = analyze_circuit_for_layout(&circuit).unwrap();
-    // Only the top-level CX is counted; the CX inside the while body is skipped.
     assert_eq!(analysis.interactions.len(), 1);
-    assert_eq!(analysis.interactions.interactions()[0].weight, 1.0);
+    assert_eq!(analysis.interactions.interactions()[0].weight, 2.0);
+}
+
+#[test]
+fn analyze_recurses_into_branch_loop_and_switch_bodies() {
+    let q0 = Qubit::new(0);
+    let q1 = Qubit::new(1);
+    let q2 = Qubit::new(2);
+    let mut circuit = Circuit::new(3);
+    circuit
+        .if_else(
+            ClassicalExpr::bool_literal(true),
+            |body| {
+                body.cx(q0, q1)?;
+                Ok(())
+            },
+            |body| {
+                body.cz(q1, q2)?;
+                Ok(())
+            },
+        )
+        .unwrap();
+    let loop_var = circuit.var(ClassicalType::uint(2).unwrap());
+    circuit
+        .for_uint(
+            loop_var,
+            ClassicalExpr::uint_literal(2, 0).unwrap(),
+            ClassicalExpr::uint_literal(2, 2).unwrap(),
+            ClassicalExpr::uint_literal(2, 1).unwrap(),
+            |body, _| {
+                body.cx(q0, q2)?;
+                Ok(())
+            },
+        )
+        .unwrap();
+    circuit
+        .switch(ClassicalExpr::uint_literal(2, 1).unwrap(), |switch| {
+            switch.value(1, |body| {
+                body.cx(q0, q1)?;
+                Ok(())
+            })?;
+            switch.default(|body| {
+                body.cz(q1, q2)?;
+                Ok(())
+            })?;
+            Ok(())
+        })
+        .unwrap();
+
+    let analysis = analyze_circuit_for_layout(&circuit).unwrap();
+
+    assert_eq!(analysis.interactions.len(), 3);
+    let interactions = analysis.interactions.interactions();
+    assert_eq!(interactions[0].left, LogicalQubit::new(0));
+    assert_eq!(interactions[0].right, LogicalQubit::new(1));
+    assert_eq!(interactions[0].weight, 2.0);
+    assert_eq!(interactions[1].left, LogicalQubit::new(0));
+    assert_eq!(interactions[1].right, LogicalQubit::new(2));
+    assert_eq!(interactions[1].weight, 1.0);
+    assert_eq!(interactions[2].left, LogicalQubit::new(1));
+    assert_eq!(interactions[2].right, LogicalQubit::new(2));
+    assert_eq!(interactions[2].weight, 2.0);
 }
 
 #[test]

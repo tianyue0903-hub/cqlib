@@ -24,6 +24,18 @@ pub struct TransformResult {
 
 /// Common interface for compiler transforms that consume one circuit and produce
 /// a rebuilt circuit.
+///
+/// # Implementing
+///
+/// - [`name`](Transformer::name) returns a static human-readable label for logging.
+/// - [`transform`](Transformer::transform) applies the pass to a circuit.
+///
+/// Parameters that differ between pass instances (e.g. config, device) are bound at
+/// construction time so `transform` keeps a uniform signature across all passes.
 pub trait Transformer {
+    /// Human-readable pass name for logging and debugging.
+    fn name(&self) -> &'static str;
+
+    /// Applies the transform to `circuit`.
     fn transform(&self, circuit: &Circuit) -> Result<TransformResult, CompilerError>;
 }

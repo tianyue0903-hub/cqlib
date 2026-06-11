@@ -11,10 +11,15 @@
 // that they have been altered from the originals.
 
 //! Trivial initial layout.
+//!
+//! This algorithm is the deterministic baseline for the layout stack: logical
+//! qubits are assigned to usable physical qubits in their existing order. It is
+//! intentionally simple, but it still runs the shared objective and diagnostics
+//! so callers can compare it with optimized algorithms.
 
 use super::{
     CircuitLayoutAnalysis, LayoutDiagnostics, LayoutObjective, LayoutResult, PhysicalLayoutGraph,
-    analyze_circuit_for_layout, build_physical_layout_graph,
+    analyze_circuit_for_layout, build_physical_layout_graph, is_perfect_layout,
 };
 use crate::circuit::Circuit;
 use crate::compile::CompilerError;
@@ -26,11 +31,34 @@ use crate::device::{Device, Layout};
 /// calibration data. It is useful as a deterministic baseline and for circuits
 /// whose logical order already matches the target device.
 ///
+/// The returned diagnostics report whether the baseline is already perfect for
+/// the circuit interaction graph. A non-perfect result is still valid input for
+/// a later routing pass.
+///
 /// # Errors
 ///
 /// Returns [`CompilerError::InvalidInput`] if the circuit has more logical
 /// qubits than the device has usable physical qubits, or if scoring rejects the
 /// resulting layout.
+///
+/// # Examples
+///
+/// ```rust
+/// use cqlib_core::circuit::{Circuit, Qubit};
+/// use cqlib_core::compile::transform::{LayoutObjective, trivial_layout};
+/// use cqlib_core::device::{Device, LogicalQubit, PhysicalQubit};
+///
+/// let mut circuit = Circuit::new(2);
+/// circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
+/// let device = Device::line("line-2", 2).unwrap();
+///
+/// let result = trivial_layout(&circuit, &device, &LayoutObjective::topology_only()).unwrap();
+/// assert_eq!(
+///     result.layout.get_physical(LogicalQubit::new(0)),
+///     Some(PhysicalQubit::new(0)),
+/// );
+/// assert!(result.diagnostics.is_perfect);
+/// ```
 pub fn trivial_layout(
     circuit: &Circuit,
     device: &Device,
@@ -41,7 +69,7 @@ pub fn trivial_layout(
     trivial_layout_prepared(&analysis, &physical, objective)
 }
 
-/// Maps logical qubits to an already-built physical graph in their existing order.
+/// Maps logical qubits to a prepared physical graph in their existing order.
 ///
 /// This lower-level entry point is useful when a workflow has already prepared
 /// circuit analysis and physical graph data for one or more layout algorithms.
@@ -58,6 +86,8 @@ pub fn trivial_layout_prepared(
         )));
     }
 
+    // Layout::new with no explicit mapping follows the order of logical and
+    // physical qubit lists, which is exactly the trivial-layout contract.
     let layout = Layout::new(
         analysis.logical_qubits.clone(),
         physical.physical_qubits().to_vec(),
@@ -70,22 +100,9 @@ pub fn trivial_layout_prepared(
     })?;
 
     let score = objective.score_layout(analysis, physical, &layout)?;
-    let is_perfect = analysis
-        .interactions
-        .interactions()
-        .iter()
-        .all(|interaction| {
-            let Some(left) = layout.get_physical(interaction.left) else {
-                return false;
-            };
-            let Some(right) = layout.get_physical(interaction.right) else {
-                return false;
-            };
-            physical.is_adjacent_undirected(left, right)
-        });
 
     let diagnostics = LayoutDiagnostics {
-        is_perfect,
+        is_perfect: is_perfect_layout(analysis, physical, &layout),
         candidates_evaluated: 1,
         used_fidelity: score.used_fidelity,
         notes: Vec::new(),

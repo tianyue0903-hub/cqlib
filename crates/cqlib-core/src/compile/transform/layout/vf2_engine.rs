@@ -17,6 +17,10 @@
 //! follows the same shape as Qiskit's Rust VF2 core: ordered graph copies,
 //! bidirectional mappings, frontier state, adjacency matrices, lookahead
 //! feasibility checks, and an extension call limit.
+//!
+//! The engine deliberately returns only node-index mappings. Layout-specific
+//! concepts such as logical qubit IDs, physical qubit IDs, direction penalties,
+//! and calibration scoring stay in the public `vf2` adapter.
 
 use rustworkx_core::petgraph::graph::{NodeIndex, UnGraph};
 use rustworkx_core::petgraph::visit::EdgeRef;
@@ -24,19 +28,31 @@ use std::cmp::Reverse;
 
 pub(super) type Vf2Graph = UnGraph<(), ()>;
 
+/// Search limits for the internal non-induced VF2 matcher.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct Vf2SearchConfig {
+    /// Maximum number of complete mappings to collect.
     pub candidate_limit: usize,
+    /// Maximum number of candidate node-pair extensions to try.
     pub call_limit: Option<usize>,
 }
 
+/// Search counters reported back to the layout adapter.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(super) struct Vf2SearchStats {
+    /// Number of complete mappings emitted by the search.
     pub candidates_evaluated: usize,
+    /// Number of candidate node-pair extensions attempted.
     pub calls: usize,
+    /// Whether search stopped because [`Vf2SearchConfig::call_limit`] was hit.
     pub stopped_by_call_limit: bool,
 }
 
+/// Finds non-induced embeddings of `needle` in `haystack`.
+///
+/// Each returned vector maps `needle` node index to `haystack` node index.
+/// Non-induced semantics require every needle edge to exist in the haystack but
+/// allow extra haystack edges between mapped nodes.
 pub(super) fn find_non_induced_mappings(
     needle: &Vf2Graph,
     haystack: &Vf2Graph,
@@ -61,7 +77,15 @@ pub(super) fn find_non_induced_mappings(
     (search.mappings, search.stats)
 }
 
+/// Computes the VF2++ node visitation order for one graph.
+///
+/// High-degree roots are visited first, and nodes adjacent to the growing order
+/// are preferred within each breadth level. The returned order is deterministic
+/// for a fixed graph node order.
 fn vf2pp_order(graph: &Vf2Graph) -> Vec<usize> {
+    // VF2++ starts with high-degree roots and then prioritizes nodes already
+    // connected to the growing order. This exposes constraints early and
+    // reduces backtracking for layout interaction graphs.
     let node_count = graph.node_count();
     let degrees = (0..node_count)
         .map(|node| graph.neighbors(NodeIndex::new(node)).count())
@@ -115,16 +139,27 @@ fn vf2pp_order(graph: &Vf2Graph) -> Vec<usize> {
 
 #[derive(Debug, Clone)]
 struct GraphState {
+    /// Dense adjacency matrix for constant-time edge checks.
     adjacency: Vec<Vec<bool>>,
+    /// Sorted-by-construction neighbor lists from the petgraph node order.
     neighbors: Vec<Vec<usize>>,
+    /// Degree cache used by feasibility pruning.
     degrees: Vec<usize>,
+    /// Mapping from this graph's nodes to the opposite graph's nodes.
     mapping: Vec<Option<usize>>,
+    /// Generation in which each node first became adjacent to the mapping.
     neighbor_since: Vec<Option<usize>>,
+    /// Number of unmapped nodes adjacent to the current partial mapping.
     unmapped_frontier_count: usize,
+    /// Current search depth, also used to undo frontier updates precisely.
     generation: usize,
 }
 
 impl GraphState {
+    /// Builds dense search state from a sparse graph.
+    ///
+    /// The adjacency matrix supports constant-time feasibility checks, while
+    /// neighbor lists and degree caches drive frontier and lookahead pruning.
     fn new(graph: &Vf2Graph) -> Self {
         let node_count = graph.node_count();
         let mut adjacency = vec![vec![false; node_count]; node_count];
@@ -152,7 +187,14 @@ impl GraphState {
         }
     }
 
+    /// Adds one mapping pair and updates frontier bookkeeping for this depth.
+    ///
+    /// `ours` is a node in this graph and `theirs` is the corresponding node in
+    /// the opposite graph. The mapping is assumed to have passed feasibility
+    /// checks before this method is called.
     fn push_mapping(&mut self, ours: usize, theirs: usize) {
+        // Frontier bookkeeping is generation-scoped: pop_mapping can remove
+        // exactly the neighbor marks introduced at this depth.
         self.generation += 1;
         debug_assert!(self.mapping[ours].is_none());
         if self.neighbor_since[ours].is_some() {
@@ -169,7 +211,13 @@ impl GraphState {
         }
     }
 
+    /// Removes the most recently pushed mapping for `ours`.
+    ///
+    /// Frontier marks created at the current generation are rolled back, while
+    /// marks inherited from earlier search depths are preserved.
     fn pop_mapping(&mut self, ours: usize) {
+        // Undo only marks created by the matching push_mapping call. Older
+        // frontier marks must survive because they belong to shallower choices.
         for neighbor in self.neighbors[ours].iter().copied() {
             if self.neighbor_since[neighbor] == Some(self.generation) {
                 self.neighbor_since[neighbor] = None;
@@ -197,6 +245,10 @@ struct Search {
 }
 
 impl Search {
+    /// Recursively extends the partial mapping until limits or completion.
+    ///
+    /// Complete mappings are appended to `self.mappings`. Search stops when the
+    /// candidate limit is met or when the optional call limit is reached.
     fn search(&mut self) {
         if self.mappings.len() >= self.config.candidate_limit || self.stats.stopped_by_call_limit {
             return;
@@ -235,6 +287,9 @@ impl Search {
                 continue;
             }
 
+            // Extend both directions of the mapping. The frontier-count check
+            // is the VF2 lookahead condition that prevents the needle frontier
+            // from outgrowing the available haystack frontier.
             self.needle.push_mapping(needle_node, haystack_node);
             self.haystack.push_mapping(haystack_node, needle_node);
             if self.needle.unmapped_frontier_count <= self.haystack.unmapped_frontier_count {
@@ -251,6 +306,7 @@ impl Search {
         }
     }
 
+    /// Records and reports whether another extension would exceed call limit.
     fn reached_call_limit(&mut self) -> bool {
         if let Some(limit) = self.config.call_limit {
             if self.stats.calls >= limit {
@@ -261,7 +317,15 @@ impl Search {
         false
     }
 
+    /// Chooses the next unmapped needle node.
+    ///
+    /// Frontier nodes are preferred because their compatibility is constrained
+    /// by already-mapped neighbors. If no frontier node exists, the next
+    /// isolated or disconnected component root is returned.
     fn next_needle_candidate(&self) -> Option<(usize, NeighborKind)> {
+        // Prefer frontier nodes because they are constrained by the existing
+        // partial mapping. Isolated/unreached nodes are delayed until no
+        // frontier nodes remain.
         let mut isolated = None;
         for node in self.needle_order.iter().copied() {
             if self.needle.mapping[node].is_some() {
@@ -275,7 +339,13 @@ impl Search {
         isolated.map(|node| (node, NeighborKind::Neither))
     }
 
+    /// Checks whether one candidate node pair can extend the mapping.
+    ///
+    /// This combines degree pruning, already-mapped edge consistency, and VF2
+    /// lookahead for unmapped frontier neighbors.
     fn is_feasible(&self, needle_node: usize, haystack_node: usize) -> bool {
+        // A haystack node with lower degree cannot realize all required needle
+        // edges in a non-induced embedding.
         if self.haystack.degrees[haystack_node] < self.needle.degrees[needle_node] {
             return false;
         }
@@ -291,7 +361,14 @@ impl Search {
         true
     }
 
+    /// Verifies required edges to already-mapped needle neighbors.
+    ///
+    /// Because the search is non-induced, extra haystack edges are allowed and
+    /// do not appear in this check.
     fn mapped_edges_count_match(&self, needle_node: usize, haystack_node: usize) -> bool {
+        // Every already-mapped needle neighbor must correspond to an existing
+        // haystack edge. Extra haystack edges are allowed by non-induced
+        // matching and therefore are not checked here.
         for needle_neighbor in self.needle.neighbors[needle_node].iter().copied() {
             let Some(haystack_neighbor) = self.needle.mapping[needle_neighbor] else {
                 continue;
@@ -303,6 +380,11 @@ impl Search {
         true
     }
 
+    /// Applies the VF2 lookahead condition for unmapped frontier neighbors.
+    ///
+    /// The candidate haystack node must expose at least as many unmapped
+    /// frontier neighbors as the needle node still needs. This avoids exploring
+    /// branches that cannot satisfy future required edges.
     fn unmapped_existing_neighbors_feasible(
         &self,
         needle_node: usize,

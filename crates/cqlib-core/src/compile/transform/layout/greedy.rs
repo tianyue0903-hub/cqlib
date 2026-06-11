@@ -11,10 +11,17 @@
 // that they have been altered from the originals.
 
 //! Greedy initial layout.
+//!
+//! The greedy algorithm is a deterministic construction heuristic. It walks the
+//! logical interaction graph from highest to lowest weight, places the most
+//! important two-qubit interactions first, and then fills any idle logical
+//! qubits. It does not insert SWAP operations; it only prepares an initial
+//! mapping for later routing.
 
 use super::{
     CircuitLayoutAnalysis, Interaction, LayoutDiagnostics, LayoutObjective, LayoutResult,
     PhysicalLayoutGraph, analyze_circuit_for_layout, build_physical_layout_graph,
+    is_perfect_layout,
 };
 use crate::circuit::Circuit;
 use crate::compile::CompilerError;
@@ -29,6 +36,9 @@ use std::collections::BTreeMap;
 /// using the shared [`LayoutObjective`] as a local tie-breaker for direction
 /// and calibration data. Routing remains a later pass: this function only
 /// selects an initial logical-to-physical mapping.
+///
+/// This is a good default candidate generator for larger devices where VF2 may
+/// be too expensive or where a perfect topology embedding does not exist.
 ///
 /// # Errors
 ///
@@ -84,6 +94,8 @@ pub fn greedy_layout_prepared(
         )));
     }
 
+    // Dense indices let the placement loop update mapping and vacancy state
+    // without repeatedly searching the logical-qubit list.
     let logical_index = analysis
         .logical_qubits
         .iter()
@@ -103,6 +115,8 @@ pub fn greedy_layout_prepared(
     let mut vacant = vec![true; physical.physical_qubits().len()];
     let mut candidates_evaluated = 0usize;
 
+    // Highest-weight interactions are placed first. Stable tie-breakers keep
+    // the result reproducible when several edges have equal weight.
     let mut interactions = analysis
         .interactions
         .interactions()
@@ -122,6 +136,7 @@ pub fn greedy_layout_prepared(
         let right_logical = logical_index[&interaction.right];
         match (mapping[left_logical], mapping[right_logical]) {
             (Some(_), Some(_)) => {}
+            // If one endpoint is already placed, expand from that anchor.
             (Some(left_physical), None) => {
                 let (right_physical, evaluated) = choose_single_candidate(
                     interaction,
@@ -152,6 +167,8 @@ pub fn greedy_layout_prepared(
                 mapping[left_logical] = Some(left_physical);
                 vacant[left_physical] = false;
             }
+            // If neither endpoint is placed, choose the best ordered physical
+            // pair and reserve both qubits.
             (None, None) => {
                 let (left_physical, right_physical, evaluated) = choose_pair_candidate(
                     interaction,
@@ -176,6 +193,8 @@ pub fn greedy_layout_prepared(
         if mapping[logical_index].is_some() {
             continue;
         }
+        // Logical qubits with no positive two-qubit interactions still need a
+        // deterministic physical assignment for a complete Layout.
         let (physical_qubit, evaluated) = choose_idle_candidate(
             logical_index,
             &mapping,
@@ -229,6 +248,11 @@ pub fn greedy_layout_prepared(
     })
 }
 
+/// Chooses physical qubits for an interaction with both endpoints unmapped.
+///
+/// Connected physical pairs are considered first, ordered by distance and
+/// qubit IDs. If no connected vacant pair remains, all ordered vacant pairs are
+/// considered so the caller gets a deterministic failure or least-bad choice.
 fn choose_pair_candidate(
     interaction: &Interaction,
     left_logical: usize,
@@ -242,6 +266,10 @@ fn choose_pair_candidate(
     let mut best: Option<(usize, usize, CandidateCost)> = None;
     let mut evaluated = 0usize;
 
+    // Prefer connected physical pairs first. If the usable graph is fully
+    // disconnected in the remaining vacant region, the fallback below still
+    // returns a deterministic least-bad pair so final scoring can reject or
+    // route around it consistently.
     for (left_physical, right_physical) in pair_candidates.iter().copied() {
         if !vacant[left_physical] || !vacant[right_physical] {
             continue;
@@ -294,6 +322,11 @@ fn choose_pair_candidate(
         })
 }
 
+/// Chooses the missing physical endpoint for a partially mapped interaction.
+///
+/// `anchored_physical` is the already-placed endpoint. `anchor_is_left`
+/// indicates whether that endpoint corresponds to the left side of
+/// `interaction`, preserving direction-sensitive scoring.
 fn choose_single_candidate(
     interaction: &Interaction,
     candidate_logical: usize,
@@ -307,6 +340,8 @@ fn choose_single_candidate(
     let mut best: Option<(usize, CandidateCost)> = None;
     let mut evaluated = 0usize;
 
+    // The anchored endpoint fixes one side of the logical interaction; each
+    // vacant physical qubit is evaluated as the other endpoint.
     for candidate_physical in 0..vacant.len() {
         if !vacant[candidate_physical] {
             continue;
@@ -353,6 +388,10 @@ fn choose_single_candidate(
         })
 }
 
+/// Chooses a physical qubit for a logical qubit with no placed interaction.
+///
+/// Idle placement prefers candidates that stay near already-used physical
+/// qubits, then uses readout cost and physical ID as deterministic tie-breaks.
 fn choose_idle_candidate(
     logical: usize,
     mapping: &[Option<usize>],
@@ -365,6 +404,9 @@ fn choose_idle_candidate(
     let mut best: Option<(usize, usize, u64, f64)> = None;
     let mut evaluated = 0usize;
 
+    // Idle qubits are placed near the already-used region when possible. This
+    // keeps future routing options compact without pretending that idle qubits
+    // impose a hard interaction constraint.
     for candidate_physical in 0..vacant.len() {
         if !vacant[candidate_physical] {
             continue;
@@ -407,12 +449,19 @@ fn choose_idle_candidate(
 
 #[derive(Debug, Clone, Copy)]
 struct CandidateCost {
+    /// Whether the two physical candidates are disconnected in the usable graph.
     disconnected: bool,
+    /// Shortest-path distance between the physical candidates.
     distance: u32,
+    /// Local objective score for this placement decision.
     objective_total: f64,
 }
 
 impl CandidateCost {
+    /// Computes the local greedy cost for placing one interaction.
+    ///
+    /// The cost is local to the current placement decision; final layout
+    /// quality is still evaluated later by [`LayoutObjective::score_layout`].
     fn for_interaction(
         interaction: &Interaction,
         left_logical: usize,
@@ -469,6 +518,11 @@ impl CandidateCost {
     }
 }
 
+/// Returns the readout contribution for placing one logical qubit.
+///
+/// A logical index outside the activity slice is treated as activity `1.0`.
+/// This is used for anchored single-endpoint scoring where the anchored side
+/// should not affect the candidate endpoint's activity lookup.
 fn readout_cost(
     logical: usize,
     physical_qubit: usize,
@@ -486,13 +540,20 @@ fn readout_cost(
         .unwrap_or(0.0)
 }
 
+/// Orders two local greedy costs from better to worse.
 fn compare_cost(a: CandidateCost, b: CandidateCost) -> Ordering {
+    // Hard topology quality dominates local calibration tie-breaks: connected
+    // beats disconnected, then shorter path, then objective score.
     a.disconnected
         .cmp(&b.disconnected)
         .then_with(|| a.distance.cmp(&b.distance))
         .then_with(|| a.objective_total.total_cmp(&b.objective_total))
 }
 
+/// Updates the current best two-endpoint placement candidate.
+///
+/// Ties are resolved by physical qubit IDs so the greedy result is
+/// reproducible across runs.
 fn update_best_pair(
     interaction: &Interaction,
     left_logical: usize,
@@ -529,7 +590,10 @@ fn update_best_pair(
     }
 }
 
+/// Returns connected ordered physical pairs in deterministic preference order.
 fn sorted_physical_pair_candidates(physical: &PhysicalLayoutGraph) -> Vec<(usize, usize)> {
+    // Pre-sorting connected ordered pairs avoids repeating the same
+    // distance/ID tie-break logic for every unmapped interaction.
     let mut candidates = Vec::new();
     for left in 0..physical.physical_qubits().len() {
         for right in 0..physical.physical_qubits().len() {
@@ -546,25 +610,4 @@ fn sorted_physical_pair_candidates(physical: &PhysicalLayoutGraph) -> Vec<(usize
             .then_with(|| physical.physical_qubits()[a.1].cmp(&physical.physical_qubits()[b.1]))
     });
     candidates
-}
-
-fn is_perfect_layout(
-    analysis: &CircuitLayoutAnalysis,
-    physical: &PhysicalLayoutGraph,
-    layout: &Layout,
-) -> bool {
-    analysis
-        .interactions
-        .interactions()
-        .iter()
-        .filter(|interaction| interaction.weight > 0.0)
-        .all(|interaction| {
-            let Some(left) = layout.get_physical(interaction.left) else {
-                return false;
-            };
-            let Some(right) = layout.get_physical(interaction.right) else {
-                return false;
-            };
-            physical.is_adjacent_undirected(left, right)
-        })
 }
