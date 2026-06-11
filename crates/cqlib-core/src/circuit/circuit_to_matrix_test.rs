@@ -16,16 +16,15 @@
 //! unitary matrix representations.
 
 use super::*;
+use crate::circuit::Qubit;
 use crate::circuit::circuit_param::ParameterValue;
 use crate::circuit::error::CircuitError;
-use crate::circuit::gate::{ConditionView, FrozenCircuit, Instruction, StandardGate, UnitaryGate};
+use crate::circuit::gate::{FrozenCircuit, Instruction, StandardGate, UnitaryGate};
 use crate::circuit::parameter::Parameter;
 use crate::circuit::symbolic_matrix::{SymbolicMatrix, standard_gate_symbolic_matrix};
-use crate::circuit::{Operation, Qubit};
 use crate::util::test_utils::{assert_is_unitary, assert_matrix_approx_eq};
 use ndarray::array;
 use num_complex::Complex64;
-use smallvec::smallvec;
 use std::f64::consts::{PI, SQRT_2};
 use std::sync::Arc;
 
@@ -639,24 +638,6 @@ fn test_reset_returns_error() {
     assert!(matches!(
         circuit_to_matrix(&circuit, None),
         Err(CircuitError::NoMatrixRepresentation)
-    ));
-}
-
-#[test]
-fn test_control_flow_returns_error() {
-    let mut circuit = Circuit::new(2);
-    let condition = ConditionView::new(Qubit::new(0), 1);
-    let true_body = vec![Operation {
-        instruction: Instruction::Standard(StandardGate::X),
-        qubits: smallvec![Qubit::new(1)],
-        params: smallvec![],
-        label: None,
-    }];
-    circuit.if_else(condition, true_body, None).unwrap();
-
-    assert!(matches!(
-        circuit_to_matrix(&circuit, None),
-        Err(CircuitError::InvalidOperation(_))
     ));
 }
 

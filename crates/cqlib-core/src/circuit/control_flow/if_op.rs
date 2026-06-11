@@ -10,8 +10,9 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
-use super::{ClassicalExpr, ControlBody};
-use crate::circuit::{CircuitError, ClassicalType, ClassicalVar, Qubit};
+use super::ControlBody;
+use crate::circuit::classical_expr::ClassicalExpr;
+use crate::circuit::{CircuitError, ClassicalType, ClassicalValue, ClassicalVar, Qubit};
 use std::collections::BTreeSet;
 
 /// Conditional execution controlled by a boolean classical expression.
@@ -54,8 +55,12 @@ impl IfOp {
         self.else_body.as_ref()
     }
 
-    pub fn classical_reads(&self) -> BTreeSet<ClassicalVar> {
+    pub fn classical_var_reads(&self) -> BTreeSet<ClassicalVar> {
         self.condition.vars()
+    }
+
+    pub fn classical_value_reads(&self) -> BTreeSet<ClassicalValue> {
+        self.condition.values()
     }
 
     pub fn used_qubits(&self) -> BTreeSet<Qubit> {
@@ -70,7 +75,9 @@ impl IfOp {
 #[cfg(test)]
 mod tests {
     use super::IfOp;
-    use crate::circuit::{ClassicalExpr, ClassicalType, ClassicalVar, ControlBody};
+    use crate::circuit::{
+        CircuitId, ClassicalExpr, ClassicalType, ClassicalValue, ClassicalVar, ControlBody,
+    };
 
     #[test]
     fn if_requires_bool_condition() {
@@ -89,14 +96,26 @@ mod tests {
     }
 
     #[test]
-    fn if_reports_condition_reads() {
-        let bit = ClassicalExpr::var(ClassicalVar::new(3, ClassicalType::Bit));
+    fn if_reports_condition_var_reads() {
+        let circuit_id = CircuitId::new();
+        let bit = ClassicalExpr::var(ClassicalVar::new(circuit_id, 3, ClassicalType::Bit));
         let condition = ClassicalExpr::bit_to_bool(bit).unwrap();
         let op = IfOp::new(condition, ControlBody::new(vec![]), None).unwrap();
 
-        assert!(
-            op.classical_reads()
-                .contains(&ClassicalVar::new(3, ClassicalType::Bit))
-        );
+        assert!(op.classical_var_reads().contains(&ClassicalVar::new(
+            circuit_id,
+            3,
+            ClassicalType::Bit
+        )));
+    }
+
+    #[test]
+    fn if_reports_condition_value_reads() {
+        let value = ClassicalValue::new(CircuitId::new(), 4, ClassicalType::Bit);
+        let condition = ClassicalExpr::bit_to_bool(value.expr()).unwrap();
+        let op = IfOp::new(condition, ControlBody::new(vec![]), None).unwrap();
+
+        assert!(op.classical_var_reads().is_empty());
+        assert!(op.classical_value_reads().contains(&value));
     }
 }

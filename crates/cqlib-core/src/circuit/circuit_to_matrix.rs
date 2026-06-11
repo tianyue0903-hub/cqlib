@@ -202,11 +202,14 @@ pub fn circuit_to_matrix(
                 let sub_matrix = circuit_to_matrix(&sub_circuit, None)?;
                 apply_gate_to_matrix(&mut matrix, &sub_matrix, &bits)?;
             }
-            Instruction::ControlFlowGate(_) => {
+            Instruction::ClassicalControl(_) => {
                 return Err(CircuitError::InvalidOperation(
                     "control-flow operations do not have an unconditional matrix representation"
                         .to_string(),
                 ));
+            }
+            Instruction::ClassicalData(_) => {
+                return Err(CircuitError::NoMatrixRepresentation);
             }
             Instruction::Directive(directive) => match directive {
                 crate::circuit::Directive::Barrier => continue,

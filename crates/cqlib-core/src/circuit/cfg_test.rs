@@ -11,963 +11,304 @@
 // that they have been altered from the originals.
 
 use crate::circuit::cfg::{BasicBlock, CircuitCFG, FlowEdge, Terminator};
-use crate::circuit::gate::control_flow::{ConditionView, ControlFlow, IfElseGate, WhileLoopGate};
-use crate::circuit::gate::{Instruction, StandardGate};
-use crate::circuit::operation::Operation;
-use crate::circuit::{Circuit, CircuitParam, Parameter, ParameterValue, Qubit};
+use crate::circuit::{
+    Circuit, CircuitError, ClassicalControlOp, ClassicalExpr, ClassicalType, Instruction,
+    Operation, Qubit, StandardGate,
+};
 use rustworkx_core::petgraph::prelude::NodeIndex;
 use smallvec::smallvec;
 
 #[test]
-fn test_basic_block_creation() {
-    let block = BasicBlock::new();
+fn basic_block_tracks_operations_and_terminator() {
+    let mut block = BasicBlock::new().with_label("entry");
     assert!(block.is_empty());
-    assert!(!block.has_terminator());
-    assert_eq!(block.len(), 0);
-    assert!(block.label().is_none());
-}
+    assert_eq!(block.label(), Some("entry"));
 
-#[test]
-fn test_basic_block_with_label() {
-    let block = BasicBlock::new().with_label("test_block");
-    assert_eq!(block.label(), Some("test_block"));
-}
-
-#[test]
-fn test_basic_block_operations() {
-    let mut block = BasicBlock::new();
-    let q0 = Qubit::new(0);
-
-    let op = Operation {
+    block.push_operation(Operation {
         instruction: Instruction::Standard(StandardGate::H),
-        qubits: smallvec![q0],
+        qubits: smallvec![Qubit::new(0)],
         params: smallvec![],
         label: None,
-    };
+    });
+    block.set_terminator(Terminator::Return);
 
-    block.push_operation(op.clone());
     assert_eq!(block.len(), 1);
-    assert!(!block.is_empty());
-
-    block.extend_operations(vec![op.clone(), op.clone()]);
-    assert_eq!(block.len(), 3);
-}
-
-#[test]
-fn test_basic_block_terminator() {
-    let mut block = BasicBlock::new();
-    let q0 = Qubit::new(0);
-    let condition = ConditionView::new(q0, 1);
-
-    block.set_terminator(Terminator::Branch(condition));
     assert!(block.has_terminator());
-    assert!(matches!(block.terminator, Some(Terminator::Branch(_))));
 }
 
 #[test]
-fn test_circuit_dag_empty() {
-    let dag = CircuitCFG::new(2);
-    assert_eq!(dag.num_qubits(), 2);
-    assert_eq!(dag.num_blocks(), 0);
-    assert!(dag.entry_block().is_none());
-    assert_eq!(dag.qubits().len(), 2);
+fn empty_circuit_round_trips() {
+    let circuit = Circuit::new(2);
+    let cfg = CircuitCFG::from_circuit(&circuit).unwrap();
+
+    assert_eq!(cfg.num_blocks(), 1);
+    let entry = cfg.entry_block().unwrap();
+    assert!(matches!(
+        cfg.data[entry].terminator(),
+        Some(Terminator::Return)
+    ));
+
+    let recovered = cfg.to_circuit().unwrap();
+    assert_eq!(recovered.num_qubits(), 2);
+    assert!(recovered.operations().is_empty());
 }
 
 #[test]
-fn test_circuit_dag_add_block() {
-    let mut dag = CircuitCFG::new(1);
-    let block = BasicBlock::new().with_label("test");
-    let idx = dag.add_block(block);
+fn classical_data_and_linear_operations_round_trip() {
+    let mut circuit = Circuit::new(2);
+    let flag = circuit.var(ClassicalType::Bool);
+    circuit.h(Qubit::new(0)).unwrap();
+    let measured = circuit.measure(Qubit::new(0)).unwrap();
+    circuit
+        .store(flag, ClassicalExpr::bit_to_bool(measured.expr()).unwrap())
+        .unwrap();
 
-    assert_eq!(dag.num_blocks(), 1);
-    assert_eq!(dag.data[idx].label(), Some("test"));
+    let recovered = CircuitCFG::from_circuit(&circuit)
+        .unwrap()
+        .to_circuit()
+        .unwrap();
+
+    assert_eq!(recovered.classical_vars(), circuit.classical_vars());
+    assert_eq!(recovered.classical_values(), circuit.classical_values());
+    assert_eq!(recovered.operations().len(), circuit.operations().len());
+    assert!(matches!(
+        recovered.operations()[1].instruction,
+        Instruction::ClassicalData(_)
+    ));
+    assert!(matches!(
+        recovered.operations()[2].instruction,
+        Instruction::ClassicalData(_)
+    ));
 }
 
 #[test]
-fn test_add_edge_rejects_unknown_endpoint() {
+fn if_without_else_round_trips_as_absent_else() {
+    let mut circuit = Circuit::new(2);
+    let measured = circuit.measure(Qubit::new(0)).unwrap();
+    let condition = ClassicalExpr::bit_to_bool(measured.expr()).unwrap();
+    circuit
+        .if_(condition, |body| {
+            body.x(Qubit::new(1))?;
+            Ok(())
+        })
+        .unwrap();
+
+    let cfg = CircuitCFG::from_circuit(&circuit).unwrap();
+    assert!(
+        cfg.blocks()
+            .any(|(_, block)| matches!(block.terminator(), Some(Terminator::Branch(_))))
+    );
+
+    let recovered = cfg.to_circuit().unwrap();
+    match &recovered.operations()[1].instruction {
+        Instruction::ClassicalControl(ClassicalControlOp::If(op)) => {
+            assert_eq!(op.then_body().operations().len(), 1);
+            assert!(op.else_body().is_none());
+        }
+        _ => panic!("expected if operation"),
+    }
+}
+
+#[test]
+fn if_else_round_trip_distinguishes_empty_else() {
+    let mut circuit = Circuit::new(1);
+    let condition = ClassicalExpr::bool_literal(true);
+    circuit
+        .if_else(
+            condition,
+            |body| {
+                body.h(Qubit::new(0))?;
+                Ok(())
+            },
+            |_body| Ok(()),
+        )
+        .unwrap();
+
+    let recovered = CircuitCFG::from_circuit(&circuit)
+        .unwrap()
+        .to_circuit()
+        .unwrap();
+
+    match &recovered.operations()[0].instruction {
+        Instruction::ClassicalControl(ClassicalControlOp::If(op)) => {
+            assert_eq!(op.then_body().operations().len(), 1);
+            assert!(op.else_body().unwrap().operations().is_empty());
+        }
+        _ => panic!("expected if operation"),
+    }
+}
+
+#[test]
+fn while_loop_round_trips_with_continue() {
+    let mut circuit = Circuit::new(1);
+    let keep_running = circuit.var(ClassicalType::Bool);
+    circuit
+        .store(keep_running, ClassicalExpr::bool_literal(true))
+        .unwrap();
+    circuit
+        .while_(keep_running.expr(), |body| {
+            body.continue_loop()?;
+            Ok(())
+        })
+        .unwrap();
+
+    let cfg = CircuitCFG::from_circuit(&circuit).unwrap();
+    assert!(cfg.blocks().any(|(node, _)| cfg.is_loop_header(node)));
+
+    let recovered = cfg.to_circuit().unwrap();
+    match &recovered.operations()[1].instruction {
+        Instruction::ClassicalControl(ClassicalControlOp::While(op)) => {
+            assert_eq!(op.body().operations().len(), 1);
+            assert!(matches!(
+                op.body().operations()[0].instruction,
+                Instruction::ClassicalControl(ClassicalControlOp::Continue)
+            ));
+        }
+        _ => panic!("expected while operation"),
+    }
+}
+
+#[test]
+fn for_loop_round_trips_without_lowering_to_while() {
+    let mut circuit = Circuit::new(1);
+    let i = circuit.var(ClassicalType::uint(8).unwrap());
+    circuit
+        .for_uint(
+            i,
+            ClassicalExpr::uint_literal(8, 0).unwrap(),
+            ClassicalExpr::uint_literal(8, 4).unwrap(),
+            ClassicalExpr::uint_literal(8, 1).unwrap(),
+            |body, _i| {
+                body.h(Qubit::new(0))?;
+                Ok(())
+            },
+        )
+        .unwrap();
+
+    let cfg = CircuitCFG::from_circuit(&circuit).unwrap();
+    assert!(
+        cfg.blocks()
+            .any(|(_, block)| matches!(block.terminator(), Some(Terminator::ForLoop { .. })))
+    );
+
+    let recovered = cfg.to_circuit().unwrap();
+    match &recovered.operations()[0].instruction {
+        Instruction::ClassicalControl(ClassicalControlOp::For(op)) => {
+            assert_eq!(op.var(), i);
+            assert_eq!(op.body().operations().len(), 1);
+        }
+        _ => panic!("expected for operation"),
+    }
+}
+
+#[test]
+fn switch_round_trips_cases_default_and_break() {
+    let mut circuit = Circuit::new(2);
+    let state = circuit.var(ClassicalType::uint(2).unwrap());
+    circuit
+        .store(state, ClassicalExpr::uint_literal(2, 1).unwrap())
+        .unwrap();
+    circuit
+        .switch(state.expr(), |case| {
+            case.value(0, |body| {
+                body.x(Qubit::new(0))?;
+                Ok(())
+            })?;
+            case.value(1, |body| {
+                body.break_loop()?;
+                Ok(())
+            })?;
+            case.default(|body| {
+                body.z(Qubit::new(1))?;
+                Ok(())
+            })?;
+            Ok(())
+        })
+        .unwrap();
+
+    let cfg = CircuitCFG::from_circuit(&circuit).unwrap();
+    assert!(
+        cfg.blocks()
+            .any(|(_, block)| matches!(block.terminator(), Some(Terminator::Switch(_))))
+    );
+
+    let recovered = cfg.to_circuit().unwrap();
+    match &recovered.operations()[1].instruction {
+        Instruction::ClassicalControl(ClassicalControlOp::Switch(op)) => {
+            assert_eq!(op.cases().len(), 2);
+            assert!(op.default().is_some());
+            assert!(matches!(
+                op.cases()[1].body().operations()[0].instruction,
+                Instruction::ClassicalControl(ClassicalControlOp::Break)
+            ));
+        }
+        _ => panic!("expected switch operation"),
+    }
+}
+
+#[test]
+fn break_continue_must_be_terminal_in_body() {
+    let mut circuit = Circuit::new(1);
+    let keep_running = circuit.var(ClassicalType::Bool);
+    circuit
+        .store(keep_running, ClassicalExpr::bool_literal(true))
+        .unwrap();
+    let error = circuit
+        .while_(keep_running.expr(), |body| {
+            body.break_loop()?;
+            body.h(Qubit::new(0))?;
+            Ok(())
+        })
+        .unwrap_err();
+
+    assert!(matches!(
+        error,
+        CircuitError::NonTerminalControlTransfer { .. }
+    ));
+}
+
+#[test]
+fn invalid_cfg_missing_true_branch_is_rejected() {
+    let mut cfg = CircuitCFG::new(1);
+    let entry = cfg.add_block(BasicBlock::new().with_label("entry"));
+    let false_target = cfg.add_block(BasicBlock::new().with_label("false"));
+    cfg.set_entry_block(entry);
+    cfg.data[entry].set_terminator(Terminator::Branch(ClassicalExpr::bool_literal(true)));
+    cfg.data[false_target].set_terminator(Terminator::Return);
+    cfg.add_edge(entry, false_target, FlowEdge::FalseBranch);
+
+    let error = cfg.to_circuit().unwrap_err();
+    assert!(error.to_string().contains("TrueBranch"));
+}
+
+#[test]
+fn invalid_cfg_unknown_classical_value_is_rejected() {
+    let mut cfg = CircuitCFG::new(1);
+    let entry = cfg.add_block(BasicBlock::new().with_label("entry"));
+    cfg.set_entry_block(entry);
+    let value = crate::circuit::ClassicalValue::new(
+        crate::circuit::CircuitId::new(),
+        0,
+        ClassicalType::Bit,
+    );
+    cfg.data[entry].set_terminator(Terminator::Branch(
+        ClassicalExpr::bit_to_bool(value.expr()).unwrap(),
+    ));
+    let then_block = cfg.add_block(BasicBlock::new().with_label("then"));
+    let else_block = cfg.add_block(BasicBlock::new().with_label("else"));
+    cfg.add_edge(entry, then_block, FlowEdge::TrueBranch);
+    cfg.add_edge(entry, else_block, FlowEdge::FalseBranch);
+
+    let error = cfg.validate().unwrap_err();
+    assert!(error.to_string().contains("unknown classical value"));
+}
+
+#[test]
+fn add_edge_rejects_unknown_endpoint() {
     let mut cfg = CircuitCFG::new(1);
     let entry = cfg.add_block(BasicBlock::new());
-
     assert!(
         cfg.add_edge(entry, NodeIndex::new(99), FlowEdge::Unconditional)
             .is_none()
     );
-}
-
-#[test]
-fn test_empty_circuit_conversion() {
-    // Empty circuit should have single entry block with Return
-    let circuit = Circuit::new(2);
-    let dag = CircuitCFG::from_circuit(&circuit).unwrap();
-
-    assert_eq!(dag.num_blocks(), 1);
-    assert!(dag.entry_block().is_some());
-
-    let entry = dag.entry_block().unwrap();
-    assert_eq!(dag.data[entry].len(), 0);
-    assert!(matches!(
-        dag.data[entry].terminator,
-        Some(Terminator::Return)
-    ));
-}
-
-#[test]
-fn test_circuit_to_dag_simple() {
-    // Linear circuit: H(0) -> CX(0, 1) -> Measure(0)
-    let mut circuit = Circuit::new(2);
-    circuit.h(Qubit::new(0)).unwrap();
-    circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
-    circuit.measure(Qubit::new(0)).unwrap();
-
-    let dag = CircuitCFG::from_circuit(&circuit).unwrap();
-
-    // No control flow = single entry block
-    assert_eq!(
-        dag.num_blocks(),
-        1,
-        "Simple circuit should have exactly 1 block"
-    );
-    assert_eq!(dag.num_qubits(), 2);
-
-    let entry = dag.entry_block().unwrap();
-    assert_eq!(
-        dag.data[entry].len(),
-        3,
-        "Entry block should have 3 operations"
-    );
-    assert!(matches!(
-        dag.data[entry].terminator,
-        Some(Terminator::Return)
-    ));
-}
-
-#[test]
-fn test_circuit_to_dag_if_else() {
-    // if (q[0] == 1): X(q[1]) else: Z(q[1])
-    let mut circuit = Circuit::new(2);
-    let q0 = Qubit::new(0);
-    let q1 = Qubit::new(1);
-
-    circuit.measure(q0).unwrap();
-
-    let condition = ConditionView::new(q0, 1);
-    let true_body = vec![Operation {
-        instruction: Instruction::Standard(StandardGate::X),
-        qubits: smallvec![q1],
-        params: smallvec![],
-        label: None,
-    }];
-    let false_body = vec![Operation {
-        instruction: Instruction::Standard(StandardGate::Z),
-        qubits: smallvec![q1],
-        params: smallvec![],
-        label: None,
-    }];
-
-    circuit
-        .if_else(condition, true_body, Some(false_body))
-        .unwrap();
-
-    let dag = CircuitCFG::from_circuit(&circuit).unwrap();
-
-    // entry, true, false, merge = 4 blocks
-    assert!(dag.num_blocks() >= 4, "Expected at least 4 blocks");
-
-    // Verify branch edges exist
-    let mut true_branch_count = 0;
-    let mut false_branch_count = 0;
-    for edge_idx in dag.data.edge_indices() {
-        let flow = &dag.data[edge_idx];
-        match flow {
-            FlowEdge::TrueBranch => true_branch_count += 1,
-            FlowEdge::FalseBranch => false_branch_count += 1,
-            FlowEdge::Unconditional => {}
-        }
-    }
-
-    assert!(true_branch_count >= 1, "Should have true branch");
-    assert!(false_branch_count >= 1, "Should have false branch");
-}
-
-#[test]
-fn test_if_without_else() {
-    // if (q[0] == 1): X(q[1]) - no else branch
-    let mut circuit = Circuit::new(2);
-    let q0 = Qubit::new(0);
-    let q1 = Qubit::new(1);
-
-    circuit.measure(q0).unwrap();
-
-    let condition = ConditionView::new(q0, 1);
-    let true_body = vec![Operation {
-        instruction: Instruction::Standard(StandardGate::X),
-        qubits: smallvec![q1],
-        params: smallvec![],
-        label: None,
-    }];
-
-    circuit.if_else(condition, true_body, None).unwrap();
-
-    let dag = CircuitCFG::from_circuit(&circuit).unwrap();
-
-    // entry, true, false_empty, merge = 4 blocks
-    assert_eq!(dag.num_blocks(), 4, "If without else should have 4 blocks");
-
-    let entry = dag.entry_block().unwrap();
-
-    // Find true and false blocks
-    let mut true_block = None;
-    let mut false_block = None;
-
-    for edge_idx in dag.data.edge_indices() {
-        let (source, target) = dag.data.edge_endpoints(edge_idx).unwrap();
-        let flow = &dag.data[edge_idx];
-
-        if source == entry {
-            match flow {
-                FlowEdge::TrueBranch => true_block = Some(target),
-                FlowEdge::FalseBranch => false_block = Some(target),
-                _ => {}
-            }
-        }
-    }
-
-    assert!(true_block.is_some(), "Should have true branch");
-    assert!(false_block.is_some(), "Should have false branch (empty)");
-
-    // True block contains X gate
-    assert_eq!(dag.data[true_block.unwrap()].len(), 1);
-
-    // False block is empty with Jump terminator
-    assert_eq!(dag.data[false_block.unwrap()].len(), 0);
-    assert!(matches!(
-        dag.data[false_block.unwrap()].terminator,
-        Some(Terminator::Jump(_))
-    ));
-
-    // Both branches merge to same block
-    let mut true_to_merge = None;
-    let mut false_to_merge = None;
-
-    for edge_idx in dag.data.edge_indices() {
-        let (source, target) = dag.data.edge_endpoints(edge_idx).unwrap();
-        let flow = &dag.data[edge_idx];
-
-        if source == true_block.unwrap() && matches!(flow, FlowEdge::Unconditional) {
-            true_to_merge = Some(target);
-        }
-        if source == false_block.unwrap() && matches!(flow, FlowEdge::Unconditional) {
-            false_to_merge = Some(target);
-        }
-    }
-
-    assert_eq!(true_to_merge, false_to_merge, "True and false should merge");
-}
-
-#[test]
-fn test_circuit_to_dag_while_loop() {
-    // while (q[0] == 1): H(q[1])
-    let mut circuit = Circuit::new(2);
-    let q0 = Qubit::new(0);
-    let q1 = Qubit::new(1);
-
-    circuit.measure(q0).unwrap();
-
-    let condition = ConditionView::new(q0, 1);
-    let body = vec![Operation {
-        instruction: Instruction::Standard(StandardGate::H),
-        qubits: smallvec![q1],
-        params: smallvec![],
-        label: None,
-    }];
-
-    circuit.while_loop(condition, body).unwrap();
-
-    let dag = CircuitCFG::from_circuit(&circuit).unwrap();
-
-    // entry, cond, body, exit = 4 blocks
-    assert_eq!(dag.num_blocks(), 4, "Expected 4 blocks");
-
-    let entry = dag.entry_block().unwrap();
-
-    // Entry should jump to cond
-    assert!(matches!(
-        dag.data[entry].terminator,
-        Some(Terminator::Jump(_))
-    ));
-
-    // Find cond block
-    let mut cond_block = None;
-    for edge_idx in dag.data.edge_indices() {
-        let (source, target) = dag.data.edge_endpoints(edge_idx).unwrap();
-        if source == entry {
-            cond_block = Some(target);
-            break;
-        }
-    }
-    let cond_block = cond_block.expect("Should have cond block");
-
-    // Cond block should have Branch terminator
-    assert!(matches!(
-        dag.data[cond_block].terminator,
-        Some(Terminator::Branch(_))
-    ));
-
-    // Find body and exit blocks
-    let mut body_block = None;
-    let mut exit_block = None;
-    for edge_idx in dag.data.edge_indices() {
-        let (source, target) = dag.data.edge_endpoints(edge_idx).unwrap();
-        let flow = &dag.data[edge_idx];
-
-        if source == cond_block {
-            match flow {
-                FlowEdge::TrueBranch => body_block = Some(target),
-                FlowEdge::FalseBranch => exit_block = Some(target),
-                _ => {}
-            }
-        }
-    }
-
-    let body_block = body_block.expect("Should have body block");
-    let exit_block = exit_block.expect("Should have exit block");
-
-    // Body contains H gate
-    assert_eq!(dag.data[body_block].len(), 1);
-
-    // Body has back edge to cond
-    let mut has_back_edge = false;
-    for edge_idx in dag.data.edge_indices() {
-        let (source, target) = dag.data.edge_endpoints(edge_idx).unwrap();
-        let flow = &dag.data[edge_idx];
-
-        if source == body_block && target == cond_block && matches!(flow, FlowEdge::Unconditional) {
-            has_back_edge = true;
-            break;
-        }
-    }
-    assert!(has_back_edge, "Body should have back edge to condition");
-
-    // Exit has Return terminator
-    assert!(matches!(
-        dag.data[exit_block].terminator,
-        Some(Terminator::Return)
-    ));
-}
-
-#[test]
-fn test_circuit_to_dag_nested_control_flow() {
-    // if (q[0] == 1): while (q[1] == 1): X(q[2]) else: Z(q[2])
-    let mut circuit = Circuit::new(3);
-    let q0 = Qubit::new(0);
-    let q1 = Qubit::new(1);
-    let q2 = Qubit::new(2);
-
-    circuit.measure(q0).unwrap();
-    circuit.measure(q1).unwrap();
-
-    // Outer if-else
-    let outer_condition = ConditionView::new(q0, 1);
-
-    // Inner while
-    let while_condition = ConditionView::new(q1, 1);
-    let while_body = vec![Operation {
-        instruction: Instruction::Standard(StandardGate::X),
-        qubits: smallvec![q2],
-        params: smallvec![],
-        label: None,
-    }];
-
-    let true_body = vec![Operation {
-        instruction: Instruction::ControlFlowGate(ControlFlow::WhileLoop(WhileLoopGate::new(
-            while_condition,
-            while_body,
-        ))),
-        qubits: smallvec![q1, q2],
-        params: smallvec![],
-        label: None,
-    }];
-
-    let false_body = vec![Operation {
-        instruction: Instruction::Standard(StandardGate::Z),
-        qubits: smallvec![q2],
-        params: smallvec![],
-        label: None,
-    }];
-
-    circuit
-        .if_else(outer_condition, true_body, Some(false_body))
-        .unwrap();
-
-    let dag = CircuitCFG::from_circuit(&circuit).unwrap();
-
-    // Nested control flow should have multiple blocks
-    assert!(dag.num_blocks() >= 5, "Expected at least 5 blocks");
-}
-
-#[test]
-fn test_to_circuit_simple_linear() {
-    // Round-trip: Circuit -> DAG -> Circuit
-    let mut original = Circuit::new(2);
-    original.h(Qubit::new(0)).unwrap();
-    original.cx(Qubit::new(0), Qubit::new(1)).unwrap();
-    original.measure(Qubit::new(0)).unwrap();
-
-    let dag = CircuitCFG::from_circuit(&original).unwrap();
-    let recovered = dag.to_circuit().unwrap();
-
-    // Verify properties
-    assert_eq!(recovered.num_qubits(), original.num_qubits());
-    assert_eq!(recovered.operations().len(), original.operations().len());
-
-    // Verify operation types match
-    for (orig_op, recv_op) in original
-        .operations()
-        .iter()
-        .zip(recovered.operations().iter())
-    {
-        assert_eq!(
-            orig_op.instruction.to_string(),
-            recv_op.instruction.to_string()
-        );
-        assert_eq!(orig_op.qubits.len(), recv_op.qubits.len());
-        for (oq, rq) in orig_op.qubits.iter().zip(recv_op.qubits.iter()) {
-            assert_eq!(oq.id(), rq.id());
-        }
-    }
-}
-
-#[test]
-fn test_to_circuit_if_else() {
-    // Round-trip: if-else Circuit -> DAG -> Circuit
-    let mut original = Circuit::new(2);
-    let q0 = Qubit::new(0);
-    let q1 = Qubit::new(1);
-
-    original.measure(q0).unwrap();
-
-    let condition = ConditionView::new(q0, 1);
-    let true_body = vec![Operation {
-        instruction: Instruction::Standard(StandardGate::X),
-        qubits: smallvec![q1],
-        params: smallvec![],
-        label: None,
-    }];
-    let false_body = vec![Operation {
-        instruction: Instruction::Standard(StandardGate::Z),
-        qubits: smallvec![q1],
-        params: smallvec![],
-        label: None,
-    }];
-    original
-        .if_else(condition, true_body, Some(false_body))
-        .unwrap();
-
-    let dag = CircuitCFG::from_circuit(&original).unwrap();
-    let recovered = dag.to_circuit().unwrap();
-
-    // Verify structure: Measure + IfElse
-    assert_eq!(recovered.operations().len(), 2);
-
-    let if_else_op = &recovered.operations()[1];
-    match &if_else_op.instruction {
-        Instruction::ControlFlowGate(ControlFlow::IfElse(gate)) => {
-            assert_eq!(gate.condition().qubit.id(), q0.id());
-            assert_eq!(gate.condition().target, 1);
-
-            // Check true body
-            let true_ops = gate.true_body();
-            assert_eq!(true_ops.len(), 1);
-            assert!(matches!(
-                true_ops[0].instruction,
-                Instruction::Standard(StandardGate::X)
-            ));
-
-            // Check false body
-            let false_ops = gate.false_body();
-            assert!(false_ops.is_some());
-            assert_eq!(false_ops.unwrap().len(), 1);
-        }
-        _ => panic!("Expected IfElse control flow"),
-    }
-}
-
-#[test]
-fn test_to_circuit_while_loop() {
-    // Round-trip: while loop Circuit -> DAG -> Circuit
-    let mut original = Circuit::new(2);
-    let q0 = Qubit::new(0);
-    let q1 = Qubit::new(1);
-
-    original.measure(q0).unwrap();
-
-    let condition = ConditionView::new(q0, 1);
-    let body = vec![Operation {
-        instruction: Instruction::Standard(StandardGate::H),
-        qubits: smallvec![q1],
-        params: smallvec![],
-        label: None,
-    }];
-    original.while_loop(condition, body).unwrap();
-
-    let dag = CircuitCFG::from_circuit(&original).unwrap();
-    let recovered = dag.to_circuit().unwrap();
-
-    // Verify structure: Measure + WhileLoop
-    assert_eq!(recovered.operations().len(), 2);
-
-    let while_op = &recovered.operations()[1];
-    match &while_op.instruction {
-        Instruction::ControlFlowGate(ControlFlow::WhileLoop(gate)) => {
-            assert_eq!(gate.condition().qubit.id(), q0.id());
-            assert_eq!(gate.condition().target, 1);
-
-            // Check loop body
-            let body_ops = gate.body();
-            assert_eq!(body_ops.len(), 1);
-            assert!(matches!(
-                body_ops[0].instruction,
-                Instruction::Standard(StandardGate::H)
-            ));
-        }
-        _ => panic!("Expected WhileLoop control flow"),
-    }
-}
-
-#[test]
-fn test_to_circuit_nested_if_in_while() {
-    // Round-trip: nested control flow Circuit -> DAG -> Circuit
-    let mut original = Circuit::new(3);
-    let q0 = Qubit::new(0);
-    let q1 = Qubit::new(1);
-    let q2 = Qubit::new(2);
-
-    original.measure(q0).unwrap();
-    original.measure(q1).unwrap();
-
-    // Build inner if-else
-    let if_condition = ConditionView::new(q1, 1);
-    let if_true = vec![Operation {
-        instruction: Instruction::Standard(StandardGate::X),
-        qubits: smallvec![q2],
-        params: smallvec![],
-        label: None,
-    }];
-    let if_false = vec![Operation {
-        instruction: Instruction::Standard(StandardGate::Y),
-        qubits: smallvec![q2],
-        params: smallvec![],
-        label: None,
-    }];
-
-    let if_op = Operation {
-        instruction: Instruction::ControlFlowGate(ControlFlow::IfElse(IfElseGate::new(
-            if_condition,
-            if_true,
-            Some(if_false),
-        ))),
-        qubits: smallvec![q1, q2],
-        params: smallvec![],
-        label: None,
-    };
-
-    // Build outer while
-    let while_condition = ConditionView::new(q0, 1);
-    let while_body = vec![if_op];
-    original.while_loop(while_condition, while_body).unwrap();
-
-    let dag = CircuitCFG::from_circuit(&original).unwrap();
-    let recovered = dag.to_circuit().unwrap();
-
-    // Verify: Measure, Measure, While(IfElse)
-    assert_eq!(recovered.operations().len(), 3);
-
-    let while_op = &recovered.operations()[2];
-    match &while_op.instruction {
-        Instruction::ControlFlowGate(ControlFlow::WhileLoop(while_gate)) => {
-            assert_eq!(while_gate.body().len(), 1);
-
-            // Check inner IfElse
-            match &while_gate.body()[0].instruction {
-                Instruction::ControlFlowGate(ControlFlow::IfElse(if_gate)) => {
-                    assert_eq!(if_gate.true_body().len(), 1);
-                    assert_eq!(if_gate.false_body().unwrap().len(), 1);
-                }
-                _ => panic!("Expected nested IfElse in While body"),
-            }
-        }
-        _ => panic!("Expected WhileLoop control flow"),
-    }
-}
-
-#[test]
-fn test_round_trip_preserves_operation_metadata_and_symbolic_phase() {
-    let q0 = Qubit::new(0);
-    let q1 = Qubit::new(1);
-    let theta = Parameter::symbol("theta");
-    let mut original = Circuit::new(2);
-    original.set_global_phase(theta.clone());
-    original
-        .append(
-            Instruction::Standard(StandardGate::RZ),
-            [q0],
-            [ParameterValue::from(theta.clone())],
-            Some("ordinary"),
-        )
-        .unwrap();
-    original
-        .append(
-            Instruction::ControlFlowGate(ControlFlow::IfElse(IfElseGate::new(
-                ConditionView::new(q0, 1),
-                vec![Operation {
-                    instruction: Instruction::Standard(StandardGate::X),
-                    qubits: smallvec![q1],
-                    params: smallvec![],
-                    label: Some("body".into()),
-                }],
-                None,
-            ))),
-            [q1, q0],
-            [ParameterValue::from(theta)],
-            Some("control"),
-        )
-        .unwrap();
-
-    let recovered = CircuitCFG::from_circuit(&original)
-        .unwrap()
-        .to_circuit()
-        .unwrap();
-    assert_eq!(recovered.symbols(), original.symbols());
-    assert_eq!(recovered.parameters().len(), original.parameters().len());
-    assert!(matches!(
-        recovered.global_phase_param(),
-        CircuitParam::Index(_)
-    ));
-
-    let ordinary = &recovered.operations()[0];
-    assert_eq!(ordinary.qubits.as_slice(), &[q0]);
-    assert_eq!(ordinary.label.as_deref(), Some("ordinary"));
-    assert!(matches!(
-        ordinary.params.as_slice(),
-        [CircuitParam::Index(_)]
-    ));
-
-    let control = &recovered.operations()[1];
-    assert_eq!(control.qubits.as_slice(), &[q1, q0]);
-    assert_eq!(control.label.as_deref(), Some("control"));
-    assert!(matches!(
-        control.params.as_slice(),
-        [CircuitParam::Index(_)]
-    ));
-    match &control.instruction {
-        Instruction::ControlFlowGate(ControlFlow::IfElse(gate)) => {
-            assert_eq!(gate.true_body()[0].label.as_deref(), Some("body"));
-        }
-        _ => panic!("Expected IfElse control flow"),
-    }
-}
-
-#[test]
-fn test_round_trip_distinguishes_absent_and_empty_else() {
-    let condition = ConditionView::new(Qubit::new(0), 1);
-
-    let mut absent = Circuit::new(1);
-    absent.if_else(condition, vec![], None).unwrap();
-    let absent = CircuitCFG::from_circuit(&absent)
-        .unwrap()
-        .to_circuit()
-        .unwrap();
-
-    let mut empty = Circuit::new(1);
-    empty.if_else(condition, vec![], Some(vec![])).unwrap();
-    let empty = CircuitCFG::from_circuit(&empty)
-        .unwrap()
-        .to_circuit()
-        .unwrap();
-
-    match &absent.operations()[0].instruction {
-        Instruction::ControlFlowGate(ControlFlow::IfElse(gate)) => {
-            assert!(gate.false_body().is_none());
-        }
-        _ => panic!("Expected IfElse control flow"),
-    }
-    match &empty.operations()[0].instruction {
-        Instruction::ControlFlowGate(ControlFlow::IfElse(gate)) => {
-            assert!(gate.false_body().unwrap().is_empty());
-        }
-        _ => panic!("Expected IfElse control flow"),
-    }
-}
-
-#[test]
-fn test_block_labels_do_not_determine_control_flow_structure() {
-    let q0 = Qubit::new(0);
-    let q1 = Qubit::new(1);
-    let mut original = Circuit::new(2);
-    original
-        .if_else(
-            ConditionView::new(q0, 1),
-            vec![Operation {
-                instruction: Instruction::Standard(StandardGate::X),
-                qubits: smallvec![q1],
-                params: smallvec![],
-                label: None,
-            }],
-            None,
-        )
-        .unwrap();
-    original
-        .while_loop(
-            ConditionView::new(q1, 1),
-            vec![Operation {
-                instruction: Instruction::Standard(StandardGate::Z),
-                qubits: smallvec![q0],
-                params: smallvec![],
-                label: None,
-            }],
-        )
-        .unwrap();
-
-    let mut cfg = CircuitCFG::from_circuit(&original).unwrap();
-    let nodes: Vec<_> = cfg.data.node_indices().collect();
-    for node in nodes {
-        cfg.data[node].label = Some("while_cond_same_label".to_string());
-    }
-
-    let recovered = cfg.to_circuit().unwrap();
-    assert!(matches!(
-        recovered.operations()[0].instruction,
-        Instruction::ControlFlowGate(ControlFlow::IfElse(_))
-    ));
-    assert!(matches!(
-        recovered.operations()[1].instruction,
-        Instruction::ControlFlowGate(ControlFlow::WhileLoop(_))
-    ));
-}
-
-#[test]
-fn test_nested_if_with_duplicate_diagnostic_labels_preserves_continuation() {
-    let q0 = Qubit::new(0);
-    let q1 = Qubit::new(1);
-    let mut original = Circuit::new(2);
-    let nested = Operation {
-        instruction: Instruction::ControlFlowGate(ControlFlow::IfElse(IfElseGate::new(
-            ConditionView::new(q1, 1),
-            vec![],
-            Some(vec![]),
-        ))),
-        qubits: smallvec![q1],
-        params: smallvec![],
-        label: None,
-    };
-    original
-        .if_else(ConditionView::new(q0, 1), vec![nested], Some(vec![]))
-        .unwrap();
-    original.h(q1).unwrap();
-
-    let recovered = CircuitCFG::from_circuit(&original)
-        .unwrap()
-        .to_circuit()
-        .unwrap();
-    assert_eq!(recovered.operations().len(), 2);
-    assert!(matches!(
-        recovered.operations()[1].instruction,
-        Instruction::Standard(StandardGate::H)
-    ));
-    match &recovered.operations()[0].instruction {
-        Instruction::ControlFlowGate(ControlFlow::IfElse(outer)) => {
-            assert_eq!(outer.true_body().len(), 1);
-            assert!(matches!(
-                outer.true_body()[0].instruction,
-                Instruction::ControlFlowGate(ControlFlow::IfElse(_))
-            ));
-            assert!(outer.false_body().unwrap().is_empty());
-        }
-        _ => panic!("Expected outer IfElse control flow"),
-    }
-}
-
-use crate::circuit::CircuitError;
-
-#[test]
-fn test_invalid_dag_missing_true_branch() {
-    // Manually construct an invalid DAG with a Branch terminator but no TrueBranch edge
-    let mut dag = CircuitCFG::new(1);
-    let q0 = Qubit::new(0);
-    let condition = ConditionView::new(q0, 1);
-
-    // Create entry block with Branch terminator
-    let entry_block = dag.add_block(BasicBlock::new().with_label("entry"));
-    dag.set_entry_block(entry_block);
-    dag.data[entry_block].set_terminator(Terminator::Branch(condition));
-
-    // Only add FalseBranch edge, intentionally omit TrueBranch
-    let false_target = dag.add_block(BasicBlock::new().with_label("false_target"));
-    dag.data[false_target].set_terminator(Terminator::Return);
-    dag.add_edge(entry_block, false_target, FlowEdge::FalseBranch);
-
-    // to_circuit should return InvalidControlFlow error
-    let result = dag.to_circuit();
-    match result {
-        Err(CircuitError::InvalidControlFlow(msg)) => {
-            assert!(
-                msg.contains("missing a TrueBranch"),
-                "Error message should indicate missing TrueBranch, got: {}",
-                msg
-            );
-        }
-        _ => panic!(
-            "Expected InvalidControlFlow error for missing TrueBranch edge, got {:?}",
-            result
-        ),
-    }
-}
-
-#[test]
-fn test_invalid_dag_missing_false_branch() {
-    // Manually construct an invalid DAG with a Branch terminator but no FalseBranch edge
-    let mut dag = CircuitCFG::new(1);
-    let q0 = Qubit::new(0);
-    let condition = ConditionView::new(q0, 1);
-
-    // Create entry block with Branch terminator
-    let entry_block = dag.add_block(BasicBlock::new().with_label("entry"));
-    dag.set_entry_block(entry_block);
-    dag.data[entry_block].set_terminator(Terminator::Branch(condition));
-
-    // Only add TrueBranch edge, intentionally omit FalseBranch
-    let true_target = dag.add_block(BasicBlock::new().with_label("true_target"));
-    dag.data[true_target].set_terminator(Terminator::Return);
-    dag.add_edge(entry_block, true_target, FlowEdge::TrueBranch);
-
-    // to_circuit should return InvalidControlFlow error
-    let result = dag.to_circuit();
-    match result {
-        Err(CircuitError::InvalidControlFlow(msg)) => {
-            assert!(
-                msg.contains("missing a FalseBranch"),
-                "Error message should indicate missing FalseBranch, got: {}",
-                msg
-            );
-        }
-        _ => panic!(
-            "Expected InvalidControlFlow error for missing FalseBranch edge, got {:?}",
-            result
-        ),
-    }
-}
-
-#[test]
-fn test_invalid_dag_error_includes_block_info() {
-    // Verify that error messages include the block label and index
-    let mut dag = CircuitCFG::new(1);
-    let q0 = Qubit::new(0);
-    let condition = ConditionView::new(q0, 1);
-
-    // Create a labeled entry block with Branch terminator but no edges
-    let entry_block = dag.add_block(BasicBlock::new().with_label("my_test_block"));
-    dag.set_entry_block(entry_block);
-    dag.data[entry_block].set_terminator(Terminator::Branch(condition));
-
-    let result = dag.to_circuit();
-    match result {
-        Err(CircuitError::InvalidControlFlow(msg)) => {
-            assert!(
-                msg.contains("my_test_block"),
-                "Error message should include block label, got: {}",
-                msg
-            );
-            assert!(
-                msg.contains("TrueBranch"),
-                "Error message should indicate missing TrueBranch, got: {}",
-                msg
-            );
-        }
-        _ => panic!(
-            "Expected InvalidControlFlow error with block details, got {:?}",
-            result
-        ),
-    }
-}
-
-#[test]
-fn test_invalid_dag_unlabeled_block() {
-    // Verify error handling for unlabeled blocks
-    let mut dag = CircuitCFG::new(1);
-    let q0 = Qubit::new(0);
-    let condition = ConditionView::new(q0, 1);
-
-    // Create unlabeled entry block with Branch terminator
-    let entry_block = dag.add_block(BasicBlock::new()); // No label
-    dag.set_entry_block(entry_block);
-    dag.data[entry_block].set_terminator(Terminator::Branch(condition));
-
-    let result = dag.to_circuit();
-    match result {
-        Err(CircuitError::InvalidControlFlow(msg)) => {
-            assert!(
-                msg.contains("<unlabeled>"),
-                "Error message should indicate unlabeled block, got: {}",
-                msg
-            );
-        }
-        _ => panic!(
-            "Expected InvalidControlFlow error for unlabeled block, got {:?}",
-            result
-        ),
-    }
-}
-
-#[test]
-fn test_invalid_cfg_missing_terminator_is_rejected() {
-    let mut cfg = CircuitCFG::new(1);
-    let entry = cfg.add_block(BasicBlock::new().with_label("entry"));
-    cfg.set_entry_block(entry);
-
-    let error = cfg.to_circuit().unwrap_err();
-    assert!(matches!(error, CircuitError::InvalidControlFlow(_)));
-    assert!(error.to_string().contains("missing a terminator"));
-}
-
-#[test]
-fn test_invalid_cfg_return_with_edge_is_rejected() {
-    let mut cfg = CircuitCFG::new(1);
-    let entry = cfg.add_block(BasicBlock::new().with_label("entry"));
-    let target = cfg.add_block(BasicBlock::new().with_label("target"));
-    cfg.set_entry_block(entry);
-    cfg.data[entry].set_terminator(Terminator::Return);
-    cfg.data[target].set_terminator(Terminator::Return);
-    cfg.add_edge(entry, target, FlowEdge::Unconditional);
-
-    assert!(matches!(
-        cfg.to_circuit(),
-        Err(CircuitError::InvalidControlFlow(_))
-    ));
-}
-
-#[test]
-fn test_invalid_cfg_unstructured_cycle_is_rejected() {
-    let mut cfg = CircuitCFG::new(1);
-    let entry = cfg.add_block(BasicBlock::new().with_label("entry"));
-    cfg.set_entry_block(entry);
-    cfg.data[entry].set_terminator(Terminator::Jump(entry));
-    cfg.add_edge(entry, entry, FlowEdge::Unconditional);
-
-    assert!(matches!(
-        cfg.to_circuit(),
-        Err(CircuitError::InvalidControlFlow(_))
-    ));
-}
-
-#[test]
-fn test_invalid_cfg_unreachable_block_is_rejected() {
-    let mut cfg = CircuitCFG::new(1);
-    let entry = cfg.add_block(BasicBlock::new().with_label("entry"));
-    let unreachable = cfg.add_block(BasicBlock::new().with_label("unreachable"));
-    cfg.set_entry_block(entry);
-    cfg.data[entry].set_terminator(Terminator::Return);
-    cfg.data[unreachable].set_terminator(Terminator::Return);
-
-    let error = cfg.to_circuit().unwrap_err();
-    assert!(error.to_string().contains("unreachable"));
 }

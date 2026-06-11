@@ -11,10 +11,7 @@
 // that they have been altered from the originals.
 
 use super::*;
-use crate::circuit::circuit_to_matrix;
-use crate::circuit::gate::control_flow::{ConditionView, IfElseGate};
-use crate::circuit::gate::{ControlFlow, FrozenCircuit, UnitaryGate};
-use crate::circuit::operation::Operation;
+use crate::circuit::gate::{FrozenCircuit, UnitaryGate};
 use crate::circuit::symbolic_matrix::gate::{
     apply_gate_to_matrix, apply_standard_gate_to_matrix, circuit_to_symbolic_matrix,
     standard_gate_symbolic_matrix,
@@ -24,9 +21,9 @@ use crate::circuit::symbolic_matrix::matrix::{
 };
 use crate::circuit::symbolic_matrix::test_utils::assert_matrix_approx_eq;
 use crate::circuit::{Circuit, Directive, Instruction, ParameterValue, Qubit};
+use crate::circuit::{ClassicalType, circuit_to_matrix};
 use ndarray::{Array2, array};
 use num_complex::Complex64;
-use smallvec::smallvec;
 use std::collections::HashMap;
 use std::f64::consts::PI;
 use std::sync::Arc;
@@ -39,10 +36,6 @@ fn assert_standard_gate_matches(gate: StandardGate, params: &[f64]) {
     assert_matrix_approx_eq(&evaluated, expected.as_ref(), 1e-10);
 }
 
-fn symbolic_phase_matrix(symbol: &str) -> SymbolicMatrix {
-    standard_gate_symbolic_matrix(StandardGate::Phase, &[Parameter::symbol(symbol)]).unwrap()
-}
-
 #[test]
 fn test_fixed_standard_gate_matches_numeric_matrix() {
     let symbolic = standard_gate_symbolic_matrix(StandardGate::H, &[]).unwrap();
@@ -50,6 +43,16 @@ fn test_fixed_standard_gate_matches_numeric_matrix() {
     let numeric = StandardGate::H.matrix(&[]).unwrap();
 
     assert_matrix_approx_eq(&evaluated, numeric.as_ref(), 1e-12);
+}
+
+#[test]
+fn test_classical_data_has_no_symbolic_matrix_representation() {
+    let mut circuit = Circuit::new(1);
+    let bit = circuit.var(ClassicalType::Bit);
+    circuit.measure_into(Qubit::new(0), bit).unwrap();
+
+    let err = circuit_to_symbolic_matrix(&circuit, None).unwrap_err();
+    assert!(matches!(err, CircuitError::NoMatrixRepresentation));
 }
 
 #[test]
@@ -423,30 +426,6 @@ fn test_zero_qubit_circuit_identity() {
 
     let numeric = circuit_to_matrix(&circuit, None).unwrap();
     assert_matrix_approx_eq(&evaluated, &numeric, 1e-12);
-}
-
-#[test]
-fn test_control_flow_no_matrix() {
-    let condition = ConditionView::new(Qubit::new(0), 1);
-    let true_body = vec![Operation {
-        instruction: Instruction::Standard(StandardGate::X),
-        qubits: smallvec![Qubit::new(1)],
-        params: smallvec![],
-        label: None,
-    }];
-    let gate = IfElseGate::new(condition, true_body, None);
-    let mut circuit = Circuit::new(2);
-    circuit
-        .append(
-            Instruction::ControlFlowGate(ControlFlow::IfElse(gate)),
-            [Qubit::new(0), Qubit::new(1)],
-            [],
-            None,
-        )
-        .unwrap();
-
-    let err = circuit_to_symbolic_matrix(&circuit, None).unwrap_err();
-    assert!(matches!(err, CircuitError::InvalidOperation(_)));
 }
 
 #[test]
@@ -912,7 +891,11 @@ fn test_symbolic_unitary_gate_circuit_definition() {
 #[test]
 fn test_symbolic_parameterized_unitary_symbolic_matrix_with_fixed_param() {
     let gate = UnitaryGate::new("CustomPhase", 1, 1)
-        .with_symbolic_matrix(["theta"], symbolic_phase_matrix("theta"))
+        .with_symbolic_matrix(
+            ["theta"],
+            standard_gate_symbolic_matrix(StandardGate::Phase, &[Parameter::symbol("theta")])
+                .unwrap(),
+        )
         .unwrap();
     let mut circuit = Circuit::new(1);
     circuit
@@ -933,7 +916,11 @@ fn test_symbolic_parameterized_unitary_symbolic_matrix_with_fixed_param() {
 #[test]
 fn test_symbolic_parameterized_unitary_symbolic_matrix_preserves_unbound_symbol() {
     let gate = UnitaryGate::new("CustomPhase", 1, 1)
-        .with_symbolic_matrix(["theta"], symbolic_phase_matrix("theta"))
+        .with_symbolic_matrix(
+            ["theta"],
+            standard_gate_symbolic_matrix(StandardGate::Phase, &[Parameter::symbol("theta")])
+                .unwrap(),
+        )
         .unwrap();
     let mut circuit = Circuit::new(1);
     circuit

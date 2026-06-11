@@ -562,12 +562,16 @@ pub fn circuit_to_symbolic_matrix(
                     apply_gate_to_matrix(matrix, &sub_matrix, &bits)?;
                 }
             }
-            Instruction::ControlFlowGate(_) => {
+            Instruction::ClassicalControl(_) => {
                 flush_numeric_run(&mut matrix, &mut numeric_run, &full_bits)?;
                 return Err(CircuitError::InvalidOperation(
                     "control-flow operations do not have an unconditional matrix representation"
                         .to_string(),
                 ));
+            }
+            Instruction::ClassicalData(_) => {
+                flush_numeric_run(&mut matrix, &mut numeric_run, &full_bits)?;
+                return Err(CircuitError::NoMatrixRepresentation);
             }
             Instruction::Directive(directive) => match directive {
                 crate::circuit::Directive::Barrier => continue,
