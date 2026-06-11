@@ -10,8 +10,9 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
-use super::{ClassicalExpr, ControlBody};
-use crate::circuit::{CircuitError, ClassicalType, ClassicalVar, Qubit};
+use super::ControlBody;
+use crate::circuit::classical_expr::ClassicalExpr;
+use crate::circuit::{CircuitError, ClassicalType, ClassicalValue, ClassicalVar, Qubit};
 use std::collections::BTreeSet;
 
 /// Exact-value switch case.
@@ -94,8 +95,12 @@ impl SwitchOp {
         self.default.as_ref()
     }
 
-    pub fn classical_reads(&self) -> BTreeSet<ClassicalVar> {
+    pub fn classical_var_reads(&self) -> BTreeSet<ClassicalVar> {
         self.target.vars()
+    }
+
+    pub fn classical_value_reads(&self) -> BTreeSet<ClassicalValue> {
+        self.target.values()
     }
 
     pub fn used_qubits(&self) -> BTreeSet<Qubit> {
@@ -113,7 +118,7 @@ impl SwitchOp {
 #[cfg(test)]
 mod tests {
     use super::{SwitchCase, SwitchOp};
-    use crate::circuit::{ClassicalExpr, ControlBody};
+    use crate::circuit::{CircuitId, ClassicalExpr, ClassicalType, ClassicalValue, ControlBody};
 
     #[test]
     fn switch_requires_uint_target_and_valid_unique_cases() {
@@ -151,5 +156,14 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn switch_reports_target_value_reads() {
+        let value = ClassicalValue::new(CircuitId::new(), 5, ClassicalType::uint(3).unwrap());
+        let op = SwitchOp::new(value.expr(), vec![], None).unwrap();
+
+        assert!(op.classical_var_reads().is_empty());
+        assert!(op.classical_value_reads().contains(&value));
     }
 }

@@ -14,7 +14,7 @@
 //!
 //! This module provides the fundamental building blocks for quantum circuits. It defines the
 //! instruction set architecture (ISA) of the library, ranging from basic unitary gates to
-//! complex controlled operations and non-reversible measurements.
+//! complex controlled operations, non-reversible directives, and structured classical control.
 //!
 //! # Core Components
 //!
@@ -22,14 +22,21 @@
 //! - **[`UnitaryGate`]**: User-defined custom gates via matrix representation.
 //! - **[`MCGate`]**: Multi-controlled gates extending standard gates with arbitrary controls.
 //! - **[`Directive`]**: Non-unitary circuit operations like `Measure`, `Reset`, and `Barrier`.
-//! - **[`ControlFlow`]**: Control flow operations for conditional and iterative quantum execution.
+//! - **[`crate::circuit::ClassicalControlOp`]**: Structured dynamic-circuit control flow driven
+//!   by typed classical expressions.
 //! - **[`Instruction`]**: The unified sum type that wraps all the above, representing a single step in a circuit.
 //! - **[`CircuitGate`]**: Composite gates defined by entire sub-circuits.
+//!
+//! Classical control is intentionally represented as an instruction, not as a
+//! unitary gate. It can appear in an operation list and own structured bodies,
+//! but it has no fixed gate arity, no matrix representation, no static inverse,
+//! and cannot be controlled by additional quantum control qubits.
 //!
 //! # Gate Matrix Generation
 //!
 //! The [`gate_matrix`] module provides low-level functions to generate the unitary matrices
-//! for all supported gates.
+//! for unitary gate instructions. Directives and classical control instructions
+//! are not unitary and therefore do not produce matrices.
 //!
 //! # Examples
 //!
@@ -70,9 +77,19 @@
 //! let h_inst: Instruction = StandardGate::H.into();
 //! let barrier_inst: Instruction = Directive::Barrier.into();
 //! ```
+//!
+//! ## Classical Control Instructions
+//!
+//! ```
+//! use cqlib_core::circuit::{ClassicalControlOp, Instruction};
+//!
+//! let break_inst: Instruction = ClassicalControlOp::Break.into();
+//! assert_eq!(break_inst.gate_arity(), None);
+//! assert!(break_inst.matrix(&[]).is_none());
+//! ```
 
 pub mod circuit_gate;
-pub mod control_flow;
+pub mod classical_data;
 pub mod directive;
 pub mod gate_matrix;
 pub mod instruction;
@@ -82,7 +99,7 @@ pub mod unitary_gate;
 
 // Re-export key types for easier access
 pub use circuit_gate::{CircuitGate, FrozenCircuit};
-pub use control_flow::{ConditionView, ControlFlow, IfElseGate, WhileLoopGate};
+pub use classical_data::ClassicalDataOp;
 pub use directive::Directive;
 pub use instruction::Instruction;
 pub use mc_gate::MCGate;

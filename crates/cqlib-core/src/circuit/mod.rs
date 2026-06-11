@@ -28,23 +28,38 @@
 pub mod ansatz;
 pub mod bit;
 pub mod cfg;
+mod circuit_classical;
 pub mod circuit_impl;
 pub mod circuit_param;
-mod circuit_to_matrix;
+pub mod circuit_to_matrix;
+pub mod circuit_verify;
+pub mod classical;
+pub mod classical_expr;
+pub mod control_flow;
 pub mod error;
 pub mod gate;
 pub mod operation;
 pub mod parameter;
 pub mod symbolic_matrix;
+pub mod value_instruction;
 
 pub use bit::Qubit;
 pub use cfg::CircuitCFG;
+pub use circuit_classical::SwitchBuilder;
 pub use circuit_impl::Circuit;
 pub use circuit_param::{CircuitParam, ParameterValue};
 pub use circuit_to_matrix::circuit_to_matrix;
+pub use classical::{CircuitId, ClassicalType, ClassicalValue, ClassicalVar, Measurement};
+pub use classical_expr::{
+    ClassicalBinaryOp, ClassicalCast, ClassicalCompareOp, ClassicalExpr, ClassicalExprKind,
+    ClassicalExprNode, ClassicalUnaryOp,
+};
+pub use control_flow::{
+    ClassicalControlOp, ControlBody, ForOp, IfOp, SwitchCase, SwitchOp, WhileOp,
+};
 pub use error::CircuitError;
 pub use gate::circuit_gate::CircuitGate;
-pub use gate::control_flow::{ConditionView, ControlFlow, IfElseGate, WhileLoopGate};
+pub use gate::classical_data::ClassicalDataOp;
 pub use gate::directive::Directive;
 pub use gate::instruction::Instruction;
 pub use gate::mc_gate::MCGate;
@@ -52,3 +67,6 @@ pub use gate::standard_gate::StandardGate;
 pub use gate::unitary_gate::UnitaryGate;
 pub use operation::{Operation, ValueOperation};
 pub use parameter::Parameter;
+pub use value_instruction::{
+    ValueClassicalControlOp, ValueControlBody, ValueInstruction, ValueSwitchCase,
+};

@@ -34,6 +34,7 @@ use crate::circuit::bit::Qubit;
 use crate::circuit::circuit_param::{CircuitParam, ParameterValue};
 use crate::circuit::error::CircuitError;
 use crate::circuit::gate::{StandardGate, instruction::Instruction};
+use crate::circuit::value_instruction::ValueInstruction;
 use alloc::borrow::Cow;
 use ndarray::Array2;
 use num_complex::Complex64;
@@ -103,7 +104,7 @@ impl Operation {
 #[derive(Debug, Clone)]
 pub struct ValueOperation {
     /// The abstract instruction definition (what to do).
-    pub instruction: Instruction,
+    pub instruction: ValueInstruction,
     /// The specific qubits this operation applies to (where to do it).
     pub qubits: SmallVec<[Qubit; 3]>,
     /// The concrete or symbolic parameters for this operation (how to do it).
@@ -120,7 +121,7 @@ impl ValueOperation {
         params: impl IntoIterator<Item = ParameterValue>,
     ) -> Self {
         Self {
-            instruction: Instruction::Standard(gate),
+            instruction: ValueInstruction::from_instruction(Instruction::Standard(gate)),
             qubits: qubits.into_iter().collect(),
             params: params.into_iter().collect(),
             label: None,

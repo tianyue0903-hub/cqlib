@@ -14,13 +14,27 @@ use crate::circuit::Qubit;
 use crate::circuit::circuit_impl::Circuit;
 use crate::circuit::circuit_param::{CircuitParam, ParameterValue};
 use crate::circuit::error::CircuitError;
-use crate::circuit::gate::control_flow::ConditionView;
+use crate::circuit::gate::classical_data::ClassicalDataOp;
 use crate::circuit::gate::{Instruction, StandardGate, UnitaryGate};
-use crate::circuit::operation::{Operation, ValueOperation};
+use crate::circuit::operation::ValueOperation;
 use crate::circuit::parameter::Parameter;
+use crate::circuit::{
+    ClassicalControlOp, ClassicalExpr, ClassicalType, ClassicalValue, ClassicalVar, ControlBody,
+    IfOp, Operation, SwitchCase, SwitchOp, ValueClassicalControlOp, ValueControlBody,
+    ValueInstruction, WhileOp,
+};
 use smallvec::smallvec;
 use std::collections::HashSet;
 use std::f64::consts::PI;
+
+fn control_operation(op: ClassicalControlOp) -> Operation {
+    Operation {
+        instruction: Instruction::ClassicalControl(op),
+        qubits: smallvec![],
+        params: smallvec![],
+        label: None,
+    }
+}
 
 #[test]
 fn test_circuit_basic_construction() {
@@ -101,26 +115,32 @@ fn from_operations_builds_circuit_and_interns_symbolic_parameters() {
     let theta = Parameter::symbol("theta");
     let operations = vec![
         ValueOperation {
-            instruction: Instruction::Standard(StandardGate::H),
+            instruction: ValueInstruction::from_instruction(Instruction::Standard(StandardGate::H)),
             qubits: smallvec![Qubit::new(2)],
             params: smallvec![],
             label: Some("prepare".into()),
         },
         ValueOperation {
-            instruction: Instruction::Standard(StandardGate::RX),
+            instruction: ValueInstruction::from_instruction(Instruction::Standard(
+                StandardGate::RX,
+            )),
             qubits: smallvec![Qubit::new(4)],
             params: smallvec![ParameterValue::Param(theta.clone())],
             label: None,
         },
         ValueOperation {
-            instruction: Instruction::Standard(StandardGate::RZ),
+            instruction: ValueInstruction::from_instruction(Instruction::Standard(
+                StandardGate::RZ,
+            )),
             qubits: smallvec![Qubit::new(2)],
             params: smallvec![ParameterValue::Fixed(0.25)],
             label: None,
         },
     ];
 
-    let circuit = Circuit::from_operations(vec![Qubit::new(2), Qubit::new(4)], operations).unwrap();
+    let circuit =
+        Circuit::from_operations(vec![Qubit::new(2), Qubit::new(4)], operations, None, None)
+            .unwrap();
 
     assert_eq!(circuit.qubits(), vec![Qubit::new(2), Qubit::new(4)]);
     assert_eq!(circuit.operations().len(), 3);
@@ -140,7 +160,8 @@ fn from_operations_builds_circuit_and_interns_symbolic_parameters() {
 
 #[test]
 fn from_operations_rejects_duplicate_qubit_declarations() {
-    let result = Circuit::from_operations(vec![Qubit::new(0), Qubit::new(0)], Vec::new());
+    let result =
+        Circuit::from_operations(vec![Qubit::new(0), Qubit::new(0)], Vec::new(), None, None);
 
     assert!(matches!(result, Err(CircuitError::DuplicateQubits)));
 }
@@ -148,15 +169,82 @@ fn from_operations_rejects_duplicate_qubit_declarations() {
 #[test]
 fn from_operations_rejects_unknown_operation_qubits() {
     let operations = vec![ValueOperation {
-        instruction: Instruction::Standard(StandardGate::H),
+        instruction: ValueInstruction::from_instruction(Instruction::Standard(StandardGate::H)),
         qubits: smallvec![Qubit::new(1)],
         params: smallvec![],
         label: None,
     }];
 
-    let result = Circuit::from_operations(vec![Qubit::new(0)], operations);
+    let result = Circuit::from_operations(vec![Qubit::new(0)], operations, None, None);
 
     assert!(matches!(result, Err(CircuitError::QubitNotFound(1))));
+}
+
+#[test]
+fn from_operations_interns_value_control_body_parameters() {
+    let theta = Parameter::symbol("theta");
+    let body = ValueControlBody::new(vec![ValueOperation {
+        instruction: ValueInstruction::from_instruction(Instruction::Standard(StandardGate::RX)),
+        qubits: smallvec![Qubit::new(0)],
+        params: smallvec![ParameterValue::Param(theta.clone())],
+        label: None,
+    }]);
+
+    let circuit = Circuit::from_operations(
+        vec![Qubit::new(0)],
+        vec![ValueOperation {
+            instruction: ValueInstruction::ClassicalControl(ValueClassicalControlOp::If {
+                condition: ClassicalExpr::bool_literal(true),
+                then_body: body,
+                else_body: None,
+            }),
+            qubits: smallvec![Qubit::new(0)],
+            params: smallvec![],
+            label: None,
+        }],
+        None,
+        None,
+    )
+    .unwrap();
+
+    let Instruction::ClassicalControl(ClassicalControlOp::If(op)) =
+        &circuit.operations()[0].instruction
+    else {
+        panic!("expected if operation");
+    };
+    let body_op = &op.then_body().operations()[0];
+    assert!(matches!(
+        body_op.params.as_slice(),
+        [CircuitParam::Index(0)]
+    ));
+    assert_eq!(circuit.parameters().get_index(0), Some(&theta));
+}
+
+#[test]
+fn from_operations_rejects_storage_control_wrapped_as_value_instruction() {
+    let body = ControlBody::new(vec![Operation {
+        instruction: Instruction::Standard(StandardGate::RX),
+        qubits: smallvec![Qubit::new(0)],
+        params: smallvec![CircuitParam::Index(0)],
+        label: None,
+    }]);
+    let op = IfOp::new(ClassicalExpr::bool_literal(true), body, None).unwrap();
+
+    let result = Circuit::from_operations(
+        vec![Qubit::new(0)],
+        vec![ValueOperation {
+            instruction: ValueInstruction::Instruction(Instruction::ClassicalControl(
+                ClassicalControlOp::If(op),
+            )),
+            qubits: smallvec![Qubit::new(0)],
+            params: smallvec![],
+            label: None,
+        }],
+        None,
+        None,
+    );
+
+    assert!(matches!(result, Err(CircuitError::InvalidOperation(_))));
 }
 
 #[test]
@@ -630,136 +718,277 @@ fn test_decompose_nested() {
 }
 
 #[test]
-fn test_if_else_basic() {
-    // Test basic if-else construction
-    let mut circuit = Circuit::new(2);
+fn test_classical_variable_allocation_and_data_ops() {
+    let mut circuit = Circuit::new(3);
+    let bit = circuit.var(ClassicalType::Bit);
+    let bool_var = circuit.var(ClassicalType::Bool);
+    let uint = circuit.var(ClassicalType::uint(8).unwrap());
+    let bit_vec = circuit.var(ClassicalType::bit_vec(3).unwrap());
 
-    let condition = ConditionView::new(Qubit::new(0), 1);
-    let true_body = vec![Operation {
-        instruction: Instruction::Standard(StandardGate::X),
-        qubits: smallvec![Qubit::new(1)],
-        params: smallvec![],
-        label: None,
-    }];
+    assert_eq!(bit.id(), 0);
+    assert_eq!(bit.ty(), ClassicalType::Bit);
+    assert_eq!(bool_var.id(), 1);
+    assert_eq!(bool_var.ty(), ClassicalType::Bool);
+    assert_eq!(uint.id(), 2);
+    assert_eq!(uint.ty(), ClassicalType::uint(8).unwrap());
+    assert_eq!(bit_vec.id(), 3);
+    assert_eq!(bit_vec.ty(), ClassicalType::bit_vec(3).unwrap());
+    assert_eq!(ClassicalType::uint(0), None);
+    assert_eq!(ClassicalType::bit_vec(0), None);
 
-    circuit.if_else(condition, true_body, None).unwrap();
+    let measured_bit = circuit.measure_into(Qubit::new(0), bit).unwrap();
+    assert_eq!(measured_bit.ty(), ClassicalType::Bit);
+    assert_eq!(measured_bit.width(), 1);
+    assert_eq!(measured_bit.qubits(), &[Qubit::new(0)]);
+    let measured_bits = circuit
+        .measure_bits_into([Qubit::new(0), Qubit::new(1), Qubit::new(2)], bit_vec)
+        .unwrap();
+    assert_eq!(measured_bits.ty(), ClassicalType::bit_vec(3).unwrap());
+    assert_eq!(measured_bits.width(), 3);
+    assert_eq!(
+        measured_bits.qubits(),
+        &[Qubit::new(0), Qubit::new(1), Qubit::new(2)]
+    );
+    circuit
+        .store(uint, ClassicalExpr::uint_literal(8, 3).unwrap())
+        .unwrap();
 
-    // Verify the circuit has 1 operation
-    assert_eq!(circuit.data.len(), 1);
-
-    // Verify the operation is a ControlFlowGate
-    let op = &circuit.data[0];
-    assert!(matches!(op.instruction, Instruction::ControlFlowGate(_)));
+    assert!(matches!(
+        circuit.data[0].instruction,
+        Instruction::ClassicalData(ClassicalDataOp::MeasureBit { result }) if result == measured_bit.value()
+    ));
+    assert!(matches!(
+        circuit.data[1].instruction,
+        Instruction::ClassicalData(ClassicalDataOp::Store { target, .. }) if target == bit
+    ));
+    assert!(matches!(
+        circuit.data[2].instruction,
+        Instruction::ClassicalData(ClassicalDataOp::MeasureBits { result }) if result == measured_bits.value()
+    ));
+    assert!(matches!(
+        circuit.data[3].instruction,
+        Instruction::ClassicalData(ClassicalDataOp::Store { target, .. }) if target == bit_vec
+    ));
+    assert!(matches!(
+        circuit.data[4].instruction,
+        Instruction::ClassicalData(ClassicalDataOp::Store { target, .. }) if target == uint
+    ));
 }
 
 #[test]
-fn test_if_else_with_false_branch() {
-    // Test if-else with both true and false branches
+fn test_measurement_drives_expression_control_flow() {
     let mut circuit = Circuit::new(2);
 
-    let condition = ConditionView::new(Qubit::new(0), 1);
-    let true_body = vec![Operation {
-        instruction: Instruction::Standard(StandardGate::X),
-        qubits: smallvec![Qubit::new(1)],
-        params: smallvec![],
-        label: None,
-    }];
-    let false_body = vec![Operation {
-        instruction: Instruction::Standard(StandardGate::Z),
-        qubits: smallvec![Qubit::new(1)],
-        params: smallvec![],
-        label: None,
-    }];
-
+    let measured = circuit.measure(Qubit::new(0)).unwrap();
+    let condition = ClassicalExpr::bit_to_bool(measured.expr()).unwrap();
     circuit
-        .if_else(condition, true_body, Some(false_body))
+        .if_(condition, |body| {
+            body.x(Qubit::new(1))?;
+            Ok(())
+        })
         .unwrap();
 
-    assert_eq!(circuit.data.len(), 1);
-
-    let op = &circuit.data[0];
-    if let Instruction::ControlFlowGate(cf) = &op.instruction {
-        use crate::circuit::gate::control_flow::ControlFlow;
-        if let ControlFlow::IfElse(gate) = cf {
-            assert_eq!(gate.true_body().len(), 1);
-            assert_eq!(gate.false_body().unwrap().len(), 1);
+    assert_eq!(circuit.data.len(), 2);
+    match &circuit.data[1].instruction {
+        Instruction::ClassicalControl(ClassicalControlOp::If(op)) => {
+            assert_eq!(op.then_body().operations().len(), 1);
+            assert!(op.else_body().is_none());
         }
+        instruction => panic!("expected if control op, got {instruction:?}"),
     }
 }
 
 #[test]
-fn test_while_loop_basic() {
-    // Test basic while loop construction
+fn test_if_else_with_false_branch() {
     let mut circuit = Circuit::new(2);
 
-    let condition = ConditionView::new(Qubit::new(0), 1);
-    let body = vec![Operation {
-        instruction: Instruction::Standard(StandardGate::H),
-        qubits: smallvec![Qubit::new(1)],
-        params: smallvec![],
-        label: None,
-    }];
-
-    circuit.while_loop(condition, body).unwrap();
+    circuit
+        .if_else(
+            ClassicalExpr::bool_literal(true),
+            |then_body| {
+                then_body.x(Qubit::new(1))?;
+                Ok(())
+            },
+            |else_body| {
+                else_body.z(Qubit::new(1))?;
+                Ok(())
+            },
+        )
+        .unwrap();
 
     assert_eq!(circuit.data.len(), 1);
-
-    let op = &circuit.data[0];
-    assert!(matches!(op.instruction, Instruction::ControlFlowGate(_)));
+    match &circuit.data[0].instruction {
+        Instruction::ClassicalControl(ClassicalControlOp::If(op)) => {
+            assert_eq!(op.then_body().operations().len(), 1);
+            assert_eq!(op.else_body().unwrap().operations().len(), 1);
+        }
+        instruction => panic!("expected if control op, got {instruction:?}"),
+    }
 }
 
 #[test]
-fn test_control_flow_multiple_operations() {
-    // Test control flow with multiple operations in body
-    let mut circuit = Circuit::new(3);
+fn test_while_loop_requires_terminal_break_and_continue() {
+    let mut circuit = Circuit::new(2);
 
-    let condition = ConditionView::new(Qubit::new(0), 1);
-    let true_body = vec![
-        Operation {
-            instruction: Instruction::Standard(StandardGate::H),
-            qubits: smallvec![Qubit::new(1)],
-            params: smallvec![],
-            label: None,
-        },
-        Operation {
-            instruction: Instruction::Standard(StandardGate::CX),
-            qubits: smallvec![Qubit::new(1), Qubit::new(2)],
-            params: smallvec![],
-            label: None,
-        },
-    ];
+    assert!(circuit.break_loop().is_err());
+    assert!(circuit.continue_loop().is_err());
 
-    circuit.if_else(condition, true_body, None).unwrap();
+    let error = circuit
+        .while_(ClassicalExpr::bool_literal(true), |body| {
+            body.h(Qubit::new(1))?;
+            body.break_loop()?;
+            body.continue_loop()?;
+            Ok(())
+        })
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        CircuitError::NonTerminalControlTransfer { .. }
+    ));
+    assert!(circuit.data.is_empty());
 
-    assert_eq!(circuit.data.len(), 1);
+    circuit
+        .while_(ClassicalExpr::bool_literal(true), |body| body.break_loop())
+        .unwrap();
 
-    let op = &circuit.data[0];
-    if let Instruction::ControlFlowGate(cf) = &op.instruction {
-        use crate::circuit::gate::control_flow::ControlFlow;
-        if let ControlFlow::IfElse(gate) = cf {
-            assert_eq!(gate.true_body().len(), 2);
+    let mut continue_circuit = Circuit::new(1);
+    continue_circuit
+        .while_(ClassicalExpr::bool_literal(true), |body| {
+            body.continue_loop()
+        })
+        .unwrap();
+}
+
+#[test]
+fn test_raw_if_body_rejects_out_of_scope_break() {
+    let mut circuit = Circuit::new(1);
+    let body = ControlBody::new(vec![control_operation(ClassicalControlOp::Break)]);
+    let op = IfOp::new(ClassicalExpr::bool_literal(true), body, None).unwrap();
+
+    assert!(circuit.append_control(ClassicalControlOp::If(op)).is_err());
+}
+
+#[test]
+fn test_raw_if_body_rejects_out_of_scope_continue() {
+    let mut circuit = Circuit::new(1);
+    let body = ControlBody::new(vec![control_operation(ClassicalControlOp::Continue)]);
+    let op = IfOp::new(ClassicalExpr::bool_literal(true), body, None).unwrap();
+
+    assert!(circuit.append_control(ClassicalControlOp::If(op)).is_err());
+}
+
+#[test]
+fn test_raw_while_body_rejects_nonterminal_nested_control_transfer() {
+    let mut circuit = Circuit::new(1);
+    let if_body = ControlBody::new(vec![
+        control_operation(ClassicalControlOp::Break),
+        control_operation(ClassicalControlOp::Continue),
+    ]);
+    let if_op = IfOp::new(ClassicalExpr::bool_literal(true), if_body, None).unwrap();
+    let while_body = ControlBody::new(vec![control_operation(ClassicalControlOp::If(if_op))]);
+    let while_op = WhileOp::new(ClassicalExpr::bool_literal(true), while_body).unwrap();
+
+    assert!(matches!(
+        circuit.append_control(ClassicalControlOp::While(while_op)),
+        Err(CircuitError::NonTerminalControlTransfer { .. })
+    ));
+}
+
+#[test]
+fn test_raw_switch_body_allows_break_but_rejects_continue_without_loop() {
+    let mut circuit = Circuit::new(1);
+    let break_body = ControlBody::new(vec![control_operation(ClassicalControlOp::Break)]);
+    let break_switch = SwitchOp::new(
+        ClassicalExpr::uint_literal(2, 0).unwrap(),
+        vec![SwitchCase::new(0, break_body)],
+        None,
+    )
+    .unwrap();
+
+    assert!(
+        circuit
+            .append_control(ClassicalControlOp::Switch(break_switch))
+            .is_ok()
+    );
+
+    let mut circuit = Circuit::new(1);
+    let continue_body = ControlBody::new(vec![control_operation(ClassicalControlOp::Continue)]);
+    let continue_switch = SwitchOp::new(
+        ClassicalExpr::uint_literal(2, 0).unwrap(),
+        vec![SwitchCase::new(0, continue_body)],
+        None,
+    )
+    .unwrap();
+
+    assert!(
+        circuit
+            .append_control(ClassicalControlOp::Switch(continue_switch))
+            .is_err()
+    );
+}
+
+#[test]
+fn test_switch_inside_loop_allows_continue_to_outer_loop() {
+    let mut circuit = Circuit::new(1);
+
+    circuit
+        .while_(ClassicalExpr::bool_literal(true), |body| {
+            body.switch(ClassicalExpr::uint_literal(2, 0).unwrap(), |case| {
+                case.value(0, |case_body| case_body.continue_loop())?;
+                Ok(())
+            })
+        })
+        .unwrap();
+}
+
+#[test]
+fn test_switch_builder_captures_cases_and_default() {
+    let mut circuit = Circuit::new(2);
+    let state = circuit.var(ClassicalType::uint(2).unwrap());
+
+    circuit
+        .switch(state.expr(), |case| {
+            case.value(0, |body| {
+                body.x(Qubit::new(0))?;
+                Ok(())
+            })?;
+            case.value(1, |body| {
+                body.h(Qubit::new(1))?;
+                Ok(())
+            })?;
+            case.value(2, |body| {
+                body.h(Qubit::new(1))?;
+                Ok(())
+            })?;
+            case.default(|body| {
+                body.z(Qubit::new(0))?;
+                Ok(())
+            })?;
+            Ok(())
+        })
+        .unwrap();
+
+    match &circuit.data[0].instruction {
+        Instruction::ClassicalControl(ClassicalControlOp::Switch(op)) => {
+            assert_eq!(op.cases().len(), 3);
+            assert!(op.default().is_some());
         }
+        instruction => panic!("expected switch control op, got {instruction:?}"),
     }
 }
 
 #[test]
 fn test_control_flow_inverse_error() {
-    // Test that inverse() returns error for circuits with control flow
     let mut circuit = Circuit::new(2);
 
-    let condition = ConditionView::new(Qubit::new(0), 1);
-    let true_body = vec![Operation {
-        instruction: Instruction::Standard(StandardGate::H),
-        qubits: smallvec![Qubit::new(1)],
-        params: smallvec![],
-        label: None,
-    }];
+    circuit
+        .if_(ClassicalExpr::bool_literal(true), |body| {
+            body.h(Qubit::new(1))?;
+            Ok(())
+        })
+        .unwrap();
 
-    circuit.if_else(condition, true_body, None).unwrap();
-
-    // inverse() should return error for circuits with control flow
     let result = circuit.inverse();
-    assert!(result.is_err());
     assert!(matches!(
         result.unwrap_err(),
         CircuitError::IrreversibleOperation
@@ -767,95 +996,70 @@ fn test_control_flow_inverse_error() {
 }
 
 #[test]
-fn test_control_flow_matrix_returns_none() {
-    // Test that ControlFlowGate matrix() returns None
-    use crate::circuit::gate::control_flow::{ControlFlow, IfElseGate};
+fn test_body_error_rolls_back_captured_operations() {
+    let mut circuit = Circuit::new(1);
 
-    let condition = ConditionView::new(Qubit::new(0), 1);
-    let true_body = vec![Operation {
-        instruction: Instruction::Standard(StandardGate::H),
-        qubits: smallvec![Qubit::new(1)],
-        params: smallvec![],
-        label: None,
-    }];
+    let result = circuit.if_(ClassicalExpr::bool_literal(true), |body| {
+        body.x(Qubit::new(0))?;
+        Err(CircuitError::InvalidOperation("stop".to_string()))
+    });
 
-    let gate = IfElseGate::new(condition, true_body, None);
-    let cf = ControlFlow::IfElse(gate);
-
-    // matrix() should return None for control flow
-    let matrix = cf.matrix();
-    assert!(matrix.is_none());
+    assert!(result.is_err());
+    assert!(circuit.data.is_empty());
 }
 
 #[test]
-fn test_decompose_preserves_control_flow() {
-    // Test that decompose() preserves control flow structure
+fn test_control_op_constructor_error_rolls_back_captured_state() {
+    let mut circuit = Circuit::new(1);
+
+    let result = circuit.if_(ClassicalExpr::uint_literal(2, 1).unwrap(), |body| {
+        let _scratch = body.var(ClassicalType::Bool);
+        let _measured = body.measure(Qubit::new(0))?;
+        Ok(())
+    });
+
+    assert!(result.is_err());
+    assert!(circuit.data.is_empty());
+    assert!(circuit.classical_vars.is_empty());
+    assert!(circuit.classical_values().is_empty());
+}
+
+#[test]
+fn test_decompose_rejects_classical_control() {
     let mut circuit = Circuit::new(2);
 
-    // Add control flow with same qubit as condition
-    let condition = ConditionView::new(Qubit::new(0), 1);
-    let true_body = vec![Operation {
-        instruction: Instruction::Standard(StandardGate::X),
-        qubits: smallvec![Qubit::new(0)], // Use same qubit as condition
-        params: smallvec![],
-        label: None,
-    }];
+    circuit
+        .if_(ClassicalExpr::bool_literal(true), |body| {
+            body.x(Qubit::new(0))?;
+            Ok(())
+        })
+        .unwrap();
 
-    circuit.if_else(condition, true_body, None).unwrap();
-
-    // Decompose the circuit
-    let decomposed = circuit.decompose().unwrap();
-
-    // Should have the control flow preserved
-    assert_eq!(decomposed.data.len(), 1);
-
-    // Control flow should still be present
-    let has_control_flow = decomposed
-        .data
-        .iter()
-        .any(|op| matches!(op.instruction, Instruction::ControlFlowGate(_)));
-    assert!(
-        has_control_flow,
-        "ControlFlowGate should be preserved after decompose"
-    );
+    assert!(circuit.decompose().is_err());
 }
 
 #[test]
-fn test_decompose_control_flow_multiple_qubits() {
-    // Test decompose with control flow body using multiple qubits
-    let mut circuit = Circuit::new(3);
+fn test_decompose_remaps_classical_data_identity() {
+    let mut circuit = Circuit::new(1);
+    let target = circuit.var(ClassicalType::Bool);
+    let measured = circuit.measure(Qubit::new(0)).unwrap();
+    circuit
+        .store(target, ClassicalExpr::bit_to_bool(measured.expr()).unwrap())
+        .unwrap();
 
-    // Add control flow with body using multiple qubits (0, 1, 2)
-    let condition = ConditionView::new(Qubit::new(0), 1);
-    let true_body = vec![
-        Operation {
-            instruction: Instruction::Standard(StandardGate::H),
-            qubits: smallvec![Qubit::new(1)],
-            params: smallvec![],
-            label: None,
-        },
-        Operation {
-            instruction: Instruction::Standard(StandardGate::CX),
-            qubits: smallvec![Qubit::new(1), Qubit::new(2)],
-            params: smallvec![],
-            label: None,
-        },
-    ];
-
-    circuit.if_else(condition, true_body, None).unwrap();
-
-    // Decompose should work without error
     let decomposed = circuit.decompose().unwrap();
 
-    // Control flow should be preserved
-    let has_control_flow = decomposed
-        .data
-        .iter()
-        .any(|op| matches!(op.instruction, Instruction::ControlFlowGate(_)));
-    assert!(
-        has_control_flow,
-        "ControlFlowGate should be preserved after decompose"
-    );
+    assert_ne!(decomposed.id(), circuit.id());
+    assert_eq!(decomposed.classical_vars(), circuit.classical_vars());
+    assert_eq!(decomposed.classical_values(), circuit.classical_values());
+    decomposed.validate().unwrap();
+
+    match &decomposed.operations()[0].instruction {
+        Instruction::ClassicalData(ClassicalDataOp::MeasureBit { result }) => {
+            assert_eq!(result.circuit_id(), decomposed.id());
+        }
+        other => panic!("expected measurement, got {other:?}"),
+    }
 }
 
 #[test]
@@ -1026,5 +1230,362 @@ fn test_compose_preserves_operation_order() {
     assert!(matches!(
         qc1.data[3].instruction,
         Instruction::Standard(StandardGate::H)
+    ));
+}
+
+#[test]
+fn test_compose_remaps_classical_data_ids() {
+    let mut qc1 = Circuit::new(2);
+    let q0 = Qubit::new(0);
+    let q1 = Qubit::new(1);
+    let left_bit = qc1.var(ClassicalType::Bit);
+    qc1.measure(q0).unwrap();
+    qc1.store(left_bit, ClassicalExpr::bit_literal(true))
+        .unwrap();
+
+    let mut qc2 = Circuit::new(2);
+    let right_bit = qc2.var(ClassicalType::Bit);
+    qc2.measure_into(q0, right_bit).unwrap();
+
+    qc1.compose(&qc2, Some(&[q1, q0])).unwrap();
+
+    assert_eq!(
+        qc1.classical_vars(),
+        &[ClassicalType::Bit, ClassicalType::Bit]
+    );
+    assert_eq!(
+        qc1.classical_values(),
+        &[ClassicalType::Bit, ClassicalType::Bit]
+    );
+
+    match &qc1.data[2].instruction {
+        Instruction::ClassicalData(ClassicalDataOp::MeasureBit { result }) => {
+            assert_eq!(
+                *result,
+                ClassicalValue::new(qc1.id(), 1, ClassicalType::Bit)
+            );
+            assert_eq!(qc1.data[2].qubits.as_slice(), &[q1]);
+        }
+        instruction => panic!("expected remapped measure_bit, got {instruction:?}"),
+    }
+
+    match &qc1.data[3].instruction {
+        Instruction::ClassicalData(ClassicalDataOp::Store { target, value }) => {
+            assert_eq!(*target, ClassicalVar::new(qc1.id(), 1, ClassicalType::Bit));
+            assert!(
+                value
+                    .values()
+                    .contains(&ClassicalValue::new(qc1.id(), 1, ClassicalType::Bit))
+            );
+        }
+        instruction => panic!("expected remapped store, got {instruction:?}"),
+    }
+}
+
+#[test]
+fn test_compose_remaps_measurement_driven_if_control() {
+    let mut qc1 = Circuit::new(3);
+    let q0 = Qubit::new(0);
+    let q1 = Qubit::new(1);
+    let q2 = Qubit::new(2);
+    qc1.measure(q0).unwrap();
+
+    let mut qc2 = Circuit::new(2);
+    let measured = qc2.measure(q0).unwrap();
+    let condition = ClassicalExpr::bit_to_bool(measured.expr()).unwrap();
+    qc2.if_(condition, |body| {
+        body.x(Qubit::new(1))?;
+        Ok(())
+    })
+    .unwrap();
+
+    qc1.compose(&qc2, Some(&[q2, q1])).unwrap();
+
+    match &qc1.data[1].instruction {
+        Instruction::ClassicalData(ClassicalDataOp::MeasureBit { result }) => {
+            assert_eq!(
+                *result,
+                ClassicalValue::new(qc1.id(), 1, ClassicalType::Bit)
+            );
+            assert_eq!(qc1.data[1].qubits.as_slice(), &[q2]);
+        }
+        instruction => panic!("expected remapped measure_bit, got {instruction:?}"),
+    }
+
+    match &qc1.data[2].instruction {
+        Instruction::ClassicalControl(ClassicalControlOp::If(op)) => {
+            assert!(op.condition().values().contains(&ClassicalValue::new(
+                qc1.id(),
+                1,
+                ClassicalType::Bit
+            )));
+            assert_eq!(op.then_body().operations()[0].qubits.as_slice(), &[q1]);
+            assert_eq!(qc1.data[2].qubits.as_slice(), &[q1]);
+        }
+        instruction => panic!("expected remapped if control op, got {instruction:?}"),
+    }
+}
+
+#[test]
+fn test_compose_remaps_loop_switch_bodies_and_nested_params() {
+    let mut qc1 = Circuit::new(2);
+    let q0 = Qubit::new(0);
+    let q1 = Qubit::new(1);
+    qc1.var(ClassicalType::Bool);
+
+    let mut qc2 = Circuit::new(2);
+    let counter = qc2.var(ClassicalType::uint(4).unwrap());
+    let selector = qc2.var(ClassicalType::uint(2).unwrap());
+
+    qc2.for_uint(
+        counter,
+        ClassicalExpr::uint_literal(4, 0).unwrap(),
+        ClassicalExpr::uint_literal(4, 2).unwrap(),
+        ClassicalExpr::uint_literal(4, 1).unwrap(),
+        |body, _| {
+            body.h(q0)?;
+            Ok(())
+        },
+    )
+    .unwrap();
+    qc2.switch(selector.expr(), |case| {
+        case.value(0, |body| {
+            body.x(q1)?;
+            Ok(())
+        })?;
+        case.default(|body| {
+            body.z(q0)?;
+            Ok(())
+        })?;
+        Ok(())
+    })
+    .unwrap();
+    qc2.while_(ClassicalExpr::bool_literal(true), |body| {
+        body.rx(q1, Parameter::symbol("theta"))?;
+        Ok(())
+    })
+    .unwrap();
+
+    qc1.compose(&qc2, Some(&[q1, q0])).unwrap();
+
+    assert_eq!(qc1.classical_vars().len(), 3);
+    assert_eq!(qc1.parameters().len(), 1);
+
+    match &qc1.data[0].instruction {
+        Instruction::ClassicalControl(ClassicalControlOp::For(op)) => {
+            assert_eq!(
+                op.var(),
+                ClassicalVar::new(qc1.id(), 1, ClassicalType::uint(4).unwrap())
+            );
+            assert_eq!(op.body().operations()[0].qubits.as_slice(), &[q1]);
+        }
+        instruction => panic!("expected remapped for control op, got {instruction:?}"),
+    }
+
+    match &qc1.data[1].instruction {
+        Instruction::ClassicalControl(ClassicalControlOp::Switch(op)) => {
+            assert!(op.target().vars().contains(&ClassicalVar::new(
+                qc1.id(),
+                2,
+                ClassicalType::uint(2).unwrap()
+            )));
+            assert_eq!(
+                op.cases()[0].body().operations()[0].qubits.as_slice(),
+                &[q0]
+            );
+            assert_eq!(
+                op.default().unwrap().operations()[0].qubits.as_slice(),
+                &[q1]
+            );
+        }
+        instruction => panic!("expected remapped switch control op, got {instruction:?}"),
+    }
+
+    match &qc1.data[2].instruction {
+        Instruction::ClassicalControl(ClassicalControlOp::While(op)) => {
+            let body_op = &op.body().operations()[0];
+            assert_eq!(body_op.qubits.as_slice(), &[q0]);
+            assert!(matches!(body_op.params[0], CircuitParam::Index(0)));
+        }
+        instruction => panic!("expected remapped while control op, got {instruction:?}"),
+    }
+}
+
+#[test]
+fn test_classical_handles_are_rejected_by_other_circuits() {
+    let mut owner = Circuit::new(1);
+    let owner_var = owner.var(ClassicalType::Bit);
+    let owner_measurement = owner.measure(Qubit::new(0)).unwrap();
+
+    let mut other = Circuit::new(1);
+    assert!(matches!(
+        other.store(owner_var, ClassicalExpr::bit_literal(true)),
+        Err(CircuitError::ForeignClassicalHandle {
+            kind: "classical variable",
+            ..
+        })
+    ));
+
+    let other_var = other.var(ClassicalType::Bit);
+    assert!(matches!(
+        other.store(other_var, owner_measurement.expr()),
+        Err(CircuitError::ForeignClassicalHandle {
+            kind: "classical value",
+            ..
+        })
+    ));
+}
+
+#[test]
+fn test_clone_allocates_new_classical_identity_and_remaps_operations() {
+    let mut original = Circuit::new(1);
+    let original_var = original.var(ClassicalType::Bit);
+    original.measure_into(Qubit::new(0), original_var).unwrap();
+
+    let cloned = original.clone();
+    assert_ne!(original.id(), cloned.id());
+    assert!(matches!(
+        cloned
+            .clone()
+            .store(original_var, ClassicalExpr::bit_literal(true)),
+        Err(CircuitError::ForeignClassicalHandle { .. })
+    ));
+    assert!(cloned.validate().is_ok());
+}
+
+#[test]
+fn test_if_body_measurement_value_cannot_escape() {
+    let mut circuit = Circuit::new(1);
+    let output = circuit.var(ClassicalType::Bit);
+    let mut escaped = None;
+
+    circuit
+        .if_(ClassicalExpr::bool_literal(true), |body| {
+            escaped = Some(body.measure(Qubit::new(0))?.expr());
+            Ok(())
+        })
+        .unwrap();
+
+    assert!(matches!(
+        circuit.store(output, escaped.unwrap()),
+        Err(CircuitError::ClassicalValueOutOfScope { .. })
+    ));
+}
+
+#[test]
+fn test_loop_and_switch_measurement_values_cannot_escape() {
+    let mut while_circuit = Circuit::new(1);
+    let while_output = while_circuit.var(ClassicalType::Bit);
+    let mut while_value = None;
+    while_circuit
+        .while_(ClassicalExpr::bool_literal(true), |body| {
+            while_value = Some(body.measure(Qubit::new(0))?.expr());
+            body.break_loop()
+        })
+        .unwrap();
+    assert!(matches!(
+        while_circuit.store(while_output, while_value.unwrap()),
+        Err(CircuitError::ClassicalValueOutOfScope { .. })
+    ));
+
+    let mut for_circuit = Circuit::new(1);
+    let for_output = for_circuit.var(ClassicalType::Bit);
+    let loop_var = for_circuit.var(ClassicalType::uint(2).unwrap());
+    let mut for_value = None;
+    for_circuit
+        .for_uint(
+            loop_var,
+            ClassicalExpr::uint_literal(2, 0).unwrap(),
+            ClassicalExpr::uint_literal(2, 2).unwrap(),
+            ClassicalExpr::uint_literal(2, 1).unwrap(),
+            |body, _| {
+                for_value = Some(body.measure(Qubit::new(0))?.expr());
+                Ok(())
+            },
+        )
+        .unwrap();
+    assert!(matches!(
+        for_circuit.store(for_output, for_value.unwrap()),
+        Err(CircuitError::ClassicalValueOutOfScope { .. })
+    ));
+
+    let mut switch_circuit = Circuit::new(1);
+    let switch_output = switch_circuit.var(ClassicalType::Bit);
+    let selector = switch_circuit.var(ClassicalType::uint(2).unwrap());
+    let mut switch_value = None;
+    switch_circuit
+        .switch(selector.expr(), |cases| {
+            cases.value(0, |body| {
+                switch_value = Some(body.measure(Qubit::new(0))?.expr());
+                Ok(())
+            })?;
+            Ok(())
+        })
+        .unwrap();
+    assert!(matches!(
+        switch_circuit.store(switch_output, switch_value.unwrap()),
+        Err(CircuitError::ClassicalValueOutOfScope { .. })
+    ));
+}
+
+#[test]
+fn test_body_measurement_can_update_outer_variable() {
+    let mut circuit = Circuit::new(1);
+    let output = circuit.var(ClassicalType::Bit);
+
+    circuit
+        .while_(ClassicalExpr::bool_literal(true), |body| {
+            let measurement = body.measure(Qubit::new(0))?;
+            body.store(output, measurement.expr())?;
+            body.break_loop()
+        })
+        .unwrap();
+
+    assert!(circuit.validate().is_ok());
+}
+
+#[test]
+fn test_from_operations_rejects_undefined_and_duplicate_values() {
+    let circuit_id = crate::circuit::CircuitId::new();
+    let value = ClassicalValue::new(circuit_id, 0, ClassicalType::Bit);
+    let target = ClassicalVar::new(circuit_id, 0, ClassicalType::Bit);
+    let undefined = Circuit::from_operations(
+        vec![Qubit::new(0)],
+        vec![ValueOperation {
+            instruction: ValueInstruction::from_instruction(Instruction::ClassicalData(
+                ClassicalDataOp::Store {
+                    target,
+                    value: value.expr(),
+                },
+            )),
+            qubits: smallvec![],
+            params: smallvec![],
+            label: None,
+        }],
+        Some(vec![ClassicalType::Bit]),
+        Some(vec![ClassicalType::Bit]),
+    );
+    assert!(matches!(
+        undefined,
+        Err(CircuitError::UndefinedClassicalValue { .. })
+    ));
+
+    let measure = || ValueOperation {
+        instruction: ValueInstruction::from_instruction(Instruction::ClassicalData(
+            ClassicalDataOp::MeasureBit { result: value },
+        )),
+        qubits: smallvec![Qubit::new(0)],
+        params: smallvec![],
+        label: None,
+    };
+    let duplicate = Circuit::from_operations(
+        vec![Qubit::new(0)],
+        vec![measure(), measure()],
+        None,
+        Some(vec![ClassicalType::Bit]),
+    );
+    assert!(matches!(
+        duplicate,
+        Err(CircuitError::DuplicateClassicalValueDefinition { .. })
     ));
 }

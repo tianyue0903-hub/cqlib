@@ -11,7 +11,7 @@
 // that they have been altered from the originals.
 
 use super::{ForOp, IfOp, SwitchOp, WhileOp};
-use crate::circuit::{ClassicalVar, Qubit};
+use crate::circuit::{ClassicalValue, ClassicalVar, Qubit};
 use std::collections::BTreeSet;
 use std::fmt;
 
@@ -28,12 +28,23 @@ pub enum ClassicalControlOp {
 
 impl ClassicalControlOp {
     /// Returns classical variables read by the operation's controlling expressions.
-    pub fn classical_reads(&self) -> BTreeSet<ClassicalVar> {
+    pub fn classical_var_reads(&self) -> BTreeSet<ClassicalVar> {
         match self {
-            Self::If(op) => op.classical_reads(),
-            Self::While(op) => op.classical_reads(),
-            Self::For(op) => op.classical_reads(),
-            Self::Switch(op) => op.classical_reads(),
+            Self::If(op) => op.classical_var_reads(),
+            Self::While(op) => op.classical_var_reads(),
+            Self::For(op) => op.classical_var_reads(),
+            Self::Switch(op) => op.classical_var_reads(),
+            Self::Break | Self::Continue => BTreeSet::new(),
+        }
+    }
+
+    /// Returns immutable classical values read by the operation's controlling expressions.
+    pub fn classical_value_reads(&self) -> BTreeSet<ClassicalValue> {
+        match self {
+            Self::If(op) => op.classical_value_reads(),
+            Self::While(op) => op.classical_value_reads(),
+            Self::For(op) => op.classical_value_reads(),
+            Self::Switch(op) => op.classical_value_reads(),
             Self::Break | Self::Continue => BTreeSet::new(),
         }
     }
@@ -77,18 +88,45 @@ impl fmt::Display for ClassicalControlOp {
 mod tests {
     use super::ClassicalControlOp;
     use crate::circuit::{
-        ClassicalExpr, ClassicalType, ClassicalVar, ControlBody, ForOp, IfOp, SwitchCase, SwitchOp,
-        WhileOp,
+        CircuitId, ClassicalExpr, ClassicalType, ClassicalValue, ClassicalVar, ControlBody, ForOp,
+        IfOp, SwitchCase, SwitchOp, WhileOp,
     };
 
     #[test]
     fn break_and_continue_have_no_resource_dependencies() {
-        assert!(ClassicalControlOp::Break.classical_reads().is_empty());
+        assert!(ClassicalControlOp::Break.classical_var_reads().is_empty());
+        assert!(ClassicalControlOp::Break.classical_value_reads().is_empty());
         assert!(ClassicalControlOp::Break.classical_writes().is_empty());
         assert!(ClassicalControlOp::Break.used_qubits().is_empty());
-        assert!(ClassicalControlOp::Continue.classical_reads().is_empty());
+        assert!(
+            ClassicalControlOp::Continue
+                .classical_var_reads()
+                .is_empty()
+        );
+        assert!(
+            ClassicalControlOp::Continue
+                .classical_value_reads()
+                .is_empty()
+        );
         assert!(ClassicalControlOp::Continue.classical_writes().is_empty());
         assert!(ClassicalControlOp::Continue.used_qubits().is_empty());
+    }
+
+    #[test]
+    fn control_op_forwards_classical_var_and_value_reads() {
+        let circuit_id = CircuitId::new();
+        let bit = ClassicalVar::new(circuit_id, 1, ClassicalType::Bit);
+        let value = ClassicalValue::new(circuit_id, 2, ClassicalType::Bit);
+        let condition = ClassicalExpr::and(
+            ClassicalExpr::bit_to_bool(bit.expr()).unwrap(),
+            ClassicalExpr::bit_to_bool(value.expr()).unwrap(),
+        )
+        .unwrap();
+        let op = IfOp::new(condition, ControlBody::new(vec![]), None).unwrap();
+        let op = ClassicalControlOp::If(op);
+
+        assert!(op.classical_var_reads().contains(&bit));
+        assert!(op.classical_value_reads().contains(&value));
     }
 
     #[test]
@@ -97,7 +135,7 @@ mod tests {
         let body = ControlBody::new(vec![]);
         let if_op = IfOp::new(condition.clone(), body.clone(), None).unwrap();
         let while_op = WhileOp::new(condition, body.clone()).unwrap();
-        let loop_var = ClassicalVar::new(0, ClassicalType::uint(8).unwrap());
+        let loop_var = ClassicalVar::new(CircuitId::new(), 0, ClassicalType::uint(8).unwrap());
         let for_op = ForOp::new(
             loop_var,
             ClassicalExpr::uint_literal(8, 0).unwrap(),

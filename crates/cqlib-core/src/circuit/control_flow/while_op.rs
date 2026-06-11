@@ -10,8 +10,9 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
-use super::{ClassicalExpr, ControlBody};
-use crate::circuit::{CircuitError, ClassicalType, ClassicalVar, Qubit};
+use super::ControlBody;
+use crate::circuit::classical_expr::ClassicalExpr;
+use crate::circuit::{CircuitError, ClassicalType, ClassicalValue, ClassicalVar, Qubit};
 use std::collections::BTreeSet;
 
 /// Loop controlled by a boolean classical expression.
@@ -41,8 +42,12 @@ impl WhileOp {
         &self.body
     }
 
-    pub fn classical_reads(&self) -> BTreeSet<ClassicalVar> {
+    pub fn classical_var_reads(&self) -> BTreeSet<ClassicalVar> {
         self.condition.vars()
+    }
+
+    pub fn classical_value_reads(&self) -> BTreeSet<ClassicalValue> {
+        self.condition.values()
     }
 
     pub fn used_qubits(&self) -> BTreeSet<Qubit> {
@@ -53,11 +58,29 @@ impl WhileOp {
 #[cfg(test)]
 mod tests {
     use super::WhileOp;
-    use crate::circuit::{ClassicalExpr, ControlBody};
+    use crate::circuit::{
+        CircuitId, ClassicalExpr, ClassicalType, ClassicalValue, ClassicalVar, ControlBody,
+    };
 
     #[test]
     fn while_requires_bool_condition() {
         assert!(WhileOp::new(ClassicalExpr::bool_literal(true), ControlBody::new(vec![])).is_ok());
         assert!(WhileOp::new(ClassicalExpr::bit_literal(true), ControlBody::new(vec![])).is_err());
+    }
+
+    #[test]
+    fn while_reports_condition_reads() {
+        let circuit_id = CircuitId::new();
+        let bit = ClassicalVar::new(circuit_id, 3, ClassicalType::Bit);
+        let value = ClassicalValue::new(circuit_id, 4, ClassicalType::Bit);
+        let condition = ClassicalExpr::and(
+            ClassicalExpr::bit_to_bool(bit.expr()).unwrap(),
+            ClassicalExpr::bit_to_bool(value.expr()).unwrap(),
+        )
+        .unwrap();
+        let op = WhileOp::new(condition, ControlBody::new(vec![])).unwrap();
+
+        assert!(op.classical_var_reads().contains(&bit));
+        assert!(op.classical_value_reads().contains(&value));
     }
 }

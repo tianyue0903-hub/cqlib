@@ -42,21 +42,29 @@
 //! // Apply Controlled-NOT gate (q0 controls q1)
 //! circuit.cx(q0, q1);
 //!
-//! // Measure q0
-//! circuit.measure(q0);
+//! // Measure q0 and keep its immutable runtime result
+//! let measured = circuit.measure(q0).unwrap();
+//! assert_eq!(measured.ty().width(), 1);
 //! ```
 
 use crate::circuit::bit::Qubit;
+use crate::circuit::circuit_classical::ControlScopeKind;
 use crate::circuit::circuit_param::{CircuitParam, ParameterValue};
-use crate::circuit::circuit_to_matrix;
+use crate::circuit::classical::CircuitId;
 use crate::circuit::error::CircuitError;
 use crate::circuit::gate::circuit_gate::{CircuitGate, FrozenCircuit};
-use crate::circuit::gate::control_flow::ConditionView;
-use crate::circuit::gate::{
-    ControlFlow, Directive, IfElseGate, Instruction, StandardGate, UnitaryGate,
-};
+use crate::circuit::gate::instruction::Instruction;
+use crate::circuit::gate::{Directive, StandardGate, UnitaryGate};
 use crate::circuit::operation::{Operation, ValueOperation};
 use crate::circuit::parameter::Parameter;
+use crate::circuit::value_instruction::{
+    ValueControlBody, ValueInstruction, storage_operation_to_value,
+};
+use crate::circuit::{
+    ClassicalControlOp, ClassicalType, ClassicalValue, ClassicalVar, ControlBody, ForOp, IfOp,
+    SwitchCase, SwitchOp, ValueClassicalControlOp, WhileOp,
+};
+use crate::circuit::{ClassicalDataOp, circuit_to_matrix};
 use indexmap::IndexSet;
 use ndarray::Array2;
 use num_complex::Complex64;
@@ -75,18 +83,19 @@ use std::collections::{HashMap, HashSet};
 /// - **Parameter Interning**: Symbolic parameters are stored in a centralized `IndexSet`. Instructions reference these parameters
 ///   by index rather than owning them. This "interning" strategy significantly reduces memory footprint for deep parameterized
 ///   circuits and enables vectorized parameter updates.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Circuit {
+    pub(super) circuit_id: CircuitId,
     /// The set of quantum bits (qubits) managed by this circuit.
     ///
     /// # Implementation Note
     /// Used `IndexSet` to maintain the strict insertion order of qubits (which defines the logical
     /// qubit indices 0, 1, 2...) while allowing $O(1)$ membership testing (`contains`).
-    qubits: IndexSet<Qubit>,
+    pub(super) qubits: IndexSet<Qubit>,
     /// A registry of all unique symbolic variables (e.g., "theta", "phi") used within the circuit.
     /// This field serves as a cache to quickly identify which free parameters need to be bound
     /// before simulation, avoiding the need to traverse the entire instruction list.
-    symbols: IndexSet<String>,
+    pub(super) symbols: IndexSet<String>,
     /// The centralized storage for symbolic parameters.
     ///
     /// This table implements the **Interning** pattern. Instructions in the `data` vector do not
@@ -94,17 +103,95 @@ pub struct Circuit {
     /// This design allows for:
     /// 1. **Deduplication**: Identical expressions are stored only once.
     /// 2. **Batch Evaluation**: All parameters can be resolved to `f64` values in a single linear pass.
-    parameters: IndexSet<Parameter>,
+    pub(super) parameters: IndexSet<Parameter>,
     /// The ordered sequence of operations (quantum gates, measurements, etc.) in the circuit.
     ///
     /// This vector represents the circuit schedule.
-    data: Vec<Operation>,
+    pub(super) data: Vec<Operation>,
+    /// Static types of circuit-local runtime classical variables.
+    ///
+    /// A [`ClassicalVar`] ID is an index into this table. Keeping ownership in
+    /// the circuit prevents expressions from silently referencing variables
+    /// allocated by another circuit.
+    pub(super) classical_vars: Vec<ClassicalType>,
+    /// Static types of immutable circuit-local runtime classical values.
+    ///
+    /// A [`ClassicalValue`] ID is an index into this table. This verifies that
+    /// measurement-produced values consumed by expressions belong to this circuit.
+    pub(super) classical_values: Vec<ClassicalType>,
+    /// Active structured-control scopes while closure bodies are being built.
+    ///
+    /// This transient builder stack validates placement of `break` and `continue`.
+    pub(super) control_scope_stack: Vec<ControlScopeKind>,
     ///  The global phase of the circuit, representing a scalar factor $e^{i\theta}$.
     ///
     /// While the global phase is unobservable in isolated systems, it is critical for:
     /// - **Controlled Operations**: When this circuit is controlled by another qubit.
     /// - **Sub-circuit Composition**: Correctly merging phases when combining circuits.
-    global_phase: CircuitParam,
+    pub(super) global_phase: CircuitParam,
+}
+
+impl Clone for Circuit {
+    fn clone(&self) -> Self {
+        let circuit_id = CircuitId::new();
+        let var_map = self
+            .classical_vars
+            .iter()
+            .enumerate()
+            .map(|(index, ty)| {
+                (
+                    ClassicalVar::new(self.circuit_id, index as u32, *ty),
+                    ClassicalVar::new(circuit_id, index as u32, *ty),
+                )
+            })
+            .collect::<HashMap<_, _>>();
+        let value_map = self
+            .classical_values
+            .iter()
+            .enumerate()
+            .map(|(index, ty)| {
+                (
+                    ClassicalValue::new(self.circuit_id, index as u32, *ty),
+                    ClassicalValue::new(circuit_id, index as u32, *ty),
+                )
+            })
+            .collect::<HashMap<_, _>>();
+        let qubit_mapping = self
+            .qubits
+            .iter()
+            .copied()
+            .map(|qubit| (qubit, qubit))
+            .collect::<HashMap<_, _>>();
+        let param_index_map = (0..self.parameters.len())
+            .map(|index| CircuitParam::Index(index as u32))
+            .collect::<Vec<_>>();
+        let data = self
+            .data
+            .iter()
+            .map(|operation| {
+                Self::remap_compose_operation(
+                    operation,
+                    &qubit_mapping,
+                    &param_index_map,
+                    &var_map,
+                    &value_map,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .expect("a valid circuit must be clonable with complete handle mappings");
+
+        Self {
+            circuit_id,
+            qubits: self.qubits.clone(),
+            symbols: self.symbols.clone(),
+            parameters: self.parameters.clone(),
+            data,
+            classical_vars: self.classical_vars.clone(),
+            classical_values: self.classical_values.clone(),
+            control_scope_stack: self.control_scope_stack.clone(),
+            global_phase: self.global_phase.clone(),
+        }
+    }
 }
 
 impl From<usize> for Circuit {
@@ -134,8 +221,12 @@ impl Circuit {
         let qubits = (0..num_qubits).map(|i| Qubit::new(i as u32)).collect();
 
         Self {
+            circuit_id: CircuitId::new(),
             qubits,
             data: vec![],
+            classical_vars: vec![],
+            classical_values: vec![],
+            control_scope_stack: vec![],
             symbols: IndexSet::default(),
             parameters: IndexSet::default(),
             global_phase: CircuitParam::Fixed(0.0),
@@ -159,19 +250,26 @@ impl Circuit {
         }
 
         Ok(Self {
+            circuit_id: CircuitId::new(),
             symbols: IndexSet::new(),
             qubits: qubits.into_iter().collect(),
             data: vec![],
+            classical_vars: vec![],
+            classical_values: vec![],
+            control_scope_stack: vec![],
             parameters: IndexSet::default(),
             global_phase: CircuitParam::Fixed(0.0),
         })
     }
 
-    /// Creates a circuit from qubits and value-level operations.
+    /// Creates a circuit from qubits, value-level operations, and optional runtime classical tables.
     ///
-    /// Operations are appended in order through [`Circuit::append`], so qubit
-    /// membership is validated and symbolic parameters are interned into the
-    /// circuit parameter table.
+    /// Operations are appended in order through value-level lowering, so qubit
+    /// membership is validated and every [`ParameterValue`] is interned into
+    /// this circuit's parameter table. `classical_vars` and
+    /// `classical_values` are installed before appending operations, allowing
+    /// expression-based control flow and classical data operations to reference
+    /// existing circuit-local handles.
     ///
     /// # Errors
     ///
@@ -182,17 +280,35 @@ impl Circuit {
     pub fn from_operations(
         qubits: Vec<Qubit>,
         operations: impl IntoIterator<Item = ValueOperation>,
+        classical_vars: Option<Vec<ClassicalType>>,
+        classical_values: Option<Vec<ClassicalType>>,
     ) -> Result<Self, CircuitError> {
+        let operations = operations.into_iter().collect::<Vec<_>>();
         let mut circuit = Self::from_qubits(qubits)?;
-        for operation in operations {
-            circuit.append(
-                operation.instruction,
-                operation.qubits,
-                operation.params,
-                operation.label.as_deref(),
-            )?;
+        if let Some(circuit_id) = infer_classical_circuit_id(&operations)? {
+            circuit.circuit_id = circuit_id;
         }
+        circuit.classical_vars = classical_vars.unwrap_or_default();
+        circuit.classical_values = classical_values.unwrap_or_default();
+        for operation in operations {
+            circuit.append_value_operation(operation)?;
+        }
+        validate_operation_parameters(circuit.operations(), &circuit.parameters)?;
+        circuit.validate()?;
         Ok(circuit)
+    }
+
+    pub fn append_value_operation(
+        &mut self,
+        operation: ValueOperation,
+    ) -> Result<(), CircuitError> {
+        let instruction = lower_instruction(self, operation.instruction)?;
+        self.append(
+            instruction,
+            operation.qubits,
+            operation.params,
+            operation.label.as_deref(),
+        )
     }
 
     /// Adds new qubits to the existing circuit.
@@ -369,6 +485,22 @@ impl Circuit {
         &self.data
     }
 
+    /// Returns the static types of runtime classical variables owned by this circuit.
+    pub fn classical_vars(&self) -> &[ClassicalType] {
+        &self.classical_vars
+    }
+
+    /// Returns this circuit's process-local identity for constructing explicit
+    /// classical IR handles.
+    pub fn id(&self) -> CircuitId {
+        self.circuit_id
+    }
+
+    /// Returns the static types of immutable runtime classical values owned by this circuit.
+    pub fn classical_values(&self) -> &[ClassicalType] {
+        &self.classical_values
+    }
+
     /// Appends a generic instruction to the circuit.
     ///
     /// This is the low-level method used by all specific gate methods (e.g., `h`, `cx`).
@@ -396,11 +528,24 @@ impl Circuit {
         Q::Item: Into<Qubit>,
         P: IntoIterator<Item = ParameterValue>,
     {
+        let validate_classical = matches!(
+            instruction,
+            Instruction::ClassicalData(_) | Instruction::ClassicalControl(_)
+        );
+        let checkpoint = validate_classical.then(|| self.checkpoint());
+
+        if let Instruction::ClassicalControl(op) = &instruction {
+            self.validate_control_op(op)?;
+        }
+
         let qubits_sv: SmallVec<[Qubit; 3]> = qubits.into_iter().map(|q| q.into()).collect();
         for qubit in &qubits_sv {
             if !self.qubits.contains(qubit) {
                 return Err(CircuitError::QubitNotFound(qubit.id()));
             }
+        }
+        if let Instruction::ClassicalData(op) = &instruction {
+            self.validate_classical_data_op(op, qubits_sv.len())?;
         }
 
         let mut circuit_params = smallvec![];
@@ -425,6 +570,13 @@ impl Circuit {
             params: circuit_params,
             label: label.map(Into::into),
         });
+
+        if validate_classical {
+            if let Err(error) = self.validate_builder_state() {
+                self.rollback_to(checkpoint.expect("classical append must define a checkpoint"));
+                return Err(error);
+            }
+        }
 
         Ok(())
     }
@@ -971,18 +1123,6 @@ impl Circuit {
         )
     }
 
-    /// Measures a qubit.
-    ///
-    /// This is a non-unitary operation that collapses the qubit's state to $|0\rangle$ or $|1\rangle$.
-    pub fn measure(&mut self, qubit: Qubit) -> Result<(), CircuitError> {
-        self.append(
-            Instruction::Directive(Directive::Measure),
-            [qubit],
-            std::iter::empty(),
-            None,
-        )
-    }
-
     /// Inserts a Barrier.
     ///
     /// A barrier forbids the compiler from optimizing across this line. It has no physical effect
@@ -994,103 +1134,6 @@ impl Circuit {
             std::iter::empty(),
             None,
         )
-    }
-
-    /// Appends a conditional (if-else) operation to the circuit.
-    ///
-    /// Executes different quantum operations based on a classical condition.
-    ///
-    /// # Arguments
-    ///
-    /// * `condition` - The classical condition to evaluate
-    /// * `true_body` - Operations to execute when condition is true
-    /// * `false_body` - Optional operations to execute when condition is false
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use cqlib_core::circuit::{Circuit, Operation, Qubit, Instruction, StandardGate, ConditionView};
-    /// use smallvec::smallvec;
-    ///
-    /// let mut circuit = Circuit::new(2);
-    /// let condition = ConditionView::new(Qubit::new(0), 1);
-    /// let true_body = vec![Operation {
-    ///     instruction: Instruction::Standard(StandardGate::X),
-    ///     qubits: smallvec![Qubit::new(1)],
-    ///     params: smallvec![],
-    ///     label: None,
-    /// }];
-    /// circuit.if_else(condition, true_body, None).unwrap();
-    /// ```
-    pub fn if_else(
-        &mut self,
-        condition: ConditionView,
-        true_body: Vec<Operation>,
-        false_body: Option<Vec<Operation>>,
-    ) -> Result<(), CircuitError> {
-        // Collect all qubits used in the control flow before consuming the vectors
-        let mut all_qubits: Vec<Qubit> = Vec::new();
-        for op in true_body.iter() {
-            all_qubits.extend(op.qubits.iter());
-        }
-        if let Some(ref fb) = false_body {
-            for op in fb.iter() {
-                all_qubits.extend(op.qubits.iter());
-            }
-        }
-        // Add condition qubit
-        all_qubits.push(condition.qubit);
-
-        let gate = IfElseGate::new(condition, true_body, false_body);
-        let instruction = Instruction::ControlFlowGate(ControlFlow::IfElse(gate));
-
-        self.append(instruction, all_qubits, std::iter::empty(), None)
-    }
-
-    /// Appends a while-loop operation to the circuit.
-    ///
-    /// Repeatedly executes quantum operations while a classical condition is true.
-    ///
-    /// # Arguments
-    ///
-    /// * `condition` - The classical condition to evaluate before each iteration
-    /// * `body` - The operations to execute in each iteration
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use cqlib_core::circuit::{Circuit,ConditionView, Operation,Instruction, StandardGate, Qubit};
-    /// use smallvec::smallvec;
-    ///
-    /// let mut circuit = Circuit::new(2);
-    /// let condition = ConditionView::new(Qubit::new(0), 1);
-    /// let body = vec![Operation {
-    ///     instruction: Instruction::Standard(StandardGate::H),
-    ///     qubits: smallvec![Qubit::new(1)],
-    ///     params: smallvec![],
-    ///     label: None,
-    /// }];
-    /// circuit.while_loop(condition, body).unwrap();
-    /// ```
-    pub fn while_loop(
-        &mut self,
-        condition: ConditionView,
-        body: Vec<Operation>,
-    ) -> Result<(), CircuitError> {
-        use crate::circuit::gate::control_flow::{ControlFlow, WhileLoopGate};
-
-        // Collect all qubits used in the loop body before consuming the vector
-        let mut all_qubits: Vec<Qubit> = Vec::new();
-        for op in body.iter() {
-            all_qubits.extend(op.qubits.iter());
-        }
-        // Add condition qubit
-        all_qubits.push(condition.qubit);
-
-        let gate = WhileLoopGate::new(condition, body);
-        let instruction = Instruction::ControlFlowGate(ControlFlow::WhileLoop(gate));
-
-        self.append(instruction, all_qubits, std::iter::empty(), None)
     }
 
     /// Resets a qubit to the $|0\rangle$ state.
@@ -1280,6 +1323,8 @@ impl Circuit {
     /// operations (e.g., `Measure`, `Reset`) or gates that cannot be symbolically inverted.
     pub fn inverse(&self) -> Result<Circuit, CircuitError> {
         let mut new_circuit = Circuit::from_qubits(self.qubits())?;
+        new_circuit.classical_vars = self.classical_vars.clone();
+        new_circuit.classical_values = self.classical_values.clone();
         new_circuit.data.reserve(self.data.len());
         // 1. Invert Global Phase
         let current_phase_param = self.global_phase();
@@ -1315,7 +1360,7 @@ impl Circuit {
                     }
                     _ => return Err(CircuitError::IrreversibleOperation),
                 },
-                Instruction::ControlFlowGate(_) => {
+                Instruction::ClassicalData(_) | Instruction::ClassicalControl(_) => {
                     // Control flow operations cannot be statically inverted
                     return Err(CircuitError::IrreversibleOperation);
                 }
@@ -1400,6 +1445,8 @@ impl Circuit {
     /// or control flow body cannot be evaluated to a concrete value.
     pub fn decompose(&self) -> Result<Circuit, CircuitError> {
         let mut new_circuit = Circuit::from_qubits(self.qubits()).unwrap();
+        new_circuit.classical_vars = self.classical_vars.clone();
+        new_circuit.classical_values = self.classical_values.clone();
         // Preserve the order of symbols from the original circuit.
         new_circuit.symbols = self.symbols.clone();
 
@@ -1421,6 +1468,28 @@ impl Circuit {
         let initial_qubit_map: HashMap<Qubit, Qubit> =
             self.qubits.iter().map(|q| (*q, *q)).collect();
         let initial_param_map: HashMap<String, Parameter> = HashMap::new();
+        let var_map = self
+            .classical_vars
+            .iter()
+            .enumerate()
+            .map(|(index, ty)| {
+                (
+                    ClassicalVar::new(self.circuit_id, index as u32, *ty),
+                    ClassicalVar::new(new_circuit.circuit_id, index as u32, *ty),
+                )
+            })
+            .collect();
+        let value_map = self
+            .classical_values
+            .iter()
+            .enumerate()
+            .map(|(index, ty)| {
+                (
+                    ClassicalValue::new(self.circuit_id, index as u32, *ty),
+                    ClassicalValue::new(new_circuit.circuit_id, index as u32, *ty),
+                )
+            })
+            .collect();
 
         for op in &self.data {
             Self::decompose_recursive(
@@ -1428,6 +1497,8 @@ impl Circuit {
                 self,
                 &initial_qubit_map,
                 &initial_param_map,
+                &var_map,
+                &value_map,
                 &mut new_circuit,
             )?;
         }
@@ -1440,6 +1511,8 @@ impl Circuit {
         context_circuit: &Circuit,
         qubit_map: &HashMap<Qubit, Qubit>,
         param_map: &HashMap<String, Parameter>,
+        var_map: &HashMap<ClassicalVar, ClassicalVar>,
+        value_map: &HashMap<ClassicalValue, ClassicalValue>,
         target_circuit: &mut Circuit,
     ) -> Result<(), CircuitError> {
         match &op.instruction {
@@ -1488,261 +1561,16 @@ impl Circuit {
                         &cg.circuit.circuit,
                         &next_qubit_map,
                         &next_param_map,
+                        var_map,
+                        value_map,
                         target_circuit,
                     )?;
                 }
                 Ok(())
             }
-            Instruction::ControlFlowGate(cf) => {
-                use crate::circuit::gate::control_flow::{
-                    ConditionView, ControlFlow, IfElseGate, WhileLoopGate,
-                };
-
-                // Helper: decompose operations directly to Vec without temporary Circuit
-                fn decompose_ops(
-                    ops: &[Operation],
-                    context: &Circuit,
-                    qubit_map: &HashMap<Qubit, Qubit>,
-                    param_map: &HashMap<String, Parameter>,
-                    target: &mut Vec<Operation>,
-                ) -> Result<(), CircuitError> {
-                    for op in ops {
-                        decompose_op(op, context, qubit_map, param_map, target)?;
-                    }
-                    Ok(())
-                }
-
-                // Helper: decompose a single operation
-                fn decompose_op(
-                    op: &Operation,
-                    context: &Circuit,
-                    qubit_map: &HashMap<Qubit, Qubit>,
-                    param_map: &HashMap<String, Parameter>,
-                    target: &mut Vec<Operation>,
-                ) -> Result<(), CircuitError> {
-                    let mapped_qubits: SmallVec<[Qubit; 3]> = op
-                        .qubits
-                        .iter()
-                        .map(|q| *qubit_map.get(q).unwrap_or(q))
-                        .collect();
-
-                    match &op.instruction {
-                        Instruction::CircuitGate(cg) => {
-                            // Resolve parameters
-                            let resolved: SmallVec<[Parameter; 3]> = op
-                                .params
-                                .iter()
-                                .map(|p| {
-                                    let param = match p {
-                                        CircuitParam::Fixed(v) => Parameter::from(*v),
-                                        CircuitParam::Index(idx) => {
-                                            context.parameters[*idx as usize].clone()
-                                        }
-                                    };
-                                    Circuit::apply_param_map(param, param_map)
-                                })
-                                .collect();
-
-                            // Build next-level maps
-                            let mut next_param_map = param_map.clone();
-                            for (i, sym) in cg.symbols().iter().enumerate() {
-                                if i < resolved.len() {
-                                    next_param_map.insert(sym.clone(), resolved[i].clone());
-                                }
-                            }
-
-                            let mut next_qubit_map = HashMap::new();
-                            for (i, inner_q) in cg.circuit.circuit.qubits().iter().enumerate() {
-                                if i < op.qubits.len() {
-                                    let global_q =
-                                        *qubit_map.get(&op.qubits[i]).unwrap_or(&op.qubits[i]);
-                                    next_qubit_map.insert(*inner_q, global_q);
-                                }
-                            }
-
-                            // Recurse into circuit
-                            decompose_ops(
-                                &cg.circuit.circuit.data,
-                                &cg.circuit.circuit,
-                                &next_qubit_map,
-                                &next_param_map,
-                                target,
-                            )?;
-                            Ok(())
-                        }
-                        Instruction::ControlFlowGate(cf) => {
-                            // Recurse into control flow bodies but preserve structure
-                            match cf {
-                                ControlFlow::IfElse(gate) => {
-                                    let mut true_body = Vec::new();
-                                    decompose_ops(
-                                        gate.true_body(),
-                                        context,
-                                        qubit_map,
-                                        param_map,
-                                        &mut true_body,
-                                    )?;
-                                    let false_body = if let Some(fb) = gate.false_body() {
-                                        let mut body = Vec::new();
-                                        decompose_ops(
-                                            fb, context, qubit_map, param_map, &mut body,
-                                        )?;
-                                        Some(body)
-                                    } else {
-                                        None
-                                    };
-                                    let mapped_cond = ConditionView::new(
-                                        *qubit_map
-                                            .get(&gate.condition().qubit)
-                                            .unwrap_or(&gate.condition().qubit),
-                                        gate.condition().target,
-                                    );
-                                    target.push(Operation {
-                                        instruction: Instruction::ControlFlowGate(
-                                            ControlFlow::IfElse(IfElseGate::new(
-                                                mapped_cond,
-                                                true_body,
-                                                false_body,
-                                            )),
-                                        ),
-                                        qubits: mapped_qubits,
-                                        params: smallvec![],
-                                        label: op.label.clone(),
-                                    });
-                                }
-                                ControlFlow::WhileLoop(gate) => {
-                                    let mut body = Vec::new();
-                                    decompose_ops(
-                                        gate.body(),
-                                        context,
-                                        qubit_map,
-                                        param_map,
-                                        &mut body,
-                                    )?;
-                                    let mapped_cond = ConditionView::new(
-                                        *qubit_map
-                                            .get(&gate.condition().qubit)
-                                            .unwrap_or(&gate.condition().qubit),
-                                        gate.condition().target,
-                                    );
-                                    target.push(Operation {
-                                        instruction: Instruction::ControlFlowGate(
-                                            ControlFlow::WhileLoop(WhileLoopGate::new(
-                                                mapped_cond,
-                                                body,
-                                            )),
-                                        ),
-                                        qubits: mapped_qubits,
-                                        params: smallvec![],
-                                        label: op.label.clone(),
-                                    });
-                                }
-                            }
-                            Ok(())
-                        }
-                        _ => {
-                            // Base case: map parameters and push
-                            let mut mapped_params: SmallVec<[CircuitParam; 1]> = smallvec![];
-                            for p in &op.params {
-                                let param = match p {
-                                    CircuitParam::Fixed(v) => CircuitParam::Fixed(*v),
-                                    CircuitParam::Index(idx) => {
-                                        let param = context.parameters[*idx as usize].clone();
-                                        let new_param = Circuit::apply_param_map(param, param_map);
-                                        if let Ok(val) = new_param.evaluate(&None) {
-                                            CircuitParam::Fixed(val)
-                                        } else {
-                                            // Parameter cannot be resolved - return error instead of using placeholder
-                                            return Err(CircuitError::UnresolvedParameter(
-                                                format!(
-                                                    "Cannot resolve parameter '{}' in control flow body. Symbolic parameters in control flow must be bound before decomposition.",
-                                                    new_param
-                                                ),
-                                            ));
-                                        }
-                                    }
-                                };
-                                mapped_params.push(param);
-                            }
-                            target.push(Operation {
-                                instruction: op.instruction.clone(),
-                                qubits: mapped_qubits,
-                                params: mapped_params,
-                                label: op.label.clone(),
-                            });
-                            Ok(())
-                        }
-                    }
-                }
-
-                // Decompose control flow bodies
-                match cf {
-                    ControlFlow::IfElse(gate) => {
-                        let mut true_body = Vec::new();
-                        decompose_ops(
-                            gate.true_body(),
-                            context_circuit,
-                            qubit_map,
-                            param_map,
-                            &mut true_body,
-                        )?;
-                        let false_body = if let Some(fb) = gate.false_body() {
-                            let mut body = Vec::new();
-                            decompose_ops(fb, context_circuit, qubit_map, param_map, &mut body)?;
-                            Some(body)
-                        } else {
-                            None
-                        };
-                        let mapped_cond = ConditionView::new(
-                            *qubit_map
-                                .get(&gate.condition().qubit)
-                                .unwrap_or(&gate.condition().qubit),
-                            gate.condition().target,
-                        );
-                        target_circuit.data.push(Operation {
-                            instruction: Instruction::ControlFlowGate(ControlFlow::IfElse(
-                                IfElseGate::new(mapped_cond, true_body, false_body),
-                            )),
-                            qubits: op
-                                .qubits
-                                .iter()
-                                .map(|q| *qubit_map.get(q).unwrap_or(q))
-                                .collect(),
-                            params: smallvec![],
-                            label: op.label.clone(),
-                        });
-                    }
-                    ControlFlow::WhileLoop(gate) => {
-                        let mut body = Vec::new();
-                        decompose_ops(
-                            gate.body(),
-                            context_circuit,
-                            qubit_map,
-                            param_map,
-                            &mut body,
-                        )?;
-                        let mapped_cond = ConditionView::new(
-                            *qubit_map
-                                .get(&gate.condition().qubit)
-                                .unwrap_or(&gate.condition().qubit),
-                            gate.condition().target,
-                        );
-                        target_circuit.data.push(Operation {
-                            instruction: Instruction::ControlFlowGate(ControlFlow::WhileLoop(
-                                WhileLoopGate::new(mapped_cond, body),
-                            )),
-                            qubits: op
-                                .qubits
-                                .iter()
-                                .map(|q| *qubit_map.get(q).unwrap_or(q))
-                                .collect(),
-                            params: smallvec![],
-                            label: op.label.clone(),
-                        });
-                    }
-                }
-                Ok(())
-            }
+            Instruction::ClassicalControl(_) => Err(CircuitError::InvalidOperation(
+                "decomposing circuits with classical control is not yet supported".to_string(),
+            )),
             _ => {
                 // Base case: Standard/Unitary/Directive
                 // Map Qubits
@@ -1767,9 +1595,16 @@ impl Circuit {
                     mapped_params.push(ParameterValue::from(param));
                 }
 
+                let instruction = match &op.instruction {
+                    Instruction::ClassicalData(op) => Instruction::ClassicalData(
+                        Self::remap_classical_data_op(op, var_map, value_map)?,
+                    ),
+                    _ => op.instruction.clone(),
+                };
+
                 target_circuit
                     .append(
-                        op.instruction.clone(),
+                        instruction,
                         mapped_qubits,
                         mapped_params,
                         op.label.as_deref(),
@@ -1812,7 +1647,20 @@ impl Circuit {
         &self,
         bindings: &Option<HashMap<&str, f64>>,
     ) -> Result<Circuit, CircuitError> {
+        if self
+            .data
+            .iter()
+            .any(|op| matches!(op.instruction, Instruction::ClassicalControl(_)))
+        {
+            return Err(CircuitError::InvalidOperation(
+                "assigning parameters in circuits with classical control is not yet supported"
+                    .to_string(),
+            ));
+        }
+
         let mut new_circuit = Circuit::from_qubits(self.qubits())?;
+        new_circuit.classical_vars = self.classical_vars.clone();
+        new_circuit.classical_values = self.classical_values.clone();
 
         // Map from old parameter index to new CircuitParam (either Fixed or Index)
         let mut index_map: Vec<CircuitParam> = Vec::with_capacity(self.parameters.len());
@@ -1874,10 +1722,211 @@ impl Circuit {
         Ok(new_circuit)
     }
 
+    fn remap_compose_operation(
+        op: &Operation,
+        qubit_mapping: &HashMap<Qubit, Qubit>,
+        param_index_map: &[CircuitParam],
+        var_map: &HashMap<ClassicalVar, ClassicalVar>,
+        value_map: &HashMap<ClassicalValue, ClassicalValue>,
+    ) -> Result<Operation, CircuitError> {
+        let mut new_op = op.clone();
+
+        for q in &mut new_op.qubits {
+            *q = qubit_mapping
+                .get(q)
+                .copied()
+                .ok_or(CircuitError::QubitNotFound(q.id()))?;
+        }
+
+        for p in &mut new_op.params {
+            if let CircuitParam::Index(old_idx) = p {
+                *p = param_index_map
+                    .get(*old_idx as usize)
+                    .cloned()
+                    .ok_or(CircuitError::InvalidParameterIndex(*old_idx))?;
+            }
+        }
+
+        new_op.instruction = match &op.instruction {
+            Instruction::ClassicalData(classical_op) => Instruction::ClassicalData(
+                Self::remap_classical_data_op(classical_op, var_map, value_map)?,
+            ),
+            Instruction::ClassicalControl(op) => {
+                Instruction::ClassicalControl(Self::remap_compose_control_op(
+                    op,
+                    qubit_mapping,
+                    param_index_map,
+                    var_map,
+                    value_map,
+                )?)
+            }
+            _ => op.instruction.clone(),
+        };
+
+        Ok(new_op)
+    }
+
+    fn remap_classical_data_op(
+        op: &ClassicalDataOp,
+        var_map: &HashMap<ClassicalVar, ClassicalVar>,
+        value_map: &HashMap<ClassicalValue, ClassicalValue>,
+    ) -> Result<ClassicalDataOp, CircuitError> {
+        match op {
+            ClassicalDataOp::Store { target, value } => Ok(ClassicalDataOp::Store {
+                target: var_map.get(target).copied().ok_or_else(|| {
+                    CircuitError::InvalidOperation(format!(
+                        "missing classical variable remap for id {}",
+                        target.id()
+                    ))
+                })?,
+                value: value.remap_classical_ids(var_map, value_map)?,
+            }),
+            ClassicalDataOp::MeasureBit { result } => Ok(ClassicalDataOp::MeasureBit {
+                result: value_map.get(result).copied().ok_or_else(|| {
+                    CircuitError::InvalidOperation(format!(
+                        "missing classical value remap for id {}",
+                        result.index()
+                    ))
+                })?,
+            }),
+            ClassicalDataOp::MeasureBits { result } => Ok(ClassicalDataOp::MeasureBits {
+                result: value_map.get(result).copied().ok_or_else(|| {
+                    CircuitError::InvalidOperation(format!(
+                        "missing classical value remap for id {}",
+                        result.index()
+                    ))
+                })?,
+            }),
+        }
+    }
+
+    fn remap_compose_control_body(
+        body: &ControlBody,
+        qubit_mapping: &HashMap<Qubit, Qubit>,
+        param_index_map: &[CircuitParam],
+        var_map: &HashMap<ClassicalVar, ClassicalVar>,
+        value_map: &HashMap<ClassicalValue, ClassicalValue>,
+    ) -> Result<ControlBody, CircuitError> {
+        body.operations()
+            .iter()
+            .map(|op| {
+                Self::remap_compose_operation(
+                    op,
+                    qubit_mapping,
+                    param_index_map,
+                    var_map,
+                    value_map,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(ControlBody::new)
+    }
+
+    fn remap_compose_control_op(
+        op: &ClassicalControlOp,
+        qubit_mapping: &HashMap<Qubit, Qubit>,
+        param_index_map: &[CircuitParam],
+        var_map: &HashMap<ClassicalVar, ClassicalVar>,
+        value_map: &HashMap<ClassicalValue, ClassicalValue>,
+    ) -> Result<ClassicalControlOp, CircuitError> {
+        match op {
+            ClassicalControlOp::If(op) => {
+                let condition = op.condition().remap_classical_ids(var_map, value_map)?;
+                let then_body = Self::remap_compose_control_body(
+                    op.then_body(),
+                    qubit_mapping,
+                    param_index_map,
+                    var_map,
+                    value_map,
+                )?;
+                let else_body = op
+                    .else_body()
+                    .map(|body| {
+                        Self::remap_compose_control_body(
+                            body,
+                            qubit_mapping,
+                            param_index_map,
+                            var_map,
+                            value_map,
+                        )
+                    })
+                    .transpose()?;
+                IfOp::new(condition, then_body, else_body).map(ClassicalControlOp::If)
+            }
+            ClassicalControlOp::While(op) => {
+                let condition = op.condition().remap_classical_ids(var_map, value_map)?;
+                let body = Self::remap_compose_control_body(
+                    op.body(),
+                    qubit_mapping,
+                    param_index_map,
+                    var_map,
+                    value_map,
+                )?;
+                WhileOp::new(condition, body).map(ClassicalControlOp::While)
+            }
+            ClassicalControlOp::For(op) => {
+                let var = var_map.get(&op.var()).copied().ok_or_else(|| {
+                    CircuitError::InvalidOperation(format!(
+                        "missing classical variable remap for id {}",
+                        op.var().id()
+                    ))
+                })?;
+                let start = op.start().remap_classical_ids(var_map, value_map)?;
+                let stop = op.stop().remap_classical_ids(var_map, value_map)?;
+                let step = op.step().remap_classical_ids(var_map, value_map)?;
+                let body = Self::remap_compose_control_body(
+                    op.body(),
+                    qubit_mapping,
+                    param_index_map,
+                    var_map,
+                    value_map,
+                )?;
+                ForOp::new(var, start, stop, step, body).map(ClassicalControlOp::For)
+            }
+            ClassicalControlOp::Switch(op) => {
+                let target = op.target().remap_classical_ids(var_map, value_map)?;
+                let cases = op
+                    .cases()
+                    .iter()
+                    .map(|case| {
+                        Ok(SwitchCase::new(
+                            case.value(),
+                            Self::remap_compose_control_body(
+                                case.body(),
+                                qubit_mapping,
+                                param_index_map,
+                                var_map,
+                                value_map,
+                            )?,
+                        ))
+                    })
+                    .collect::<Result<Vec<_>, CircuitError>>()?;
+                let default = op
+                    .default()
+                    .map(|body| {
+                        Self::remap_compose_control_body(
+                            body,
+                            qubit_mapping,
+                            param_index_map,
+                            var_map,
+                            value_map,
+                        )
+                    })
+                    .transpose()?;
+                SwitchOp::new(target, cases, default).map(ClassicalControlOp::Switch)
+            }
+            ClassicalControlOp::Break => Ok(ClassicalControlOp::Break),
+            ClassicalControlOp::Continue => Ok(ClassicalControlOp::Continue),
+        }
+    }
+
     /// Composes another circuit into this circuit.
     ///
     /// This method merges the operations from `other` circuit into `self`. Qubits from `other`
     /// can either be mapped to existing qubits in `self` (via `qubits_map`) or appended as new qubits.
+    /// Circuit-local classical variables and values from `other` are appended to `self`'s
+    /// classical tables, and all classical data/control references inside copied operations are
+    /// remapped to those new local IDs.
     ///
     /// # Arguments
     ///
@@ -1950,6 +1999,26 @@ impl Circuit {
             map
         };
 
+        // Build circuit-local classical ID mappings. Handles from `other` are
+        // remapped to the appended table range owned by `self`.
+        let var_base = self.classical_vars.len();
+        let mut var_map = HashMap::with_capacity(other.classical_vars.len());
+        for (idx, ty) in other.classical_vars.iter().enumerate() {
+            var_map.insert(
+                ClassicalVar::new(other.circuit_id, idx as u32, *ty),
+                ClassicalVar::new(self.circuit_id, (var_base + idx) as u32, *ty),
+            );
+        }
+
+        let value_base = self.classical_values.len();
+        let mut value_map = HashMap::with_capacity(other.classical_values.len());
+        for (idx, ty) in other.classical_values.iter().enumerate() {
+            value_map.insert(
+                ClassicalValue::new(other.circuit_id, idx as u32, *ty),
+                ClassicalValue::new(self.circuit_id, (value_base + idx) as u32, *ty),
+            );
+        }
+
         // Merge parameters and build index mapping
         let mut param_index_map: Vec<CircuitParam> = Vec::with_capacity(other.parameters.len());
         for param in other.parameters.iter() {
@@ -1957,33 +2026,19 @@ impl Circuit {
             param_index_map.push(CircuitParam::Index(idx as u32));
         }
 
-        // Reserve space for new operations
-        self.data.reserve(other.data.len());
-
-        // Append operations with remapped qubits and parameters
-        for op in &other.data {
-            let mut new_op = op.clone();
-
-            // Remap qubits
-            for q in &mut new_op.qubits {
-                *q = qubit_mapping
-                    .get(q)
-                    .copied()
-                    .ok_or(CircuitError::QubitNotFound(q.id()))?;
-            }
-
-            // Remap parameter indices
-            for p in &mut new_op.params {
-                if let CircuitParam::Index(old_idx) = p {
-                    *p = param_index_map
-                        .get(*old_idx as usize)
-                        .cloned()
-                        .ok_or(CircuitError::InvalidParameterIndex(*old_idx))?;
-                }
-            }
-
-            self.data.push(new_op);
-        }
+        let remapped_ops = other
+            .data
+            .iter()
+            .map(|op| {
+                Self::remap_compose_operation(
+                    op,
+                    &qubit_mapping,
+                    &param_index_map,
+                    &var_map,
+                    &value_map,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
 
         // Merge global phase (if both have fixed values, add them; otherwise keep symbolic)
         self.global_phase = match (self.global_phase.clone(), other.global_phase.clone()) {
@@ -2031,28 +2086,308 @@ impl Circuit {
             }
         };
 
+        self.classical_vars
+            .extend(other.classical_vars.iter().copied());
+        self.classical_values
+            .extend(other.classical_values.iter().copied());
+        self.data.reserve(remapped_ops.len());
+        self.data.extend(remapped_ops);
+
         Ok(())
     }
 
     pub fn index(&self, i: usize) -> ValueOperation {
-        let v = &self.data[i];
-        let ps = v
+        storage_operation_to_value(self.data[i].clone(), &|param| self.parameter_value(param))
+            .expect("stored circuit operation must resolve against its own parameter table")
+    }
+}
+
+fn lower_instruction(
+    circuit: &mut Circuit,
+    instruction: ValueInstruction,
+) -> Result<Instruction, CircuitError> {
+    fn lower_operation(
+        circuit: &mut Circuit,
+        operation: ValueOperation,
+    ) -> Result<Operation, CircuitError> {
+        let instruction = lower_instruction(circuit, operation.instruction)?;
+        let params = operation
             .params
-            .iter()
-            .map(|p| match p {
-                CircuitParam::Index(idx) => {
-                    ParameterValue::Param(self.parameters[*idx as usize].clone())
+            .into_iter()
+            .map(|param| -> Result<CircuitParam, CircuitError> {
+                match param {
+                    ParameterValue::Param(param) => {
+                        let (index, is_new) = circuit.parameters.insert_full(param.clone());
+                        if is_new {
+                            for sym in param.get_symbols() {
+                                circuit.symbols.insert(sym);
+                            }
+                        }
+                        Ok(CircuitParam::Index(index as u32))
+                    }
+                    ParameterValue::Fixed(value) => Ok(CircuitParam::Fixed(value)),
                 }
-                CircuitParam::Fixed(v) => ParameterValue::Fixed(*v),
             })
-            .collect();
-        ValueOperation {
-            instruction: v.instruction.clone(),
-            qubits: v.qubits.clone(),
-            params: ps,
-            label: v.label.clone(),
+            .collect::<Result<_, _>>()?;
+        Ok(Operation {
+            instruction,
+            qubits: operation.qubits,
+            params,
+            label: operation.label,
+        })
+    }
+
+    fn lower_body(
+        circuit: &mut Circuit,
+        body: ValueControlBody,
+    ) -> Result<ControlBody, CircuitError> {
+        body.operations()
+            .iter()
+            .cloned()
+            .map(|operation| lower_operation(circuit, operation))
+            .collect::<Result<Vec<_>, _>>()
+            .map(ControlBody::new)
+    }
+
+    let op = match instruction {
+        ValueInstruction::Instruction(Instruction::ClassicalControl(_)) => {
+            return Err(CircuitError::InvalidOperation(
+                "ValueInstruction::Instruction cannot wrap Instruction::ClassicalControl"
+                    .to_string(),
+            ));
+        }
+        ValueInstruction::Instruction(instruction) => return Ok(instruction),
+        ValueInstruction::ClassicalControl(op) => op,
+    };
+
+    let op = match op {
+        ValueClassicalControlOp::If {
+            condition,
+            then_body,
+            else_body,
+        } => {
+            let then_body = lower_body(circuit, then_body)?;
+            let else_body = else_body
+                .map(|body| lower_body(circuit, body))
+                .transpose()?;
+            IfOp::new(condition, then_body, else_body).map(ClassicalControlOp::If)?
+        }
+        ValueClassicalControlOp::While { condition, body } => {
+            let body = lower_body(circuit, body)?;
+            WhileOp::new(condition, body).map(ClassicalControlOp::While)?
+        }
+        ValueClassicalControlOp::For {
+            var,
+            start,
+            stop,
+            step,
+            body,
+        } => {
+            let body = lower_body(circuit, body)?;
+            ForOp::new(var, start, stop, step, body).map(ClassicalControlOp::For)?
+        }
+        ValueClassicalControlOp::Switch {
+            target,
+            cases,
+            default,
+        } => {
+            let cases = cases
+                .into_iter()
+                .map(|case| Ok(SwitchCase::new(case.value, lower_body(circuit, case.body)?)))
+                .collect::<Result<Vec<_>, CircuitError>>()?;
+            let default = default.map(|body| lower_body(circuit, body)).transpose()?;
+            SwitchOp::new(target, cases, default).map(ClassicalControlOp::Switch)?
+        }
+        ValueClassicalControlOp::Break => ClassicalControlOp::Break,
+        ValueClassicalControlOp::Continue => ClassicalControlOp::Continue,
+    };
+    Ok(Instruction::ClassicalControl(op))
+}
+
+fn validate_operation_parameters(
+    operations: &[Operation],
+    parameters: &IndexSet<Parameter>,
+) -> Result<(), CircuitError> {
+    for operation in operations {
+        for param in &operation.params {
+            match param {
+                CircuitParam::Fixed(value) => {
+                    if !value.is_finite() {
+                        return Err(CircuitError::InvalidParameterValue(0, *value));
+                    }
+                }
+                CircuitParam::Index(index) => {
+                    if parameters.get_index(*index as usize).is_none() {
+                        return Err(CircuitError::InvalidParameterIndex(*index));
+                    }
+                }
+            }
+        }
+        if let Instruction::ClassicalControl(op) = &operation.instruction {
+            match op {
+                ClassicalControlOp::If(op) => {
+                    validate_operation_parameters(op.then_body().operations(), parameters)?;
+                    if let Some(body) = op.else_body() {
+                        validate_operation_parameters(body.operations(), parameters)?;
+                    }
+                }
+                ClassicalControlOp::While(op) => {
+                    validate_operation_parameters(op.body().operations(), parameters)?;
+                }
+                ClassicalControlOp::For(op) => {
+                    validate_operation_parameters(op.body().operations(), parameters)?;
+                }
+                ClassicalControlOp::Switch(op) => {
+                    for case in op.cases() {
+                        validate_operation_parameters(case.body().operations(), parameters)?;
+                    }
+                    if let Some(body) = op.default() {
+                        validate_operation_parameters(body.operations(), parameters)?;
+                    }
+                }
+                ClassicalControlOp::Break | ClassicalControlOp::Continue => {}
+            }
         }
     }
+    Ok(())
+}
+
+fn infer_classical_circuit_id(
+    operations: &[ValueOperation],
+) -> Result<Option<CircuitId>, CircuitError> {
+    fn collect_instruction(instruction: &Instruction, identities: &mut HashSet<CircuitId>) {
+        match instruction {
+            Instruction::ClassicalData(op) => match op {
+                ClassicalDataOp::Store { target, value } => {
+                    identities.insert(target.circuit_id());
+                    identities.extend(value.vars().into_iter().map(ClassicalVar::circuit_id));
+                    identities.extend(value.values().into_iter().map(ClassicalValue::circuit_id));
+                }
+                ClassicalDataOp::MeasureBit { result }
+                | ClassicalDataOp::MeasureBits { result } => {
+                    identities.insert(result.circuit_id());
+                }
+            },
+            Instruction::ClassicalControl(op) => {
+                identities.extend(
+                    op.classical_var_reads()
+                        .into_iter()
+                        .map(ClassicalVar::circuit_id),
+                );
+                identities.extend(
+                    op.classical_value_reads()
+                        .into_iter()
+                        .map(ClassicalValue::circuit_id),
+                );
+                identities.extend(
+                    op.classical_writes()
+                        .into_iter()
+                        .map(ClassicalVar::circuit_id),
+                );
+                match op {
+                    ClassicalControlOp::If(op) => {
+                        for operation in op
+                            .then_body()
+                            .operations()
+                            .iter()
+                            .chain(op.else_body().into_iter().flat_map(ControlBody::operations))
+                        {
+                            collect_instruction(&operation.instruction, identities);
+                        }
+                    }
+                    ClassicalControlOp::While(op) => {
+                        for operation in op.body().operations() {
+                            collect_instruction(&operation.instruction, identities);
+                        }
+                    }
+                    ClassicalControlOp::For(op) => {
+                        for operation in op.body().operations() {
+                            collect_instruction(&operation.instruction, identities);
+                        }
+                    }
+                    ClassicalControlOp::Switch(op) => {
+                        for operation in op
+                            .cases()
+                            .iter()
+                            .flat_map(|case| case.body().operations())
+                            .chain(op.default().into_iter().flat_map(ControlBody::operations))
+                        {
+                            collect_instruction(&operation.instruction, identities);
+                        }
+                    }
+                    ClassicalControlOp::Break | ClassicalControlOp::Continue => {}
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn collect_value(instruction: &ValueInstruction, identities: &mut HashSet<CircuitId>) {
+        match instruction {
+            ValueInstruction::Instruction(instruction) => {
+                collect_instruction(instruction, identities);
+            }
+            ValueInstruction::ClassicalControl(op) => {
+                identities.extend(
+                    op.classical_var_reads()
+                        .into_iter()
+                        .map(ClassicalVar::circuit_id),
+                );
+                identities.extend(
+                    op.classical_value_reads()
+                        .into_iter()
+                        .map(ClassicalValue::circuit_id),
+                );
+                identities.extend(
+                    op.classical_writes()
+                        .into_iter()
+                        .map(ClassicalVar::circuit_id),
+                );
+                match op {
+                    ValueClassicalControlOp::If {
+                        then_body,
+                        else_body,
+                        ..
+                    } => {
+                        for operation in then_body
+                            .operations()
+                            .iter()
+                            .chain(else_body.iter().flat_map(|body| body.operations()))
+                        {
+                            collect_value(&operation.instruction, identities);
+                        }
+                    }
+                    ValueClassicalControlOp::While { body, .. }
+                    | ValueClassicalControlOp::For { body, .. } => {
+                        for operation in body.operations() {
+                            collect_value(&operation.instruction, identities);
+                        }
+                    }
+                    ValueClassicalControlOp::Switch { cases, default, .. } => {
+                        for operation in cases
+                            .iter()
+                            .flat_map(|case| case.body.operations())
+                            .chain(default.iter().flat_map(|body| body.operations()))
+                        {
+                            collect_value(&operation.instruction, identities);
+                        }
+                    }
+                    ValueClassicalControlOp::Break | ValueClassicalControlOp::Continue => {}
+                }
+            }
+        }
+    }
+
+    let mut identities = HashSet::new();
+    for operation in operations {
+        collect_value(&operation.instruction, &mut identities);
+    }
+    if identities.len() > 1 {
+        return Err(CircuitError::InvalidOperation(
+            "operations contain classical handles from multiple circuits".to_string(),
+        ));
+    }
+    Ok(identities.into_iter().next())
 }
 
 #[cfg(test)]

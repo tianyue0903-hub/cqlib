@@ -39,8 +39,8 @@
 //!
 //! [`ClassicalExpr`] represents a runtime classical computation. It has a
 //! static [`crate::circuit::ClassicalType`] and can report the classical
-//! variables it reads. The expression layer does not write storage, measure
-//! qubits, branch, or loop.
+//! variables and immutable values it reads. The expression layer does not write
+//! storage, measure qubits, branch, or loop.
 //!
 //! [`ControlBody`] owns the operations inside a structured control-flow region.
 //! A body is a sequence of ordinary circuit [`crate::circuit::Operation`] values
@@ -70,8 +70,10 @@
 //!
 //! Control-flow IR nodes expose lightweight dependency queries:
 //!
-//! - `classical_reads()` returns classical variables read by controlling
+//! - `classical_var_reads()` returns classical variables read by controlling
 //!   expressions.
+//! - `classical_value_reads()` returns immutable classical values read by
+//!   controlling expressions.
 //! - `classical_writes()` currently reports direct writes introduced by the
 //!   control operation itself, such as a [`ForOp`] loop variable.
 //! - `used_qubits()` reports qubits referenced directly by structured bodies.
@@ -79,6 +81,11 @@
 //! These methods are structural summaries for validation, remapping, and future
 //! lowering passes. They are not a complete data-flow analysis for nested
 //! dynamic-circuit execution.
+//!
+//! Classical handles are circuit-local. When circuits are composed, classical
+//! variables and values from the source circuit are copied into the destination
+//! circuit's classical tables and every expression/control body reference is
+//! remapped to the new local ID.
 //!
 //! # Examples
 //!
@@ -138,7 +145,6 @@
 
 mod body;
 mod control_op;
-mod expr;
 mod for_op;
 mod if_op;
 mod switch_op;
@@ -146,9 +152,6 @@ mod while_op;
 
 pub use body::ControlBody;
 pub use control_op::ClassicalControlOp;
-pub use expr::{
-    ClassicalBinaryOp, ClassicalCast, ClassicalCompareOp, ClassicalExpr, ClassicalUnaryOp,
-};
 pub use for_op::ForOp;
 pub use if_op::IfOp;
 pub use switch_op::{SwitchCase, SwitchOp};

@@ -15,18 +15,18 @@
 //! This module defines the [`Instruction`] enum, which serves as the universal wrapper for all
 //! operations that can be placed in a quantum circuit. It unifies:
 //! - **Standard Gates**: Highly optimized, commonly used gates (e.g., H, CX).
-//! - **Extended Gates**: Complex gates like multi-controlled operations or custom unitaries.
-//! - **Non-Unitary Operations**: Measurement, Barrier, Reset.
-//! - **Control Flow**: Conditional and iterative operations (If-Else, While-Loop).
+//! - **Extended Gates**: Multi-controlled operations, custom unitaries, and circuit-backed gates.
+//! - **Directives**: Non-unitary operations such as measurement, barrier, and reset.
+//! - **Classical Control**: Structured dynamic-circuit control flow driven by typed classical
+//!   expressions.
 //!
 //! By using `Instruction`, the circuit can store a heterogeneous list of operations in a single vector.
 
 use crate::circuit::gate::circuit_gate::{CircuitGate, FrozenCircuit};
-use crate::circuit::gate::control_flow::ControlFlow;
 use crate::circuit::gate::directive::Directive;
 use crate::circuit::gate::standard_gate::StandardGate;
-use crate::circuit::gate::{MCGate, UnitaryGate, gate_matrix};
-use crate::circuit::{Parameter, circuit_to_matrix};
+use crate::circuit::gate::{ClassicalDataOp, MCGate, UnitaryGate, gate_matrix};
+use crate::circuit::{ClassicalControlOp, Parameter, circuit_to_matrix};
 use alloc::borrow::Cow;
 use ndarray::Array2;
 use num_complex::Complex64;
@@ -38,8 +38,10 @@ use std::sync::Arc;
 ///
 /// This enum acts as a sum type for all possible instructions.
 /// - Prefer [`Instruction::Standard`] for common gates to leverage simulator optimizations.
-/// - Use [`Instruction::Extended`] for generalized controls or custom matrices.
-/// - Use [`Instruction::Operation`] for non-reversible actions (measurement, reset).
+/// - Use [`Instruction::McGate`] for generalized controls over standard gates.
+/// - Use [`Instruction::UnitaryGate`] or [`Instruction::CircuitGate`] for custom unitary behavior.
+/// - Use [`Instruction::Directive`] for non-reversible actions such as measurement and reset.
+/// - Use [`Instruction::ClassicalControl`] for expression-based dynamic control flow.
 #[derive(Debug, Clone)]
 pub enum Instruction {
     /// A standard, natively supported quantum gate (e.g., `H`, `CX`).
@@ -51,17 +53,18 @@ pub enum Instruction {
     /// A non-unitary operation, such as `Measure`, `Barrier`, or `Reset`.
     Directive(Directive),
 
-    /// Control flow operation for conditional or iterative quantum execution.
+    /// Runtime classical data operation such as assignment or measurement
+    /// into typed classical storage.
+    ClassicalData(ClassicalDataOp),
+
+    /// Structured classical control flow.
     ///
-    /// This variant supports:
-    /// - [`IfElseGate`]: Conditional execution based on classical measurement outcomes
-    /// - [`WhileLoopGate`]: Iterative execution based on classical conditions
-    ///
-    /// # Important
-    ///
-    /// Control flow operations are **not unitary** and cannot be represented as a matrix.
-    /// They require runtime interpretation and may not be supported by all backends.
-    ControlFlowGate(ControlFlow),
+    /// This variant carries expression-based IR such as `if`, `while`, `for`,
+    /// `switch`, `break`, and `continue`. It is a runtime control instruction,
+    /// not a unitary gate: it has no fixed arity, cannot be represented as a
+    /// matrix, has no static inverse, and cannot be promoted to a
+    /// quantum-controlled instruction.
+    ClassicalControl(ClassicalControlOp),
     /// I gate in QCIS, represented here as Delay, unit is 0.5ns
     Delay,
 }
@@ -136,9 +139,9 @@ impl Instruction {
     ///
     /// This method describes arity that is intrinsic to the instruction itself.
     /// It returns `None` for instructions whose qubit count is variable or
-    /// context-dependent, such as barriers and control-flow operations.  Callers
-    /// that need the qubits used by a control-flow body should use
-    /// [`ControlFlow::used_qubits`] or [`ControlFlow::ordered_qubits`] instead.
+    /// context-dependent, such as barriers and classical control operations.
+    /// Callers that need the qubits used by a classical control body should use
+    /// [`ClassicalControlOp::used_qubits`] instead.
     pub fn gate_arity(&self) -> Option<(usize, usize)> {
         match self {
             Instruction::Standard(gate) => Some((gate.num_qubits(), gate.num_params())),
@@ -148,8 +151,12 @@ impl Instruction {
             }
             Instruction::CircuitGate(gate) => Some((gate.num_qubits(), gate.num_params())),
             Instruction::Directive(Directive::Measure | Directive::Reset) => Some((1, 0)),
+            Instruction::ClassicalData(ClassicalDataOp::Store { .. }) => Some((0, 0)),
+            Instruction::ClassicalData(ClassicalDataOp::MeasureBit { .. }) => Some((1, 0)),
             Instruction::Delay => Some((1, 1)),
-            Instruction::Directive(Directive::Barrier) | Instruction::ControlFlowGate(_) => None,
+            Instruction::Directive(Directive::Barrier)
+            | Instruction::ClassicalData(ClassicalDataOp::MeasureBits { .. })
+            | Instruction::ClassicalControl(_) => None,
         }
     }
 
@@ -162,7 +169,8 @@ impl Instruction {
     /// # Returns
     ///
     /// - `Some(Cow<Array2>)`: The unitary matrix for `Standard` and `Extended` gates.
-    /// - `None`: If the instruction is non-unitary (e.g., `Measure`, `Barrier`, `Reset`).
+    /// - `None`: If the instruction is non-unitary (e.g., `Measure`, `Barrier`, `Reset`,
+    ///   or classical control).
     pub fn matrix(&self, params: &[f64]) -> Option<Cow<'_, Array2<Complex64>>> {
         match self {
             Instruction::Standard(g) => g.matrix(params).ok(),
@@ -172,8 +180,9 @@ impl Instruction {
                 .ok()
                 .map(Cow::Owned),
             Instruction::Directive(_) => None,
+            Instruction::ClassicalData(_) => None,
             Instruction::Delay => None,
-            Instruction::ControlFlowGate(_) => None,
+            Instruction::ClassicalControl(_) => None,
         }
     }
 
@@ -186,8 +195,8 @@ impl Instruction {
     /// # Returns
     ///
     /// - `Some(...)`: The inverse instruction and its transformed parameters.
-    /// - `None`: If the instruction is non-invertible (e.g., `Measure`) or if the inverse
-    ///   cannot be symbolically determined (e.g., some custom unitaries).
+    /// - `None`: If the instruction is non-invertible (e.g., `Measure` or classical control)
+    ///   or if the inverse cannot be symbolically determined (e.g., some custom unitaries).
     pub fn inverse(&self, params: &[Parameter]) -> Option<(Instruction, SmallVec<[Parameter; 3]>)> {
         match self {
             Instruction::Standard(g) => {
@@ -238,8 +247,9 @@ impl Instruction {
                 Directive::Barrier => Some((Self::Directive(Directive::Barrier), SmallVec::new())),
                 _ => None,
             },
+            Instruction::ClassicalData(_) => None,
             Instruction::Delay => Some((Self::Delay, SmallVec::new())),
-            Instruction::ControlFlowGate(_) => None,
+            Instruction::ClassicalControl(_) => None,
         }
     }
 
@@ -249,7 +259,8 @@ impl Instruction {
     ///
     /// 1. **Promotion**: If adding controls to a `StandardGate` results in another `StandardGate`
     ///    (e.g., $X \xrightarrow{+1} CX \xrightarrow{+1} CCX$), it returns the upgraded standard gate.
-    /// 2. **Fallback**: If no standard equivalent exists (e.g., $C^3-X$), it returns an [`ExtendedGate::MCGate`].
+    /// 2. **Fallback**: If no standard equivalent exists (e.g., $C^3-X$), it returns
+    ///    an [`Instruction::McGate`].
     /// 3. **Aggregation**: If the instruction is already an `MCGate`, the new controls are merged into it.
     ///
     /// # Arguments
@@ -259,7 +270,8 @@ impl Instruction {
     /// # Returns
     ///
     /// - `Some(Instruction)`: The new controlled instruction.
-    /// - `None`: If the instruction cannot be controlled (e.g., `Barrier`, `Measure`).
+    /// - `None`: If the instruction cannot be controlled (e.g., `Barrier`, `Measure`,
+    ///   or classical control).
     pub fn control(&self, num_new_ctrls: usize) -> Option<Instruction> {
         if num_new_ctrls == 0 {
             return Some(self.clone());
@@ -326,8 +338,9 @@ impl Instruction {
             }
             Instruction::CircuitGate(_) => None, // CircuitGate does not support control yet
             Instruction::Directive(_) => None,
+            Instruction::ClassicalData(_) => None,
             Instruction::Delay => None,
-            Instruction::ControlFlowGate(_) => None,
+            Instruction::ClassicalControl(_) => None,
         }
     }
 }
@@ -340,8 +353,9 @@ impl fmt::Display for Instruction {
             Instruction::UnitaryGate(g) => write!(f, "{}", g),
             Instruction::CircuitGate(g) => write!(f, "{}", g.name),
             Instruction::Directive(i) => write!(f, "{}", i),
+            Instruction::ClassicalData(i) => write!(f, "{}", i),
             Instruction::Delay => write!(f, "delay"),
-            Instruction::ControlFlowGate(g) => write!(f, "{}", g),
+            Instruction::ClassicalControl(g) => write!(f, "{}", g),
         }
     }
 }
@@ -358,125 +372,18 @@ impl From<Directive> for Instruction {
     }
 }
 
-impl From<ControlFlow> for Instruction {
-    fn from(cf: ControlFlow) -> Self {
-        Self::ControlFlowGate(cf)
+impl From<ClassicalControlOp> for Instruction {
+    fn from(cf: ClassicalControlOp) -> Self {
+        Self::ClassicalControl(cf)
+    }
+}
+
+impl From<ClassicalDataOp> for Instruction {
+    fn from(op: ClassicalDataOp) -> Self {
+        Self::ClassicalData(op)
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::Instruction;
-    use crate::circuit::gate::{
-        CircuitGate, ConditionView, ControlFlow, Directive, FrozenCircuit, MCGate, StandardGate,
-        UnitaryGate,
-    };
-    use crate::circuit::{Circuit, Qubit};
-
-    #[test]
-    fn canonicalize_form_collapses_supported_mc_gate_forms() {
-        let cases = [
-            (MCGate::new(0, StandardGate::X), StandardGate::X),
-            (MCGate::new(1, StandardGate::X), StandardGate::CX),
-            (MCGate::new(2, StandardGate::X), StandardGate::CCX),
-            (MCGate::new(1, StandardGate::CX), StandardGate::CCX),
-            (MCGate::new(1, StandardGate::Y), StandardGate::CY),
-            (MCGate::new(1, StandardGate::Z), StandardGate::CZ),
-            (MCGate::new(1, StandardGate::RX), StandardGate::CRX),
-            (MCGate::new(1, StandardGate::RY), StandardGate::CRY),
-            (MCGate::new(1, StandardGate::RZ), StandardGate::CRZ),
-        ];
-
-        for (mc_gate, expected) in cases {
-            let expected_controls = expected.num_ctrl_qubits();
-            let expected_qubits = expected.num_qubits();
-            let expected_params = expected.num_params();
-            let canonical = Instruction::McGate(Box::new(mc_gate)).canonicalize_form();
-
-            let Instruction::Standard(actual) = canonical else {
-                panic!("expected standard gate {expected:?}");
-            };
-            assert_eq!(actual, expected);
-            assert_eq!(actual.num_ctrl_qubits(), expected_controls);
-            assert_eq!(actual.num_qubits(), expected_qubits);
-            assert_eq!(actual.num_params(), expected_params);
-        }
-    }
-
-    #[test]
-    fn canonicalize_form_keeps_non_promotable_mc_gate_forms() {
-        let cases = [
-            MCGate::new(3, StandardGate::X),
-            MCGate::new(1, StandardGate::H),
-            MCGate::new(1, StandardGate::RXX),
-        ];
-
-        for mc_gate in cases {
-            let expected_controls = mc_gate.num_ctrl_qubits();
-            let expected_qubits = mc_gate.num_qubits();
-            let expected_params = mc_gate.num_params();
-            let canonical = Instruction::McGate(Box::new(mc_gate)).canonicalize_form();
-
-            let Instruction::McGate(actual) = canonical else {
-                panic!("expected MCGate");
-            };
-            assert_eq!(actual.num_ctrl_qubits(), expected_controls);
-            assert_eq!(actual.num_qubits(), expected_qubits);
-            assert_eq!(actual.num_params(), expected_params);
-        }
-    }
-
-    #[test]
-    fn control_on_mc_gate_counts_inherent_base_controls_once() {
-        let instruction = Instruction::McGate(Box::new(MCGate::new(1, StandardGate::CX)));
-
-        let controlled = instruction.control(1).unwrap();
-
-        let Instruction::McGate(actual) = controlled else {
-            panic!("expected MCGate");
-        };
-        assert_eq!(actual.base_gate(), &StandardGate::X);
-        assert_eq!(actual.num_ctrl_qubits(), 3);
-        assert_eq!(actual.num_qubits(), 4);
-    }
-
-    #[test]
-    fn gate_arity_reports_fixed_gate_like_instructions() {
-        let unitary = UnitaryGate::new("custom", 2, 3);
-        let circuit_gate =
-            CircuitGate::new("composite", FrozenCircuit::new(Circuit::new(4))).unwrap();
-
-        let cases = [
-            (Instruction::Standard(StandardGate::H), Some((1, 0))),
-            (Instruction::Standard(StandardGate::RX), Some((1, 1))),
-            (Instruction::Standard(StandardGate::GPhase), Some((0, 1))),
-            (
-                Instruction::McGate(Box::new(MCGate::new(2, StandardGate::RZ))),
-                Some((3, 1)),
-            ),
-            (Instruction::UnitaryGate(Box::new(unitary)), Some((2, 3))),
-            (
-                Instruction::CircuitGate(Box::new(circuit_gate)),
-                Some((4, 0)),
-            ),
-            (Instruction::Directive(Directive::Measure), Some((1, 0))),
-            (Instruction::Directive(Directive::Reset), Some((1, 0))),
-            (Instruction::Delay, Some((1, 1))),
-        ];
-
-        for (instruction, expected) in cases {
-            assert_eq!(instruction.gate_arity(), expected);
-        }
-    }
-
-    #[test]
-    fn gate_arity_excludes_variable_or_contextual_instructions() {
-        let flow = ControlFlow::if_else(ConditionView::new(Qubit::new(0), 1), Vec::new(), None);
-
-        assert_eq!(
-            Instruction::Directive(Directive::Barrier).gate_arity(),
-            None
-        );
-        assert_eq!(Instruction::ControlFlowGate(flow).gate_arity(), None);
-    }
-}
+#[path = "instruction_test.rs"]
+mod instruction_test;

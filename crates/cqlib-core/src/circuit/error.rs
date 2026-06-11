@@ -191,6 +191,28 @@ pub enum CircuitError {
     #[error("Invalid control flow graph structure: {0}")]
     InvalidControlFlow(String),
 
+    #[error("{kind} {index} belongs to another circuit")]
+    ForeignClassicalHandle { kind: &'static str, index: u32 },
+
+    #[error("classical value {index} is not available at {context}")]
+    UndefinedClassicalValue { index: u32, context: String },
+
+    #[error("classical value {index} has more than one definition: {first} and {second}")]
+    DuplicateClassicalValueDefinition {
+        index: u32,
+        first: String,
+        second: String,
+    },
+
+    #[error("classical value {index} escapes its defining control-flow region at {context}")]
+    ClassicalValueOutOfScope { index: u32, context: String },
+
+    #[error("{operation} must be the final operation in {context}")]
+    NonTerminalControlTransfer {
+        operation: &'static str,
+        context: String,
+    },
+
     #[error("Invalid Operation: {0}")]
     InvalidOperation(String),
 }
