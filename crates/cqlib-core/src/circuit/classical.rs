@@ -13,12 +13,42 @@
 //! Runtime classical storage for circuits.
 //!
 //! This module defines the first layer of the dynamic control-flow model:
-//! typed classical storage locations that exist only while a circuit executes.
-//! A [`ClassicalVar`] is a circuit-local handle to a mutable runtime location.
-//! Measurement and assignment operations may write it, while classical
-//! expressions may read its current value.
+//! typed classical values and storage locations that exist only while a
+//! circuit executes. A [`ClassicalValue`] is an immutable runtime result,
+//! similar to an SSA value. A [`ClassicalVar`] is a circuit-local handle to a
+//! mutable runtime storage location. Control-flow expressions may read both,
+//! while store operations may only write variables.
 
-use std::num::NonZeroU32;
+use std::num::{NonZeroU32, NonZeroU64};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use crate::circuit::bit::Qubit;
+use crate::circuit::classical_expr::ClassicalExpr;
+use smallvec::SmallVec;
+
+static NEXT_CIRCUIT_ID: AtomicU64 = AtomicU64::new(1);
+
+/// Process-local identity for classical handles owned by a circuit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct CircuitId(NonZeroU64);
+
+impl CircuitId {
+    /// Allocates a new process-local circuit identity.
+    pub fn new() -> Self {
+        let id = NEXT_CIRCUIT_ID
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                current.checked_add(1).filter(|next| *next != u64::MAX)
+            })
+            .unwrap_or_else(|_| panic!("circuit identity space exhausted"));
+        Self(NonZeroU64::new(id).expect("circuit identity counter must remain non-zero"))
+    }
+}
+
+impl Default for CircuitId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 /// Static type of a runtime classical variable.
 ///
@@ -61,6 +91,35 @@ impl ClassicalType {
         }
     }
 
+    /// Returns the zero literal for this type.
+    ///
+    /// `Bool` → `false`, `Bit` → `bit_literal(false)`. `UInt` and `BitVec`
+    /// require a width argument; see [`ClassicalExpr::uint_literal`] and
+    /// [`ClassicalExpr::bit_vec_literal`].
+    pub fn zero_literal(self) -> ClassicalExpr {
+        match self {
+            Self::Bool => ClassicalExpr::bool_literal(false),
+            Self::Bit => ClassicalExpr::bit_literal(false),
+            Self::UInt(_) | Self::BitVec(_) => {
+                ClassicalExpr::bool_literal(false) // fallback; width-bearing types use explicit constructors
+            }
+        }
+    }
+
+    /// Returns the one literal for this type.
+    ///
+    /// `Bool` → `true`, `Bit` → `bit_literal(true)`. `UInt` and `BitVec`
+    /// require a width argument.
+    pub fn one_literal(self) -> ClassicalExpr {
+        match self {
+            Self::Bool => ClassicalExpr::bool_literal(true),
+            Self::Bit => ClassicalExpr::bit_literal(true),
+            Self::UInt(_) | Self::BitVec(_) => {
+                ClassicalExpr::bool_literal(true) // fallback
+            }
+        }
+    }
+
     /// Returns the number of measured bits accepted by this type.
     ///
     /// Only `Bit` and `BitVec` are valid direct measurement targets. `Bool`
@@ -81,33 +140,147 @@ impl ClassicalType {
 /// meaningful only inside the circuit that allocated it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ClassicalVar {
-    id: u32,
+    circuit_id: CircuitId,
+    index: u32,
     ty: ClassicalType,
 }
 
 impl ClassicalVar {
     /// Creates a new classical variable handle.
     ///
-    /// This is crate-private because variables must be allocated by a circuit
-    /// once the circuit owns a classical variable table.
-    pub(crate) fn new(id: u32, ty: ClassicalType) -> Self {
-        Self { id, ty }
+    /// Prefer [`Circuit::var`](super::Circuit::var) for normal circuit
+    /// construction so the handle is registered in the circuit's type table.
+    pub fn new(circuit_id: CircuitId, index: u32, ty: ClassicalType) -> Self {
+        Self {
+            circuit_id,
+            index,
+            ty,
+        }
     }
 
     /// Returns the circuit-local variable identifier.
     pub fn id(self) -> u32 {
-        self.id
+        self.index
+    }
+
+    /// Returns the circuit-local variable table index.
+    pub fn index(self) -> u32 {
+        self.index
+    }
+
+    /// Returns the identity of the circuit that owns this variable.
+    pub fn circuit_id(self) -> CircuitId {
+        self.circuit_id
     }
 
     /// Returns the static type of this variable.
     pub fn ty(self) -> ClassicalType {
         self.ty
     }
+
+    /// Creates an expression that reads this variable's current runtime value.
+    pub fn expr(self) -> ClassicalExpr {
+        ClassicalExpr::var(self)
+    }
+}
+
+/// Circuit-local handle to an immutable runtime classical value.
+///
+/// Values are produced by operations such as measurement. Unlike
+/// [`ClassicalVar`], a value is never overwritten. If a runtime result must be
+/// preserved as loop-carried mutable state, store it into a [`ClassicalVar`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ClassicalValue {
+    circuit_id: CircuitId,
+    index: u32,
+    ty: ClassicalType,
+}
+
+impl ClassicalValue {
+    /// Creates a new classical value handle.
+    ///
+    /// Prefer circuit measurement builders for normal circuit construction so
+    /// the value has a dominating producer in the circuit IR.
+    pub fn new(circuit_id: CircuitId, index: u32, ty: ClassicalType) -> Self {
+        Self {
+            circuit_id,
+            index,
+            ty,
+        }
+    }
+
+    /// Returns the circuit-local value table index.
+    pub fn index(self) -> u32 {
+        self.index
+    }
+
+    /// Returns the identity of the circuit that owns this value.
+    pub fn circuit_id(self) -> CircuitId {
+        self.circuit_id
+    }
+
+    /// Returns the static type of this value.
+    pub fn ty(self) -> ClassicalType {
+        self.ty
+    }
+
+    /// Creates an expression that reads this immutable runtime value.
+    pub fn expr(self) -> ClassicalExpr {
+        ClassicalExpr::value(self)
+    }
+}
+
+/// Self-contained handle returned by circuit measurement builders.
+///
+/// [`ClassicalValue`] is the IR value used by expressions and control-flow.
+/// `Measurement` adds the measured qubits and their bit order, so state-level
+/// sampling APIs can consume a measurement without searching the circuit IR.
+///
+/// Bit order follows the `measure_bits` input order: `qubits()[0]` is bit index
+/// `0`, the least-significant bit in packed results.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Measurement {
+    value: ClassicalValue,
+    qubits: SmallVec<[Qubit; 3]>,
+}
+
+impl Measurement {
+    /// Creates a measurement handle from its IR value and measured qubits.
+    pub fn new(value: ClassicalValue, qubits: SmallVec<[Qubit; 3]>) -> Self {
+        Self { value, qubits }
+    }
+
+    /// Returns the immutable circuit value produced by this measurement.
+    pub fn value(&self) -> ClassicalValue {
+        self.value
+    }
+
+    /// Creates an expression that reads this measurement's immutable value.
+    pub fn expr(&self) -> ClassicalExpr {
+        self.value.expr()
+    }
+
+    /// Returns the measured qubits in result bit order.
+    pub fn qubits(&self) -> &[Qubit] {
+        &self.qubits
+    }
+
+    /// Returns the number of measured bits.
+    pub fn width(&self) -> usize {
+        self.qubits.len()
+    }
+
+    /// Returns the static type of the measurement result.
+    pub fn ty(&self) -> ClassicalType {
+        self.value.ty()
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{ClassicalType, ClassicalVar};
+    use super::{CircuitId, ClassicalType, ClassicalValue, ClassicalVar, Measurement};
+    use crate::circuit::Qubit;
+    use smallvec::smallvec;
 
     #[test]
     fn type_widths_are_reported() {
@@ -136,7 +309,7 @@ mod tests {
 
     #[test]
     fn variables_expose_id_and_type() {
-        let var = ClassicalVar::new(12, ClassicalType::bit_vec(4).unwrap());
+        let var = ClassicalVar::new(CircuitId::new(), 12, ClassicalType::bit_vec(4).unwrap());
 
         assert_eq!(var.id(), 12);
         assert_eq!(var.ty(), ClassicalType::bit_vec(4).unwrap());
@@ -144,13 +317,26 @@ mod tests {
 
     #[test]
     fn variable_identity_includes_id_and_type() {
-        let bit = ClassicalVar::new(1, ClassicalType::Bit);
-        let same_bit = ClassicalVar::new(1, ClassicalType::Bit);
-        let bool_var = ClassicalVar::new(1, ClassicalType::Bool);
-        let other_bit = ClassicalVar::new(2, ClassicalType::Bit);
+        let circuit_id = CircuitId::new();
+        let bit = ClassicalVar::new(circuit_id, 1, ClassicalType::Bit);
+        let same_bit = ClassicalVar::new(circuit_id, 1, ClassicalType::Bit);
+        let bool_var = ClassicalVar::new(circuit_id, 1, ClassicalType::Bool);
+        let other_bit = ClassicalVar::new(circuit_id, 2, ClassicalType::Bit);
 
         assert_eq!(bit, same_bit);
         assert_ne!(bit, bool_var);
         assert_ne!(bit, other_bit);
+    }
+
+    #[test]
+    fn measurement_exposes_value_and_qubit_order() {
+        let value = ClassicalValue::new(CircuitId::new(), 3, ClassicalType::bit_vec(2).unwrap());
+        let measurement = Measurement::new(value, smallvec![Qubit::new(1), Qubit::new(0)]);
+
+        assert_eq!(measurement.value(), value);
+        assert_eq!(measurement.ty(), ClassicalType::bit_vec(2).unwrap());
+        assert_eq!(measurement.width(), 2);
+        assert_eq!(measurement.qubits(), &[Qubit::new(1), Qubit::new(0)]);
+        assert_eq!(measurement.expr().ty(), ClassicalType::bit_vec(2).unwrap());
     }
 }

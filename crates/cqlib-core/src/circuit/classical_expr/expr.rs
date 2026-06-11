@@ -12,16 +12,15 @@
 
 //! Typed, side-effect-free runtime classical expressions.
 //!
-//! Expressions read [`ClassicalVar`] handles and combine them into typed
-//! runtime values. They do not measure qubits, write classical storage, or
-//! transfer control. Control-flow statements consume these expressions in a
-//! later layer.
+//! Expressions read [`ClassicalVar`] and [`ClassicalValue`] handles and combine
+//! them into typed runtime values. They do not measure qubits, write classical
+//! storage, or transfer control. Control-flow statements consume these
+//! expressions in a later layer.
 
-use crate::circuit::classical::{ClassicalType, ClassicalVar};
+use crate::circuit::classical::{ClassicalType, ClassicalValue, ClassicalVar};
 use crate::circuit::error::CircuitError;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::num::NonZeroU32;
-use std::sync::Arc;
 
 /// Unary operators for classical expressions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -62,20 +61,30 @@ pub enum ClassicalCast {
 }
 
 /// A typed, side-effect-free runtime classical expression.
+///
+/// The expression node kind is exposed through [`ClassicalExpr::kind`] for
+/// inspection and tooling. Prefer the typed constructors on this type when
+/// building expressions; they centralize type checks and keep the AST valid.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ClassicalExpr {
-    node: Arc<ClassicalExprNode>,
+    node: Box<ClassicalExprNode>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) struct ClassicalExprNode {
+pub struct ClassicalExprNode {
     ty: ClassicalType,
     kind: ClassicalExprKind,
 }
 
+/// Public node kind for inspecting a [`ClassicalExpr`] AST.
+///
+/// The variants mirror the expression builders on [`ClassicalExpr`]. External
+/// callers can pattern-match this enum through [`ClassicalExpr::kind`], while
+/// expression construction should continue to use the typed builders.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) enum ClassicalExprKind {
+pub enum ClassicalExprKind {
     Var(ClassicalVar),
+    Value(ClassicalValue),
     BoolLiteral(bool),
     BitLiteral(bool),
     UIntLiteral {
@@ -130,9 +139,19 @@ impl ClassicalExpr {
     /// Creates an expression that reads the current runtime value of `var`.
     pub fn var(var: ClassicalVar) -> Self {
         Self {
-            node: Arc::new(ClassicalExprNode {
+            node: Box::new(ClassicalExprNode {
                 ty: var.ty(),
                 kind: ClassicalExprKind::Var(var),
+            }),
+        }
+    }
+
+    /// Creates an expression that reads an immutable runtime classical value.
+    pub fn value(value: ClassicalValue) -> Self {
+        Self {
+            node: Box::new(ClassicalExprNode {
+                ty: value.ty(),
+                kind: ClassicalExprKind::Value(value),
             }),
         }
     }
@@ -140,7 +159,7 @@ impl ClassicalExpr {
     /// Creates a boolean literal expression.
     pub fn bool_literal(value: bool) -> Self {
         Self {
-            node: Arc::new(ClassicalExprNode {
+            node: Box::new(ClassicalExprNode {
                 ty: ClassicalType::Bool,
                 kind: ClassicalExprKind::BoolLiteral(value),
             }),
@@ -150,7 +169,7 @@ impl ClassicalExpr {
     /// Creates a bit literal expression.
     pub fn bit_literal(value: bool) -> Self {
         Self {
-            node: Arc::new(ClassicalExprNode {
+            node: Box::new(ClassicalExprNode {
                 ty: ClassicalType::Bit,
                 kind: ClassicalExprKind::BitLiteral(value),
             }),
@@ -179,7 +198,7 @@ impl ClassicalExpr {
             )));
         }
         Ok(Self {
-            node: Arc::new(ClassicalExprNode {
+            node: Box::new(ClassicalExprNode {
                 ty: ClassicalType::UInt(width),
                 kind: ClassicalExprKind::UIntLiteral { width, value },
             }),
@@ -208,7 +227,7 @@ impl ClassicalExpr {
             )));
         }
         Ok(Self {
-            node: Arc::new(ClassicalExprNode {
+            node: Box::new(ClassicalExprNode {
                 ty: ClassicalType::BitVec(width),
                 kind: ClassicalExprKind::BitVecLiteral { width, value },
             }),
@@ -220,11 +239,130 @@ impl ClassicalExpr {
         self.node.ty
     }
 
+    /// Returns the expression node kind.
+    ///
+    /// This exposes the classical expression AST for inspection. Prefer the
+    /// typed constructors on [`ClassicalExpr`] when building expressions so
+    /// expression invariants remain centralized.
+    pub fn kind(&self) -> &ClassicalExprKind {
+        &self.node.kind
+    }
+
+    /// Returns a copy of this expression with circuit-local classical handles remapped.
+    ///
+    /// Every [`ClassicalVar`] and [`ClassicalValue`] referenced by this
+    /// expression must have an entry in the corresponding map. Literal and
+    /// structural nodes keep their static type and shape.
+    pub fn remap_classical_ids(
+        &self,
+        var_map: &HashMap<ClassicalVar, ClassicalVar>,
+        value_map: &HashMap<ClassicalValue, ClassicalValue>,
+    ) -> Result<Self, CircuitError> {
+        let kind = match &self.node.kind {
+            ClassicalExprKind::Var(var) => {
+                let mapped = var_map.get(var).copied().ok_or_else(|| {
+                    CircuitError::InvalidOperation(format!(
+                        "missing classical variable remap for id {}",
+                        var.id()
+                    ))
+                })?;
+                ClassicalExprKind::Var(mapped)
+            }
+            ClassicalExprKind::Value(value) => {
+                let mapped = value_map.get(value).copied().ok_or_else(|| {
+                    CircuitError::InvalidOperation(format!(
+                        "missing classical value remap for id {}",
+                        value.index()
+                    ))
+                })?;
+                ClassicalExprKind::Value(mapped)
+            }
+            ClassicalExprKind::BoolLiteral(value) => ClassicalExprKind::BoolLiteral(*value),
+            ClassicalExprKind::BitLiteral(value) => ClassicalExprKind::BitLiteral(*value),
+            ClassicalExprKind::UIntLiteral { width, value } => ClassicalExprKind::UIntLiteral {
+                width: *width,
+                value: *value,
+            },
+            ClassicalExprKind::BitVecLiteral { width, value } => ClassicalExprKind::BitVecLiteral {
+                width: *width,
+                value: *value,
+            },
+            ClassicalExprKind::Unary { op, expr } => ClassicalExprKind::Unary {
+                op: *op,
+                expr: expr.remap_classical_ids(var_map, value_map)?,
+            },
+            ClassicalExprKind::Binary { op, lhs, rhs } => ClassicalExprKind::Binary {
+                op: *op,
+                lhs: lhs.remap_classical_ids(var_map, value_map)?,
+                rhs: rhs.remap_classical_ids(var_map, value_map)?,
+            },
+            ClassicalExprKind::Compare { op, lhs, rhs } => ClassicalExprKind::Compare {
+                op: *op,
+                lhs: lhs.remap_classical_ids(var_map, value_map)?,
+                rhs: rhs.remap_classical_ids(var_map, value_map)?,
+            },
+            ClassicalExprKind::Cast { cast, expr } => ClassicalExprKind::Cast {
+                cast: *cast,
+                expr: expr.remap_classical_ids(var_map, value_map)?,
+            },
+            ClassicalExprKind::Select {
+                condition,
+                then_expr,
+                else_expr,
+            } => ClassicalExprKind::Select {
+                condition: condition.remap_classical_ids(var_map, value_map)?,
+                then_expr: then_expr.remap_classical_ids(var_map, value_map)?,
+                else_expr: else_expr.remap_classical_ids(var_map, value_map)?,
+            },
+            ClassicalExprKind::ExtractBit { value, index } => ClassicalExprKind::ExtractBit {
+                value: value.remap_classical_ids(var_map, value_map)?,
+                index: *index,
+            },
+            ClassicalExprKind::ExtractBits {
+                value,
+                offset,
+                width,
+            } => ClassicalExprKind::ExtractBits {
+                value: value.remap_classical_ids(var_map, value_map)?,
+                offset: *offset,
+                width: *width,
+            },
+            ClassicalExprKind::Concat { parts } => ClassicalExprKind::Concat {
+                parts: parts
+                    .iter()
+                    .map(|part| part.remap_classical_ids(var_map, value_map))
+                    .collect::<Result<Vec<_>, _>>()?
+                    .into_boxed_slice(),
+            },
+            ClassicalExprKind::PackBits { bits } => ClassicalExprKind::PackBits {
+                bits: bits
+                    .iter()
+                    .map(|bit| bit.remap_classical_ids(var_map, value_map))
+                    .collect::<Result<Vec<_>, _>>()?
+                    .into_boxed_slice(),
+            },
+        };
+
+        Ok(Self {
+            node: Box::new(ClassicalExprNode {
+                ty: self.node.ty,
+                kind,
+            }),
+        })
+    }
+
     /// Returns all runtime classical variables read by this expression.
     pub fn vars(&self) -> BTreeSet<ClassicalVar> {
         let mut vars = BTreeSet::new();
         self.collect_vars(&mut vars);
         vars
+    }
+
+    /// Returns all immutable runtime classical values read by this expression.
+    pub fn values(&self) -> BTreeSet<ClassicalValue> {
+        let mut values = BTreeSet::new();
+        self.collect_values(&mut values);
+        values
     }
 
     /// Adds every runtime classical variable read by this expression to `out`.
@@ -233,6 +371,7 @@ impl ClassicalExpr {
             ClassicalExprKind::Var(var) => {
                 out.insert(*var);
             }
+            ClassicalExprKind::Value(_) => {}
             ClassicalExprKind::BoolLiteral(_)
             | ClassicalExprKind::BitLiteral(_)
             | ClassicalExprKind::UIntLiteral { .. }
@@ -271,11 +410,56 @@ impl ClassicalExpr {
         }
     }
 
+    /// Adds every immutable runtime classical value read by this expression to `out`.
+    pub fn collect_values(&self, out: &mut BTreeSet<ClassicalValue>) {
+        match &self.node.kind {
+            ClassicalExprKind::Value(value) => {
+                out.insert(*value);
+            }
+            ClassicalExprKind::Var(_)
+            | ClassicalExprKind::BoolLiteral(_)
+            | ClassicalExprKind::BitLiteral(_)
+            | ClassicalExprKind::UIntLiteral { .. }
+            | ClassicalExprKind::BitVecLiteral { .. } => {}
+            ClassicalExprKind::Unary { expr, .. } | ClassicalExprKind::Cast { expr, .. } => {
+                expr.collect_values(out);
+            }
+            ClassicalExprKind::Binary { lhs, rhs, .. }
+            | ClassicalExprKind::Compare { lhs, rhs, .. } => {
+                lhs.collect_values(out);
+                rhs.collect_values(out);
+            }
+            ClassicalExprKind::Select {
+                condition,
+                then_expr,
+                else_expr,
+            } => {
+                condition.collect_values(out);
+                then_expr.collect_values(out);
+                else_expr.collect_values(out);
+            }
+            ClassicalExprKind::ExtractBit { value, .. }
+            | ClassicalExprKind::ExtractBits { value, .. } => {
+                value.collect_values(out);
+            }
+            ClassicalExprKind::Concat { parts } => {
+                for part in parts.iter() {
+                    part.collect_values(out);
+                }
+            }
+            ClassicalExprKind::PackBits { bits } => {
+                for bit in bits.iter() {
+                    bit.collect_values(out);
+                }
+            }
+        }
+    }
+
     /// Creates a `not` expression for `Bool` or `Bit` values.
     pub fn not(expr: Self) -> Result<Self, CircuitError> {
         match expr.ty() {
             ClassicalType::Bool | ClassicalType::Bit => Ok(Self {
-                node: Arc::new(ClassicalExprNode {
+                node: Box::new(ClassicalExprNode {
                     ty: expr.ty(),
                     kind: ClassicalExprKind::Unary {
                         op: ClassicalUnaryOp::Not,
@@ -301,7 +485,7 @@ impl ClassicalExpr {
         }
         match ty {
             ClassicalType::Bool | ClassicalType::Bit => Ok(Self {
-                node: Arc::new(ClassicalExprNode {
+                node: Box::new(ClassicalExprNode {
                     ty,
                     kind: ClassicalExprKind::Binary {
                         op: ClassicalBinaryOp::And,
@@ -328,7 +512,7 @@ impl ClassicalExpr {
         }
         match ty {
             ClassicalType::Bool | ClassicalType::Bit => Ok(Self {
-                node: Arc::new(ClassicalExprNode {
+                node: Box::new(ClassicalExprNode {
                     ty,
                     kind: ClassicalExprKind::Binary {
                         op: ClassicalBinaryOp::Or,
@@ -355,7 +539,7 @@ impl ClassicalExpr {
         }
         match ty {
             ClassicalType::Bool | ClassicalType::Bit => Ok(Self {
-                node: Arc::new(ClassicalExprNode {
+                node: Box::new(ClassicalExprNode {
                     ty,
                     kind: ClassicalExprKind::Binary {
                         op: ClassicalBinaryOp::Xor,
@@ -380,7 +564,7 @@ impl ClassicalExpr {
             )));
         }
         Ok(Self {
-            node: Arc::new(ClassicalExprNode {
+            node: Box::new(ClassicalExprNode {
                 ty: ClassicalType::Bool,
                 kind: ClassicalExprKind::Compare {
                     op: ClassicalCompareOp::Eq,
@@ -401,7 +585,7 @@ impl ClassicalExpr {
             )));
         }
         Ok(Self {
-            node: Arc::new(ClassicalExprNode {
+            node: Box::new(ClassicalExprNode {
                 ty: ClassicalType::Bool,
                 kind: ClassicalExprKind::Compare {
                     op: ClassicalCompareOp::Ne,
@@ -428,7 +612,7 @@ impl ClassicalExpr {
             )));
         }
         Ok(Self {
-            node: Arc::new(ClassicalExprNode {
+            node: Box::new(ClassicalExprNode {
                 ty: ClassicalType::Bool,
                 kind: ClassicalExprKind::Compare {
                     op: ClassicalCompareOp::Lt,
@@ -455,7 +639,7 @@ impl ClassicalExpr {
             )));
         }
         Ok(Self {
-            node: Arc::new(ClassicalExprNode {
+            node: Box::new(ClassicalExprNode {
                 ty: ClassicalType::Bool,
                 kind: ClassicalExprKind::Compare {
                     op: ClassicalCompareOp::Le,
@@ -482,7 +666,7 @@ impl ClassicalExpr {
             )));
         }
         Ok(Self {
-            node: Arc::new(ClassicalExprNode {
+            node: Box::new(ClassicalExprNode {
                 ty: ClassicalType::Bool,
                 kind: ClassicalExprKind::Compare {
                     op: ClassicalCompareOp::Gt,
@@ -509,7 +693,7 @@ impl ClassicalExpr {
             )));
         }
         Ok(Self {
-            node: Arc::new(ClassicalExprNode {
+            node: Box::new(ClassicalExprNode {
                 ty: ClassicalType::Bool,
                 kind: ClassicalExprKind::Compare {
                     op: ClassicalCompareOp::Ge,
@@ -529,7 +713,7 @@ impl ClassicalExpr {
             )));
         }
         Ok(Self {
-            node: Arc::new(ClassicalExprNode {
+            node: Box::new(ClassicalExprNode {
                 ty: ClassicalType::Bool,
                 kind: ClassicalExprKind::Cast {
                     cast: ClassicalCast::BitToBool,
@@ -543,7 +727,7 @@ impl ClassicalExpr {
     pub fn bit_vec_to_uint(expr: Self) -> Result<Self, CircuitError> {
         match expr.ty() {
             ClassicalType::BitVec(width) => Ok(Self {
-                node: Arc::new(ClassicalExprNode {
+                node: Box::new(ClassicalExprNode {
                     ty: ClassicalType::UInt(width),
                     kind: ClassicalExprKind::Cast {
                         cast: ClassicalCast::BitVecToUInt,
@@ -573,7 +757,7 @@ impl ClassicalExpr {
             )));
         }
         Ok(Self {
-            node: Arc::new(ClassicalExprNode {
+            node: Box::new(ClassicalExprNode {
                 ty: then_expr.ty(),
                 kind: ClassicalExprKind::Select {
                     condition,
@@ -602,7 +786,7 @@ impl ClassicalExpr {
             )));
         }
         Ok(Self {
-            node: Arc::new(ClassicalExprNode {
+            node: Box::new(ClassicalExprNode {
                 ty: ClassicalType::Bit,
                 kind: ClassicalExprKind::ExtractBit { value, index },
             }),
@@ -637,7 +821,7 @@ impl ClassicalExpr {
             )));
         }
         Ok(Self {
-            node: Arc::new(ClassicalExprNode {
+            node: Box::new(ClassicalExprNode {
                 ty: ClassicalType::BitVec(width),
                 kind: ClassicalExprKind::ExtractBits {
                     value,
@@ -692,13 +876,55 @@ impl ClassicalExpr {
             ));
         };
         Ok(Self {
-            node: Arc::new(ClassicalExprNode {
+            node: Box::new(ClassicalExprNode {
                 ty: ClassicalType::BitVec(width),
                 kind: ClassicalExprKind::Concat {
                     parts: parts.into_boxed_slice(),
                 },
             }),
         })
+    }
+
+    /// Returns `true` when this expression is the boolean literal `true`.
+    pub fn is_bool_true(&self) -> bool {
+        matches!(self.kind(), ClassicalExprKind::BoolLiteral(true))
+    }
+
+    /// Returns `true` when this expression is the boolean literal `false`.
+    pub fn is_bool_false(&self) -> bool {
+        matches!(self.kind(), ClassicalExprKind::BoolLiteral(false))
+    }
+
+    /// Returns `true` when this expression is the bit literal `true` (1).
+    pub fn is_bit_true(&self) -> bool {
+        matches!(self.kind(), ClassicalExprKind::BitLiteral(true))
+    }
+
+    /// Returns `true` when this expression is the bit literal `false` (0).
+    pub fn is_bit_false(&self) -> bool {
+        matches!(self.kind(), ClassicalExprKind::BitLiteral(false))
+    }
+
+    /// Returns a structurally simplified copy of this expression.
+    ///
+    /// Simplification eliminates literal-driven redundancies and algebraic
+    /// identities without evaluating runtime variable or value reads. It is
+    /// idempotent: applying it twice yields the same expression.
+    ///
+    /// See [`simplify`](super::simplify::simplify) for the full rule set.
+    pub fn simplified(&self) -> Self {
+        super::simplify::simplify(self)
+    }
+
+    /// Creates an expression from a type-tag and node kind.
+    ///
+    /// This is a low-level constructor used by the simplifier and other
+    /// internal passes. Prefer the typed constructors for normal circuit
+    /// building.
+    pub(crate) fn from_kind(ty: ClassicalType, kind: ClassicalExprKind) -> Self {
+        Self {
+            node: Box::new(ClassicalExprNode { ty, kind }),
+        }
     }
 
     /// Packs single-bit expressions into a `BitVec`.
@@ -726,7 +952,7 @@ impl ClassicalExpr {
             ));
         };
         Ok(Self {
-            node: Arc::new(ClassicalExprNode {
+            node: Box::new(ClassicalExprNode {
                 ty: ClassicalType::BitVec(width),
                 kind: ClassicalExprKind::PackBits {
                     bits: bits.into_boxed_slice(),
@@ -737,162 +963,5 @@ impl ClassicalExpr {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::ClassicalExpr;
-    use crate::circuit::{ClassicalType, ClassicalVar};
-
-    #[test]
-    fn literals_have_static_types_and_validate_widths() {
-        assert_eq!(ClassicalExpr::bool_literal(true).ty(), ClassicalType::Bool);
-        assert_eq!(ClassicalExpr::bit_literal(false).ty(), ClassicalType::Bit);
-        assert_eq!(
-            ClassicalExpr::uint_literal(8, 255).unwrap().ty(),
-            ClassicalType::uint(8).unwrap()
-        );
-        assert_eq!(
-            ClassicalExpr::bit_vec_literal(3, 0b101).unwrap().ty(),
-            ClassicalType::bit_vec(3).unwrap()
-        );
-
-        assert!(ClassicalExpr::uint_literal(0, 0).is_err());
-        assert!(ClassicalExpr::uint_literal(129, 0).is_err());
-        assert!(ClassicalExpr::uint_literal(3, 8).is_err());
-    }
-
-    #[test]
-    fn boolean_and_bit_operations_are_typed_separately() {
-        let b0 = ClassicalExpr::var(ClassicalVar::new(0, ClassicalType::Bool));
-        let b1 = ClassicalExpr::var(ClassicalVar::new(1, ClassicalType::Bool));
-        assert_eq!(
-            ClassicalExpr::and(b0.clone(), b1.clone()).unwrap().ty(),
-            ClassicalType::Bool
-        );
-        assert_eq!(ClassicalExpr::not(b0).unwrap().ty(), ClassicalType::Bool);
-
-        let bit0 = ClassicalExpr::var(ClassicalVar::new(2, ClassicalType::Bit));
-        let bit1 = ClassicalExpr::var(ClassicalVar::new(3, ClassicalType::Bit));
-        assert_eq!(
-            ClassicalExpr::xor(bit0.clone(), bit1).unwrap().ty(),
-            ClassicalType::Bit
-        );
-
-        assert!(ClassicalExpr::and(b1, bit0).is_err());
-    }
-
-    #[test]
-    fn comparisons_return_bool_and_enforce_ordered_uints() {
-        let bit0 = ClassicalExpr::var(ClassicalVar::new(0, ClassicalType::Bit));
-        let bit1 = ClassicalExpr::var(ClassicalVar::new(1, ClassicalType::Bit));
-        assert_eq!(
-            ClassicalExpr::eq(bit0.clone(), bit1.clone()).unwrap().ty(),
-            ClassicalType::Bool
-        );
-        assert!(ClassicalExpr::lt(bit0, bit1).is_err());
-
-        let u0 = ClassicalExpr::var(ClassicalVar::new(2, ClassicalType::uint(4).unwrap()));
-        let u1 = ClassicalExpr::var(ClassicalVar::new(3, ClassicalType::uint(4).unwrap()));
-        assert_eq!(ClassicalExpr::ge(u0, u1).unwrap().ty(), ClassicalType::Bool);
-    }
-
-    #[test]
-    fn casts_are_explicit() {
-        let bit = ClassicalExpr::var(ClassicalVar::new(0, ClassicalType::Bit));
-        assert_eq!(
-            ClassicalExpr::bit_to_bool(bit).unwrap().ty(),
-            ClassicalType::Bool
-        );
-
-        let bits = ClassicalExpr::var(ClassicalVar::new(1, ClassicalType::bit_vec(5).unwrap()));
-        assert_eq!(
-            ClassicalExpr::bit_vec_to_uint(bits).unwrap().ty(),
-            ClassicalType::uint(5).unwrap()
-        );
-
-        assert!(ClassicalExpr::bit_to_bool(ClassicalExpr::bool_literal(true)).is_err());
-        assert!(
-            ClassicalExpr::bit_vec_to_uint(ClassicalExpr::var(ClassicalVar::new(
-                2,
-                ClassicalType::uint(5).unwrap()
-            )))
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn select_requires_bool_condition_and_matching_branch_types() {
-        let condition = ClassicalExpr::bool_literal(true);
-        let then_expr = ClassicalExpr::var(ClassicalVar::new(0, ClassicalType::Bit));
-        let else_expr = ClassicalExpr::var(ClassicalVar::new(1, ClassicalType::Bit));
-
-        assert_eq!(
-            ClassicalExpr::select(condition, then_expr, else_expr)
-                .unwrap()
-                .ty(),
-            ClassicalType::Bit
-        );
-
-        assert!(
-            ClassicalExpr::select(
-                ClassicalExpr::bit_literal(true),
-                ClassicalExpr::var(ClassicalVar::new(2, ClassicalType::Bit)),
-                ClassicalExpr::var(ClassicalVar::new(3, ClassicalType::Bit)),
-            )
-            .is_err()
-        );
-        assert!(
-            ClassicalExpr::select(
-                ClassicalExpr::bool_literal(true),
-                ClassicalExpr::var(ClassicalVar::new(4, ClassicalType::Bit)),
-                ClassicalExpr::var(ClassicalVar::new(5, ClassicalType::Bool)),
-            )
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn extraction_uses_little_endian_indices() {
-        let value = ClassicalExpr::var(ClassicalVar::new(0, ClassicalType::bit_vec(8).unwrap()));
-        assert_eq!(
-            ClassicalExpr::extract_bit(value.clone(), 0).unwrap().ty(),
-            ClassicalType::Bit
-        );
-        assert_eq!(
-            ClassicalExpr::extract_bits(value.clone(), 2, 3)
-                .unwrap()
-                .ty(),
-            ClassicalType::bit_vec(3).unwrap()
-        );
-
-        assert!(ClassicalExpr::extract_bit(value.clone(), 8).is_err());
-        assert!(ClassicalExpr::extract_bits(value, 7, 2).is_err());
-    }
-
-    #[test]
-    fn pack_bits_and_concat_build_bit_vectors() {
-        let bit0 = ClassicalExpr::var(ClassicalVar::new(0, ClassicalType::Bit));
-        let bit1 = ClassicalExpr::var(ClassicalVar::new(1, ClassicalType::Bit));
-        let packed = ClassicalExpr::pack_bits([bit0.clone(), bit1.clone()]).unwrap();
-        assert_eq!(packed.ty(), ClassicalType::bit_vec(2).unwrap());
-
-        let vec3 = ClassicalExpr::var(ClassicalVar::new(2, ClassicalType::bit_vec(3).unwrap()));
-        let concat = ClassicalExpr::concat([bit0, vec3]).unwrap();
-        assert_eq!(concat.ty(), ClassicalType::bit_vec(4).unwrap());
-
-        assert!(ClassicalExpr::pack_bits([ClassicalExpr::bool_literal(true)]).is_err());
-        assert!(ClassicalExpr::concat([ClassicalExpr::bool_literal(true)]).is_err());
-        assert!(ClassicalExpr::concat(std::iter::empty()).is_err());
-    }
-
-    #[test]
-    fn variables_are_collected_recursively() {
-        let bit0 = ClassicalExpr::var(ClassicalVar::new(0, ClassicalType::Bit));
-        let bit1 = ClassicalExpr::var(ClassicalVar::new(1, ClassicalType::Bit));
-        let condition = ClassicalExpr::bit_to_bool(bit0.clone()).unwrap();
-        let expr = ClassicalExpr::select(condition, bit0, bit1).unwrap();
-
-        let vars = expr.vars();
-        assert_eq!(vars.len(), 2);
-        assert!(vars.contains(&ClassicalVar::new(0, ClassicalType::Bit)));
-        assert!(vars.contains(&ClassicalVar::new(1, ClassicalType::Bit)));
-    }
-}
+#[path = "expr_test.rs"]
+mod expr_test;
