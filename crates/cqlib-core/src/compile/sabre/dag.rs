@@ -35,7 +35,7 @@
 //! decomposed into its own [`SabreDag`] so routing can restore layouts at block
 //! boundaries.
 
-use crate::circuit::{ControlFlow, Instruction, Operation};
+use crate::circuit::{ClassicalControlOp, ClassicalExpr, ClassicalVar, Instruction, Operation};
 use crate::compile::CompilerError;
 use crate::device::LogicalQubit;
 use rustworkx_core::petgraph::Direction;
@@ -53,15 +53,33 @@ pub(crate) enum SabreNodeKind {
 
 #[derive(Debug, Clone)]
 pub(crate) enum SabreControlFlow {
-    IfElse {
-        condition: crate::circuit::ConditionView,
-        true_body: SabreDag,
-        false_body: Option<SabreDag>,
+    If {
+        condition: ClassicalExpr,
+        then_body: SabreDag,
+        else_body: Option<SabreDag>,
     },
-    WhileLoop {
-        condition: crate::circuit::ConditionView,
+    While {
+        condition: ClassicalExpr,
         body: SabreDag,
     },
+    For {
+        var: ClassicalVar,
+        start: ClassicalExpr,
+        stop: ClassicalExpr,
+        step: ClassicalExpr,
+        body: SabreDag,
+    },
+    Switch {
+        target: ClassicalExpr,
+        cases: Vec<SabreSwitchCase>,
+        default: Option<SabreDag>,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct SabreSwitchCase {
+    pub(crate) value: u128,
+    pub(crate) body: SabreDag,
 }
 
 #[derive(Debug, Clone)]
@@ -83,9 +101,14 @@ impl SabreDag {
         let mut graph = DiGraph::new();
         let mut wire_pos: BTreeMap<LogicalQubit, NodeIndex> = BTreeMap::new();
         let mut first_layer = Vec::new();
+        let mut global_barrier = None;
 
         for operation in operations {
             let kind = kind_from_operation(operation)?;
+            let ordering_barrier = matches!(
+                operation.instruction,
+                Instruction::ClassicalData(_) | Instruction::ClassicalControl(_)
+            );
             let qubits = operation
                 .qubits
                 .iter()
@@ -93,16 +116,40 @@ impl SabreDag {
                 .map(LogicalQubit::from_qubit)
                 .collect::<Vec<_>>();
 
-            let predecessors = predecessors_for(&qubits, &wire_pos);
+            let mut parents = global_barrier.into_iter().collect::<Vec<_>>();
+            if ordering_barrier {
+                for parent in wire_pos.values().copied() {
+                    if !parents.contains(&parent) {
+                        parents.push(parent);
+                    }
+                }
+            } else {
+                for logical in &qubits {
+                    if let Some(parent) = wire_pos.get(logical).copied()
+                        && !parents.contains(&parent)
+                    {
+                        parents.push(parent);
+                    }
+                }
+            }
+            let predecessors = match parents.as_slice() {
+                [] => Predecessors::AllUnmapped,
+                [parent] => Predecessors::Single(*parent),
+                _ => Predecessors::Multiple(parents),
+            };
+            let mut created_node = None;
             match predecessors {
                 Predecessors::AllUnmapped => match kind {
-                    SabreNodeKind::Synchronize => initial.push(operation.clone()),
+                    SabreNodeKind::Synchronize if !ordering_barrier => {
+                        initial.push(operation.clone())
+                    }
                     kind => {
                         let node = graph.add_node(SabreNode {
                             operations: vec![operation.clone()],
                             kind,
                         });
                         first_layer.push(node);
+                        created_node = Some(node);
                         for logical in qubits {
                             wire_pos.insert(logical, node);
                         }
@@ -112,7 +159,14 @@ impl SabreDag {
                     // Synchronize operations share the same dependency boundary,
                     // and consecutive two-qubit operations on the same active
                     // wires remain routable once the first one is routed.
-                    let fold_into_previous = can_fold_into_previous(&graph[previous].kind, &kind);
+                    let fold_into_previous = !ordering_barrier
+                        && match (&graph[previous].kind, &kind) {
+                            (_, SabreNodeKind::Synchronize) => true,
+                            (SabreNodeKind::TwoQ(previous), SabreNodeKind::TwoQ(current)) => {
+                                previous == current || *previous == [current[1], current[0]]
+                            }
+                            _ => false,
+                        };
                     if fold_into_previous {
                         graph[previous].operations.push(operation.clone());
                         for logical in qubits {
@@ -124,6 +178,7 @@ impl SabreDag {
                             kind,
                         });
                         graph.add_edge(previous, node, ());
+                        created_node = Some(node);
                         for logical in qubits {
                             wire_pos.insert(logical, node);
                         }
@@ -134,6 +189,7 @@ impl SabreDag {
                         operations: vec![operation.clone()],
                         kind,
                     });
+                    created_node = Some(node);
                     for parent in parents {
                         if graph.find_edge(parent, node).is_none() {
                             graph.add_edge(parent, node, ());
@@ -143,6 +199,9 @@ impl SabreDag {
                         wire_pos.insert(logical, node);
                     }
                 }
+            }
+            if ordering_barrier {
+                global_barrier = created_node;
             }
         }
 
@@ -189,62 +248,59 @@ impl SabreDag {
     }
 }
 
-fn can_fold_into_previous(previous: &SabreNodeKind, current: &SabreNodeKind) -> bool {
-    match (previous, current) {
-        (_, SabreNodeKind::Synchronize) => true,
-        (SabreNodeKind::TwoQ(previous), SabreNodeKind::TwoQ(current)) => {
-            same_logical_pair(*previous, *current)
-        }
-        _ => false,
-    }
-}
-
-fn same_logical_pair(left: [LogicalQubit; 2], right: [LogicalQubit; 2]) -> bool {
-    left == right || [left[1], left[0]] == right
-}
-
 enum Predecessors {
     AllUnmapped,
     Single(NodeIndex),
     Multiple(Vec<NodeIndex>),
 }
 
-fn predecessors_for(
-    qubits: &[LogicalQubit],
-    wire_pos: &BTreeMap<LogicalQubit, NodeIndex>,
-) -> Predecessors {
-    let mut parents = Vec::new();
-    for logical in qubits {
-        if let Some(parent) = wire_pos.get(logical).copied() {
-            if !parents.contains(&parent) {
-                parents.push(parent);
-            }
-        }
-    }
-
-    match parents.as_slice() {
-        [] => Predecessors::AllUnmapped,
-        [parent] => Predecessors::Single(*parent),
-        _ => Predecessors::Multiple(parents),
-    }
-}
-
 fn kind_from_operation(operation: &Operation) -> Result<SabreNodeKind, CompilerError> {
     match &operation.instruction {
-        Instruction::ControlFlowGate(flow) => match flow {
-            ControlFlow::IfElse(gate) => Ok(SabreNodeKind::ControlFlow(SabreControlFlow::IfElse {
-                condition: gate.condition(),
-                true_body: SabreDag::from_operations(gate.true_body())?,
-                false_body: gate
-                    .false_body()
-                    .map(SabreDag::from_operations)
+        Instruction::ClassicalControl(flow) => match flow {
+            ClassicalControlOp::If(op) => Ok(SabreNodeKind::ControlFlow(SabreControlFlow::If {
+                condition: op.condition().clone(),
+                then_body: SabreDag::from_operations(op.then_body().operations())?,
+                else_body: op
+                    .else_body()
+                    .map(|body| SabreDag::from_operations(body.operations()))
                     .transpose()?,
             })),
-            ControlFlow::WhileLoop(gate) => {
-                Ok(SabreNodeKind::ControlFlow(SabreControlFlow::WhileLoop {
-                    condition: gate.condition(),
-                    body: SabreDag::from_operations(gate.body())?,
+            ClassicalControlOp::While(op) => {
+                Ok(SabreNodeKind::ControlFlow(SabreControlFlow::While {
+                    condition: op.condition().clone(),
+                    body: SabreDag::from_operations(op.body().operations())?,
                 }))
+            }
+            ClassicalControlOp::For(op) => Ok(SabreNodeKind::ControlFlow(SabreControlFlow::For {
+                var: op.var(),
+                start: op.start().clone(),
+                stop: op.stop().clone(),
+                step: op.step().clone(),
+                body: SabreDag::from_operations(op.body().operations())?,
+            })),
+            ClassicalControlOp::Switch(op) => {
+                let cases = op
+                    .cases()
+                    .iter()
+                    .map(|case| {
+                        Ok(SabreSwitchCase {
+                            value: case.value(),
+                            body: SabreDag::from_operations(case.body().operations())?,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, CompilerError>>()?;
+                let default = op
+                    .default()
+                    .map(|body| SabreDag::from_operations(body.operations()))
+                    .transpose()?;
+                Ok(SabreNodeKind::ControlFlow(SabreControlFlow::Switch {
+                    target: op.target().clone(),
+                    cases,
+                    default,
+                }))
+            }
+            ClassicalControlOp::Break | ClassicalControlOp::Continue => {
+                Ok(SabreNodeKind::Synchronize)
             }
         },
         Instruction::Directive(_) | Instruction::Delay => Ok(SabreNodeKind::Synchronize),

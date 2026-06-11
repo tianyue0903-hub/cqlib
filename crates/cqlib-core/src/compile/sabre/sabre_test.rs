@@ -12,13 +12,11 @@
 
 use super::*;
 use crate::circuit::{
-    Circuit, CircuitParam, ConditionView, ControlFlow, Instruction, Operation, Parameter,
-    ParameterValue, Qubit, StandardGate,
+    Circuit, CircuitParam, ClassicalControlOp, ClassicalExpr, ClassicalType, Instruction,
+    Operation, Parameter, ParameterValue, Qubit, StandardGate,
 };
 use crate::compile::CompilerError;
-use crate::compile::transform::layout::LayoutObjective;
 use crate::device::{Device, Layout, LogicalQubit, PhysicalQubit, Topology};
-use smallvec::smallvec;
 use std::collections::HashSet;
 
 #[test]
@@ -167,25 +165,6 @@ fn route_may_fold_consecutive_two_qubit_gates_on_same_pair() {
 }
 
 #[test]
-fn refine_layout_is_reproducible_for_same_seed() {
-    let device = Device::line("line", 4).unwrap();
-    let objective = LayoutObjective::topology_only();
-    let config = SabreConfig::deterministic_seeded(7);
-    let mut circuit = Circuit::new(3);
-    circuit.cx(Qubit::new(0), Qubit::new(2)).unwrap();
-    circuit.cx(Qubit::new(1), Qubit::new(2)).unwrap();
-
-    let first = sabre_refine_layout(&circuit, &device, None, &objective, &config).unwrap();
-    let second = sabre_refine_layout(&circuit, &device, None, &objective, &config).unwrap();
-
-    assert_eq!(first.layout.l2p_map(), second.layout.l2p_map());
-    assert_eq!(
-        first.score.as_ref().map(|score| score.total),
-        second.score.as_ref().map(|score| score.total)
-    );
-}
-
-#[test]
 fn route_with_decay_is_reproducible_for_same_seed() {
     let device = Device::line("line", 5).unwrap();
     let layout = Layout::from_pairs(&[(0, 0), (1, 4), (2, 2)], 5).unwrap();
@@ -226,15 +205,12 @@ fn control_flow_body_is_routed_and_restored() {
     let device = Device::line("line", 3).unwrap();
     let layout = Layout::from_pairs(&[(0, 0), (1, 2)], 3).unwrap();
     let config = SabreConfig::deterministic_seeded(7);
-    let true_body = vec![Operation {
-        instruction: Instruction::Standard(StandardGate::CX),
-        qubits: smallvec![Qubit::new(0), Qubit::new(1)],
-        params: smallvec![],
-        label: None,
-    }];
     let mut circuit = Circuit::new(2);
     circuit
-        .if_else(ConditionView::new(Qubit::new(0), 1), true_body, None)
+        .if_(ClassicalExpr::bool_literal(true), |body| {
+            body.cx(Qubit::new(0), Qubit::new(1))?;
+            Ok(())
+        })
         .unwrap();
 
     let result = sabre_route(&circuit, &device, &layout, &config).unwrap();
@@ -242,8 +218,8 @@ fn control_flow_body_is_routed_and_restored() {
     assert_eq!(result.final_layout.l2p_map(), layout.l2p_map());
     assert_eq!(result.diagnostics.control_flow_blocks_routed, 1);
     match &result.circuit.operations()[0].instruction {
-        Instruction::ControlFlowGate(crate::circuit::ControlFlow::IfElse(gate)) => {
-            assert!(gate.true_body().iter().any(|operation| matches!(
+        Instruction::ClassicalControl(ClassicalControlOp::If(op)) => {
+            assert!(op.then_body().operations().iter().any(|operation| matches!(
                 operation.instruction,
                 Instruction::Standard(StandardGate::SWAP)
             )));
@@ -253,18 +229,53 @@ fn control_flow_body_is_routed_and_restored() {
 }
 
 #[test]
+fn measurement_driven_control_flow_preserves_classical_identity() {
+    let device = Device::line("line", 3).unwrap();
+    let layout = Layout::from_pairs(&[(0, 0), (1, 2)], 3).unwrap();
+    let config = SabreConfig::deterministic_seeded(7);
+    let mut circuit = Circuit::new(2);
+    let measured = circuit.measure(Qubit::new(0)).unwrap();
+    let condition = ClassicalExpr::bit_to_bool(measured.expr()).unwrap();
+    circuit
+        .if_(condition, |body| {
+            body.cx(Qubit::new(0), Qubit::new(1))?;
+            Ok(())
+        })
+        .unwrap();
+
+    let result = sabre_route(&circuit, &device, &layout, &config).unwrap();
+
+    assert_eq!(result.circuit.id(), circuit.id());
+    assert_eq!(
+        result.circuit.classical_values(),
+        circuit.classical_values()
+    );
+    result.circuit.validate().unwrap();
+    let Instruction::ClassicalControl(ClassicalControlOp::If(if_op)) =
+        &result.circuit.operations()[1].instruction
+    else {
+        panic!("expected routed if operation");
+    };
+    assert!(if_op.classical_value_reads().contains(&measured.value()));
+}
+
+#[test]
 fn if_else_routes_both_branches_and_restores_layout() {
     let device = Device::line("line", 3).unwrap();
     let layout = Layout::from_pairs(&[(0, 0), (1, 2)], 3).unwrap();
     let config = SabreConfig::deterministic_seeded(7);
-    let true_body = vec![cx_operation(0, 1)];
-    let false_body = vec![cx_operation(1, 0)];
     let mut circuit = Circuit::new(2);
     circuit
         .if_else(
-            ConditionView::new(Qubit::new(0), 1),
-            true_body,
-            Some(false_body),
+            ClassicalExpr::bool_literal(true),
+            |body| {
+                body.cx(Qubit::new(0), Qubit::new(1))?;
+                Ok(())
+            },
+            |body| {
+                body.cx(Qubit::new(1), Qubit::new(0))?;
+                Ok(())
+            },
         )
         .unwrap();
 
@@ -273,15 +284,21 @@ fn if_else_routes_both_branches_and_restores_layout() {
     assert_eq!(result.final_layout.l2p_map(), layout.l2p_map());
     assert_eq!(result.diagnostics.control_flow_blocks_routed, 2);
     match &result.circuit.operations()[0].instruction {
-        Instruction::ControlFlowGate(ControlFlow::IfElse(gate)) => {
-            assert!(gate.true_body().iter().any(|operation| matches!(
+        Instruction::ClassicalControl(ClassicalControlOp::If(op)) => {
+            assert!(op.then_body().operations().iter().any(|operation| matches!(
                 operation.instruction,
                 Instruction::Standard(StandardGate::SWAP)
             )));
-            assert!(gate.false_body().unwrap().iter().any(|operation| matches!(
-                operation.instruction,
-                Instruction::Standard(StandardGate::SWAP)
-            )));
+            assert!(
+                op.else_body()
+                    .unwrap()
+                    .operations()
+                    .iter()
+                    .any(|operation| matches!(
+                        operation.instruction,
+                        Instruction::Standard(StandardGate::SWAP)
+                    ))
+            );
         }
         other => panic!("expected routed if/else operation, got {other:?}"),
     }
@@ -294,10 +311,10 @@ fn empty_control_flow_bodies_route_without_layout_drift() {
     let config = SabreConfig::deterministic_seeded(7);
     let mut circuit = Circuit::new(2);
     circuit
-        .if_else(ConditionView::new(Qubit::new(0), 1), vec![], Some(vec![]))
+        .if_else(ClassicalExpr::bool_literal(true), |_| Ok(()), |_| Ok(()))
         .unwrap();
     circuit
-        .while_loop(ConditionView::new(Qubit::new(1), 1), vec![])
+        .while_(ClassicalExpr::bool_literal(false), |_| Ok(()))
         .unwrap();
 
     let result = sabre_route(&circuit, &device, &layout, &config).unwrap();
@@ -359,21 +376,6 @@ fn route_rejects_three_qubit_gate_before_routing() {
 
     assert!(
         matches!(error, CompilerError::InvalidInput(message) if message.contains("more than two qubits"))
-    );
-}
-
-#[test]
-fn refine_layout_rejects_more_logical_than_physical_qubits() {
-    let device = Device::line("line", 1).unwrap();
-    let objective = LayoutObjective::topology_only();
-    let config = SabreConfig::deterministic_seeded(7);
-    let mut circuit = Circuit::new(2);
-    circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
-
-    let error = sabre_refine_layout(&circuit, &device, None, &objective, &config).unwrap_err();
-
-    assert!(
-        matches!(error, CompilerError::InvalidInput(message) if message.contains("2 logical qubits") && message.contains("1 usable physical qubits"))
     );
 }
 
@@ -448,6 +450,48 @@ fn route_preserves_parameterized_gate_parameters() {
 }
 
 #[test]
+fn route_remaps_parameters_used_only_inside_control_flow_bodies() {
+    let device = Device::line("line", 2).unwrap();
+    let layout = Layout::from_pairs(&[(0, 0), (1, 1)], 2).unwrap();
+    let config = SabreConfig::deterministic_seeded(7);
+    let body_theta = Parameter::symbol("body_theta");
+    let top_theta = Parameter::symbol("top_theta");
+    let mut circuit = Circuit::new(2);
+    circuit
+        .if_(ClassicalExpr::bool_literal(true), |body| {
+            body.rx(Qubit::new(0), ParameterValue::Param(body_theta.clone()))?;
+            Ok(())
+        })
+        .unwrap();
+    circuit
+        .rz(Qubit::new(1), ParameterValue::Param(top_theta.clone()))
+        .unwrap();
+
+    let result = sabre_route(&circuit, &device, &layout, &config).unwrap();
+
+    let Instruction::ClassicalControl(ClassicalControlOp::If(if_op)) =
+        &result.circuit.operations()[0].instruction
+    else {
+        panic!("expected routed if operation");
+    };
+    let body_rx = &if_op.then_body().operations()[0];
+    assert_eq!(
+        result
+            .circuit
+            .resolve_parameter(&body_rx.params[0])
+            .unwrap(),
+        body_theta
+    );
+    assert_eq!(
+        result
+            .circuit
+            .resolve_parameter(&result.circuit.operations()[1].params[0])
+            .unwrap(),
+        top_theta
+    );
+}
+
+#[test]
 fn route_preserves_multiple_parameters_and_global_phase() {
     let device = Device::line("line", 3).unwrap();
     let layout = Layout::from_pairs(&[(0, 0), (1, 2)], 3).unwrap();
@@ -492,29 +536,81 @@ fn nested_control_flow_is_routed_and_restored() {
     let device = Device::line("line", 3).unwrap();
     let layout = Layout::from_pairs(&[(0, 0), (1, 2)], 3).unwrap();
     let config = SabreConfig::deterministic_seeded(7);
-    let while_body = vec![cx_operation(0, 1)];
-    let while_operation = Operation {
-        instruction: Instruction::ControlFlowGate(ControlFlow::while_loop(
-            ConditionView::new(Qubit::new(0), 1),
-            while_body,
-        )),
-        qubits: smallvec![Qubit::new(0), Qubit::new(1)],
-        params: smallvec![],
-        label: None,
-    };
     let mut circuit = Circuit::new(2);
     circuit
-        .if_else(
-            ConditionView::new(Qubit::new(0), 1),
-            vec![while_operation],
-            None,
-        )
+        .if_(ClassicalExpr::bool_literal(true), |then_body| {
+            then_body.while_(ClassicalExpr::bool_literal(true), |while_body| {
+                while_body.cx(Qubit::new(0), Qubit::new(1))?;
+                Ok(())
+            })?;
+            Ok(())
+        })
         .unwrap();
 
     let result = sabre_route(&circuit, &device, &layout, &config).unwrap();
 
     assert_eq!(result.final_layout.l2p_map(), layout.l2p_map());
     assert_eq!(result.diagnostics.control_flow_blocks_routed, 2);
+}
+
+#[test]
+fn for_and_switch_bodies_are_routed_with_control_transfers_preserved() {
+    let device = Device::line("line", 3).unwrap();
+    let layout = Layout::from_pairs(&[(0, 0), (1, 2)], 3).unwrap();
+    let config = SabreConfig::deterministic_seeded(7);
+    let mut circuit = Circuit::new(2);
+    let loop_var = circuit.var(ClassicalType::uint(2).unwrap());
+    circuit
+        .for_uint(
+            loop_var,
+            ClassicalExpr::uint_literal(2, 0).unwrap(),
+            ClassicalExpr::uint_literal(2, 2).unwrap(),
+            ClassicalExpr::uint_literal(2, 1).unwrap(),
+            |body, _| {
+                body.cx(Qubit::new(0), Qubit::new(1))?;
+                body.continue_loop()?;
+                Ok(())
+            },
+        )
+        .unwrap();
+    circuit
+        .switch(ClassicalExpr::uint_literal(2, 1).unwrap(), |switch| {
+            switch.value(1, |body| {
+                body.cx(Qubit::new(1), Qubit::new(0))?;
+                body.break_loop()?;
+                Ok(())
+            })?;
+            switch.default(|_| Ok(()))?;
+            Ok(())
+        })
+        .unwrap();
+
+    let result = sabre_route(&circuit, &device, &layout, &config).unwrap();
+
+    assert_eq!(result.final_layout.l2p_map(), layout.l2p_map());
+    assert_eq!(result.diagnostics.control_flow_blocks_routed, 3);
+    let Instruction::ClassicalControl(ClassicalControlOp::For(for_op)) =
+        &result.circuit.operations()[0].instruction
+    else {
+        panic!("expected routed for operation");
+    };
+    assert!(matches!(
+        for_op.body().operations().last().map(|op| &op.instruction),
+        Some(Instruction::ClassicalControl(ClassicalControlOp::Continue))
+    ));
+    let Instruction::ClassicalControl(ClassicalControlOp::Switch(switch_op)) =
+        &result.circuit.operations()[1].instruction
+    else {
+        panic!("expected routed switch operation");
+    };
+    assert!(matches!(
+        switch_op.cases()[0]
+            .body()
+            .operations()
+            .last()
+            .map(|op| &op.instruction),
+        Some(Instruction::ClassicalControl(ClassicalControlOp::Break))
+    ));
 }
 
 #[test]
@@ -575,37 +671,6 @@ fn fallback_triggers_when_attempt_limit_is_zero() {
 }
 
 #[test]
-fn refinement_with_multiple_iterations_is_no_worse_than_zero_iterations_for_seeded_case() {
-    let device = Device::line("line", 5).unwrap();
-    let objective = LayoutObjective::topology_only();
-    let mut circuit = Circuit::new(4);
-    circuit.cx(Qubit::new(0), Qubit::new(3)).unwrap();
-    circuit.cx(Qubit::new(1), Qubit::new(3)).unwrap();
-    circuit.cx(Qubit::new(0), Qubit::new(2)).unwrap();
-    let no_refinement = SabreConfig {
-        refinement_iterations: 0,
-        routing_trials: 3,
-        seed: Some(31),
-        ..SabreConfig::deterministic_seeded(7)
-    };
-    let refined = SabreConfig {
-        refinement_iterations: 2,
-        routing_trials: 3,
-        seed: Some(31),
-        ..SabreConfig::deterministic_seeded(7)
-    };
-
-    let base_layout =
-        sabre_refine_layout(&circuit, &device, None, &objective, &no_refinement).unwrap();
-    let refined_layout =
-        sabre_refine_layout(&circuit, &device, None, &objective, &refined).unwrap();
-    let base_route = sabre_route(&circuit, &device, &base_layout.layout, &no_refinement).unwrap();
-    let refined_route = sabre_route(&circuit, &device, &refined_layout.layout, &refined).unwrap();
-
-    assert!(refined_route.swap_count <= base_route.swap_count);
-}
-
-#[test]
 fn trial_objective_controls_quality_tie_breaking() {
     let left = super::routing::TrialQuality {
         swap_count: 1,
@@ -658,21 +723,21 @@ fn route_diagnostics_report_selected_quality_metrics() {
 }
 
 #[test]
-fn layout_scoring_trials_must_be_positive() {
+fn layout_only_trial_counts_do_not_block_routing() {
     let device = Device::line("line", 2).unwrap();
-    let objective = LayoutObjective::topology_only();
+    let layout = Layout::from_pairs(&[(0, 0), (1, 1)], 2).unwrap();
     let mut circuit = Circuit::new(2);
     circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
     let config = SabreConfig {
+        layout_trials: 0,
         layout_scoring_trials: 0,
         ..SabreConfig::deterministic_seeded(7)
     };
 
-    let error = sabre_refine_layout(&circuit, &device, None, &objective, &config).unwrap_err();
+    let result = sabre_route(&circuit, &device, &layout, &config).unwrap();
 
-    assert!(
-        matches!(error, CompilerError::InvalidInput(message) if message.contains("layout_scoring_trials"))
-    );
+    assert_eq!(result.swap_count, 0);
+    assert_eq!(result.diagnostics.trials_evaluated, config.routing_trials);
 }
 
 fn are_adjacent(left: Qubit, right: Qubit) -> bool {
@@ -697,13 +762,4 @@ fn operation_is_adjacent_on_grid(operation: &Operation, cols: u32) -> bool {
     let left = operation.qubits[0].id();
     let right = operation.qubits[1].id();
     left.abs_diff(right) == 1 && left / cols == right / cols || left.abs_diff(right) == cols
-}
-
-fn cx_operation(control: u32, target: u32) -> Operation {
-    Operation {
-        instruction: Instruction::Standard(StandardGate::CX),
-        qubits: smallvec![Qubit::new(control), Qubit::new(target)],
-        params: smallvec![],
-        label: None,
-    }
 }

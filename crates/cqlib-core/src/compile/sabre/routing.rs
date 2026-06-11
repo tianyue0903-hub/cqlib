@@ -13,13 +13,15 @@
 use super::dag::{SabreControlFlow, SabreDag, SabreNodeKind};
 use super::heuristic::{SabreConfig, SabreHeuristicConfig, SabreTrialObjective};
 use super::layer::Layer;
+use crate::circuit::value_instruction::storage_operation_to_value;
 use crate::circuit::{
-    Circuit, CircuitParam, ConditionView, ControlFlow, Instruction, Operation, ParameterValue,
-    Qubit, StandardGate,
+    Circuit, CircuitParam, ClassicalControlOp, ControlBody, ForOp, IfOp, Instruction, Operation,
+    Parameter, Qubit, StandardGate, SwitchCase, SwitchOp, WhileOp,
 };
 use crate::compile::CompilerError;
-use crate::compile::transform::layout::{PhysicalLayoutGraph, build_physical_layout_graph};
+use crate::compile::physical_target::PhysicalLayoutGraph;
 use crate::device::{Device, Layout, LogicalQubit, PhysicalQubit};
+use indexmap::IndexSet;
 use rand::rngs::StdRng;
 use rand::seq::IndexedRandom;
 use rand::{Rng, SeedableRng};
@@ -95,8 +97,8 @@ pub fn sabre_route(
     initial_layout: &Layout,
     config: &SabreConfig,
 ) -> Result<SabreRoutingResult, CompilerError> {
-    validate_config(config)?;
-    let physical = build_physical_layout_graph(device)?;
+    validate_routing_config(config)?;
+    let physical = PhysicalLayoutGraph::from_device(device)?;
     let target = RoutingTarget::from_physical(&physical)?;
     let logical_qubits = circuit
         .qubits()
@@ -129,18 +131,65 @@ pub fn sabre_route(
         })
         .expect("routing_trials is validated to be non-zero");
 
-    let mut routed = Circuit::from_qubits(
+    let mut parameter_order = IndexSet::<Parameter>::new();
+    for operation in &best.operations {
+        for param in &operation.params {
+            if let CircuitParam::Index(index) = param {
+                let parameter = circuit
+                    .parameters()
+                    .get_index(*index as usize)
+                    .cloned()
+                    .ok_or(crate::circuit::CircuitError::InvalidParameterIndex(*index))?;
+                parameter_order.insert(parameter);
+            }
+        }
+    }
+    for parameter in circuit.parameters() {
+        parameter_order.insert(parameter.clone());
+    }
+    let parameter_indices = circuit
+        .parameters()
+        .iter()
+        .map(|parameter| {
+            parameter_order
+                .get_index_of(parameter)
+                .expect("source parameters are included in routed parameter order")
+                as u32
+        })
+        .collect::<Vec<_>>();
+    let mapped_operations = best
+        .operations
+        .iter()
+        .map(|operation| remap_parameter_indices(operation, &parameter_indices))
+        .collect::<Result<Vec<_>, _>>()?;
+    let routed_operations = mapped_operations
+        .iter()
+        .map(|operation| {
+            storage_operation_to_value(operation.clone(), &|param| match param {
+                CircuitParam::Fixed(value) => Ok((*value).into()),
+                CircuitParam::Index(index) => parameter_order
+                    .get_index(*index as usize)
+                    .cloned()
+                    .map(Into::into)
+                    .ok_or(crate::circuit::CircuitError::InvalidParameterIndex(*index)),
+            })
+        })
+        .collect::<Result<Vec<_>, crate::circuit::CircuitError>>()?;
+    let mut routed = Circuit::from_operations(
         target
             .physical_qubits
             .iter()
             .copied()
             .map(PhysicalQubit::qubit)
             .collect(),
+        routed_operations,
+        Some(circuit.classical_vars().to_vec()),
+        Some(circuit.classical_values().to_vec()),
     )?;
-    routed.set_global_phase(circuit.global_phase());
-    for operation in &best.operations {
-        append_operation_to_circuit(&mut routed, operation, circuit)?;
+    for parameter in parameter_order {
+        routed.add_parameter(parameter);
     }
+    routed.set_global_phase(circuit.global_phase());
 
     Ok(SabreRoutingResult {
         circuit: routed,
@@ -158,21 +207,20 @@ pub fn sabre_route(
     })
 }
 
-/// Validates a SABRE configuration before layout refinement or routing.
+/// Validates a SABRE routing configuration.
+///
+/// This check intentionally ignores layout-refinement fields such as
+/// [`SabreConfig::layout_trials`] and [`SabreConfig::layout_scoring_trials`].
+/// Routing starts from a concrete initial layout and does not depend on those
+/// layout-only knobs.
 pub fn validate_config(config: &SabreConfig) -> Result<(), CompilerError> {
-    if config.layout_trials == 0 {
-        return Err(CompilerError::InvalidInput(
-            "sabre layout_trials must be greater than zero".to_string(),
-        ));
-    }
+    validate_routing_config(config)
+}
+
+fn validate_routing_config(config: &SabreConfig) -> Result<(), CompilerError> {
     if config.routing_trials == 0 {
         return Err(CompilerError::InvalidInput(
             "sabre routing_trials must be greater than zero".to_string(),
-        ));
-    }
-    if config.layout_scoring_trials == 0 {
-        return Err(CompilerError::InvalidInput(
-            "sabre layout_scoring_trials must be greater than zero".to_string(),
         ));
     }
     config.heuristic.validate()
@@ -224,18 +272,15 @@ pub(crate) fn route_trial_unchecked(
             state.apply_swap(best_swap.physical, target)?;
             current_swaps.push(best_swap.physical);
             let adjacent = |left, right| target.are_adjacent_by_index(left, right);
-            push_unique(
-                &mut routable_nodes,
-                state
-                    .front_layer
-                    .routable_node_on_index(best_swap.indices[0], &adjacent),
-            );
-            push_unique(
-                &mut routable_nodes,
-                state
-                    .front_layer
-                    .routable_node_on_index(best_swap.indices[1], &adjacent),
-            );
+            for candidate in best_swap
+                .indices
+                .into_iter()
+                .filter_map(|index| state.front_layer.routable_node_on_index(index, &adjacent))
+            {
+                if !routable_nodes.contains(&candidate) {
+                    routable_nodes.push(candidate);
+                }
+            }
 
             if let Some(increment) = heuristic.decay_increment {
                 search_steps_since_decay_reset += 1;
@@ -308,7 +353,7 @@ pub fn normalize_initial_layout(
     device: &Device,
     initial_layout: &Layout,
 ) -> Result<Layout, CompilerError> {
-    let physical = build_physical_layout_graph(device)?;
+    let physical = PhysicalLayoutGraph::from_device(device)?;
     let target = RoutingTarget::from_physical(&physical)?;
     normalize_initial_layout_for_target(logical_qubits, &target, initial_layout)
 }
@@ -353,7 +398,7 @@ pub fn validate_reachable_interactions(
     device: &Device,
     initial_layout: &Layout,
 ) -> Result<(), CompilerError> {
-    let physical = build_physical_layout_graph(device)?;
+    let physical = PhysicalLayoutGraph::from_device(device)?;
     let target = RoutingTarget::from_physical(&physical)?;
     let logical_qubits = circuit
         .qubits()
@@ -690,23 +735,19 @@ impl RoutingState {
             return Ok(());
         };
         let routed = match flow {
-            SabreControlFlow::IfElse {
+            SabreControlFlow::If {
                 condition,
-                true_body,
-                false_body,
+                then_body,
+                else_body,
             } => {
-                let mapped_condition = ConditionView::new(
-                    physical_for(&self.layout, LogicalQubit::from_qubit(condition.qubit))?.qubit(),
-                    condition.target,
-                );
-                let true_result = route_control_flow_body(
-                    true_body,
+                let then_result = route_control_flow_body(
+                    then_body,
                     target,
                     &self.layout,
                     heuristic,
                     output.next_nested_seed(),
                 )?;
-                let false_result = false_body
+                let else_result = else_body
                     .as_ref()
                     .map(|body| {
                         route_control_flow_body(
@@ -718,26 +759,24 @@ impl RoutingState {
                         )
                     })
                     .transpose()?;
-                output.merge_nested(&true_result);
-                if let Some(result) = &false_result {
+                output.merge_nested(&then_result);
+                if let Some(result) = &else_result {
                     output.merge_nested(result);
                 }
-                let true_ops = true_result.operations;
-                let false_ops = false_result.map(|result| result.operations);
-                let flow = ControlFlow::if_else(mapped_condition, true_ops, false_ops);
+                let flow = ClassicalControlOp::If(IfOp::new(
+                    condition.clone(),
+                    ControlBody::new(then_result.operations),
+                    else_result.map(|result| ControlBody::new(result.operations)),
+                )?);
                 let qubits = flow.used_qubits().into_iter().collect();
                 Operation {
-                    instruction: Instruction::ControlFlowGate(flow),
+                    instruction: Instruction::ClassicalControl(flow),
                     qubits,
                     params: SmallVec::new(),
                     label: first.label.clone(),
                 }
             }
-            SabreControlFlow::WhileLoop { condition, body } => {
-                let mapped_condition = ConditionView::new(
-                    physical_for(&self.layout, LogicalQubit::from_qubit(condition.qubit))?.qubit(),
-                    condition.target,
-                );
+            SabreControlFlow::While { condition, body } => {
                 let body_result = route_control_flow_body(
                     body,
                     target,
@@ -746,11 +785,91 @@ impl RoutingState {
                     output.next_nested_seed(),
                 )?;
                 output.merge_nested(&body_result);
-                let body_ops = body_result.operations;
-                let flow = ControlFlow::while_loop(mapped_condition, body_ops);
+                let flow = ClassicalControlOp::While(WhileOp::new(
+                    condition.clone(),
+                    ControlBody::new(body_result.operations),
+                )?);
                 let qubits = flow.used_qubits().into_iter().collect();
                 Operation {
-                    instruction: Instruction::ControlFlowGate(flow),
+                    instruction: Instruction::ClassicalControl(flow),
+                    qubits,
+                    params: SmallVec::new(),
+                    label: first.label.clone(),
+                }
+            }
+            SabreControlFlow::For {
+                var,
+                start,
+                stop,
+                step,
+                body,
+            } => {
+                let body_result = route_control_flow_body(
+                    body,
+                    target,
+                    &self.layout,
+                    heuristic,
+                    output.next_nested_seed(),
+                )?;
+                output.merge_nested(&body_result);
+                let flow = ClassicalControlOp::For(ForOp::new(
+                    *var,
+                    start.clone(),
+                    stop.clone(),
+                    step.clone(),
+                    ControlBody::new(body_result.operations),
+                )?);
+                let qubits = flow.used_qubits().into_iter().collect();
+                Operation {
+                    instruction: Instruction::ClassicalControl(flow),
+                    qubits,
+                    params: SmallVec::new(),
+                    label: first.label.clone(),
+                }
+            }
+            SabreControlFlow::Switch {
+                target: switch_target,
+                cases,
+                default,
+            } => {
+                let mut routed_cases = Vec::with_capacity(cases.len());
+                for case in cases {
+                    let result = route_control_flow_body(
+                        &case.body,
+                        target,
+                        &self.layout,
+                        heuristic,
+                        output.next_nested_seed(),
+                    )?;
+                    output.merge_nested(&result);
+                    routed_cases.push(SwitchCase::new(
+                        case.value,
+                        ControlBody::new(result.operations),
+                    ));
+                }
+                let routed_default = default
+                    .as_ref()
+                    .map(|body| {
+                        route_control_flow_body(
+                            body,
+                            target,
+                            &self.layout,
+                            heuristic,
+                            output.next_nested_seed(),
+                        )
+                    })
+                    .transpose()?;
+                if let Some(result) = &routed_default {
+                    output.merge_nested(result);
+                }
+                let flow = ClassicalControlOp::Switch(SwitchOp::new(
+                    switch_target.clone(),
+                    routed_cases,
+                    routed_default.map(|result| ControlBody::new(result.operations)),
+                )?);
+                let qubits = flow.used_qubits().into_iter().collect();
+                Operation {
+                    instruction: Instruction::ClassicalControl(flow),
                     qubits,
                     params: SmallVec::new(),
                     label: first.label.clone(),
@@ -972,16 +1091,14 @@ impl RoutingState {
                 target.physical_index(swap[0])?,
                 target.physical_index(swap[1])?,
             ];
-            push_unique(
-                &mut routed,
-                self.front_layer
-                    .routable_node_on_index(swap_indices[0], &adjacent),
-            );
-            push_unique(
-                &mut routed,
-                self.front_layer
-                    .routable_node_on_index(swap_indices[1], &adjacent),
-            );
+            for candidate in swap_indices
+                .into_iter()
+                .filter_map(|index| self.front_layer.routable_node_on_index(index, &adjacent))
+            {
+                if !routed.contains(&candidate) {
+                    routed.push(candidate);
+                }
+            }
         }
 
         if routed.is_empty() {
@@ -1046,9 +1163,20 @@ fn route_control_flow_body(
             ))
         })?;
     }
+    let control_transfer = matches!(
+        result
+            .operations
+            .last()
+            .map(|operation| &operation.instruction),
+        Some(Instruction::ClassicalControl(
+            ClassicalControlOp::Break | ClassicalControlOp::Continue
+        ))
+    )
+    .then(|| result.operations.pop().expect("last operation exists"));
     result
         .operations
         .extend(epilogue_swaps.iter().copied().map(swap_operation));
+    result.operations.extend(control_transfer);
     result.swap_count += epilogue_swaps.len();
     result.final_layout = layout;
     result.quality = trial_quality(&result.operations, result.swap_count);
@@ -1102,39 +1230,6 @@ fn restore_layout_swaps(
         .collect()
 }
 
-fn append_operation_to_circuit(
-    circuit: &mut Circuit,
-    operation: &Operation,
-    context: &Circuit,
-) -> Result<(), CompilerError> {
-    let params = operation
-        .params
-        .iter()
-        .map(|param| match param {
-            CircuitParam::Fixed(value) => Ok(ParameterValue::Fixed(*value)),
-            CircuitParam::Index(index) => context
-                .parameters()
-                .get_index(*index as usize)
-                .cloned()
-                .map(ParameterValue::Param)
-                .ok_or_else(|| {
-                    CompilerError::InvalidInput(format!(
-                        "operation references parameter index {} outside the source circuit",
-                        index
-                    ))
-                }),
-        })
-        .collect::<Result<Vec<_>, CompilerError>>()?;
-    circuit
-        .append(
-            operation.instruction.clone(),
-            operation.qubits.iter().copied(),
-            params,
-            operation.label.as_deref(),
-        )
-        .map_err(CompilerError::from)
-}
-
 fn map_operation(operation: &Operation, layout: &Layout) -> Result<Operation, CompilerError> {
     Ok(Operation {
         instruction: operation.instruction.clone(),
@@ -1149,6 +1244,104 @@ fn map_operation(operation: &Operation, layout: &Layout) -> Result<Operation, Co
         params: operation.params.clone(),
         label: operation.label.clone(),
     })
+}
+
+fn remap_parameter_indices(
+    operation: &Operation,
+    parameter_indices: &[u32],
+) -> Result<Operation, CompilerError> {
+    let mut mapped = operation.clone();
+    for param in &mut mapped.params {
+        if let CircuitParam::Index(index) = param {
+            *index = *parameter_indices
+                .get(*index as usize)
+                .ok_or(crate::circuit::CircuitError::InvalidParameterIndex(*index))?;
+        }
+    }
+    mapped.instruction = match &operation.instruction {
+        Instruction::ClassicalControl(ClassicalControlOp::If(op)) => {
+            let then_body = op
+                .then_body()
+                .operations()
+                .iter()
+                .map(|operation| remap_parameter_indices(operation, parameter_indices))
+                .collect::<Result<Vec<_>, _>>()?;
+            let else_body = op
+                .else_body()
+                .map(|body| {
+                    body.operations()
+                        .iter()
+                        .map(|operation| remap_parameter_indices(operation, parameter_indices))
+                        .collect::<Result<Vec<_>, _>>()
+                        .map(ControlBody::new)
+                })
+                .transpose()?;
+            Instruction::ClassicalControl(ClassicalControlOp::If(IfOp::new(
+                op.condition().clone(),
+                ControlBody::new(then_body),
+                else_body,
+            )?))
+        }
+        Instruction::ClassicalControl(ClassicalControlOp::While(op)) => {
+            let body = op
+                .body()
+                .operations()
+                .iter()
+                .map(|operation| remap_parameter_indices(operation, parameter_indices))
+                .collect::<Result<Vec<_>, _>>()?;
+            Instruction::ClassicalControl(ClassicalControlOp::While(WhileOp::new(
+                op.condition().clone(),
+                ControlBody::new(body),
+            )?))
+        }
+        Instruction::ClassicalControl(ClassicalControlOp::For(op)) => {
+            let body = op
+                .body()
+                .operations()
+                .iter()
+                .map(|operation| remap_parameter_indices(operation, parameter_indices))
+                .collect::<Result<Vec<_>, _>>()?;
+            Instruction::ClassicalControl(ClassicalControlOp::For(ForOp::new(
+                op.var(),
+                op.start().clone(),
+                op.stop().clone(),
+                op.step().clone(),
+                ControlBody::new(body),
+            )?))
+        }
+        Instruction::ClassicalControl(ClassicalControlOp::Switch(op)) => {
+            let cases = op
+                .cases()
+                .iter()
+                .map(|case| {
+                    let body = case
+                        .body()
+                        .operations()
+                        .iter()
+                        .map(|operation| remap_parameter_indices(operation, parameter_indices))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    Ok(SwitchCase::new(case.value(), ControlBody::new(body)))
+                })
+                .collect::<Result<Vec<_>, CompilerError>>()?;
+            let default = op
+                .default()
+                .map(|body| {
+                    body.operations()
+                        .iter()
+                        .map(|operation| remap_parameter_indices(operation, parameter_indices))
+                        .collect::<Result<Vec<_>, _>>()
+                        .map(ControlBody::new)
+                })
+                .transpose()?;
+            Instruction::ClassicalControl(ClassicalControlOp::Switch(SwitchOp::new(
+                op.target().clone(),
+                cases,
+                default,
+            )?))
+        }
+        _ => operation.instruction.clone(),
+    };
+    Ok(mapped)
 }
 
 fn physical_for(layout: &Layout, logical: LogicalQubit) -> Result<PhysicalQubit, CompilerError> {
@@ -1171,18 +1364,28 @@ pub(crate) fn validate_reachable_interactions_for_target(
                 let right = physical_for(layout, pair[1])?;
                 target.distance(left, right)?;
             }
-            SabreNodeKind::ControlFlow(SabreControlFlow::IfElse {
-                true_body,
-                false_body,
+            SabreNodeKind::ControlFlow(SabreControlFlow::If {
+                then_body,
+                else_body,
                 ..
             }) => {
-                validate_reachable_interactions_for_target(true_body, target, layout)?;
-                if let Some(false_body) = false_body {
-                    validate_reachable_interactions_for_target(false_body, target, layout)?;
+                validate_reachable_interactions_for_target(then_body, target, layout)?;
+                if let Some(else_body) = else_body {
+                    validate_reachable_interactions_for_target(else_body, target, layout)?;
                 }
             }
-            SabreNodeKind::ControlFlow(SabreControlFlow::WhileLoop { body, .. }) => {
+            SabreNodeKind::ControlFlow(
+                SabreControlFlow::While { body, .. } | SabreControlFlow::For { body, .. },
+            ) => {
                 validate_reachable_interactions_for_target(body, target, layout)?;
+            }
+            SabreNodeKind::ControlFlow(SabreControlFlow::Switch { cases, default, .. }) => {
+                for case in cases {
+                    validate_reachable_interactions_for_target(&case.body, target, layout)?;
+                }
+                if let Some(default) = default {
+                    validate_reachable_interactions_for_target(default, target, layout)?;
+                }
             }
             SabreNodeKind::Synchronize => {}
         }
@@ -1196,14 +1399,6 @@ fn swap_operation(swap: [PhysicalQubit; 2]) -> Operation {
         qubits: smallvec![swap[0].qubit(), swap[1].qubit()],
         params: SmallVec::new(),
         label: None,
-    }
-}
-
-fn push_unique(nodes: &mut Vec<NodeIndex>, node: Option<NodeIndex>) {
-    if let Some(node) = node {
-        if !nodes.contains(&node) {
-            nodes.push(node);
-        }
     }
 }
 
@@ -1274,12 +1469,31 @@ fn two_qubit_depth(operations: &[Operation]) -> usize {
 
 fn operation_local_two_qubit_depth(operation: &Operation) -> usize {
     match &operation.instruction {
-        Instruction::ControlFlowGate(ControlFlow::IfElse(gate)) => {
-            let true_depth = two_qubit_depth(gate.true_body());
-            let false_depth = gate.false_body().map(two_qubit_depth).unwrap_or(0);
-            true_depth.max(false_depth)
+        Instruction::ClassicalControl(ClassicalControlOp::If(op)) => {
+            let then_depth = two_qubit_depth(op.then_body().operations());
+            let else_depth = op
+                .else_body()
+                .map(|body| two_qubit_depth(body.operations()))
+                .unwrap_or(0);
+            then_depth.max(else_depth)
         }
-        Instruction::ControlFlowGate(ControlFlow::WhileLoop(gate)) => two_qubit_depth(gate.body()),
+        Instruction::ClassicalControl(ClassicalControlOp::While(op)) => {
+            two_qubit_depth(op.body().operations())
+        }
+        Instruction::ClassicalControl(ClassicalControlOp::For(op)) => {
+            two_qubit_depth(op.body().operations())
+        }
+        Instruction::ClassicalControl(ClassicalControlOp::Switch(op)) => op
+            .cases()
+            .iter()
+            .map(|case| two_qubit_depth(case.body().operations()))
+            .chain(
+                op.default()
+                    .into_iter()
+                    .map(|body| two_qubit_depth(body.operations())),
+            )
+            .max()
+            .unwrap_or(0),
         _ if operation.qubits.len() == 2 => 1,
         _ => 0,
     }
@@ -1290,12 +1504,26 @@ fn operation_count(operations: &[Operation]) -> usize {
         .iter()
         .map(|operation| {
             1 + match &operation.instruction {
-                Instruction::ControlFlowGate(ControlFlow::IfElse(gate)) => {
-                    operation_count(gate.true_body())
-                        + gate.false_body().map(operation_count).unwrap_or(0)
+                Instruction::ClassicalControl(ClassicalControlOp::If(op)) => {
+                    operation_count(op.then_body().operations())
+                        + op.else_body()
+                            .map(|body| operation_count(body.operations()))
+                            .unwrap_or(0)
                 }
-                Instruction::ControlFlowGate(ControlFlow::WhileLoop(gate)) => {
-                    operation_count(gate.body())
+                Instruction::ClassicalControl(ClassicalControlOp::While(op)) => {
+                    operation_count(op.body().operations())
+                }
+                Instruction::ClassicalControl(ClassicalControlOp::For(op)) => {
+                    operation_count(op.body().operations())
+                }
+                Instruction::ClassicalControl(ClassicalControlOp::Switch(op)) => {
+                    op.cases()
+                        .iter()
+                        .map(|case| operation_count(case.body().operations()))
+                        .sum::<usize>()
+                        + op.default()
+                            .map(|body| operation_count(body.operations()))
+                            .unwrap_or(0)
                 }
                 _ => 0,
             }

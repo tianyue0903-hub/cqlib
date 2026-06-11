@@ -10,13 +10,13 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
-//! SABRE layout refinement and routing core.
+//! SABRE routing core.
 //!
 //! SABRE is a SWAP-based bidirectional heuristic search for mapping logical
 //! qubits onto a device with limited two-qubit connectivity. The algorithm
 //! incrementally routes executable two-qubit operations, scores candidate SWAPs
-//! with current and lookahead interaction distances, and uses forward/backward
-//! trial routing to improve the initial layout before final routing.
+//! with current and lookahead interaction distances, and selects the best
+//! routed circuit from deterministic or seeded routing trials.
 //!
 //! This implementation follows the original SABRE structure and incorporates
 //! selected LightSABRE/Qiskit-style production enhancements: deterministic
@@ -43,15 +43,9 @@
 //!
 //! # Entry Points
 //!
-//! - [`sabre_refine_layout`] evaluates deterministic and randomized initial
-//!   layout candidates with forward/backward refinement and returns the best
-//!   layout according to final-route SWAP count plus the supplied layout
-//!   objective as a tie-breaker.
 //! - [`sabre_route`] routes a circuit from a supplied initial layout and returns
 //!   a physical circuit with inserted SWAP operations, the final layout, and
 //!   diagnostics.
-//! - [`sabre_layout_and_route`] combines layout refinement and final routing for
-//!   callers that want the complete SABRE path.
 //!
 //! # Example
 //!
@@ -104,12 +98,13 @@
 mod dag;
 mod heuristic;
 mod layer;
-mod refine;
 mod routing;
 
+pub(crate) use dag::SabreDag;
 pub use heuristic::{SabreConfig, SabreHeuristicConfig, SabreTrialObjective};
-pub use refine::{
-    SabreCompileResult, sabre_layout_and_route, sabre_refine_layout, sabre_refine_layout_prepared,
+pub(crate) use routing::{
+    RoutingTarget, TrialQuality, compare_trial_quality, normalize_initial_layout_for_target,
+    route_trial, route_trial_unchecked, trial_seeds, validate_reachable_interactions_for_target,
 };
 pub use routing::{SabreRoutingDiagnostics, SabreRoutingResult, sabre_route};
 pub use routing::{normalize_initial_layout, validate_config, validate_reachable_interactions};
