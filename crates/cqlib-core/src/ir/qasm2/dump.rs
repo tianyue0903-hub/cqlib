@@ -19,7 +19,7 @@
 //!
 //! - **Standard Gates**: Outputs all standard quantum gates with correct QASM syntax
 //! - **Custom Gates**: Outputs user-defined gates as gate definitions followed by invocations
-//! - **Control Flow**: Handles conditional (if-else) operations with proper QASM format
+//! - **Control Flow**: Handles the OpenQASM 2.0 `if (creg == integer)` subset
 //! - **Extended Gates**: Automatically includes definitions for non-standard gates (CRX, CRY, etc.)
 //! - **Parameter Formatting**: Formats floating-point parameters using common constants (pi, pi/2, etc.)
 //!
@@ -48,17 +48,20 @@
 //!
 //! ## Limitations
 //!
-//! - While loops are not supported in OpenQASM 2.0 and will return an error
-//! - Nested control flow is not supported
-//! - Measurements inside gate definitions are silently ignored (OpenQASM restriction)
+//! - General classical expressions and assignments are not supported by OpenQASM 2.0
+//! - Else branches, loops, switches, and nested control flow return an error
+//! - Measurements inside gate definitions return an error
 
 use crate::circuit::circuit_param::CircuitParam;
-use crate::circuit::gate::circuit_gate::{CircuitGate, FrozenCircuit};
-use crate::circuit::gate::control_flow::ControlFlow;
-use crate::circuit::gate::{Directive, Instruction, StandardGate};
+use crate::circuit::gate::{
+    CircuitGate, ClassicalDataOp, Directive, FrozenCircuit, Instruction, StandardGate,
+};
 use crate::circuit::operation::Operation;
 use crate::circuit::parameter::Parameter;
-use crate::circuit::{Circuit, Qubit};
+use crate::circuit::{
+    Circuit, ClassicalCast, ClassicalCompareOp, ClassicalControlOp, ClassicalExpr,
+    ClassicalExprKind, ClassicalType, ClassicalUnaryOp, ClassicalValue, ClassicalVar, Qubit,
+};
 use indexmap::IndexMap;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
@@ -77,14 +80,24 @@ pub enum QasmDumpError {
     IoError(String),
     /// Format error (invalid gate, parameter, or syntax generation failure)
     FormatError(String),
-    /// While loops are not supported in OpenQASM 2.0
-    WhileLoopNotSupported,
     /// Measure directives inside gate definitions are invalid in OpenQASM 2.0
     MeasureInGateNotAllowed,
     /// Invalid qubit index in quantum register
     InvalidQubitIndex(String),
-    /// Nested control flow (if inside if) is not supported
-    NestedControlFlowNotSupported,
+    /// A classical type cannot be represented by an OpenQASM 2.0 `creg`.
+    UnsupportedClassicalType(String),
+    /// A classical data operation cannot be represented in OpenQASM 2.0.
+    UnsupportedClassicalData(String),
+    /// A classical control operation cannot be represented in OpenQASM 2.0.
+    UnsupportedClassicalControl(String),
+    /// Distinct custom gate definitions use the same OpenQASM gate name.
+    ConflictingGateDefinition {
+        name: String,
+        existing_qubits: usize,
+        existing_params: usize,
+        conflicting_qubits: usize,
+        conflicting_params: usize,
+    },
 }
 
 impl std::fmt::Display for QasmDumpError {
@@ -92,16 +105,91 @@ impl std::fmt::Display for QasmDumpError {
         match self {
             QasmDumpError::IoError(s) => write!(f, "IO error: {}", s),
             QasmDumpError::FormatError(s) => write!(f, "Format error: {}", s),
-            QasmDumpError::WhileLoopNotSupported => {
-                write!(f, "While loops are not supported in OpenQASM 2.0")
-            }
             QasmDumpError::MeasureInGateNotAllowed => {
                 write!(f, "Measure inside gate definition is not allowed")
             }
             QasmDumpError::InvalidQubitIndex(s) => write!(f, "Invalid qubit index: {}", s),
-            QasmDumpError::NestedControlFlowNotSupported => {
-                write!(f, "Nested control flow is not supported")
+            QasmDumpError::UnsupportedClassicalType(s) => {
+                write!(f, "Unsupported OpenQASM 2.0 classical type: {s}")
             }
+            QasmDumpError::UnsupportedClassicalData(s) => {
+                write!(f, "Unsupported OpenQASM 2.0 classical data operation: {s}")
+            }
+            QasmDumpError::UnsupportedClassicalControl(s) => {
+                write!(
+                    f,
+                    "Unsupported OpenQASM 2.0 classical control operation: {s}"
+                )
+            }
+            QasmDumpError::ConflictingGateDefinition {
+                name,
+                existing_qubits,
+                existing_params,
+                conflicting_qubits,
+                conflicting_params,
+            } => write!(
+                f,
+                "Conflicting definitions for gate '{name}': existing definition has {existing_qubits} qubits and {existing_params} parameters, conflicting definition has {conflicting_qubits} qubits and {conflicting_params} parameters"
+            ),
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct ClassicalRegisterMap {
+    vars: HashMap<ClassicalVar, String>,
+    values: HashMap<ClassicalValue, String>,
+}
+
+impl ClassicalRegisterMap {
+    fn new(circuit: &Circuit, output: &mut String) -> Result<Self, QasmDumpError> {
+        let mut registers = Self::default();
+
+        for (id, ty) in circuit.classical_vars().iter().copied().enumerate() {
+            let width = qasm_register_width(ty)?;
+            let name = format!("c{id}");
+            writeln!(output, "creg {name}[{width}];")?;
+            registers
+                .vars
+                .insert(ClassicalVar::new(circuit.id(), id as u32, ty), name);
+        }
+        for (id, ty) in circuit.classical_values().iter().copied().enumerate() {
+            let width = qasm_register_width(ty)?;
+            let name = format!("v{id}");
+            writeln!(output, "creg {name}[{width}];")?;
+            registers
+                .values
+                .insert(ClassicalValue::new(circuit.id(), id as u32, ty), name);
+        }
+
+        Ok(registers)
+    }
+
+    fn var(&self, var: ClassicalVar) -> Result<&str, QasmDumpError> {
+        self.vars.get(&var).map(String::as_str).ok_or_else(|| {
+            QasmDumpError::UnsupportedClassicalData(format!(
+                "classical variable {} is not owned by the circuit",
+                var.index()
+            ))
+        })
+    }
+
+    fn value(&self, value: ClassicalValue) -> Result<&str, QasmDumpError> {
+        self.values.get(&value).map(String::as_str).ok_or_else(|| {
+            QasmDumpError::UnsupportedClassicalData(format!(
+                "classical value {} is not owned by the circuit",
+                value.index()
+            ))
+        })
+    }
+}
+
+fn qasm_register_width(ty: ClassicalType) -> Result<u32, QasmDumpError> {
+    match ty {
+        ClassicalType::Bit => Ok(1),
+        ClassicalType::BitVec(width) => Ok(width.get()),
+        ClassicalType::Bool | ClassicalType::UInt(_) => {
+            Err(QasmDumpError::UnsupportedClassicalType(format!("{ty:?}")))
         }
     }
 }
@@ -135,18 +223,7 @@ pub fn dumps(circuit: &Circuit) -> Result<String, QasmDumpError> {
     writeln!(&mut output, "OPENQASM 2.0;")?;
     writeln!(&mut output, "include \"qelib1.inc\";\n")?;
     writeln!(&mut output, "qreg q[{}];", circuit.num_qubits())?;
-
-    // Collect all qubits used in control flow conditions
-    let mut conditional_qubits: HashSet<usize> = HashSet::new();
-    collect_conditional_qubits(circuit, &mut conditional_qubits);
-
-    // For OpenQASM 2.0 compliance, create single-bit registers for conditional qubits
-    // Each conditional qubit gets its own register named c{idx} with size 1
-    for idx in 0..circuit.num_qubits() {
-        if conditional_qubits.contains(&(idx)) {
-            writeln!(&mut output, "creg c{}[1];", idx)?;
-        }
-    }
+    let classical_registers = ClassicalRegisterMap::new(circuit, &mut output)?;
     writeln!(&mut output)?;
 
     // Output global phase as a comment (OpenQASM 2.0 does not have a standard directive for this)
@@ -195,7 +272,7 @@ pub fn dumps(circuit: &Circuit) -> Result<String, QasmDumpError> {
         &mut unitary_gate_defs,
         &mut opaque_unitary_gates,
         &mut has_delay,
-    );
+    )?;
 
     // Output CircuitGate definitions
     for gate in defined_gates.values() {
@@ -236,62 +313,10 @@ pub fn dumps(circuit: &Circuit) -> Result<String, QasmDumpError> {
         &mut output,
         &qubit_map,
         &param_map,
-        &conditional_qubits,
+        &classical_registers,
     )?;
 
     Ok(output)
-}
-
-/// Collect all qubits that are used in control flow conditions (If/While)
-fn collect_conditional_qubits(circuit: &Circuit, qubits: &mut HashSet<usize>) {
-    for op in circuit.operations() {
-        match &op.instruction {
-            Instruction::ControlFlowGate(cf) => match cf {
-                ControlFlow::IfElse(if_else) => {
-                    qubits.insert(if_else.condition().qubit.index());
-                    // Recurse into true body
-                    for body_op in if_else.true_body() {
-                        collect_conditional_qubits_from_op(body_op, qubits);
-                    }
-                    // Recurse into false body
-                    if let Some(false_body) = if_else.false_body() {
-                        for body_op in false_body {
-                            collect_conditional_qubits_from_op(body_op, qubits);
-                        }
-                    }
-                }
-                ControlFlow::WhileLoop(while_loop) => {
-                    qubits.insert(while_loop.condition().qubit.index());
-                    for body_op in while_loop.body() {
-                        collect_conditional_qubits_from_op(body_op, qubits);
-                    }
-                }
-            },
-            Instruction::CircuitGate(cg) => {
-                collect_conditional_qubits(&cg.circuit.circuit, qubits);
-            }
-            Instruction::UnitaryGate(ug) => {
-                if let Some(fc) = ug.circuit() {
-                    collect_conditional_qubits(&fc.circuit, qubits);
-                }
-            }
-            _ => {}
-        }
-    }
-}
-
-/// Helper to collect conditional qubits from a single operation
-fn collect_conditional_qubits_from_op(op: &Operation, qubits: &mut HashSet<usize>) {
-    if let Instruction::ControlFlowGate(cf) = &op.instruction {
-        match cf {
-            ControlFlow::IfElse(if_else) => {
-                qubits.insert(if_else.condition().qubit.index());
-            }
-            ControlFlow::WhileLoop(while_loop) => {
-                qubits.insert(while_loop.condition().qubit.index());
-            }
-        }
-    }
 }
 
 /// Collects all custom gate definitions from a circuit for output.
@@ -308,8 +333,24 @@ fn collect_gates(
     unitary_gate_defs: &mut IndexMap<String, Arc<FrozenCircuit>>,
     opaque_unitary_gates: &mut IndexMap<String, u16>,
     has_delay: &mut bool,
-) {
-    for op in circuit.operations() {
+) -> Result<(), QasmDumpError> {
+    collect_gates_from_operations(
+        circuit.operations(),
+        defined_gates,
+        unitary_gate_defs,
+        opaque_unitary_gates,
+        has_delay,
+    )
+}
+
+fn collect_gates_from_operations(
+    operations: &[Operation],
+    defined_gates: &mut IndexMap<String, CircuitGate>,
+    unitary_gate_defs: &mut IndexMap<String, Arc<FrozenCircuit>>,
+    opaque_unitary_gates: &mut IndexMap<String, u16>,
+    has_delay: &mut bool,
+) -> Result<(), QasmDumpError> {
+    for op in operations {
         match &op.instruction {
             Instruction::CircuitGate(cg) => {
                 // Recurse first (Post-order traversal ensures dependencies are collected first)
@@ -319,23 +360,18 @@ fn collect_gates(
                     unitary_gate_defs,
                     opaque_unitary_gates,
                     has_delay,
-                );
+                )?;
 
                 if let Some(existing) = defined_gates.get(cg.name.as_str()) {
-                    // Basic collision detection: Check if interface matches
-                    if existing.num_qubits() != cg.num_qubits()
-                        || existing.num_params() != cg.num_params()
-                    {
-                        eprintln!(
-                            "Warning: Gate name collision detected for '{}'. Existing: (q={}, p={}), New: (q={}, p={}). The existing definition will be used.",
-                            cg.name,
-                            existing.num_qubits(),
-                            existing.num_params(),
-                            cg.num_qubits(),
-                            cg.num_params()
-                        );
+                    if !Arc::ptr_eq(&existing.circuit, &cg.circuit) {
+                        return Err(QasmDumpError::ConflictingGateDefinition {
+                            name: cg.name.to_string(),
+                            existing_qubits: existing.num_qubits(),
+                            existing_params: existing.num_params(),
+                            conflicting_qubits: cg.num_qubits(),
+                            conflicting_params: cg.num_params(),
+                        });
                     }
-                    // Deep structural comparison is expensive and requires PartialEq on Circuit, skipping for now.
                 } else {
                     defined_gates.insert(cg.name.to_string(), *cg.clone());
                 }
@@ -349,7 +385,7 @@ fn collect_gates(
                         unitary_gate_defs,
                         opaque_unitary_gates,
                         has_delay,
-                    );
+                    )?;
 
                     // Register this UnitaryGate as a gate definition
                     let label = ug.label().to_string();
@@ -367,12 +403,76 @@ fn collect_gates(
             Instruction::Delay => {
                 *has_delay = true;
             }
+            Instruction::ClassicalControl(control) => match control {
+                ClassicalControlOp::If(if_op) => {
+                    collect_gates_from_operations(
+                        if_op.then_body().operations(),
+                        defined_gates,
+                        unitary_gate_defs,
+                        opaque_unitary_gates,
+                        has_delay,
+                    )?;
+                    if let Some(body) = if_op.else_body() {
+                        collect_gates_from_operations(
+                            body.operations(),
+                            defined_gates,
+                            unitary_gate_defs,
+                            opaque_unitary_gates,
+                            has_delay,
+                        )?;
+                    }
+                }
+                ClassicalControlOp::While(while_op) => {
+                    collect_gates_from_operations(
+                        while_op.body().operations(),
+                        defined_gates,
+                        unitary_gate_defs,
+                        opaque_unitary_gates,
+                        has_delay,
+                    )?;
+                }
+                ClassicalControlOp::For(for_op) => {
+                    collect_gates_from_operations(
+                        for_op.body().operations(),
+                        defined_gates,
+                        unitary_gate_defs,
+                        opaque_unitary_gates,
+                        has_delay,
+                    )?;
+                }
+                ClassicalControlOp::Switch(switch_op) => {
+                    for case in switch_op.cases() {
+                        collect_gates_from_operations(
+                            case.body().operations(),
+                            defined_gates,
+                            unitary_gate_defs,
+                            opaque_unitary_gates,
+                            has_delay,
+                        )?;
+                    }
+                    if let Some(body) = switch_op.default() {
+                        collect_gates_from_operations(
+                            body.operations(),
+                            defined_gates,
+                            unitary_gate_defs,
+                            opaque_unitary_gates,
+                            has_delay,
+                        )?;
+                    }
+                }
+                ClassicalControlOp::Break | ClassicalControlOp::Continue => {}
+            },
             _ => {}
         }
     }
+    Ok(())
 }
 
 fn dump_gate_definition(cg: &CircuitGate, output: &mut String) -> Result<(), QasmDumpError> {
+    if operations_contain_measurement(cg.circuit.circuit.operations()) {
+        return Err(QasmDumpError::MeasureInGateNotAllowed);
+    }
+
     let params: Vec<String> = cg.symbols().iter().cloned().collect();
     let params_str = if params.is_empty() {
         String::new()
@@ -399,14 +499,13 @@ fn dump_gate_definition(cg: &CircuitGate, output: &mut String) -> Result<(), Qas
     // No substitution needed.
     let body_param_map = HashMap::new();
 
-    // For gate definitions, we don't have conditional qubits (gates can't contain control flow)
-    let empty_conditional_qubits: HashSet<usize> = HashSet::new();
+    let classical_registers = ClassicalRegisterMap::default();
     process_circuit_operations(
         inner_circuit,
         output,
         &body_qubit_map,
         &body_param_map,
-        &empty_conditional_qubits,
+        &classical_registers,
     )?;
 
     writeln!(output, "}}")?;
@@ -418,6 +517,10 @@ fn dump_unitary_gate_definition(
     frozen_circuit: &FrozenCircuit,
     output: &mut String,
 ) -> Result<(), QasmDumpError> {
+    if operations_contain_measurement(frozen_circuit.circuit.operations()) {
+        return Err(QasmDumpError::MeasureInGateNotAllowed);
+    }
+
     let num_qubits = frozen_circuit.circuit.qubits().len();
     let qubits: Vec<String> = (0..num_qubits).map(|i| format!("q{}", i)).collect();
     let qubits_str = qubits.join(",");
@@ -432,18 +535,52 @@ fn dump_unitary_gate_definition(
     }
 
     let body_param_map = HashMap::new();
-    // For gate definitions, we don't have conditional qubits (gates can't contain control flow)
-    let empty_conditional_qubits: HashSet<usize> = HashSet::new();
+    let classical_registers = ClassicalRegisterMap::default();
     process_circuit_operations(
         inner_circuit,
         output,
         &body_qubit_map,
         &body_param_map,
-        &empty_conditional_qubits,
+        &classical_registers,
     )?;
 
     writeln!(output, "}}")?;
     Ok(())
+}
+
+fn operations_contain_measurement(operations: &[Operation]) -> bool {
+    operations
+        .iter()
+        .any(|operation| match &operation.instruction {
+            Instruction::Directive(Directive::Measure)
+            | Instruction::ClassicalData(ClassicalDataOp::MeasureBit { .. })
+            | Instruction::ClassicalData(ClassicalDataOp::MeasureBits { .. }) => true,
+            Instruction::ClassicalControl(control) => match control {
+                ClassicalControlOp::If(if_op) => {
+                    operations_contain_measurement(if_op.then_body().operations())
+                        || if_op
+                            .else_body()
+                            .is_some_and(|body| operations_contain_measurement(body.operations()))
+                }
+                ClassicalControlOp::While(while_op) => {
+                    operations_contain_measurement(while_op.body().operations())
+                }
+                ClassicalControlOp::For(for_op) => {
+                    operations_contain_measurement(for_op.body().operations())
+                }
+                ClassicalControlOp::Switch(switch_op) => {
+                    switch_op
+                        .cases()
+                        .iter()
+                        .any(|case| operations_contain_measurement(case.body().operations()))
+                        || switch_op
+                            .default()
+                            .is_some_and(|body| operations_contain_measurement(body.operations()))
+                }
+                ClassicalControlOp::Break | ClassicalControlOp::Continue => false,
+            },
+            _ => false,
+        })
 }
 
 fn dump_opaque_declaration(
@@ -463,9 +600,22 @@ fn process_circuit_operations(
     output: &mut String,
     qubit_map: &HashMap<Qubit, String>,
     param_map: &HashMap<String, Parameter>,
-    conditional_qubits: &HashSet<usize>,
+    classical_registers: &ClassicalRegisterMap,
 ) -> Result<(), QasmDumpError> {
-    for op in circuit.operations() {
+    let operations = circuit.operations();
+    let mut index = 0;
+    let mut accepting_initializers = true;
+    while index < operations.len() {
+        let op = &operations[index];
+        if let Instruction::ClassicalData(ClassicalDataOp::Store { target, value }) =
+            &op.instruction
+        {
+            if accepting_initializers && is_zero_initializer(*target, value) {
+                index += 1;
+                continue;
+            }
+        }
+        accepting_initializers = false;
         match &op.instruction {
             Instruction::Standard(gate) => {
                 dump_standard_gate(gate, op, circuit, output, qubit_map, param_map)?;
@@ -474,7 +624,7 @@ fn process_circuit_operations(
                 dump_mc_gate(mc_gate, op, circuit, output, qubit_map, param_map)?;
             }
             Instruction::Directive(directive) => {
-                dump_directive(directive, op, output, qubit_map, conditional_qubits)?;
+                dump_directive(directive, op, output, qubit_map)?;
             }
             Instruction::CircuitGate(cg) => {
                 // Output gate call: name(params) qubits;
@@ -493,15 +643,46 @@ fn process_circuit_operations(
                 let mapped_qs = map_qubits(op, qubit_map);
                 writeln!(output, "{} {};", unitary_gate.label(), mapped_qs.join(","))?;
             }
-            Instruction::ControlFlowGate(gate) => {
-                dump_control_flow(
-                    gate,
+            Instruction::ClassicalData(ClassicalDataOp::MeasureBit { result })
+            | Instruction::ClassicalData(ClassicalDataOp::MeasureBits { result }) => {
+                let next = operations.get(index + 1);
+                let (destination, consumes_store) =
+                    measurement_destination(&op.instruction, *result, next)?;
+                if consumes_store
+                    && operations[index + 2..]
+                        .iter()
+                        .any(|operation| operation_reads_value(operation, *result))
+                {
+                    return Err(QasmDumpError::UnsupportedClassicalData(format!(
+                        "measurement value {} is read after being stored into a mutable register",
+                        result.index()
+                    )));
+                }
+                dump_classical_measurement(
                     op,
+                    *result,
+                    destination,
+                    output,
+                    qubit_map,
+                    classical_registers,
+                )?;
+                if consumes_store {
+                    index += 1;
+                }
+            }
+            Instruction::ClassicalData(ClassicalDataOp::Store { .. }) => {
+                return Err(QasmDumpError::UnsupportedClassicalData(
+                    "general store assignment".to_string(),
+                ));
+            }
+            Instruction::ClassicalControl(control) => {
+                dump_control_flow(
+                    control,
                     circuit,
                     output,
                     qubit_map,
                     param_map,
-                    conditional_qubits,
+                    classical_registers,
                 )?;
             }
             Instruction::Delay => {
@@ -512,6 +693,193 @@ fn process_circuit_operations(
                 writeln!(output, "delay({}) {};", params_str, mapped_qs[0])?;
             }
         }
+        index += 1;
+    }
+    Ok(())
+}
+
+fn is_zero_initializer(target: ClassicalVar, value: &ClassicalExpr) -> bool {
+    match (target.ty(), value.kind()) {
+        (ClassicalType::Bit, ClassicalExprKind::BitLiteral(false)) => true,
+        (
+            ClassicalType::BitVec(target_width),
+            ClassicalExprKind::BitVecLiteral { width, value: 0 },
+        ) => target_width == *width,
+        (ClassicalType::BitVec(target_width), ClassicalExprKind::PackBits { bits }) => {
+            bits.len() == target_width.get() as usize
+                && bits
+                    .iter()
+                    .all(|bit| matches!(bit.kind(), ClassicalExprKind::BitLiteral(false)))
+        }
+        _ => false,
+    }
+}
+
+fn operation_reads_value(operation: &Operation, value: ClassicalValue) -> bool {
+    match &operation.instruction {
+        Instruction::ClassicalData(ClassicalDataOp::Store {
+            value: expression, ..
+        }) => expression.values().contains(&value),
+        Instruction::ClassicalData(_) => false,
+        Instruction::ClassicalControl(control) => {
+            if control.classical_value_reads().contains(&value) {
+                return true;
+            }
+            match control {
+                ClassicalControlOp::If(if_op) => {
+                    if_op
+                        .then_body()
+                        .operations()
+                        .iter()
+                        .any(|operation| operation_reads_value(operation, value))
+                        || if_op.else_body().is_some_and(|body| {
+                            body.operations()
+                                .iter()
+                                .any(|operation| operation_reads_value(operation, value))
+                        })
+                }
+                ClassicalControlOp::While(while_op) => while_op
+                    .body()
+                    .operations()
+                    .iter()
+                    .any(|operation| operation_reads_value(operation, value)),
+                ClassicalControlOp::For(for_op) => for_op
+                    .body()
+                    .operations()
+                    .iter()
+                    .any(|operation| operation_reads_value(operation, value)),
+                ClassicalControlOp::Switch(switch_op) => {
+                    switch_op.cases().iter().any(|case| {
+                        case.body()
+                            .operations()
+                            .iter()
+                            .any(|operation| operation_reads_value(operation, value))
+                    }) || switch_op.default().is_some_and(|body| {
+                        body.operations()
+                            .iter()
+                            .any(|operation| operation_reads_value(operation, value))
+                    })
+                }
+                ClassicalControlOp::Break | ClassicalControlOp::Continue => false,
+            }
+        }
+        _ => false,
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum MeasurementDestination {
+    Value(ClassicalValue),
+    VarWhole(ClassicalVar),
+    VarBit(ClassicalVar, u32),
+}
+
+fn measurement_destination(
+    instruction: &Instruction,
+    result: ClassicalValue,
+    next: Option<&Operation>,
+) -> Result<(MeasurementDestination, bool), QasmDumpError> {
+    let Some(Operation {
+        instruction: Instruction::ClassicalData(ClassicalDataOp::Store { target, value }),
+        ..
+    }) = next
+    else {
+        return Ok((MeasurementDestination::Value(result), false));
+    };
+
+    if matches!(value.kind(), ClassicalExprKind::Value(value) if *value == result) {
+        return match instruction {
+            Instruction::ClassicalData(ClassicalDataOp::MeasureBit { .. })
+                if target.ty() == ClassicalType::Bit =>
+            {
+                Ok((MeasurementDestination::VarWhole(*target), true))
+            }
+            Instruction::ClassicalData(ClassicalDataOp::MeasureBits { .. })
+                if target.ty() == result.ty() =>
+            {
+                Ok((MeasurementDestination::VarWhole(*target), true))
+            }
+            _ => Err(QasmDumpError::UnsupportedClassicalData(
+                "measurement store has incompatible target type".to_string(),
+            )),
+        };
+    }
+
+    if matches!(
+        instruction,
+        Instruction::ClassicalData(ClassicalDataOp::MeasureBit { .. })
+    ) {
+        if let Some(bit) = stored_measurement_bit(*target, result, value) {
+            return Ok((MeasurementDestination::VarBit(*target, bit), true));
+        }
+    }
+
+    Err(QasmDumpError::UnsupportedClassicalData(
+        "measurement is followed by a store that cannot be represented by OpenQASM 2.0".to_string(),
+    ))
+}
+
+fn stored_measurement_bit(
+    target: ClassicalVar,
+    result: ClassicalValue,
+    expression: &ClassicalExpr,
+) -> Option<u32> {
+    let ClassicalType::BitVec(width) = target.ty() else {
+        return None;
+    };
+    let ClassicalExprKind::PackBits { bits } = expression.kind() else {
+        return None;
+    };
+    if bits.len() != width.get() as usize {
+        return None;
+    }
+
+    let mut measured_index = None;
+    for (index, bit) in bits.iter().enumerate() {
+        match bit.kind() {
+            ClassicalExprKind::Value(value) if *value == result => {
+                if measured_index.replace(index as u32).is_some() {
+                    return None;
+                }
+            }
+            ClassicalExprKind::ExtractBit {
+                value,
+                index: source_index,
+            } if *source_index == index as u32
+                && matches!(value.kind(), ClassicalExprKind::Var(var) if *var == target) => {}
+            _ => return None,
+        }
+    }
+    measured_index
+}
+
+fn dump_classical_measurement(
+    op: &Operation,
+    result: ClassicalValue,
+    destination: MeasurementDestination,
+    output: &mut String,
+    qubit_map: &HashMap<Qubit, String>,
+    registers: &ClassicalRegisterMap,
+) -> Result<(), QasmDumpError> {
+    let mapped_qubits = map_qubits(op, qubit_map);
+    let (register, first_bit, width) = match destination {
+        MeasurementDestination::Value(value) => (registers.value(value)?, 0, value.ty().width()),
+        MeasurementDestination::VarWhole(var) => (registers.var(var)?, 0, var.ty().width()),
+        MeasurementDestination::VarBit(var, bit) => (registers.var(var)?, bit, 1),
+    };
+
+    if mapped_qubits.len() != width as usize || result.ty().width() != width {
+        return Err(QasmDumpError::UnsupportedClassicalData(format!(
+            "measurement width {} does not match destination width {width}",
+            mapped_qubits.len()
+        )));
+    }
+    for (offset, qubit) in mapped_qubits.iter().enumerate() {
+        writeln!(
+            output,
+            "measure {qubit} -> {register}[{}];",
+            first_bit + offset as u32
+        )?;
     }
     Ok(())
 }
@@ -682,33 +1050,14 @@ fn dump_directive(
     op: &Operation,
     output: &mut String,
     qubit_map: &HashMap<Qubit, String>,
-    conditional_qubits: &HashSet<usize>,
 ) -> Result<(), QasmDumpError> {
     let mapped_qs = map_qubits(op, qubit_map);
 
     match directive {
         Directive::Measure => {
-            // Only output measure statement if the qubit is used in conditional operations
-            // Otherwise, comment it out (no register to store the result)
-            for q_str in mapped_qs {
-                if q_str.starts_with("q[") && q_str.ends_with("]") {
-                    let idx_str = &q_str[2..q_str.len() - 1];
-                    if let Ok(idx) = idx_str.parse::<usize>() {
-                        if conditional_qubits.contains(&idx) {
-                            // Qubit is used in condition - output actual measure to its register
-                            writeln!(output, "measure {} -> c{}[0];", q_str, idx)?;
-                        } else {
-                            // No condition uses this qubit - comment out the measure
-                            writeln!(output, "// measure {} -> c{}[0];", q_str, idx)?;
-                        }
-                    } else {
-                        return Err(QasmDumpError::InvalidQubitIndex(q_str.to_string()));
-                    }
-                } else {
-                    // Inside gate or non-standard naming.
-                    return Err(QasmDumpError::MeasureInGateNotAllowed);
-                }
-            }
+            return Err(QasmDumpError::UnsupportedClassicalData(
+                "legacy measurement has no classical destination".to_string(),
+            ));
         }
         Directive::Barrier => {
             writeln!(output, "barrier {};", mapped_qs.join(","))?;
@@ -761,7 +1110,14 @@ fn dump_mc_gate(
 }
 
 fn collect_used_standard_gates(circuit: &Circuit, used_gates: &mut HashSet<StandardGate>) {
-    for op in circuit.operations() {
+    collect_used_standard_gates_from_operations(circuit.operations(), used_gates);
+}
+
+fn collect_used_standard_gates_from_operations(
+    operations: &[Operation],
+    used_gates: &mut HashSet<StandardGate>,
+) {
+    for op in operations {
         match &op.instruction {
             Instruction::Standard(sg) => {
                 used_gates.insert(*sg);
@@ -774,68 +1130,166 @@ fn collect_used_standard_gates(circuit: &Circuit, used_gates: &mut HashSet<Stand
                     collect_used_standard_gates(&fc.circuit, used_gates);
                 }
             }
+            Instruction::ClassicalControl(control) => match control {
+                ClassicalControlOp::If(if_op) => {
+                    collect_used_standard_gates_from_operations(
+                        if_op.then_body().operations(),
+                        used_gates,
+                    );
+                    if let Some(body) = if_op.else_body() {
+                        collect_used_standard_gates_from_operations(body.operations(), used_gates);
+                    }
+                }
+                ClassicalControlOp::While(while_op) => {
+                    collect_used_standard_gates_from_operations(
+                        while_op.body().operations(),
+                        used_gates,
+                    );
+                }
+                ClassicalControlOp::For(for_op) => {
+                    collect_used_standard_gates_from_operations(
+                        for_op.body().operations(),
+                        used_gates,
+                    );
+                }
+                ClassicalControlOp::Switch(switch_op) => {
+                    for case in switch_op.cases() {
+                        collect_used_standard_gates_from_operations(
+                            case.body().operations(),
+                            used_gates,
+                        );
+                    }
+                    if let Some(body) = switch_op.default() {
+                        collect_used_standard_gates_from_operations(body.operations(), used_gates);
+                    }
+                }
+                ClassicalControlOp::Break | ClassicalControlOp::Continue => {}
+            },
             _ => {}
         }
     }
 }
 
-/// Dumps a control flow gate (IfElse or WhileLoop) to QASM format.
-///
-/// Handles conversion of conditional quantum operations to OpenQASM 2.0 format:
-/// - **IfElse**: Outputs as `if (creg == value) op;`
-/// - **WhileLoop**: Returns error (not supported in OpenQASM 2.0)
-///
-/// For else branches, inverts the condition (e.g., `if (c0 == 0)` instead of else).
+/// Dumps the subset of expression-based control flow representable by OpenQASM 2.0.
 fn dump_control_flow(
-    gate: &ControlFlow,
-    _op: &Operation,
+    control: &ClassicalControlOp,
     circuit: &Circuit,
     output: &mut String,
     qubit_map: &HashMap<Qubit, String>,
     param_map: &HashMap<String, Parameter>,
-    _conditional_qubits: &HashSet<usize>,
+    registers: &ClassicalRegisterMap,
 ) -> Result<(), QasmDumpError> {
-    match gate {
-        ControlFlow::IfElse(if_else) => {
-            // Get the condition qubit index - in OpenQASM 2.0, this maps to a single-bit creg
-            // The register is named c{idx} (e.g., c0, c1) with size 1
-            let cond_qubit_idx = if_else.condition().qubit.index();
-            let target_value = if_else.condition().target;
-            let creg_name = format!("c{}", cond_qubit_idx);
-
-            // Dump true body operations
-            let true_body = if_else.true_body();
-            for body_op in true_body {
+    match control {
+        ClassicalControlOp::If(if_op) => {
+            if if_op.else_body().is_some() {
+                return Err(QasmDumpError::UnsupportedClassicalControl(
+                    "if/else has no lossless OpenQASM 2.0 representation".to_string(),
+                ));
+            }
+            let (register, value) = qasm_condition(if_op.condition(), registers)?;
+            for body_op in if_op.then_body().operations() {
                 let body_qasm = operation_to_qasm(body_op, circuit, qubit_map, param_map)?;
-                // OpenQASM 2.0 format: if (creg == value) op;
-                writeln!(
-                    output,
-                    "if ({} == {}) {};",
-                    creg_name, target_value, body_qasm
-                )?;
-            }
-
-            // Dump false body operations (else branch)
-            // OpenQASM 2.0 doesn't have native else, so we use inverted condition
-            if let Some(false_body) = if_else.false_body() {
-                for body_op in false_body {
-                    let body_qasm = operation_to_qasm(body_op, circuit, qubit_map, param_map)?;
-                    // Invert condition: if (creg == 1-value) op;
-                    let inverted_value = if target_value == 0 { 1 } else { 0 };
-                    writeln!(
-                        output,
-                        "if ({} == {}) {};",
-                        creg_name, inverted_value, body_qasm
-                    )?;
-                }
+                writeln!(output, "if ({register} == {value}) {body_qasm};")?;
             }
         }
-        ControlFlow::WhileLoop(_while_loop) => {
-            // OpenQASM 2.0 does not support while loops
-            return Err(QasmDumpError::WhileLoopNotSupported);
-        }
+        ClassicalControlOp::While(_) => return unsupported_control("while"),
+        ClassicalControlOp::For(_) => return unsupported_control("for"),
+        ClassicalControlOp::Switch(_) => return unsupported_control("switch"),
+        ClassicalControlOp::Break => return unsupported_control("break"),
+        ClassicalControlOp::Continue => return unsupported_control("continue"),
     }
     Ok(())
+}
+
+fn unsupported_control<T>(name: &str) -> Result<T, QasmDumpError> {
+    Err(QasmDumpError::UnsupportedClassicalControl(format!(
+        "{name} is not part of OpenQASM 2.0"
+    )))
+}
+
+fn qasm_condition<'a>(
+    expression: &ClassicalExpr,
+    registers: &'a ClassicalRegisterMap,
+) -> Result<(&'a str, u128), QasmDumpError> {
+    match expression.kind() {
+        ClassicalExprKind::Cast {
+            cast: ClassicalCast::BitToBool,
+            expr,
+        } => Ok((classical_source(expr, registers, ClassicalType::Bit)?, 1)),
+        ClassicalExprKind::Unary {
+            op: ClassicalUnaryOp::Not,
+            expr,
+        } => match expr.kind() {
+            ClassicalExprKind::Cast {
+                cast: ClassicalCast::BitToBool,
+                expr,
+            } => Ok((classical_source(expr, registers, ClassicalType::Bit)?, 0)),
+            _ => unsupported_condition(expression),
+        },
+        ClassicalExprKind::Compare {
+            op: ClassicalCompareOp::Eq,
+            lhs,
+            rhs,
+        } => qasm_equality_condition(lhs, rhs, registers)
+            .or_else(|_| qasm_equality_condition(rhs, lhs, registers)),
+        _ => unsupported_condition(expression),
+    }
+}
+
+fn qasm_equality_condition<'a>(
+    source: &ClassicalExpr,
+    literal: &ClassicalExpr,
+    registers: &'a ClassicalRegisterMap,
+) -> Result<(&'a str, u128), QasmDumpError> {
+    match (source.kind(), literal.kind()) {
+        (
+            ClassicalExprKind::Cast {
+                cast: ClassicalCast::BitVecToUInt,
+                expr,
+            },
+            ClassicalExprKind::UIntLiteral { width, value },
+        ) if expr.ty().width() == width.get() => {
+            Ok((classical_source(expr, registers, expr.ty())?, *value))
+        }
+        (
+            ClassicalExprKind::Var(_) | ClassicalExprKind::Value(_),
+            ClassicalExprKind::BitLiteral(value),
+        ) if source.ty() == ClassicalType::Bit => Ok((
+            classical_source(source, registers, ClassicalType::Bit)?,
+            u128::from(*value),
+        )),
+        (ClassicalExprKind::ExtractBit { value, index: 0 }, ClassicalExprKind::BitLiteral(bit))
+            if value.ty().width() == 1 =>
+        {
+            Ok((
+                classical_source(value, registers, value.ty())?,
+                u128::from(*bit),
+            ))
+        }
+        _ => unsupported_condition(source),
+    }
+}
+
+fn classical_source<'a>(
+    expression: &ClassicalExpr,
+    registers: &'a ClassicalRegisterMap,
+    expected_type: ClassicalType,
+) -> Result<&'a str, QasmDumpError> {
+    if expression.ty() != expected_type {
+        return unsupported_condition(expression);
+    }
+    match expression.kind() {
+        ClassicalExprKind::Var(var) => registers.var(*var),
+        ClassicalExprKind::Value(value) => registers.value(*value),
+        _ => unsupported_condition(expression),
+    }
+}
+
+fn unsupported_condition<T>(expression: &ClassicalExpr) -> Result<T, QasmDumpError> {
+    Err(QasmDumpError::UnsupportedClassicalControl(format!(
+        "condition {:?} cannot be reduced to 'creg == integer'",
+        expression.kind()
+    )))
 }
 
 /// Convert a single operation to QASM string (without semicolon)
@@ -930,7 +1384,12 @@ fn operation_to_qasm(
             let mapped_qs = map_qubits(op, qubit_map);
             Ok(format!("{} {}", unitary_gate.label(), mapped_qs.join(",")))
         }
-        Instruction::ControlFlowGate(_) => Err(QasmDumpError::NestedControlFlowNotSupported),
+        Instruction::ClassicalData(_) => Err(QasmDumpError::UnsupportedClassicalData(
+            "classical data operation inside conditional body".to_string(),
+        )),
+        Instruction::ClassicalControl(_) => Err(QasmDumpError::UnsupportedClassicalControl(
+            "nested control flow".to_string(),
+        )),
         Instruction::Delay => {
             let params_str = format_params(op, circuit, param_map);
             let mapped_qs = map_qubits(op, qubit_map);

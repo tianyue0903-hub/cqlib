@@ -12,8 +12,11 @@
 
 use super::*;
 use crate::circuit::circuit_param::CircuitParam;
-use crate::circuit::gate::{Directive, Instruction, StandardGate};
-use crate::circuit::{Circuit, Qubit};
+use crate::circuit::gate::{ClassicalDataOp, Directive, Instruction, StandardGate};
+use crate::circuit::{
+    Circuit, ClassicalCast, ClassicalCompareOp, ClassicalControlOp, ClassicalExprKind,
+    ClassicalType, Qubit,
+};
 use crate::ir::qasm2::dump::dumps;
 
 fn assert_standard_gate(
@@ -246,12 +249,24 @@ fn test_measure_reset() {
     assert!(result.is_ok(), "Parse failed: {:?}", result.err());
     let circuit = result.unwrap();
 
+    // 0. Initialize c to zero.
+    assert!(matches!(
+        circuit.operations()[0].instruction,
+        Instruction::ClassicalData(ClassicalDataOp::Store { .. })
+    ));
     // 1. Reset q[0]
-    assert_directive(&circuit, 0, Directive::Reset, &[0]);
+    assert_directive(&circuit, 1, Directive::Reset, &[0]);
     // 2. Barrier q[0], q[1] (q expanded)
-    assert_directive(&circuit, 1, Directive::Barrier, &[0, 1]);
-    // 3. Measure q[0]
-    assert_directive(&circuit, 2, Directive::Measure, &[0]);
+    assert_directive(&circuit, 2, Directive::Barrier, &[0, 1]);
+    // 3-4. Measure q[0] and store the result in c[0].
+    assert!(matches!(
+        circuit.operations()[3].instruction,
+        Instruction::ClassicalData(ClassicalDataOp::MeasureBit { .. })
+    ));
+    assert!(matches!(
+        circuit.operations()[4].instruction,
+        Instruction::ClassicalData(ClassicalDataOp::Store { .. })
+    ));
 }
 
 #[test]
@@ -287,6 +302,72 @@ fn test_param_gate() {
     } else {
         panic!("Top level gate should be CircuitGate");
     }
+}
+
+#[test]
+fn test_qelib1_gate_name_cannot_be_redefined() {
+    let error = loads(
+        r#"
+        OPENQASM 2.0;
+        qreg q[1];
+        gate h a { rx(pi) a; }
+        h q[0];
+        "#,
+    )
+    .unwrap_err();
+
+    assert_eq!(error, QasmParseError::ReservedGateName("h".to_string()));
+    assert_eq!(
+        error.to_string(),
+        "Gate name 'h' is reserved by qelib1.inc and cannot be redefined"
+    );
+}
+
+#[test]
+fn test_qelib1_gate_name_cannot_be_declared_opaque() {
+    let error = loads(
+        r#"
+        OPENQASM 2.0;
+        qreg q[1];
+        opaque h a;
+        "#,
+    )
+    .unwrap_err();
+
+    assert_eq!(error, QasmParseError::ReservedGateName("h".to_string()));
+}
+
+#[test]
+fn test_builtin_qelib1_gate_declarations_are_allowed() {
+    let circuit = loads(
+        r#"
+        OPENQASM 2.0;
+        include "qelib1.inc";
+        qreg q[1];
+        h q[0];
+        "#,
+    )
+    .unwrap();
+
+    assert_standard_gate(&circuit, 0, StandardGate::H, &[0], &[]);
+}
+
+#[test]
+fn test_qelib1_reserved_gate_names_match_bundled_declarations() {
+    use std::collections::HashSet;
+
+    let program = parser::ProgramBodyParser::new().parse(QELIB1).unwrap();
+    let declared_names: HashSet<&str> = program
+        .statements
+        .iter()
+        .filter_map(|statement| match statement {
+            Statement::GateDecl(data) => Some(data.name.as_str()),
+            _ => None,
+        })
+        .collect();
+    let reserved_names: HashSet<&str> = QELIB1_RESERVED_GATE_NAMES.iter().copied().collect();
+
+    assert_eq!(reserved_names, declared_names);
 }
 
 #[test]
@@ -363,6 +444,47 @@ fn test_circular_gate_dependency() {
         "Got error: {}",
         err
     );
+}
+
+#[test]
+fn test_compile_gate_rolls_back_state_after_circular_dependency() {
+    let program = parser::ProgramBodyParser::new()
+        .parse(
+            r#"
+            gate a q { b q; }
+            gate b q { a q; }
+            "#,
+        )
+        .unwrap();
+    let mut converter = AstToCircuit::new(None, Box::new(NullResolver));
+    converter
+        .discovery_pass(&program, DiscoverySource::User)
+        .unwrap();
+
+    assert!(matches!(
+        converter.compile_gate_if_needed("a"),
+        Err(QasmParseError::CircularGateDependency { .. })
+    ));
+    assert_eq!(converter.recursion_depth, 0);
+    assert!(converter.compiling_gates.is_empty());
+}
+
+#[test]
+fn test_compile_gate_rolls_back_state_after_body_build_failure() {
+    let program = parser::ProgramBodyParser::new()
+        .parse("gate broken q { x missing; }")
+        .unwrap();
+    let mut converter = AstToCircuit::new(None, Box::new(NullResolver));
+    converter
+        .discovery_pass(&program, DiscoverySource::User)
+        .unwrap();
+
+    assert!(matches!(
+        converter.compile_gate_if_needed("broken"),
+        Err(QasmParseError::UndefinedQubit(name)) if name == "missing"
+    ));
+    assert_eq!(converter.recursion_depth, 0);
+    assert!(converter.compiling_gates.is_empty());
 }
 
 #[test]
@@ -459,392 +581,251 @@ fn test_parameter_count_mismatch() {
 }
 
 #[test]
-fn test_if_statement() {
-    // Test if statement with measurement
-    let qasm_with_if = r#"
+fn test_if_statement_uses_classical_data_and_control_ir() {
+    let circuit = loads(
+        r#"
         OPENQASM 2.0;
         qreg q[2];
         creg c[1];
         h q[0];
         measure q[0] -> c[0];
         if (c[0] == 1) x q[1];
-    "#;
+        "#,
+    )
+    .unwrap();
 
-    let result = loads(qasm_with_if);
-    assert!(
-        result.is_ok(),
-        "If statement should succeed: {:?}",
-        result.err()
+    assert_eq!(
+        circuit.classical_vars(),
+        &[ClassicalType::bit_vec(1).unwrap()]
     );
-    let circuit = result.unwrap();
+    assert_eq!(circuit.operations().len(), 5);
+    assert!(matches!(
+        circuit.operations()[2].instruction,
+        Instruction::ClassicalData(ClassicalDataOp::MeasureBit { .. })
+    ));
+    assert!(matches!(
+        circuit.operations()[3].instruction,
+        Instruction::ClassicalData(ClassicalDataOp::Store { .. })
+    ));
 
-    // Verify the circuit has 3 operations: H, Measure, IfElse
-    let ops = circuit.operations();
-    assert_eq!(ops.len(), 3, "Expected 3 operations, got {}", ops.len());
-
-    // Op 0: H gate on q[0]
-    assert_standard_gate(&circuit, 0, StandardGate::H, &[0], &[]);
-
-    // Op 1: Measure q[0] -> c[0]
-    match &ops[1].instruction {
-        Instruction::Directive(Directive::Measure) => {
-            assert_eq!(ops[1].qubits.len(), 1);
-            assert_eq!(ops[1].qubits[0], Qubit::new(0));
-        }
-        _ => panic!("Expected Measure directive, got {:?}", ops[1].instruction),
-    }
-
-    // Op 2: IfElse gate
-    match &ops[2].instruction {
-        Instruction::ControlFlowGate(ControlFlow::IfElse(if_else)) => {
-            // Verify condition: qubit 0, target value 1
-            let condition = if_else.condition();
-            assert_eq!(condition.qubit, Qubit::new(0));
-            assert_eq!(condition.target, 1);
-
-            // Verify true_body has one operation: X on q[1]
-            let true_body = if_else.true_body();
-            assert_eq!(true_body.len(), 1, "Expected 1 operation in true_body");
-            match &true_body[0].instruction {
-                Instruction::Standard(StandardGate::X) => {
-                    assert_eq!(true_body[0].qubits.len(), 1);
-                    assert_eq!(true_body[0].qubits[0], Qubit::new(1));
-                }
-                _ => panic!(
-                    "Expected X gate in true_body, got {:?}",
-                    true_body[0].instruction
-                ),
-            }
-
-            // Verify false_body is None
-            assert!(if_else.false_body().is_none());
-        }
-        _ => panic!("Expected IfElse control flow, got {:?}", ops[2].instruction),
-    }
+    let Instruction::ClassicalControl(ClassicalControlOp::If(if_op)) =
+        &circuit.operations()[4].instruction
+    else {
+        panic!("expected expression-based if operation");
+    };
+    assert!(if_op.else_body().is_none());
+    assert_eq!(if_op.then_body().operations().len(), 1);
+    assert!(matches!(
+        if_op.then_body().operations()[0].instruction,
+        Instruction::Standard(StandardGate::X)
+    ));
+    let ClassicalExprKind::Compare { op, lhs, rhs } = if_op.condition().kind() else {
+        panic!("expected equality condition");
+    };
+    assert_eq!(*op, ClassicalCompareOp::Eq);
+    assert!(matches!(
+        lhs.kind(),
+        ClassicalExprKind::ExtractBit { index: 0, .. }
+    ));
+    assert!(matches!(rhs.kind(), ClassicalExprKind::BitLiteral(true)));
 }
 
 #[test]
-fn test_if_statement_without_measurement_error() {
-    // Test if statement without prior measurement (should fail)
-    let qasm_no_measure = r#"
+fn test_indexed_condition_retains_selected_bit() {
+    let circuit = loads(
+        r#"
         OPENQASM 2.0;
-        qreg q[2];
-        creg c[1];
-        h q[0];
-        if (c[0] == 1) x q[1];
-    "#;
+        qreg q[1];
+        creg c[3];
+        if (c[2] == 1) x q[0];
+        "#,
+    )
+    .unwrap();
 
-    let result = loads(qasm_no_measure);
-    assert!(result.is_err(), "If without measurement should fail");
-    let err = result.unwrap_err().to_string();
-    assert!(
-        err.contains("No measurement found"),
-        "Expected measurement error, got: {}",
-        err
-    );
+    let Instruction::ClassicalControl(ClassicalControlOp::If(if_op)) =
+        &circuit.operations()[1].instruction
+    else {
+        panic!("expected if operation");
+    };
+    let ClassicalExprKind::Compare { lhs, .. } = if_op.condition().kind() else {
+        panic!("expected equality condition");
+    };
+    assert!(matches!(
+        lhs.kind(),
+        ClassicalExprKind::ExtractBit { index: 2, .. }
+    ));
 }
 
 #[test]
-fn test_if_statement_simple_creg_ref() {
-    // Test if statement with simple creg reference (c == 1 means c[0] == 1)
-    use crate::circuit::gate::control_flow::ControlFlow;
-
-    let qasm_simple = r#"
+fn test_condition_references_correct_classical_register() {
+    let circuit = loads(
+        r#"
         OPENQASM 2.0;
-        qreg q[2];
-        creg c[1];
-        h q[0];
-        measure q[0] -> c[0];
-        if (c == 1) x q[1];
-    "#;
+        qreg q[1];
+        creg first[2];
+        creg second[3];
+        if (second[1] == 1) x q[0];
+        "#,
+    )
+    .unwrap();
 
-    let result = loads(qasm_simple);
-    assert!(
-        result.is_ok(),
-        "Simple creg reference should work: {:?}",
-        result.err()
-    );
-    let circuit = result.unwrap();
+    let Instruction::ClassicalData(ClassicalDataOp::Store {
+        target: first_var, ..
+    }) = &circuit.operations()[0].instruction
+    else {
+        panic!("expected first classical-register initializer");
+    };
+    let Instruction::ClassicalData(ClassicalDataOp::Store {
+        target: second_var, ..
+    }) = &circuit.operations()[1].instruction
+    else {
+        panic!("expected second classical-register initializer");
+    };
+    assert_ne!(first_var, second_var);
+    assert_eq!(first_var.ty(), ClassicalType::bit_vec(2).unwrap());
+    assert_eq!(second_var.ty(), ClassicalType::bit_vec(3).unwrap());
 
-    // Verify the circuit has 3 operations
-    let ops = circuit.operations();
-    assert_eq!(ops.len(), 3, "Expected 3 operations");
-
-    // Op 2: IfElse gate (same as above, since c == 1 is equivalent to c[0] == 1)
-    match &ops[2].instruction {
-        Instruction::ControlFlowGate(ControlFlow::IfElse(if_else)) => {
-            let condition = if_else.condition();
-            assert_eq!(condition.qubit, Qubit::new(0));
-            assert_eq!(condition.target, 1);
-        }
-        _ => panic!("Expected IfElse control flow"),
-    }
+    let Instruction::ClassicalControl(ClassicalControlOp::If(if_op)) =
+        &circuit.operations()[2].instruction
+    else {
+        panic!("expected if operation");
+    };
+    let ClassicalExprKind::Compare { lhs, .. } = if_op.condition().kind() else {
+        panic!("expected equality condition");
+    };
+    let ClassicalExprKind::ExtractBit { value, index } = lhs.kind() else {
+        panic!("expected indexed classical-register read");
+    };
+    assert_eq!(*index, 1);
+    assert!(matches!(
+        value.kind(),
+        ClassicalExprKind::Var(var) if var == second_var
+    ));
+    assert!(!matches!(
+        value.kind(),
+        ClassicalExprKind::Var(var) if var == first_var
+    ));
 }
 
 #[test]
-fn test_if_statement_with_cx_gate() {
-    // Test if statement with CX (controlled-X) gate
-    use crate::circuit::gate::control_flow::ControlFlow;
+fn test_if_before_measurement_reads_zero_initialized_creg() {
+    let circuit = loads(
+        r#"
+        OPENQASM 2.0;
+        qreg q[1];
+        creg c[1];
+        if (c == 0) x q[0];
+        "#,
+    )
+    .unwrap();
 
-    let qasm_cx = r#"
+    assert!(matches!(
+        circuit.operations()[0].instruction,
+        Instruction::ClassicalData(ClassicalDataOp::Store { .. })
+    ));
+    assert!(matches!(
+        circuit.operations()[1].instruction,
+        Instruction::ClassicalControl(ClassicalControlOp::If(_))
+    ));
+}
+
+#[test]
+fn test_multibit_creg_condition_preserves_little_endian_value() {
+    let circuit = loads(
+        r#"
         OPENQASM 2.0;
         qreg q[3];
-        creg c[1];
-        h q[0];
-        measure q[0] -> c[0];
-        if (c[0] == 1) cx q[1], q[2];
-    "#;
-
-    let result = loads(qasm_cx);
-    assert!(
-        result.is_ok(),
-        "If with CX should succeed: {:?}",
-        result.err()
-    );
-    let circuit = result.unwrap();
-
-    let ops = circuit.operations();
-    assert_eq!(ops.len(), 3);
-
-    // Op 2: IfElse with CX
-    match &ops[2].instruction {
-        Instruction::ControlFlowGate(ControlFlow::IfElse(if_else)) => {
-            let true_body = if_else.true_body();
-            assert_eq!(true_body.len(), 1);
-            match &true_body[0].instruction {
-                Instruction::Standard(StandardGate::CX) => {
-                    assert_eq!(true_body[0].qubits.len(), 2);
-                    assert_eq!(true_body[0].qubits[0], Qubit::new(1));
-                    assert_eq!(true_body[0].qubits[1], Qubit::new(2));
-                }
-                _ => panic!("Expected CX gate in true_body"),
-            }
-        }
-        _ => panic!("Expected IfElse"),
-    }
-}
-
-#[test]
-fn test_if_statement_with_symbolic_params() {
-    // Test if statement with symbolic parameters in the body
-    // This verifies that parameters like 'theta' in rx(theta) are correctly handled
-    use crate::circuit::circuit_param::CircuitParam;
-    use crate::circuit::gate::control_flow::ControlFlow;
-
-    let qasm_with_symbolic = r#"
-        OPENQASM 2.0;
-        qreg q[2];
-        creg c[1];
-        h q[0];
-        measure q[0] -> c[0];
-        if (c[0] == 1) rx(pi/2) q[1];
-    "#;
-
-    let result = loads(qasm_with_symbolic);
-    assert!(
-        result.is_ok(),
-        "If with symbolic param should succeed: {:?}",
-        result.err()
-    );
-    let circuit = result.unwrap();
-
-    let ops = circuit.operations();
-    assert_eq!(ops.len(), 3);
-
-    // Op 2: IfElse with RX(pi/2)
-    match &ops[2].instruction {
-        Instruction::ControlFlowGate(ControlFlow::IfElse(if_else)) => {
-            let true_body = if_else.true_body();
-            assert_eq!(true_body.len(), 1, "Expected 1 operation in true_body");
-            match &true_body[0].instruction {
-                Instruction::Standard(StandardGate::RX) => {
-                    assert_eq!(true_body[0].qubits.len(), 1);
-                    assert_eq!(true_body[0].qubits[0], Qubit::new(1));
-
-                    // Check parameter - should be Fixed(pi/2), not 0.0
-                    assert_eq!(true_body[0].params.len(), 1, "Expected 1 parameter");
-                    match &true_body[0].params[0] {
-                        CircuitParam::Fixed(val) => {
-                            // pi/2 ≈ 1.5708
-                            assert!(
-                                (val - std::f64::consts::FRAC_PI_2).abs() < 1e-10,
-                                "Expected pi/2 ({}), got {}",
-                                std::f64::consts::FRAC_PI_2,
-                                val
-                            );
-                        }
-                        CircuitParam::Index(_) => {
-                            // Index is also acceptable if the parameter was interned
-                        }
-                    }
-                }
-                _ => panic!(
-                    "Expected RX gate in true_body, got {:?}",
-                    true_body[0].instruction
-                ),
-            }
-        }
-        _ => panic!("Expected IfElse control flow"),
-    }
-}
-
-#[test]
-fn test_if_statement_with_unevaluated_symbolic_param() {
-    // Test that unevaluated symbolic parameters don't become 0.0
-    // This is a regression test for the issue where symbolic params were replaced with 0.0
-    use crate::circuit::gate::control_flow::ControlFlow;
-
-    let qasm = r#"
-        OPENQASM 2.0;
-        qreg q[2];
-        creg c[1];
-        h q[0];
-        measure q[0] -> c[0];
-        if (c[0] == 1) rx(0.5) q[1];
-    "#;
-
-    let result = loads(qasm);
-    assert!(result.is_ok(), "Should parse: {:?}", result.err());
-    let circuit = result.unwrap();
-
-    let ops = circuit.operations();
-    match &ops[2].instruction {
-        Instruction::ControlFlowGate(ControlFlow::IfElse(if_else)) => {
-            let true_body = if_else.true_body();
-            match &true_body[0].instruction {
-                Instruction::Standard(StandardGate::RX) => {
-                    match &true_body[0].params[0] {
-                        CircuitParam::Fixed(val) => {
-                            // Should be 0.5, not 0.0
-                            assert!(
-                                (val - 0.5).abs() < 1e-10,
-                                "Parameter should be 0.5, got {} (regression: was incorrectly 0.0)",
-                                val
-                            );
-                        }
-                        _ => {}
-                    }
-                }
-                _ => {}
-            }
-        }
-        _ => {}
-    }
-}
-
-#[test]
-fn test_if_statement_with_true_symbolic_param() {
-    // Test that true symbolic parameters (like undefined 'theta') are handled
-    // This test documents current behavior: undefined symbols fall back to 0.0
-    use crate::circuit::gate::control_flow::ControlFlow;
-
-    // This qasm uses an undefined parameter 'theta'
-    // According to OpenQASM spec, this should either:
-    // 1. Error out (parameter not defined)
-    // 2. Be handled as a symbolic parameter
-    //
-    // Current behavior: falls back to 0.0 (may need improvement)
-
-    let qasm = r#"
-        OPENQASM 2.0;
-        qreg q[2];
-        creg c[1];
-        h q[0];
-        measure q[0] -> c[0];
-        if (c[0] == 1) rx(theta) q[1];
-    "#;
-
-    let result = loads(qasm);
-    // Currently this may either fail or succeed with theta=0.0
-    // The test documents the current behavior
-    if let Ok(circuit) = result {
-        let ops = circuit.operations();
-        match &ops[2].instruction {
-            Instruction::ControlFlowGate(ControlFlow::IfElse(if_else)) => {
-                let true_body = if_else.true_body();
-                if let Instruction::Standard(StandardGate::RX) = &true_body[0].instruction {
-                    match &true_body[0].params[0] {
-                        CircuitParam::Fixed(val) => {
-                            // Document current behavior: undefined symbols become 0.0
-                            // This is a known limitation that may be improved in the future
-                            println!("Undefined symbolic parameter 'theta' evaluated to: {}", val);
-                        }
-                        CircuitParam::Index(_) => {
-                            // If this is an Index, it means the parameter was properly interned
-                            // which would be an improvement
-                        }
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-    // Test passes either way - it just documents the behavior
-}
-
-#[test]
-fn test_if_statement_param_evaluation() {
-    // Verify that parameters are correctly evaluated in if-body context
-    use crate::circuit::gate::control_flow::ControlFlow;
-
-    // Test with expressions that should evaluate correctly
-    let test_cases = vec![
-        ("pi/2", std::f64::consts::FRAC_PI_2),
-        ("pi", std::f64::consts::PI),
-        ("0.5", 0.5),
-        ("1.0", 1.0),
-        ("2*pi", 2.0 * std::f64::consts::PI),
-    ];
-
-    for (expr, expected) in test_cases {
-        let qasm = format!(
-            r#"
-            OPENQASM 2.0;
-            qreg q[2];
-            creg c[1];
-            h q[0];
-            measure q[0] -> c[0];
-            if (c[0] == 1) rx({}) q[1];
+        creg c[3];
+        measure q -> c;
+        if (c == 5) x q[0];
         "#,
-            expr
-        );
+    )
+    .unwrap();
 
-        let result = loads(&qasm);
-        assert!(
-            result.is_ok(),
-            "Should parse rx({}): {:?}",
-            expr,
-            result.err()
-        );
-
-        let circuit = result.unwrap();
-        let ops = circuit.operations();
-        match &ops[2].instruction {
-            Instruction::ControlFlowGate(ControlFlow::IfElse(if_else)) => {
-                let true_body = if_else.true_body();
-                match &true_body[0].instruction {
-                    Instruction::Standard(StandardGate::RX) => {
-                        match &true_body[0].params[0] {
-                            CircuitParam::Fixed(val) => {
-                                assert!(
-                                    (val - expected).abs() < 1e-9,
-                                    "Expression '{}' should evaluate to {}, got {}",
-                                    expr,
-                                    expected,
-                                    val
-                                );
-                            }
-                            CircuitParam::Index(_) => {
-                                // Index is acceptable if parameter was interned
-                            }
-                        }
-                    }
-                    _ => panic!("Expected RX gate"),
-                }
-            }
-            _ => panic!("Expected IfElse"),
+    assert!(matches!(
+        circuit.operations()[0].instruction,
+        Instruction::ClassicalData(ClassicalDataOp::Store { .. })
+    ));
+    assert!(matches!(
+        circuit.operations()[1].instruction,
+        Instruction::ClassicalData(ClassicalDataOp::MeasureBits { .. })
+    ));
+    let Instruction::ClassicalControl(ClassicalControlOp::If(if_op)) =
+        &circuit.operations()[3].instruction
+    else {
+        panic!("expected if operation");
+    };
+    let ClassicalExprKind::Compare { lhs, rhs, .. } = if_op.condition().kind() else {
+        panic!("expected equality condition");
+    };
+    assert!(matches!(
+        lhs.kind(),
+        ClassicalExprKind::Cast {
+            cast: ClassicalCast::BitVecToUInt,
+            ..
         }
-    }
+    ));
+    assert!(matches!(
+        rhs.kind(),
+        ClassicalExprKind::UIntLiteral { value: 5, .. }
+    ));
+}
+
+#[test]
+fn test_condition_value_must_fit_creg_width() {
+    let error = loads(
+        r#"
+        OPENQASM 2.0;
+        qreg q[1];
+        creg c[2];
+        if (c == 4) x q[0];
+        "#,
+    )
+    .unwrap_err();
+
+    assert!(error.to_string().contains("does not fit"));
+}
+
+#[test]
+fn test_zero_width_register_is_rejected() {
+    let error = loads(
+        r#"
+        OPENQASM 2.0;
+        qreg q[1];
+        creg c[0];
+        "#,
+    )
+    .unwrap_err();
+
+    assert!(error.to_string().contains("positive width"));
+}
+
+#[test]
+fn test_if_statement_parameter_evaluation() {
+    let circuit = loads(
+        r#"
+        OPENQASM 2.0;
+        qreg q[1];
+        creg c[1];
+        if (c == 0) rx(pi/2) q[0];
+        "#,
+    )
+    .unwrap();
+
+    let Instruction::ClassicalControl(ClassicalControlOp::If(if_op)) =
+        &circuit.operations()[1].instruction
+    else {
+        panic!("expected if operation");
+    };
+    let body_op = &if_op.then_body().operations()[0];
+    assert!(matches!(
+        body_op.instruction,
+        Instruction::Standard(StandardGate::RX)
+    ));
+    assert!(matches!(
+        body_op.params[0],
+        CircuitParam::Fixed(value) if (value - std::f64::consts::FRAC_PI_2).abs() < 1e-10
+    ));
 }
 
 #[test]
@@ -867,32 +848,6 @@ fn test_if_statement_undefined_symbol_fails() {
     assert!(
         err.contains("Unknown parameter") || err.contains("Evaluation error"),
         "Expected 'Unknown parameter' or 'Evaluation error', got: {}",
-        err
-    );
-}
-
-#[test]
-fn test_if_statement_multibit_register_fails() {
-    // The backend only supports single-bit conditions.
-    // Using a multi-bit register should fail with a clear error.
-    let qasm_multibit = r#"
-        OPENQASM 2.0;
-        qreg q[2];
-        creg c_reg[3];
-        h q[0];
-        measure q[0] -> c_reg[0];
-        if (c_reg==1) x q[1];
-    "#;
-
-    let result = loads(qasm_multibit);
-    assert!(
-        result.is_err(),
-        "Multi-bit register condition should cause an error"
-    );
-    let err = result.unwrap_err().to_string();
-    assert!(
-        err.contains("single-bit conditions") || err.contains("not supported"),
-        "Expected error about single-bit conditions, got: {}",
         err
     );
 }
@@ -954,6 +909,36 @@ fn test_memory_resolver_include() {
     );
     let circuit = result.unwrap();
     assert_eq!(circuit.num_qubits(), 1);
+}
+
+#[test]
+fn test_qelib1_gate_name_cannot_be_redefined_in_external_include() {
+    use std::path::Path;
+
+    struct ReservedGateResolver;
+
+    impl QasmSourceResolver for ReservedGateResolver {
+        fn resolve_source(&self, path: &Path) -> Result<String, String> {
+            if path == Path::new("reserved.inc") {
+                Ok("gate h a { rx(pi) a; }".to_string())
+            } else {
+                Err(format!("File not found: {path:?}"))
+            }
+        }
+    }
+
+    let error = parse_qasm_with_context(
+        r#"
+        OPENQASM 2.0;
+        include "reserved.inc";
+        qreg q[1];
+        "#,
+        None,
+        Box::new(ReservedGateResolver),
+    )
+    .unwrap_err();
+
+    assert_eq!(error, QasmParseError::ReservedGateName("h".to_string()));
 }
 
 #[test]

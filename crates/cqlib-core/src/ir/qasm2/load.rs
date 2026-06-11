@@ -68,13 +68,14 @@
 //! let circuit = loads(qasm).unwrap();
 //! ```
 
-use crate::circuit::Circuit;
 use crate::circuit::bit::Qubit;
 use crate::circuit::circuit_param::{CircuitParam, ParameterValue};
 use crate::circuit::gate::circuit_gate::{CircuitGate, FrozenCircuit};
-use crate::circuit::gate::control_flow::{ConditionView, ControlFlow, IfElseGate};
 use crate::circuit::gate::{Directive, Instruction, StandardGate};
 use crate::circuit::operation::Operation;
+use crate::circuit::{
+    Circuit, ClassicalControlOp, ClassicalExpr, ClassicalType, ClassicalVar, ControlBody, IfOp,
+};
 
 use crate::circuit::parameter::Parameter;
 use crate::ir::qasm2::ast::{
@@ -160,6 +161,16 @@ const QELIB1_STANDARD_GATES: &[&str] = &[
     "crz", "CRZ", // mapped to StandardGate::CRZ
 ];
 
+/// Gate names declared by the bundled qelib1.inc file.
+///
+/// User sources may call these gates after including qelib1.inc, but may not
+/// redefine them. OpenQASM identifiers are case-sensitive, so this list uses
+/// the exact lowercase spellings present in the bundled file.
+const QELIB1_RESERVED_GATE_NAMES: &[&str] = &[
+    "u3", "u2", "u1", "cx", "id", "x", "y", "z", "h", "s", "sdg", "t", "tdg", "rx", "ry", "rz",
+    "cz", "cy", "ch", "ccx", "crz", "cu1", "cu3",
+];
+
 #[rustfmt::skip]
 mod parser {
     include!(concat!(env!("OUT_DIR"), "/ir/qasm2/parser.rs"));
@@ -222,6 +233,8 @@ pub enum QasmParseError {
     UndefinedRegister(String),
     /// Reference to undefined gate
     UndefinedGate(String),
+    /// Attempt to redefine a gate declared by the bundled qelib1.inc file
+    ReservedGateName(String),
     /// Invalid argument format or usage
     InvalidArgument(String),
     /// Gate applied to wrong number of qubits
@@ -245,6 +258,11 @@ impl std::fmt::Display for QasmParseError {
             QasmParseError::UndefinedQubit(s) => write!(f, "Undefined qubit: {}", s),
             QasmParseError::UndefinedRegister(s) => write!(f, "Undefined register: {}", s),
             QasmParseError::UndefinedGate(s) => write!(f, "Undefined gate: {}", s),
+            QasmParseError::ReservedGateName(s) => write!(
+                f,
+                "Gate name '{}' is reserved by qelib1.inc and cannot be redefined",
+                s
+            ),
             QasmParseError::InvalidArgument(s) => write!(f, "Invalid argument: {}", s),
             QasmParseError::MismatchedQubitCount { expected, actual } => {
                 write!(
@@ -293,9 +311,10 @@ struct AstToCircuit {
     qreg_order: Vec<String>,
     /// Classical register name -> size mapping
     cregs: HashMap<String, i64>,
-    /// Maps (creg_name, creg_index) -> qubit for condition tracking
-    /// Populated during measure processing; used for if-statement conditions
-    creg_to_qubit_map: HashMap<(String, usize), Qubit>,
+    /// Declaration order for deterministic classical-variable allocation.
+    creg_order: Vec<String>,
+    /// Classical register name -> circuit-local BitVec variable.
+    creg_vars: HashMap<String, ClassicalVar>,
     /// Custom gate definitions (name -> definition)
     custom_gates: HashMap<String, CustomGateDef>,
     /// Base path for resolving relative include paths
@@ -310,14 +329,6 @@ struct AstToCircuit {
     compiling_gates: HashSet<String>,
     /// File system abstraction
     resolver: Box<dyn QasmSourceResolver>,
-}
-
-/// Enum to distinguish between a specific classical bit reference and a whole register reference.
-enum ClassicalRef {
-    /// A specific bit reference, e.g., "c[0]"
-    Single(String, usize),
-    /// A whole register reference, e.g., "c"
-    Whole(String),
 }
 
 /// A custom gate definition that stores either AST or compiled CircuitGate
@@ -335,13 +346,20 @@ struct CustomGateDef {
     is_opaque: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DiscoverySource {
+    User,
+    BuiltinQelib1,
+}
+
 impl AstToCircuit {
     fn new(base_path: Option<PathBuf>, resolver: Box<dyn QasmSourceResolver>) -> Self {
         Self {
             qregs: HashMap::new(),
             qreg_order: Vec::new(),
             cregs: HashMap::new(),
-            creg_to_qubit_map: HashMap::new(),
+            creg_order: Vec::new(),
+            creg_vars: HashMap::new(),
             custom_gates: HashMap::new(),
             base_path,
             file_cache: HashMap::new(),
@@ -355,15 +373,38 @@ impl AstToCircuit {
     fn convert(&mut self, program: &OpenQASMProgram) -> Result<Circuit, QasmParseError> {
         // Phase 1: Discovery
         // Recursively traverse includes to find all qregs and gate definitions
-        self.discovery_pass(program)?;
+        self.discovery_pass(program, DiscoverySource::User)?;
 
         // Phase 1.5: Compile all custom gates
         // This must happen after all gate definitions are discovered
         self.compile_all_gates()?;
 
         // Calculate total qubits
-        let total_qubits: usize = self.qregs.values().sum::<i64>() as usize;
+        let total_qubits = self.qregs.values().try_fold(0usize, |total, size| {
+            total.checked_add(*size as usize).ok_or_else(|| {
+                QasmParseError::ConversionError(
+                    "Total quantum register size exceeds platform limits".to_string(),
+                )
+            })
+        })?;
         let mut circuit = Circuit::new(total_qubits);
+
+        for name in &self.creg_order {
+            let width = self.cregs[name] as u32;
+            let ty = ClassicalType::bit_vec(width).ok_or_else(|| {
+                QasmParseError::ConversionError(format!(
+                    "Classical register '{name}' must have non-zero width"
+                ))
+            })?;
+            let var = circuit.var(ty);
+            let zero =
+                ClassicalExpr::pack_bits((0..width).map(|_| ClassicalExpr::bit_literal(false)))
+                    .map_err(|e| QasmParseError::ConversionError(e.to_string()))?;
+            circuit
+                .store(var, zero)
+                .map_err(|e| QasmParseError::ConversionError(e.to_string()))?;
+            self.creg_vars.insert(name.clone(), var);
+        }
 
         // Create the register start map: reg_name -> global_start_index
         let mut reg_start_map: HashMap<String, usize> = HashMap::new();
@@ -441,30 +482,31 @@ impl AstToCircuit {
         // Increment recursion depth
         self.recursion_depth += 1;
 
-        // Ensure dependencies are compiled
-        for stmt in &body {
-            if let Statement::CustomGate(dep_name, _, _) = stmt {
-                if self.custom_gates.contains_key(dep_name) {
-                    // Check if this dependency creates a cycle
-                    if self.compiling_gates.contains(dep_name) {
-                        return Err(QasmParseError::CircularGateDependency {
-                            gate: name.to_string(),
-                            dependency: dep_name.to_string(),
-                        });
+        let result = (|| {
+            // Ensure dependencies are compiled
+            for stmt in &body {
+                if let Statement::CustomGate(dep_name, _, _) = stmt {
+                    if self.custom_gates.contains_key(dep_name) {
+                        // Check if this dependency creates a cycle
+                        if self.compiling_gates.contains(dep_name) {
+                            return Err(QasmParseError::CircularGateDependency {
+                                gate: name.to_string(),
+                                dependency: dep_name.to_string(),
+                            });
+                        }
+                        self.compile_gate_if_needed(dep_name)?;
                     }
-                    self.compile_gate_if_needed(dep_name)?;
                 }
             }
-        }
 
-        // Build the circuit gate
-        let circuit_gate = self.build_circuit_gate(name, &params, &qubits, &body)?;
+            self.build_circuit_gate(name, &params, &qubits, &body)
+        })();
 
-        // Decrement recursion depth
+        // Restore compilation state before propagating any error.
         self.recursion_depth -= 1;
-
-        // Mark this gate as no longer being compiled
         self.compiling_gates.remove(name);
+
+        let circuit_gate = result?;
 
         // Store the compiled result
         if let Some(def) = self.custom_gates.get_mut(name) {
@@ -474,21 +516,46 @@ impl AstToCircuit {
         Ok(Some(circuit_gate))
     }
 
-    fn discovery_pass(&mut self, program: &OpenQASMProgram) -> Result<(), QasmParseError> {
+    fn discovery_pass(
+        &mut self,
+        program: &OpenQASMProgram,
+        source: DiscoverySource,
+    ) -> Result<(), QasmParseError> {
         for stmt in &program.statements {
             match stmt {
                 Statement::QReg(name, size) => {
+                    if *size <= 0 {
+                        return Err(QasmParseError::InvalidArgument(format!(
+                            "Quantum register '{name}' must have positive width, got {size}"
+                        )));
+                    }
                     if !self.qregs.contains_key(name) {
                         self.qregs.insert(name.clone(), *size);
                         self.qreg_order.push(name.clone());
                     }
                 }
                 Statement::CReg(name, size) => {
-                    self.cregs.insert(name.clone(), *size);
+                    if *size <= 0 {
+                        return Err(QasmParseError::InvalidArgument(format!(
+                            "Classical register '{name}' must have positive width, got {size}"
+                        )));
+                    }
+                    if !self.cregs.contains_key(name) {
+                        self.cregs.insert(name.clone(), *size);
+                        self.creg_order.push(name.clone());
+                    }
                 }
                 Statement::GateDecl(data) => {
+                    if source == DiscoverySource::User
+                        && QELIB1_RESERVED_GATE_NAMES.contains(&data.name.as_str())
+                    {
+                        return Err(QasmParseError::ReservedGateName(data.name.clone()));
+                    }
+
                     // Skip standard gates from qelib1.inc - they have direct StandardGate mappings
-                    if QELIB1_STANDARD_GATES.contains(&data.name.as_str()) {
+                    if source == DiscoverySource::BuiltinQelib1
+                        && QELIB1_STANDARD_GATES.contains(&data.name.as_str())
+                    {
                         continue;
                     }
 
@@ -534,10 +601,21 @@ impl AstToCircuit {
                             .insert(target_path.clone(), included_program.clone());
 
                         // Recurse
-                        self.discovery_pass(&included_program)?;
+                        let included_source = if filename == "qelib1.inc" {
+                            DiscoverySource::BuiltinQelib1
+                        } else {
+                            DiscoverySource::User
+                        };
+                        self.discovery_pass(&included_program, included_source)?;
                     }
                 }
                 Statement::Opaque(name, params, qubits) => {
+                    if source == DiscoverySource::User
+                        && QELIB1_RESERVED_GATE_NAMES.contains(&name.as_str())
+                    {
+                        return Err(QasmParseError::ReservedGateName(name.clone()));
+                    }
+
                     // Opaque gates have no body - they cannot be expanded
                     let decl = CustomGateDef {
                         name: name.clone(),
@@ -975,21 +1053,41 @@ impl AstToCircuit {
                         )));
                     }
 
-                    // Apply measurement operations and track creg -> qubit mapping
-                    for (i, qubit) in qubits.iter().enumerate() {
-                        // Store measurement result with classical register index
-                        // Track the mapping for if-statement support
-                        if let Argument::IndexedId(creg_name, _) = carg {
-                            // Single bit case: carg is like "c[0]"
-                            self.creg_to_qubit_map
-                                .insert((creg_name.clone(), creg_indices[i]), *qubit);
-                        } else if let Argument::Id(creg_name) = carg {
-                            // Register case: carg is like "c", need to track each index
-                            self.creg_to_qubit_map
-                                .insert((creg_name.clone(), creg_indices[i]), *qubit);
-                        }
+                    let creg_name = match carg {
+                        Argument::Id(name) | Argument::IndexedId(name, _) => name,
+                    };
+                    let target = *self
+                        .creg_vars
+                        .get(creg_name)
+                        .ok_or_else(|| QasmParseError::UndefinedRegister(creg_name.clone()))?;
+
+                    if matches!(carg, Argument::Id(_)) {
+                        let result = circuit
+                            .measure_bits(qubits)
+                            .map_err(|e| QasmParseError::ConversionError(e.to_string()))?;
                         circuit
-                            .measure(*qubit)
+                            .store(target, result.expr())
+                            .map_err(|e| QasmParseError::ConversionError(e.to_string()))?;
+                    } else {
+                        let result = circuit
+                            .measure(qubits[0])
+                            .map_err(|e| QasmParseError::ConversionError(e.to_string()))?;
+                        let width = target.ty().width();
+                        let measured_index = creg_indices[0] as u32;
+                        let mut bits = Vec::with_capacity(width as usize);
+                        for index in 0..width {
+                            let bit = if index == measured_index {
+                                result.expr()
+                            } else {
+                                ClassicalExpr::extract_bit(target.expr(), index)
+                                    .map_err(|e| QasmParseError::ConversionError(e.to_string()))?
+                            };
+                            bits.push(bit);
+                        }
+                        let packed = ClassicalExpr::pack_bits(bits)
+                            .map_err(|e| QasmParseError::ConversionError(e.to_string()))?;
+                        circuit
+                            .store(target, packed)
                             .map_err(|e| QasmParseError::ConversionError(e.to_string()))?;
                     }
                 }
@@ -1034,58 +1132,12 @@ impl AstToCircuit {
                     }
                 }
                 Statement::If(creg, value, stmt) => {
-                    // 1. Parse the classical register reference
-                    let creg_ref = Self::parse_creg_reference(creg)?;
-
-                    // 2. Resolve to name and index, enforcing backend limitations
-                    let (target_name, target_index) = match creg_ref {
-                        ClassicalRef::Single(name, idx) => (name, idx),
-                        ClassicalRef::Whole(name) => {
-                            let size = *self.cregs.get(&name).ok_or_else(|| {
-                                QasmParseError::UndefinedRegister(format!(
-                                    "Classical register '{}' not defined",
-                                    name
-                                ))
-                            })?;
-
-                            if size > 1 {
-                                return Err(QasmParseError::ConversionError(format!(
-                                    "Unsupported: The backend only supports single-bit conditions. Register '{}' has {} bits.",
-                                    name, size
-                                )));
-                            }
-                            // If size is 1, treat "c" as "c[0]"
-                            (name, 0)
-                        }
-                    };
-
-                    // 3. Convert inner statement to operations
-                    // Note: Symbolic parameters are NOT allowed in if bodies per OpenQASM 2.0 spec
                     let true_body = self.statement_to_operations(stmt, reg_start_map)?;
-
-                    // 4. Find the corresponding measured qubit
-                    let condition_qubit = self
-                        .creg_to_qubit_map
-                        .get(&(target_name.clone(), target_index))
-                        .ok_or_else(|| {
-                            QasmParseError::ConversionError(format!(
-                                "No measurement found for classical bit '{}[{}]'. Conditional operations require a prior measurement.",
-                                target_name, target_index
-                            ))
-                        })?;
-
-                    // 5. Create ConditionView and IfElseGate
-                    let condition = ConditionView::new(*condition_qubit, *value as u8);
-                    let if_else_gate = IfElseGate::new(condition, true_body, None);
-
-                    // 6. Add to circuit as ControlFlow
+                    let condition = self.build_condition(creg, *value)?;
+                    let if_op = IfOp::new(condition, ControlBody::new(true_body), None)
+                        .map_err(|e| QasmParseError::ConversionError(e.to_string()))?;
                     circuit
-                        .append(
-                            Instruction::ControlFlowGate(ControlFlow::IfElse(if_else_gate)),
-                            vec![*condition_qubit],
-                            std::iter::empty(),
-                            None,
-                        )
+                        .append_control(ClassicalControlOp::If(if_op))
                         .map_err(|e| QasmParseError::ConversionError(e.to_string()))?;
                 }
                 _ => {} // Declarations already handled
@@ -1201,11 +1253,15 @@ impl AstToCircuit {
                 }
             }
             Argument::IndexedId(name, idx) => {
-                // Single classical bit
-                if !self.cregs.contains_key(name) {
-                    return Err(QasmParseError::UndefinedRegister(format!(
+                let size = self.cregs.get(name).ok_or_else(|| {
+                    QasmParseError::UndefinedRegister(format!(
                         "Classical register '{}' not defined",
                         name
+                    ))
+                })?;
+                if *idx < 0 || *idx >= *size {
+                    return Err(QasmParseError::InvalidArgument(format!(
+                        "Classical register index {name}[{idx}] is out of bounds for width {size}"
                     )));
                 }
                 indices.push(*idx as usize);
@@ -1214,30 +1270,59 @@ impl AstToCircuit {
         Ok(indices)
     }
 
-    /// Parse classical register reference from if statement.
-    /// Handles formats like "c" (whole register) or "c[0]" (single bit).
-    fn parse_creg_reference(creg: &str) -> Result<ClassicalRef, QasmParseError> {
-        if let Some(start) = creg.find('[') {
-            if let Some(end) = creg.find(']') {
-                let name = creg[0..start].to_string();
-                let index_str = &creg[start + 1..end];
-                let index: usize = index_str.parse().map_err(|_| {
-                    QasmParseError::InvalidArgument(format!(
-                        "Invalid register index: {}",
-                        index_str
-                    ))
-                })?;
-                Ok(ClassicalRef::Single(name, index))
-            } else {
-                Err(QasmParseError::InvalidArgument(format!(
-                    "Unclosed bracket in: {}",
-                    creg
-                )))
-            }
-        } else {
-            // No brackets means whole register reference
-            Ok(ClassicalRef::Whole(creg.to_string()))
+    fn build_condition(
+        &self,
+        reference: &Argument,
+        value: i64,
+    ) -> Result<ClassicalExpr, QasmParseError> {
+        let (name, index) = match reference {
+            Argument::Id(name) => (name, None),
+            Argument::IndexedId(name, index) => (name, Some(*index)),
+        };
+        let var = *self
+            .creg_vars
+            .get(name)
+            .ok_or_else(|| QasmParseError::UndefinedRegister(name.clone()))?;
+        let width = var.ty().width();
+
+        if value < 0 {
+            return Err(QasmParseError::InvalidArgument(format!(
+                "Classical condition value must be non-negative, got {value}"
+            )));
         }
+
+        let (lhs, rhs) = if let Some(index) = index {
+            if index < 0 || index as u32 >= width {
+                return Err(QasmParseError::InvalidArgument(format!(
+                    "Classical register index {name}[{index}] is out of bounds for width {width}"
+                )));
+            }
+            if value > 1 {
+                return Err(QasmParseError::InvalidArgument(format!(
+                    "Single-bit condition value must be 0 or 1, got {value}"
+                )));
+            }
+            (
+                ClassicalExpr::extract_bit(var.expr(), index as u32)
+                    .map_err(|e| QasmParseError::ConversionError(e.to_string()))?,
+                ClassicalExpr::bit_literal(value == 1),
+            )
+        } else {
+            let value = value as u128;
+            if width < 128 && value >= (1u128 << width) {
+                return Err(QasmParseError::InvalidArgument(format!(
+                    "Condition value {value} does not fit classical register '{name}' width {width}"
+                )));
+            }
+            (
+                ClassicalExpr::bit_vec_to_uint(var.expr())
+                    .map_err(|e| QasmParseError::ConversionError(e.to_string()))?,
+                ClassicalExpr::uint_literal(width, value)
+                    .map_err(|e| QasmParseError::ConversionError(e.to_string()))?,
+            )
+        };
+
+        ClassicalExpr::eq(lhs, rhs).map_err(|e| QasmParseError::ConversionError(e.to_string()))
     }
 
     /// Convert a single Statement to Operations for use in if-else body.
@@ -1266,10 +1351,10 @@ impl AstToCircuit {
                     if let Some(ref cg) = gate_def.circuit_gate {
                         // Strict conversion: symbolic parameters are not allowed
                         let mut circuit_params = SmallVec::new();
-                        for pv in param_values {
+                        for pv in &param_values {
                             match pv {
                                 ParameterValue::Fixed(v) => {
-                                    circuit_params.push(CircuitParam::Fixed(v))
+                                    circuit_params.push(CircuitParam::Fixed(*v))
                                 }
                                 ParameterValue::Param(p) => {
                                     return Err(QasmParseError::ConversionError(format!(
@@ -1287,14 +1372,6 @@ impl AstToCircuit {
                         });
                         return Ok(operations);
                     }
-                }
-
-                // Try standard gate with strict parameter checking
-                let mut param_values: SmallVec<[ParameterValue; 3]> = smallvec![];
-                let symbols: HashMap<String, Parameter> = HashMap::new();
-                for e in params {
-                    let param = Self::expr_to_parameter(e, &symbols)?;
-                    param_values.push(ParameterValue::from(param));
                 }
 
                 self.append_standard_gate_to_operation(
@@ -1324,18 +1401,10 @@ impl AstToCircuit {
                     });
                 }
             }
-            Statement::Measure(qarg, _carg) => {
-                let qubits = self.resolve_global_args_single_or_register(qarg, reg_start_map)?;
-                // Note: We can't actually execute measurement in the if-body in this context
-                // Just add the operation for completeness
-                for qubit in qubits {
-                    operations.push(Operation {
-                        instruction: Instruction::Directive(Directive::Measure),
-                        qubits: smallvec![qubit],
-                        params: smallvec![],
-                        label: None,
-                    });
-                }
+            Statement::Measure(_, _) => {
+                return Err(QasmParseError::ConversionError(
+                    "Measurement in an OpenQASM 2.0 conditional body is not supported".to_string(),
+                ));
             }
             _ => {
                 return Err(QasmParseError::ConversionError(format!(

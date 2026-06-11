@@ -13,12 +13,9 @@
 use crate::circuit::gate::circuit_gate::FrozenCircuit;
 use crate::circuit::gate::{StandardGate, UnitaryGate};
 use crate::circuit::parameter::Parameter;
-use crate::circuit::{
-    Circuit, ConditionView, ControlFlow, IfElseGate, Instruction, Operation, Qubit, WhileLoopGate,
-};
+use crate::circuit::{Circuit, ClassicalExpr, ClassicalType, Instruction, Qubit};
 use crate::ir::qasm2::dump::{QasmDumpError, dumps};
 use crate::ir::qasm2::load::loads;
-use smallvec::smallvec;
 use std::sync::Arc;
 
 /// Assert that QASM output contains all expected lines in order
@@ -34,18 +31,6 @@ fn assert_qasm_contains_ordered(qasm: &str, expected_lines: &[&str]) {
             qasm
         );
         search_start += pos.unwrap() + line.len();
-    }
-}
-
-/// Assert that QASM does NOT contain any forbidden lines
-fn assert_qasm_not_contains(qasm: &str, forbidden_lines: &[&str]) {
-    for &line in forbidden_lines {
-        assert!(
-            !qasm.contains(line),
-            "QASM output should NOT contain:\n'{}'\n\nActual QASM:\n{}",
-            line,
-            qasm
-        );
     }
 }
 
@@ -209,14 +194,12 @@ fn test_dump_directives_no_condition() {
     assert_qasm_contains_ordered(
         &qasm,
         &[
+            "creg v0[1];",
             "reset q[0];",
             "barrier q[0],q[1];",
-            "// measure q[0] -> c0[0];", // Commented out - no conditional use
+            "measure q[0] -> v0[0];",
         ],
     );
-
-    // Verify NO creg declarations
-    assert_qasm_not_contains(&qasm, &["creg"]);
 
     verify_qasm_roundtrip(&qasm, 2);
 }
@@ -250,6 +233,23 @@ fn test_dump_custom_gate() {
 
     // Check Usage
     assert_qasm_contains(&qasm, &["bell q[0],q[1];"]);
+}
+
+#[test]
+fn test_dump_rejects_measurement_in_gate_definition() {
+    let mut inner = Circuit::new(1);
+    inner.measure(Qubit::new(0)).unwrap();
+    let gate = inner.to_gate("measuring_gate").unwrap();
+
+    let mut circuit = Circuit::new(1);
+    circuit
+        .append(gate, [Qubit::new(0)], std::iter::empty(), None)
+        .unwrap();
+
+    assert!(matches!(
+        dumps(&circuit),
+        Err(QasmDumpError::MeasureInGateNotAllowed)
+    ));
 }
 
 #[test]
@@ -312,7 +312,7 @@ fn test_dump_mc_gate() {
 }
 
 #[test]
-fn test_gate_collision_behavior() {
+fn test_dump_gate_collision_same_interface() {
     // Define Gate A: H gate
     let mut c1 = Circuit::new(1);
     c1.h(Qubit::new(0)).unwrap();
@@ -329,13 +329,10 @@ fn test_gate_collision_behavior() {
     main.append(g1, vec![q0], vec![], None).unwrap();
     main.append(g2, vec![q0], vec![], None).unwrap();
 
-    let qasm = dumps(&main).expect("Dump failed");
-
-    assert!(qasm.contains("gate my_gate q0 {\nh q0;"));
-    assert!(!qasm.contains("x q0;")); // The definition body shouldn't have x
-
-    let matches: Vec<_> = qasm.match_indices("my_gate q[0];").collect();
-    assert_eq!(matches.len(), 2);
+    assert!(matches!(
+        dumps(&main),
+        Err(QasmDumpError::ConflictingGateDefinition { name, .. }) if name == "my_gate"
+    ));
 }
 
 #[test]
@@ -546,232 +543,166 @@ fn test_dump_extended_gates() {
 
 #[test]
 fn test_dump_if_statement_simple() {
-    // Strict test for basic if statement
     let mut circuit = Circuit::new(2);
     let q0 = Qubit::new(0);
     let q1 = Qubit::new(1);
 
     circuit.h(q0).unwrap();
-    circuit.measure(q0).unwrap();
-
-    let condition = ConditionView::new(q0, 1);
-    let true_body = vec![Operation {
-        instruction: Instruction::Standard(StandardGate::X),
-        qubits: smallvec![q1],
-        params: smallvec![],
-        label: None,
-    }];
-    let if_else_gate = IfElseGate::new(condition, true_body, None);
+    let measured = circuit.measure(q0).unwrap();
+    let condition = ClassicalExpr::bit_to_bool(measured.expr()).unwrap();
     circuit
-        .append(
-            Instruction::ControlFlowGate(ControlFlow::IfElse(if_else_gate)),
-            vec![q0],
-            std::iter::empty(),
-            None,
-        )
+        .if_(condition, |body| {
+            body.x(q1)?;
+            Ok(())
+        })
         .unwrap();
 
     let qasm = dumps(&circuit).expect("Dump should succeed");
-
-    // Strict verification of OpenQASM 2.0 compliance
     assert_qasm_contains_ordered(
         &qasm,
         &[
-            "creg c0[1];",
+            "creg v0[1];",
             "h q[0];",
-            "measure q[0] -> c0[0];",
-            "if (c0 == 1) x q[1];",
+            "measure q[0] -> v0[0];",
+            "if (v0 == 1) x q[1];",
         ],
     );
-
-    // Verify exact format - NO array notation in if condition
-    assert!(
-        qasm.contains("if (c0 == 1)"),
-        "OpenQASM 2.0 requires 'if (c0 == 1)' not 'if (c[0] == 1)'"
-    );
-    assert!(
-        !qasm.contains("c[0]"),
-        "Should NOT use multi-bit register notation c[0]"
-    );
-
     verify_qasm_roundtrip(&qasm, 2);
 }
 
 #[test]
-fn test_dump_if_statement_with_cx() {
+fn test_dump_measure_into_bitvec_and_multibit_condition() {
     let mut circuit = Circuit::new(3);
-    let q0 = Qubit::new(0);
-    let q1 = Qubit::new(1);
-    let q2 = Qubit::new(2);
-
-    circuit.h(q0).unwrap();
-    circuit.measure(q0).unwrap();
-
-    // Create if-else gate with CX
-    let condition = ConditionView::new(q0, 1);
-    let true_body = vec![Operation {
-        instruction: Instruction::Standard(StandardGate::CX),
-        qubits: smallvec![q1, q2],
-        params: smallvec![],
-        label: None,
-    }];
-    let if_else_gate = IfElseGate::new(condition, true_body, None);
+    let register = circuit.var(ClassicalType::bit_vec(3).unwrap());
     circuit
-        .append(
-            Instruction::ControlFlowGate(ControlFlow::IfElse(if_else_gate)),
-            vec![q0],
-            std::iter::empty(),
-            None,
-        )
+        .measure_bits_into([Qubit::new(0), Qubit::new(1), Qubit::new(2)], register)
+        .unwrap();
+    let condition = ClassicalExpr::eq(
+        ClassicalExpr::bit_vec_to_uint(register.expr()).unwrap(),
+        ClassicalExpr::uint_literal(3, 5).unwrap(),
+    )
+    .unwrap();
+    circuit
+        .if_(condition, |body| {
+            body.x(Qubit::new(0))?;
+            Ok(())
+        })
         .unwrap();
 
     let qasm = dumps(&circuit).expect("Dump should succeed");
-
-    // Strict verification
     assert_qasm_contains_ordered(
         &qasm,
         &[
-            "creg c0[1];",
-            "h q[0];",
+            "creg c0[3];",
             "measure q[0] -> c0[0];",
-            "if (c0 == 1) cx q[1],q[2];",
+            "measure q[1] -> c0[1];",
+            "measure q[2] -> c0[2];",
+            "if (c0 == 5) x q[0];",
         ],
     );
-
     verify_qasm_roundtrip(&qasm, 3);
 }
 
 #[test]
-fn test_dump_simple_if_else() {
-    // Create a circuit with if-else (only true branch)
-    let mut circuit = Circuit::new(2);
+fn test_dynamic_qasm_load_dump_roundtrip() {
+    let circuit = loads(
+        r#"
+        OPENQASM 2.0;
+        qreg q[3];
+        creg c[3];
+        measure q -> c;
+        if (c == 5) x q[0];
+        "#,
+    )
+    .unwrap();
 
-    circuit.h(Qubit::new(0)).unwrap();
-    circuit.measure(Qubit::new(0)).unwrap();
-
-    let condition = ConditionView::new(Qubit::new(0), 1);
-    let true_body = vec![Operation {
-        instruction: Instruction::Standard(StandardGate::X),
-        qubits: smallvec![Qubit::new(1)],
-        params: smallvec![],
-        label: None,
-    }];
-    let if_else_gate = IfElseGate::new(condition, true_body, None);
-    circuit
-        .append(
-            Instruction::ControlFlowGate(ControlFlow::IfElse(if_else_gate)),
-            vec![Qubit::new(0), Qubit::new(1)],
-            std::iter::empty(),
-            None,
-        )
-        .unwrap();
-
-    let qasm = dumps(&circuit).expect("Dump should succeed");
-
-    // Strict verification
+    let qasm = dumps(&circuit).unwrap();
     assert_qasm_contains_ordered(
         &qasm,
         &[
-            "creg c0[1];",
-            "h q[0];",
+            "creg c0[3];",
             "measure q[0] -> c0[0];",
-            "if (c0 == 1) x q[1];",
+            "measure q[1] -> c0[1];",
+            "measure q[2] -> c0[2];",
+            "if (c0 == 5) x q[0];",
         ],
     );
-
-    // Verify NO else branch
-    assert!(!qasm.contains("c0 == 0"), "Should not have else branch");
-
-    verify_qasm_roundtrip(&qasm, 2);
+    verify_qasm_roundtrip(&qasm, 3);
 }
 
 #[test]
-fn test_dump_if_else_detailed() {
-    // Create a circuit with if-else with false branch
+fn test_dump_if_else_is_rejected() {
     let mut circuit = Circuit::new(2);
-
-    circuit.h(Qubit::new(0)).unwrap();
-    circuit.measure(Qubit::new(0)).unwrap();
-
-    // if (q0 == 1) x q1 else z q1
-    let condition = ConditionView::new(Qubit::new(0), 1);
-    let true_body = vec![Operation {
-        instruction: Instruction::Standard(StandardGate::X),
-        qubits: smallvec![Qubit::new(1)],
-        params: smallvec![],
-        label: None,
-    }];
-    let false_body = vec![Operation {
-        instruction: Instruction::Standard(StandardGate::Z),
-        qubits: smallvec![Qubit::new(1)],
-        params: smallvec![],
-        label: None,
-    }];
-    let if_else_gate = IfElseGate::new(condition, true_body, Some(false_body));
+    let measured = circuit.measure(Qubit::new(0)).unwrap();
+    let condition = ClassicalExpr::bit_to_bool(measured.expr()).unwrap();
     circuit
-        .append(
-            Instruction::ControlFlowGate(ControlFlow::IfElse(if_else_gate)),
-            vec![Qubit::new(0), Qubit::new(1)],
-            std::iter::empty(),
-            None,
+        .if_else(
+            condition,
+            |body| {
+                body.x(Qubit::new(1))?;
+                Ok(())
+            },
+            |body| {
+                body.z(Qubit::new(1))?;
+                Ok(())
+            },
         )
         .unwrap();
 
-    let qasm = dumps(&circuit).expect("Should dump");
-
-    // Strict verification of OpenQASM 2.0 format
-    assert_qasm_contains_ordered(
-        &qasm,
-        &[
-            "creg c0[1];",
-            "h q[0];",
-            "measure q[0] -> c0[0];",
-            "if (c0 == 1) x q[1];",
-            "if (c0 == 0) z q[1];",
-        ],
-    );
-
-    // Verify else branch uses inverted condition
-    assert!(
-        qasm.contains("if (c0 == 0) z q[1]"),
-        "Else branch should use inverted condition (c0 == 0)"
-    );
-
-    verify_qasm_roundtrip(&qasm, 2);
+    assert!(matches!(
+        dumps(&circuit),
+        Err(QasmDumpError::UnsupportedClassicalControl(_))
+    ));
 }
 
 #[test]
 fn test_dump_while_loop_error() {
-    // While loops are not supported in OpenQASM 2.0
-    let mut circuit = Circuit::new(2);
-
-    let condition = ConditionView::new(Qubit::new(0), 1);
-    let body = vec![Operation {
-        instruction: Instruction::Standard(StandardGate::H),
-        qubits: smallvec![Qubit::new(1)],
-        params: smallvec![],
-        label: None,
-    }];
-    let while_gate = WhileLoopGate::new(condition, body);
+    let mut circuit = Circuit::new(1);
     circuit
-        .append(
-            Instruction::ControlFlowGate(ControlFlow::WhileLoop(while_gate)),
-            vec![Qubit::new(0), Qubit::new(1)],
-            std::iter::empty(),
-            None,
-        )
+        .while_(ClassicalExpr::bool_literal(true), |body| {
+            body.h(Qubit::new(0))?;
+            Ok(())
+        })
         .unwrap();
 
-    // Must return specific error type
-    let result = dumps(&circuit);
-    assert!(result.is_err(), "While loop should fail");
+    assert!(matches!(
+        dumps(&circuit),
+        Err(QasmDumpError::UnsupportedClassicalControl(_))
+    ));
+}
 
-    match result.err().unwrap() {
-        QasmDumpError::WhileLoopNotSupported => {
-            // Expected error type
-        }
-        other => panic!("Expected WhileLoopNotSupported, got {:?}", other),
-    }
+#[test]
+fn test_dump_general_store_is_rejected() {
+    let mut circuit = Circuit::new(1);
+    let register = circuit.var(ClassicalType::bit_vec(2).unwrap());
+    circuit
+        .store(register, ClassicalExpr::bit_vec_literal(2, 1).unwrap())
+        .unwrap();
+
+    assert!(matches!(
+        dumps(&circuit),
+        Err(QasmDumpError::UnsupportedClassicalData(_))
+    ));
+}
+
+#[test]
+fn test_dump_rejects_reusing_fused_measurement_value() {
+    let mut circuit = Circuit::new(1);
+    let register = circuit.var(ClassicalType::bit_vec(1).unwrap());
+    let measured = circuit
+        .measure_bits_into([Qubit::new(0)], register)
+        .unwrap();
+    let condition = ClassicalExpr::eq(
+        ClassicalExpr::bit_vec_to_uint(measured.expr()).unwrap(),
+        ClassicalExpr::uint_literal(1, 1).unwrap(),
+    )
+    .unwrap();
+    circuit.if_(condition, |_| Ok(())).unwrap();
+
+    assert!(matches!(
+        dumps(&circuit),
+        Err(QasmDumpError::UnsupportedClassicalData(_))
+    ));
 }
 
 #[test]
@@ -795,52 +726,32 @@ fn test_dump_empty_circuit() {
 
 #[test]
 fn test_dump_multiple_conditional_qubits() {
-    // Test multiple independent if statements with different condition qubits
     let mut circuit = Circuit::new(4);
     let q0 = Qubit::new(0);
     let q1 = Qubit::new(1);
     let q2 = Qubit::new(2);
     let q3 = Qubit::new(3);
 
-    // Measure all qubits used in conditions
     circuit.h(q0).unwrap();
     circuit.h(q1).unwrap();
-    circuit.measure(q0).unwrap();
-    circuit.measure(q1).unwrap();
-
-    // First if: condition on q0
-    let cond0 = ConditionView::new(q0, 1);
-    let true_body0 = vec![Operation {
-        instruction: Instruction::Standard(StandardGate::X),
-        qubits: smallvec![q2],
-        params: smallvec![],
-        label: None,
-    }];
-    let if_else0 = IfElseGate::new(cond0, true_body0, None);
+    let measured0 = circuit.measure(q0).unwrap();
+    let measured1 = circuit.measure(q1).unwrap();
     circuit
-        .append(
-            Instruction::ControlFlowGate(ControlFlow::IfElse(if_else0)),
-            vec![q0, q2],
-            std::iter::empty(),
-            None,
+        .if_(
+            ClassicalExpr::bit_to_bool(measured0.expr()).unwrap(),
+            |body| {
+                body.x(q2)?;
+                Ok(())
+            },
         )
         .unwrap();
-
-    // Second if: condition on q1
-    let cond1 = ConditionView::new(q1, 1);
-    let true_body1 = vec![Operation {
-        instruction: Instruction::Standard(StandardGate::Z),
-        qubits: smallvec![q3],
-        params: smallvec![],
-        label: None,
-    }];
-    let if_else1 = IfElseGate::new(cond1, true_body1, None);
     circuit
-        .append(
-            Instruction::ControlFlowGate(ControlFlow::IfElse(if_else1)),
-            vec![q1, q3],
-            std::iter::empty(),
-            None,
+        .if_(
+            ClassicalExpr::bit_to_bool(measured1.expr()).unwrap(),
+            |body| {
+                body.z(q3)?;
+                Ok(())
+            },
         )
         .unwrap();
 
@@ -850,14 +761,14 @@ fn test_dump_multiple_conditional_qubits() {
     assert_qasm_contains_ordered(
         &qasm,
         &[
-            "creg c0[1];",
-            "creg c1[1];",
+            "creg v0[1];",
+            "creg v1[1];",
             "h q[0];",
             "h q[1];",
-            "measure q[0] -> c0[0];",
-            "measure q[1] -> c1[0];",
-            "if (c0 == 1) x q[2];",
-            "if (c1 == 1) z q[3];",
+            "measure q[0] -> v0[0];",
+            "measure q[1] -> v1[0];",
+            "if (v0 == 1) x q[2];",
+            "if (v1 == 1) z q[3];",
         ],
     );
 
@@ -866,7 +777,6 @@ fn test_dump_multiple_conditional_qubits() {
 
 #[test]
 fn test_dump_if_body_with_mcgate() {
-    // Test if-body containing multi-controlled gates
     let mut circuit = Circuit::new(4);
     let q0 = Qubit::new(0);
     let q1 = Qubit::new(1);
@@ -874,26 +784,22 @@ fn test_dump_if_body_with_mcgate() {
     let q3 = Qubit::new(3);
 
     circuit.h(q0).unwrap();
-    circuit.measure(q0).unwrap();
-
-    let condition = ConditionView::new(q0, 1);
-    // ccx in if body (2-controlled X, 2 controls + 1 target = 3 qubits)
-    let true_body = vec![Operation {
-        instruction: Instruction::McGate(Box::new(crate::circuit::gate::MCGate::new(
-            2, // 2 control qubits
-            StandardGate::X,
-        ))),
-        qubits: smallvec![q1, q2, q3],
-        params: smallvec![],
-        label: None,
-    }];
-    let if_else_gate = IfElseGate::new(condition, true_body, None);
+    let measured = circuit.measure(q0).unwrap();
     circuit
-        .append(
-            Instruction::ControlFlowGate(ControlFlow::IfElse(if_else_gate)),
-            vec![q0],
-            std::iter::empty(),
-            None,
+        .if_(
+            ClassicalExpr::bit_to_bool(measured.expr()).unwrap(),
+            |body| {
+                body.append(
+                    Instruction::McGate(Box::new(crate::circuit::gate::MCGate::new(
+                        2,
+                        StandardGate::X,
+                    ))),
+                    [q1, q2, q3],
+                    std::iter::empty(),
+                    None,
+                )?;
+                Ok(())
+            },
         )
         .unwrap();
 
@@ -903,10 +809,10 @@ fn test_dump_if_body_with_mcgate() {
     assert_qasm_contains_ordered(
         &qasm,
         &[
-            "creg c0[1];",
+            "creg v0[1];",
             "h q[0];",
-            "measure q[0] -> c0[0];",
-            "if (c0 == 1) ccx q[1],q[2],q[3];",
+            "measure q[0] -> v0[0];",
+            "if (v0 == 1) ccx q[1],q[2],q[3];",
         ],
     );
 
@@ -915,34 +821,28 @@ fn test_dump_if_body_with_mcgate() {
 
 #[test]
 fn test_dump_if_body_with_parameterized_mcgate() {
-    // Test if-body containing parameterized multi-controlled gates
     let mut circuit = Circuit::new(3);
     let q0 = Qubit::new(0);
     let q1 = Qubit::new(1);
     let q2 = Qubit::new(2);
 
     circuit.h(q0).unwrap();
-    circuit.measure(q0).unwrap();
-
-    let theta: f64 = 0.5; // Use fixed parameter for test
-    let condition = ConditionView::new(q0, 1);
-    // crx in if body (1-controlled RX with parameter)
-    let true_body = vec![Operation {
-        instruction: Instruction::McGate(Box::new(crate::circuit::gate::MCGate::new(
-            1, // 1 control qubit
-            StandardGate::RX,
-        ))),
-        qubits: smallvec![q1, q2],
-        params: smallvec![theta.into()],
-        label: None,
-    }];
-    let if_else_gate = IfElseGate::new(condition, true_body, None);
+    let measured = circuit.measure(q0).unwrap();
     circuit
-        .append(
-            Instruction::ControlFlowGate(ControlFlow::IfElse(if_else_gate)),
-            vec![q0],
-            std::iter::empty(),
-            None,
+        .if_(
+            ClassicalExpr::bit_to_bool(measured.expr()).unwrap(),
+            |body| {
+                body.append(
+                    Instruction::McGate(Box::new(crate::circuit::gate::MCGate::new(
+                        1,
+                        StandardGate::RX,
+                    ))),
+                    [q1, q2],
+                    [crate::circuit::ParameterValue::from(0.5)],
+                    None,
+                )?;
+                Ok(())
+            },
         )
         .unwrap();
 
@@ -953,10 +853,10 @@ fn test_dump_if_body_with_parameterized_mcgate() {
     assert_qasm_contains_ordered(
         &qasm,
         &[
-            "creg c0[1];",
+            "creg v0[1];",
             "h q[0];",
-            "measure q[0] -> c0[0];",
-            "if (c0 == 1) crx(0.5) q[1],q[2];",
+            "measure q[0] -> v0[0];",
+            "if (v0 == 1) crx(0.5) q[1],q[2];",
         ],
     );
 
@@ -965,7 +865,6 @@ fn test_dump_if_body_with_parameterized_mcgate() {
 
 #[test]
 fn test_dump_if_body_with_custom_gate() {
-    // Test if-body containing custom CircuitGate
     let mut sub_circ = Circuit::new(2);
     sub_circ.h(Qubit::new(0)).unwrap();
     sub_circ.cx(Qubit::new(0), Qubit::new(1)).unwrap();
@@ -974,137 +873,83 @@ fn test_dump_if_body_with_custom_gate() {
     let q0 = Qubit::new(0);
 
     circuit.h(q0).unwrap();
-    circuit.measure(q0).unwrap();
-
-    let condition = ConditionView::new(q0, 1);
-    let true_body = vec![Operation {
-        instruction: Instruction::CircuitGate(Box::new(
-            crate::circuit::gate::circuit_gate::CircuitGate {
-                name: Arc::new("my_bell".to_string()),
-                circuit: Arc::new(crate::circuit::gate::circuit_gate::FrozenCircuit::new(
-                    sub_circ.clone(),
-                )),
-                num_qubits: 2,
-                num_params: 0,
-            },
-        )),
-        qubits: smallvec![Qubit::new(1), Qubit::new(2)],
-        params: smallvec![],
-        label: None,
-    }];
-    // Use sub_circ to avoid unused variable warning
-    let _custom_gate = sub_circ.to_gate("my_bell").unwrap();
-    let if_else_gate = IfElseGate::new(condition, true_body, None);
+    let measured = circuit.measure(q0).unwrap();
+    let custom_gate = sub_circ.to_gate("my_bell").unwrap();
     circuit
-        .append(
-            Instruction::ControlFlowGate(ControlFlow::IfElse(if_else_gate)),
-            vec![q0],
-            std::iter::empty(),
-            None,
+        .if_(
+            ClassicalExpr::bit_to_bool(measured.expr()).unwrap(),
+            |body| {
+                body.append(
+                    custom_gate,
+                    [Qubit::new(1), Qubit::new(2)],
+                    std::iter::empty(),
+                    None,
+                )?;
+                Ok(())
+            },
         )
         .unwrap();
 
     let qasm = dumps(&circuit).expect("Dump failed");
 
-    // Verify custom gate definition and usage in if-body
-    // Note: Gate definitions for CircuitGate inside if-body may not be output
-    // The circuit simply references the gate by name
+    // Gate discovery must recurse into structured control-flow bodies.
     assert_qasm_contains_ordered(
         &qasm,
         &[
-            "creg c0[1];",
+            "creg v0[1];",
+            "gate my_bell q0,q1 {",
             "h q[0];",
-            "measure q[0] -> c0[0];",
-            "if (c0 == 1) my_bell q[1],q[2];",
+            "measure q[0] -> v0[0];",
+            "if (v0 == 1) my_bell q[1],q[2];",
         ],
     );
 }
 
 #[test]
 fn test_dump_nested_control_flow_error() {
-    // Nested control flow should return error
-    let mut circuit = Circuit::new(3);
-
-    // Outer if
-    let condition = ConditionView::new(Qubit::new(0), 1);
-
-    // Inner if in body (nested control flow)
-    let inner_condition = ConditionView::new(Qubit::new(1), 1);
-    let inner_body = vec![Operation {
-        instruction: Instruction::Standard(StandardGate::Z),
-        qubits: smallvec![Qubit::new(2)],
-        params: smallvec![],
-        label: None,
-    }];
-    let inner_if = IfElseGate::new(inner_condition, inner_body, None);
-    let inner_cf = Operation {
-        instruction: Instruction::ControlFlowGate(ControlFlow::IfElse(inner_if)),
-        qubits: smallvec![Qubit::new(1), Qubit::new(2)],
-        params: smallvec![],
-        label: None,
-    };
-
-    let outer_body = vec![inner_cf];
-    let outer_if = IfElseGate::new(condition, outer_body, None);
-
-    circuit.h(Qubit::new(0)).unwrap();
-    circuit.measure(Qubit::new(0)).unwrap();
+    let mut circuit = Circuit::new(2);
+    let outer = circuit.measure(Qubit::new(0)).unwrap();
+    let inner = circuit.measure(Qubit::new(1)).unwrap();
     circuit
-        .append(
-            Instruction::ControlFlowGate(ControlFlow::IfElse(outer_if)),
-            vec![Qubit::new(0)],
-            std::iter::empty(),
-            None,
-        )
+        .if_(ClassicalExpr::bit_to_bool(outer.expr()).unwrap(), |body| {
+            body.if_(ClassicalExpr::bit_to_bool(inner.expr())?, |inner_body| {
+                inner_body.z(Qubit::new(1))?;
+                Ok(())
+            })?;
+            Ok(())
+        })
         .unwrap();
 
-    let result = dumps(&circuit);
-    assert!(result.is_err(), "Nested control flow should fail");
-
-    match result.err().unwrap() {
-        QasmDumpError::NestedControlFlowNotSupported => {
-            // Expected
-        }
-        other => panic!("Expected NestedControlFlowNotSupported, got {:?}", other),
-    }
+    assert!(matches!(
+        dumps(&circuit),
+        Err(QasmDumpError::UnsupportedClassicalControl(_))
+    ));
 }
 
 #[test]
 fn test_dump_empty_if_body() {
-    // Empty if body should still generate valid QASM (no if statement needed)
-    let mut circuit = Circuit::new(2);
+    let mut circuit = Circuit::new(1);
     let q0 = Qubit::new(0);
 
     circuit.h(q0).unwrap();
-    circuit.measure(q0).unwrap();
-
-    let condition = ConditionView::new(q0, 1);
-    let empty_body: Vec<Operation> = vec![];
-    let if_else_gate = IfElseGate::new(condition, empty_body, None);
+    let measured = circuit.measure(q0).unwrap();
     circuit
-        .append(
-            Instruction::ControlFlowGate(ControlFlow::IfElse(if_else_gate)),
-            vec![q0],
-            std::iter::empty(),
-            None,
-        )
+        .if_(ClassicalExpr::bit_to_bool(measured.expr()).unwrap(), |_| {
+            Ok(())
+        })
         .unwrap();
 
     let qasm = dumps(&circuit).expect("Dump failed");
-
-    // Should have creg and measure but no if statement
-    assert_qasm_contains_ordered(&qasm, &["creg c0[1];", "h q[0];", "measure q[0] -> c0[0];"]);
-
-    // Should NOT have any if statement
+    assert_qasm_contains_ordered(&qasm, &["creg v0[1];", "h q[0];", "measure q[0] -> v0[0];"]);
     assert!(
         !qasm.contains("if ("),
         "Empty body should not generate if statement"
     );
+    verify_qasm_roundtrip(&qasm, 1);
 }
 
 #[test]
 fn test_dump_multi_operation_if_body() {
-    // If body with multiple operations
     let mut circuit = Circuit::new(4);
     let q0 = Qubit::new(0);
     let q1 = Qubit::new(1);
@@ -1112,36 +957,16 @@ fn test_dump_multi_operation_if_body() {
     let q3 = Qubit::new(3);
 
     circuit.h(q0).unwrap();
-    circuit.measure(q0).unwrap();
-
-    let condition = ConditionView::new(q0, 1);
-    let true_body = vec![
-        Operation {
-            instruction: Instruction::Standard(StandardGate::X),
-            qubits: smallvec![q1],
-            params: smallvec![],
-            label: None,
-        },
-        Operation {
-            instruction: Instruction::Standard(StandardGate::Y),
-            qubits: smallvec![q2],
-            params: smallvec![],
-            label: None,
-        },
-        Operation {
-            instruction: Instruction::Standard(StandardGate::Z),
-            qubits: smallvec![q3],
-            params: smallvec![],
-            label: None,
-        },
-    ];
-    let if_else_gate = IfElseGate::new(condition, true_body, None);
+    let measured = circuit.measure(q0).unwrap();
     circuit
-        .append(
-            Instruction::ControlFlowGate(ControlFlow::IfElse(if_else_gate)),
-            vec![q0],
-            std::iter::empty(),
-            None,
+        .if_(
+            ClassicalExpr::bit_to_bool(measured.expr()).unwrap(),
+            |body| {
+                body.x(q1)?;
+                body.y(q2)?;
+                body.z(q3)?;
+                Ok(())
+            },
         )
         .unwrap();
 
@@ -1151,12 +976,12 @@ fn test_dump_multi_operation_if_body() {
     assert_qasm_contains_ordered(
         &qasm,
         &[
-            "creg c0[1];",
+            "creg v0[1];",
             "h q[0];",
-            "measure q[0] -> c0[0];",
-            "if (c0 == 1) x q[1];",
-            "if (c0 == 1) y q[2];",
-            "if (c0 == 1) z q[3];",
+            "measure q[0] -> v0[0];",
+            "if (v0 == 1) x q[1];",
+            "if (v0 == 1) y q[2];",
+            "if (v0 == 1) z q[3];",
         ],
     );
 
@@ -1165,34 +990,14 @@ fn test_dump_multi_operation_if_body() {
 
 #[test]
 fn test_dump_unsupported_mcgate_error() {
-    // Test that unsupported McGates return proper error
     let mut circuit = Circuit::new(4);
-    let q0 = Qubit::new(0);
-    let q1 = Qubit::new(1);
-    let q2 = Qubit::new(2);
-    let q3 = Qubit::new(3);
-
-    circuit.h(q0).unwrap();
-    circuit.measure(q0).unwrap();
-
-    // Create unsupported McGate: 3-controlled X (cccx) - but we need a target qubit
-    // For this test, let's use q3 as target (3 controls + 1 target = 4 qubits, but we only have 4)
-    // So use 3 controls on X with only 3 qubits - this should cause an error
-    let condition = ConditionView::new(q0, 1);
-    let true_body = vec![Operation {
-        instruction: Instruction::McGate(Box::new(crate::circuit::gate::MCGate::new(
-            3, // 3 control qubits (cccx)
-            StandardGate::X,
-        ))),
-        qubits: smallvec![q1, q2, q3], // This is wrong (should be 4 qubits), but error handling should catch it
-        params: smallvec![],
-        label: None,
-    }];
-    let if_else_gate = IfElseGate::new(condition, true_body, None);
     circuit
         .append(
-            Instruction::ControlFlowGate(ControlFlow::IfElse(if_else_gate)),
-            vec![q0],
+            Instruction::McGate(Box::new(crate::circuit::gate::MCGate::new(
+                3,
+                StandardGate::X,
+            ))),
+            [Qubit::new(0), Qubit::new(1), Qubit::new(2), Qubit::new(3)],
             std::iter::empty(),
             None,
         )
@@ -1247,11 +1052,16 @@ fn test_dump_gate_collision_different_interface() {
     main.append(g2, vec![Qubit::new(0), Qubit::new(1)], vec![], None)
         .unwrap();
 
-    let qasm = dumps(&main).expect("Dump failed");
-
-    // Should have warning output but still work
-    // The first gate definition should be used
-    assert!(qasm.contains("gate collision_gate"));
+    assert!(matches!(
+        dumps(&main),
+        Err(QasmDumpError::ConflictingGateDefinition {
+            name,
+            existing_qubits: 1,
+            existing_params: 0,
+            conflicting_qubits: 2,
+            conflicting_params: 0,
+        }) if name == "collision_gate"
+    ));
 }
 
 #[test]
@@ -1397,36 +1207,26 @@ fn test_dump_gphase() {
 
 #[test]
 fn test_dump_condition_value_zero() {
-    // Test if condition with target value 0
     let mut circuit = Circuit::new(2);
     let q0 = Qubit::new(0);
     let q1 = Qubit::new(1);
 
     circuit.h(q0).unwrap();
-    circuit.measure(q0).unwrap();
-
-    let condition = ConditionView::new(q0, 0); // Target value 0
-    let true_body = vec![Operation {
-        instruction: Instruction::Standard(StandardGate::X),
-        qubits: smallvec![q1],
-        params: smallvec![],
-        label: None,
-    }];
-    let if_else_gate = IfElseGate::new(condition, true_body, None);
+    let measured = circuit.measure(q0).unwrap();
+    let condition =
+        ClassicalExpr::not(ClassicalExpr::bit_to_bool(measured.expr()).unwrap()).unwrap();
     circuit
-        .append(
-            Instruction::ControlFlowGate(ControlFlow::IfElse(if_else_gate)),
-            vec![q0],
-            std::iter::empty(),
-            None,
-        )
+        .if_(condition, |body| {
+            body.x(q1)?;
+            Ok(())
+        })
         .unwrap();
 
     let qasm = dumps(&circuit).expect("Dump failed");
 
     // Verify condition value 0
     assert!(
-        qasm.contains("if (c0 == 0)"),
+        qasm.contains("if (v0 == 0)"),
         "Should have condition with value 0: {}",
         qasm
     );
@@ -1451,26 +1251,18 @@ fn test_dump_qasm_ordering() {
     let q1 = Qubit::new(1);
 
     circuit.h(q0).unwrap();
-    circuit.measure(q0).unwrap();
+    let measured = circuit.measure(q0).unwrap();
 
     // Use custom gate
     circuit.append(custom_gate, vec![q1], vec![], None).unwrap();
 
-    // Add if statement
-    let condition = ConditionView::new(q0, 1);
-    let true_body = vec![Operation {
-        instruction: Instruction::Standard(StandardGate::X),
-        qubits: smallvec![q1],
-        params: smallvec![],
-        label: None,
-    }];
-    let if_else_gate = IfElseGate::new(condition, true_body, None);
     circuit
-        .append(
-            Instruction::ControlFlowGate(ControlFlow::IfElse(if_else_gate)),
-            vec![q0],
-            std::iter::empty(),
-            None,
+        .if_(
+            ClassicalExpr::bit_to_bool(measured.expr()).unwrap(),
+            |body| {
+                body.x(q1)?;
+                Ok(())
+            },
         )
         .unwrap();
 

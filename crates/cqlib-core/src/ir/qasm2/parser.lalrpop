@@ -30,12 +30,8 @@ Statement: Statement = {
     "barrier" <a:ArgList> ";" => Statement::Barrier(a),
     "reset" <a:Arg> ";" => Statement::Reset(a),
     "measure" <q:Arg> "->" <c:Arg> ";" => Statement::Measure(q, c),
-    "if" "(" <creg:CRegRef> "==" <value:Int> ")" <s:Statement> => {
-        // CRegRef returns (String, i64) as (name, index)
-        // Statement::If expects (creg_name, compare_value, statement)
-        let (name, _idx) = creg;
-        Statement::If(name, value, Box::new(s))
-    },
+    "if" "(" <creg:CRegRef> "==" <value:Int> ")" <s:Statement> =>
+        Statement::If(creg, value, Box::new(s)),
     // 门声明
     "gate" <name:Id> <p:("(" <IdList> ")")?> <q:IdList> "{" <body:Statement*> "}" => {
         Statement::GateDecl(Box::new(GateDeclData {
@@ -107,10 +103,11 @@ Arg: Argument = {
     <id:Id> "[" <n:Int> "]" => Argument::IndexedId(id, n),
 };
 
-// Classical register reference for if statements: supports both "c" and "c[0]"
-CRegRef: (String, i64) = {
-    <id:Id> => (id, 0),  // "c" means c[0]
-    <id:Id> "[" <n:Int> "]" => (id, n),  // "c[0]"
+// OpenQASM 2.0 uses a whole creg. Indexed references are accepted as a
+// cqlib-compatible extension and must retain their index in the AST.
+CRegRef: Argument = {
+    <id:Id> => Argument::Id(id),
+    <id:Id> "[" <n:Int> "]" => Argument::IndexedId(id, n),
 };
 
 // 基础词法规则

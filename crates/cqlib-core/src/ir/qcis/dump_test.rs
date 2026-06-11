@@ -1,8 +1,8 @@
 use super::*;
-use crate::circuit::Circuit;
 use crate::circuit::Qubit;
 use crate::circuit::circuit_param::ParameterValue;
 use crate::circuit::parameter::Parameter;
+use crate::circuit::{Circuit, ClassicalExpr, ClassicalType};
 
 #[test]
 fn test_dump_simple_gates() {
@@ -122,6 +122,42 @@ fn test_dump_measurement() {
 M Q1
 "#;
     assert_eq!(qcis, expected);
+}
+
+#[test]
+fn test_dump_measure_bits_preserves_qubit_order() {
+    let mut c = Circuit::new(3);
+    c.measure_bits([Qubit::new(2), Qubit::new(0), Qubit::new(1)])
+        .unwrap();
+
+    assert_eq!(dumps(&c).unwrap(), "M Q2 Q0 Q1\n");
+}
+
+#[test]
+fn test_dump_rejects_classical_store() {
+    let mut c = Circuit::new(1);
+    let var = c.var(ClassicalType::Bit);
+    c.store(var, ClassicalExpr::bit_literal(false)).unwrap();
+
+    assert!(matches!(
+        dumps(&c),
+        Err(QcisDumpError::UnsupportedClassicalData(_))
+    ));
+}
+
+#[test]
+fn test_dump_rejects_classical_control() {
+    let mut c = Circuit::new(1);
+    c.if_(ClassicalExpr::bool_literal(true), |body| {
+        body.x(Qubit::new(0))?;
+        Ok(())
+    })
+    .unwrap();
+
+    assert!(matches!(
+        dumps(&c),
+        Err(QcisDumpError::UnsupportedClassicalControl(_))
+    ));
 }
 
 #[test]

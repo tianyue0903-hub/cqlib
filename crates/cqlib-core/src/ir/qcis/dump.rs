@@ -65,8 +65,8 @@ use crate::circuit::bit::Qubit;
 
 use crate::circuit::circuit_param::CircuitParam;
 use crate::circuit::gate::directive::Directive;
-use crate::circuit::gate::instruction::Instruction;
 use crate::circuit::gate::standard_gate::StandardGate;
+use crate::circuit::gate::{ClassicalDataOp, Instruction};
 use crate::circuit::operation::Operation;
 use std::fmt::Write;
 
@@ -80,6 +80,10 @@ pub enum QcisDumpError {
     IoError(std::io::Error),
     /// Gate is not supported by QCIS backend and needs compilation
     UnsupportedGate(String),
+    /// Classical data operation is not representable in QCIS.
+    UnsupportedClassicalData(String),
+    /// Classical control flow is not representable in QCIS.
+    UnsupportedClassicalControl(String),
     /// Parameter contains symbolic values that cannot be resolved to numbers
     SymbolicParameter(String),
 }
@@ -99,6 +103,14 @@ impl std::fmt::Display for QcisDumpError {
                     "Please compile the circuit to QCIS basis gates (X2P, X2M, Y2P, Y2M, XY2P, XY2M, CZ, RZ, I, X, Y, Z, H, S, SD, T, TD, RX, RY, RXY) before dumping."
                 )
             }
+            QcisDumpError::UnsupportedClassicalData(operation) => write!(
+                f,
+                "Unsupported classical data operation '{operation}': QCIS does not represent classical storage"
+            ),
+            QcisDumpError::UnsupportedClassicalControl(operation) => write!(
+                f,
+                "Unsupported classical control operation '{operation}': QCIS does not represent classical control flow"
+            ),
             QcisDumpError::SymbolicParameter(p) => {
                 write!(
                     f,
@@ -176,8 +188,15 @@ fn operation_to_qcis(op: &Operation, circuit: &Circuit) -> Result<String, QcisDu
         Instruction::CircuitGate(_) => Err(QcisDumpError::UnsupportedGate(
             "CircuitGate (custom gate)".to_string(),
         )),
-        Instruction::ControlFlowGate(_) => Err(QcisDumpError::UnsupportedGate(
-            "ControlFlowGate".to_string(),
+        Instruction::ClassicalData(ClassicalDataOp::MeasureBit { .. })
+        | Instruction::ClassicalData(ClassicalDataOp::MeasureBits { .. }) => {
+            Ok(format!("M {}", format_qubits(&op.qubits)))
+        }
+        Instruction::ClassicalData(ClassicalDataOp::Store { .. }) => {
+            Err(QcisDumpError::UnsupportedClassicalData("store".to_string()))
+        }
+        Instruction::ClassicalControl(control) => Err(QcisDumpError::UnsupportedClassicalControl(
+            format!("{control:?}"),
         )),
         Instruction::Directive(dir) => directive_to_qcis(*dir, &op.qubits),
         Instruction::Delay => delay_to_qcis(&op.qubits, &op.params, circuit),
