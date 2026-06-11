@@ -17,6 +17,7 @@ use super::{
     relative_phase::emit_relative_phase_toffoli,
     test_utils::{EPSILON, selected_basis_states},
 };
+use crate::circuit::value_instruction::ValueInstruction;
 use crate::circuit::{
     Instruction, Qubit, StandardGate, circuit_to_matrix, operation::ValueOperation,
 };
@@ -80,13 +81,13 @@ fn apply_sparse_operations_to_basis_state(
     for operation in operations {
         let mut next = BTreeMap::new();
         match operation.instruction {
-            Instruction::Standard(StandardGate::X) => {
+            ValueInstruction::Instruction(Instruction::Standard(StandardGate::X)) => {
                 let target = operation.qubits[0].index();
                 for (basis_state, amplitude) in state {
                     add_sparse_amplitude(&mut next, basis_state ^ (1 << target), amplitude);
                 }
             }
-            Instruction::Standard(StandardGate::H) => {
+            ValueInstruction::Instruction(Instruction::Standard(StandardGate::H)) => {
                 let target = operation.qubits[0].index();
                 for (basis_state, amplitude) in state {
                     let sign = if basis_state & (1 << target) == 0 {
@@ -103,13 +104,13 @@ fn apply_sparse_operations_to_basis_state(
                     );
                 }
             }
-            Instruction::Standard(StandardGate::T) => {
+            ValueInstruction::Instruction(Instruction::Standard(StandardGate::T)) => {
                 apply_sparse_phase(&mut next, state, operation.qubits[0], PI / 4.0);
             }
-            Instruction::Standard(StandardGate::TDG) => {
+            ValueInstruction::Instruction(Instruction::Standard(StandardGate::TDG)) => {
                 apply_sparse_phase(&mut next, state, operation.qubits[0], -PI / 4.0);
             }
-            Instruction::Standard(StandardGate::CX) => {
+            ValueInstruction::Instruction(Instruction::Standard(StandardGate::CX)) => {
                 let control = operation.qubits[0].index();
                 let target = operation.qubits[1].index();
                 for (basis_state, amplitude) in state {
@@ -121,7 +122,7 @@ fn apply_sparse_operations_to_basis_state(
                     add_sparse_amplitude(&mut next, output, amplitude);
                 }
             }
-            Instruction::Standard(StandardGate::CCX) => {
+            ValueInstruction::Instruction(Instruction::Standard(StandardGate::CCX)) => {
                 let first_control = operation.qubits[0].index();
                 let second_control = operation.qubits[1].index();
                 let target = operation.qubits[2].index();
@@ -394,7 +395,7 @@ fn toffoli_level_gate_count(operations: &[ValueOperation]) -> usize {
         .filter(|operation| {
             matches!(
                 operation.instruction,
-                Instruction::Standard(StandardGate::CCX)
+                ValueInstruction::Instruction(Instruction::Standard(StandardGate::CCX))
             )
         })
         .count();
@@ -403,7 +404,7 @@ fn toffoli_level_gate_count(operations: &[ValueOperation]) -> usize {
         .filter(|operation| {
             matches!(
                 operation.instruction,
-                Instruction::Standard(StandardGate::H)
+                ValueInstruction::Instruction(Instruction::Standard(StandardGate::H))
             )
         })
         .count();

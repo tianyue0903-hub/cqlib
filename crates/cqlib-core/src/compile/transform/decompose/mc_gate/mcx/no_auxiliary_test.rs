@@ -18,6 +18,7 @@ use super::{
     },
     test_utils::{EPSILON, selected_basis_states},
 };
+use crate::circuit::value_instruction::ValueInstruction;
 use crate::circuit::{Instruction, ParameterValue, Qubit, StandardGate, operation::ValueOperation};
 use crate::compile::error::CompilerError;
 use crate::util::test_utils::assert_value_operations_equal;
@@ -76,13 +77,13 @@ fn apply_operations_to_basis_state(
     for operation in operations {
         let mut next = BTreeMap::new();
         match operation.instruction {
-            Instruction::Standard(StandardGate::X) => {
+            ValueInstruction::Instruction(Instruction::Standard(StandardGate::X)) => {
                 let target = operation.qubits[0].index();
                 for (basis_state, amplitude) in state {
                     add_amplitude(&mut next, basis_state ^ (1 << target), amplitude);
                 }
             }
-            Instruction::Standard(StandardGate::H) => {
+            ValueInstruction::Instruction(Instruction::Standard(StandardGate::H)) => {
                 let target = operation.qubits[0].index();
                 for (basis_state, amplitude) in state {
                     let sign = if basis_state & (1 << target) == 0 {
@@ -99,13 +100,13 @@ fn apply_operations_to_basis_state(
                     );
                 }
             }
-            Instruction::Standard(StandardGate::T) => {
+            ValueInstruction::Instruction(Instruction::Standard(StandardGate::T)) => {
                 apply_phase(&mut next, state, operation.qubits[0], PI / 4.0);
             }
-            Instruction::Standard(StandardGate::TDG) => {
+            ValueInstruction::Instruction(Instruction::Standard(StandardGate::TDG)) => {
                 apply_phase(&mut next, state, operation.qubits[0], -PI / 4.0);
             }
-            Instruction::Standard(StandardGate::Phase) => {
+            ValueInstruction::Instruction(Instruction::Standard(StandardGate::Phase)) => {
                 apply_phase(
                     &mut next,
                     state,
@@ -113,7 +114,7 @@ fn apply_operations_to_basis_state(
                     phase_parameter(operation),
                 );
             }
-            Instruction::Standard(StandardGate::CX) => {
+            ValueInstruction::Instruction(Instruction::Standard(StandardGate::CX)) => {
                 let control = operation.qubits[0].index();
                 let target = operation.qubits[1].index();
                 for (basis_state, amplitude) in state {
@@ -125,7 +126,7 @@ fn apply_operations_to_basis_state(
                     add_amplitude(&mut next, output, amplitude);
                 }
             }
-            Instruction::Standard(StandardGate::CCX) => {
+            ValueInstruction::Instruction(Instruction::Standard(StandardGate::CCX)) => {
                 let first_control = operation.qubits[0].index();
                 let second_control = operation.qubits[1].index();
                 let target = operation.qubits[2].index();
@@ -246,7 +247,10 @@ fn assert_increment_semantics(
 fn assert_only_uses_input_qubits(controls: &[Qubit], target: Qubit, operations: &[ValueOperation]) {
     let allowed: HashSet<_> = controls.iter().copied().chain([target]).collect();
     for operation in operations {
-        assert!(matches!(operation.instruction, Instruction::Standard(_)));
+        assert!(matches!(
+            operation.instruction,
+            ValueInstruction::Instruction(Instruction::Standard(_))
+        ));
         assert!(operation.qubits.iter().all(|qubit| allowed.contains(qubit)));
     }
 }

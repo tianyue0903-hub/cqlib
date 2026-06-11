@@ -38,10 +38,12 @@
 use super::unitary_1q::synthesize_numeric_1q_unitary;
 use super::unitary_2q::{TwoQubitUnitaryDecomposeBasis, synthesize_numeric_2q_unitary};
 use crate::circuit::{
-    Circuit, CircuitParam, ControlFlow, IfElseGate, Instruction, Operation, Parameter,
-    ParameterValue, StandardGate, UnitaryGate, WhileLoopGate,
+    Circuit, CircuitParam, ClassicalControlOp, ControlBody, ForOp, IfOp, Instruction, Operation,
+    Parameter, ParameterValue, StandardGate, SwitchCase, SwitchOp, UnitaryGate, ValueOperation,
+    WhileOp,
 };
 use crate::compile::CompilerError;
+use crate::compile::transform::{TransformResult, Transformer};
 use ndarray::Array2;
 use num_complex::Complex64;
 use smallvec::{SmallVec, smallvec};
@@ -73,6 +75,39 @@ impl Default for UnitaryDecomposeConfig {
     }
 }
 
+/// [`Transformer`] adapter for [`decompose_unitaries`].
+///
+/// Configuration is bound at construction time.
+#[derive(Debug, Clone)]
+pub struct DecomposeUnitaries {
+    config: UnitaryDecomposeConfig,
+}
+
+impl DecomposeUnitaries {
+    pub fn new(config: UnitaryDecomposeConfig) -> Self {
+        Self { config }
+    }
+}
+
+impl Default for DecomposeUnitaries {
+    fn default() -> Self {
+        Self::new(UnitaryDecomposeConfig::default())
+    }
+}
+
+impl Transformer for DecomposeUnitaries {
+    fn name(&self) -> &'static str {
+        SYNTHESIS_NAME
+    }
+
+    fn transform(&self, circuit: &Circuit) -> Result<TransformResult, CompilerError> {
+        Ok(TransformResult {
+            circuit: decompose_unitaries(circuit, self.config)?,
+            changed: true,
+        })
+    }
+}
+
 /// Rewrites supported matrix-backed `UnitaryGate` operations in `circuit`.
 ///
 /// The output circuit owns a fresh parameter table. Every preserved operation
@@ -96,7 +131,12 @@ pub fn decompose_unitaries(
 ) -> Result<Circuit, CompilerError> {
     let decomposer = UnitaryDecomposer {
         source: circuit,
-        target: Circuit::from_qubits(circuit.qubits())?,
+        target: Circuit::from_operations(
+            circuit.qubits(),
+            Vec::<ValueOperation>::new(),
+            Some(circuit.classical_vars().to_vec()),
+            Some(circuit.classical_values().to_vec()),
+        )?,
         top_phase: circuit.global_phase(),
         config,
     };
@@ -162,7 +202,9 @@ impl<'a> UnitaryDecomposer<'a> {
     ) -> Result<Decomposition, CompilerError> {
         match &operation.instruction {
             Instruction::UnitaryGate(gate) => self.decompose_unitary_gate(gate, operation),
-            Instruction::ControlFlowGate(flow) => self.decompose_control_flow(operation, flow),
+            Instruction::ClassicalControl(control) => {
+                self.decompose_control_flow(operation, control)
+            }
             _ => Ok(Decomposition {
                 operations: vec![self.remap_preserved_operation(operation)?],
                 phase_delta: 0.0,
@@ -173,27 +215,67 @@ impl<'a> UnitaryDecomposer<'a> {
     fn decompose_control_flow(
         &mut self,
         operation: &Operation,
-        flow: &ControlFlow,
+        control: &ClassicalControlOp,
     ) -> Result<Decomposition, CompilerError> {
-        let instruction = match flow {
-            ControlFlow::IfElse(gate) => {
-                let true_body = self.rebuild_body(gate.true_body())?;
-                let false_body = gate
-                    .false_body()
-                    .map(|body| self.rebuild_body(body))
+        let instruction = match control {
+            ClassicalControlOp::If(op) => {
+                let then_body = self.rebuild_body(op.then_body().operations())?;
+                let else_body = op
+                    .else_body()
+                    .map(|body| self.rebuild_body(body.operations()))
                     .transpose()?;
-                Instruction::ControlFlowGate(ControlFlow::IfElse(IfElseGate::new(
-                    gate.condition(),
-                    true_body,
-                    false_body,
-                )))
+                Instruction::ClassicalControl(ClassicalControlOp::If(
+                    IfOp::new(
+                        op.condition().clone(),
+                        ControlBody::new(then_body),
+                        else_body.map(ControlBody::new),
+                    )
+                    .map_err(CompilerError::Circuit)?,
+                ))
             }
-            ControlFlow::WhileLoop(gate) => {
-                let body = self.rebuild_body(gate.body())?;
-                Instruction::ControlFlowGate(ControlFlow::WhileLoop(WhileLoopGate::new(
-                    gate.condition(),
-                    body,
-                )))
+            ClassicalControlOp::While(op) => {
+                let body = self.rebuild_body(op.body().operations())?;
+                Instruction::ClassicalControl(ClassicalControlOp::While(
+                    WhileOp::new(op.condition().clone(), ControlBody::new(body))
+                        .map_err(CompilerError::Circuit)?,
+                ))
+            }
+            ClassicalControlOp::For(op) => {
+                let body = self.rebuild_body(op.body().operations())?;
+                Instruction::ClassicalControl(ClassicalControlOp::For(
+                    ForOp::new(
+                        op.var(),
+                        op.start().clone(),
+                        op.stop().clone(),
+                        op.step().clone(),
+                        ControlBody::new(body),
+                    )
+                    .map_err(CompilerError::Circuit)?,
+                ))
+            }
+            ClassicalControlOp::Switch(op) => {
+                let cases = op
+                    .cases()
+                    .iter()
+                    .map(|case| {
+                        Ok(SwitchCase::new(
+                            case.value(),
+                            ControlBody::new(self.rebuild_body(case.body().operations())?),
+                        ))
+                    })
+                    .collect::<Result<Vec<_>, CompilerError>>()?;
+                let default = op
+                    .default()
+                    .map(|body| self.rebuild_body(body.operations()))
+                    .transpose()?
+                    .map(ControlBody::new);
+                Instruction::ClassicalControl(ClassicalControlOp::Switch(
+                    SwitchOp::new(op.target().clone(), cases, default)
+                        .map_err(CompilerError::Circuit)?,
+                ))
+            }
+            ClassicalControlOp::Break | ClassicalControlOp::Continue => {
+                Instruction::ClassicalControl(control.clone())
             }
         };
 
@@ -366,36 +448,96 @@ impl<'a> UnitaryDecomposer<'a> {
         operation: &Operation,
     ) -> Result<Operation, CompilerError> {
         let instruction = match &operation.instruction {
-            Instruction::ControlFlowGate(ControlFlow::IfElse(gate)) => {
-                let mut true_body = Vec::with_capacity(gate.true_body().len());
-                for inner in gate.true_body() {
-                    true_body.push(self.remap_preserved_operation(inner)?);
-                }
-                let false_body = gate
-                    .false_body()
-                    .map(|source_body| {
-                        let mut mapped = Vec::with_capacity(source_body.len());
-                        for inner in source_body {
-                            mapped.push(self.remap_preserved_operation(inner)?);
-                        }
-                        Ok::<_, CompilerError>(mapped)
+            Instruction::ClassicalControl(ClassicalControlOp::If(op)) => {
+                let then_body = op
+                    .then_body()
+                    .operations()
+                    .iter()
+                    .map(|inner| self.remap_preserved_operation(inner))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let else_body = op
+                    .else_body()
+                    .map(|body| {
+                        body.operations()
+                            .iter()
+                            .map(|inner| self.remap_preserved_operation(inner))
+                            .collect::<Result<Vec<_>, _>>()
                     })
                     .transpose()?;
-                Instruction::ControlFlowGate(ControlFlow::IfElse(IfElseGate::new(
-                    gate.condition(),
-                    true_body,
-                    false_body,
-                )))
+                Instruction::ClassicalControl(ClassicalControlOp::If(
+                    IfOp::new(
+                        op.condition().clone(),
+                        ControlBody::new(then_body),
+                        else_body.map(ControlBody::new),
+                    )
+                    .map_err(CompilerError::Circuit)?,
+                ))
             }
-            Instruction::ControlFlowGate(ControlFlow::WhileLoop(gate)) => {
-                let mut body = Vec::with_capacity(gate.body().len());
-                for inner in gate.body() {
-                    body.push(self.remap_preserved_operation(inner)?);
-                }
-                Instruction::ControlFlowGate(ControlFlow::WhileLoop(WhileLoopGate::new(
-                    gate.condition(),
-                    body,
-                )))
+            Instruction::ClassicalControl(ClassicalControlOp::While(op)) => {
+                let body = op
+                    .body()
+                    .operations()
+                    .iter()
+                    .map(|inner| self.remap_preserved_operation(inner))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Instruction::ClassicalControl(ClassicalControlOp::While(
+                    WhileOp::new(op.condition().clone(), ControlBody::new(body))
+                        .map_err(CompilerError::Circuit)?,
+                ))
+            }
+            Instruction::ClassicalControl(ClassicalControlOp::For(op)) => {
+                let body = op
+                    .body()
+                    .operations()
+                    .iter()
+                    .map(|inner| self.remap_preserved_operation(inner))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Instruction::ClassicalControl(ClassicalControlOp::For(
+                    ForOp::new(
+                        op.var(),
+                        op.start().clone(),
+                        op.stop().clone(),
+                        op.step().clone(),
+                        ControlBody::new(body),
+                    )
+                    .map_err(CompilerError::Circuit)?,
+                ))
+            }
+            Instruction::ClassicalControl(ClassicalControlOp::Switch(op)) => {
+                let cases = op
+                    .cases()
+                    .iter()
+                    .map(|case| {
+                        Ok(SwitchCase::new(
+                            case.value(),
+                            ControlBody::new(
+                                case.body()
+                                    .operations()
+                                    .iter()
+                                    .map(|inner| self.remap_preserved_operation(inner))
+                                    .collect::<Result<Vec<_>, _>>()?,
+                            ),
+                        ))
+                    })
+                    .collect::<Result<Vec<_>, CompilerError>>()?;
+                let default = op
+                    .default()
+                    .map(|body| {
+                        body.operations()
+                            .iter()
+                            .map(|inner| self.remap_preserved_operation(inner))
+                            .collect::<Result<Vec<_>, _>>()
+                    })
+                    .transpose()?
+                    .map(ControlBody::new);
+                Instruction::ClassicalControl(ClassicalControlOp::Switch(
+                    SwitchOp::new(op.target().clone(), cases, default)
+                        .map_err(CompilerError::Circuit)?,
+                ))
+            }
+            Instruction::ClassicalControl(ClassicalControlOp::Break)
+            | Instruction::ClassicalControl(ClassicalControlOp::Continue) => {
+                operation.instruction.clone()
             }
             _ => operation.instruction.clone(),
         };
@@ -495,7 +637,7 @@ mod tests {
     use crate::circuit::Qubit;
     use crate::circuit::gate::gate_matrix;
     use crate::circuit::symbolic_matrix::{SymbolicComplex, SymbolicMatrix};
-    use crate::circuit::{ConditionView, circuit_to_matrix};
+    use crate::circuit::{ClassicalExpr, circuit_to_matrix};
     use approx::assert_abs_diff_eq;
     use ndarray::array;
 
@@ -643,29 +785,42 @@ mod tests {
         let mut circuit = Circuit::new(2);
         circuit.add_parameter(Parameter::symbol("unused"));
         let (theta_index, _) = circuit.add_parameter(Parameter::symbol("theta"));
-        let body = vec![Operation {
+        let body_ops = vec![Operation {
             instruction: Instruction::Standard(StandardGate::RZ),
             qubits: smallvec![Qubit::new(1)],
             params: smallvec![CircuitParam::Index(theta_index as u32)],
             label: None,
         }];
-        let flow = IfElseGate::new(ConditionView::new(Qubit::new(0), 1), body, None);
+        let body_param_values: Vec<Vec<ParameterValue>> = body_ops
+            .iter()
+            .map(|op| {
+                op.params
+                    .iter()
+                    .map(|p| circuit.parameter_value(p))
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
         circuit
-            .append(
-                Instruction::ControlFlowGate(ControlFlow::IfElse(flow)),
-                [Qubit::new(0), Qubit::new(1)],
-                std::iter::empty(),
-                None,
+            .if_else(
+                ClassicalExpr::bool_literal(true),
+                move |body| {
+                    for (op, params) in body_ops.into_iter().zip(body_param_values) {
+                        body.append(op.instruction, op.qubits, params, op.label.as_deref())?;
+                    }
+                    Ok(())
+                },
+                |_| Ok(()),
             )
             .unwrap();
 
         let decomposed = decompose_unitaries(&circuit, UnitaryDecomposeConfig::default()).unwrap();
-        let Instruction::ControlFlowGate(ControlFlow::IfElse(flow)) =
+        let Instruction::ClassicalControl(ClassicalControlOp::If(op)) =
             &decomposed.operations()[0].instruction
         else {
-            panic!("expected if-else gate");
+            panic!("expected if operation");
         };
-        let operation = &flow.true_body()[0];
+        let operation = &op.then_body().operations()[0];
         let CircuitParam::Index(index) = operation.params[0] else {
             panic!("expected remapped symbolic parameter index");
         };
@@ -684,47 +839,71 @@ mod tests {
         let mut circuit = Circuit::new(2);
         circuit.add_parameter(Parameter::symbol("unused"));
         let (phi_index, _) = circuit.add_parameter(Parameter::symbol("phi"));
-        let true_body = vec![Operation {
+        let true_body_ops = vec![Operation {
             instruction: Instruction::Standard(StandardGate::I),
             qubits: smallvec![Qubit::new(1)],
             params: smallvec![],
             label: None,
         }];
-        let false_body = vec![Operation {
+        let false_body_ops = vec![Operation {
             instruction: Instruction::Standard(StandardGate::RZ),
             qubits: smallvec![Qubit::new(1)],
             params: smallvec![CircuitParam::Index(phi_index as u32)],
             label: None,
         }];
-        let flow = IfElseGate::new(
-            ConditionView::new(Qubit::new(0), 1),
-            true_body,
-            Some(false_body),
-        );
+        let true_body_param_values: Vec<Vec<ParameterValue>> = true_body_ops
+            .iter()
+            .map(|op| {
+                op.params
+                    .iter()
+                    .map(|p| circuit.parameter_value(p))
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        let false_body_param_values: Vec<Vec<ParameterValue>> = false_body_ops
+            .iter()
+            .map(|op| {
+                op.params
+                    .iter()
+                    .map(|p| circuit.parameter_value(p))
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
         circuit
-            .append(
-                Instruction::ControlFlowGate(ControlFlow::IfElse(flow)),
-                [Qubit::new(0), Qubit::new(1)],
-                std::iter::empty(),
-                None,
+            .if_else(
+                ClassicalExpr::bool_literal(true),
+                move |body| {
+                    for (op, params) in true_body_ops.into_iter().zip(true_body_param_values) {
+                        body.append(op.instruction, op.qubits, params, op.label.as_deref())?;
+                    }
+                    Ok(())
+                },
+                move |body| {
+                    for (op, params) in false_body_ops.into_iter().zip(false_body_param_values) {
+                        body.append(op.instruction, op.qubits, params, op.label.as_deref())?;
+                    }
+                    Ok(())
+                },
             )
             .unwrap();
 
         let decomposed = decompose_unitaries(&circuit, UnitaryDecomposeConfig::default()).unwrap();
-        let Instruction::ControlFlowGate(ControlFlow::IfElse(flow)) =
+        let Instruction::ClassicalControl(ClassicalControlOp::If(op)) =
             &decomposed.operations()[0].instruction
         else {
-            panic!("expected if-else gate");
+            panic!("expected if operation");
         };
-        let false_body = flow.false_body().expect("expected false body");
-        let CircuitParam::Index(index) = false_body[0].params[0] else {
+        let else_body = op.else_body().expect("expected else body");
+        let CircuitParam::Index(index) = else_body.operations()[0].params[0] else {
             panic!("expected remapped false-body parameter index");
         };
 
         assert_eq!(index, 0);
         assert_eq!(decomposed.parameters().len(), 1);
         assert!(
-            operation_parameter(&decomposed, &false_body[0], 0)
+            operation_parameter(&decomposed, &else_body.operations()[0], 0)
                 .get_symbols()
                 .contains("phi")
         );
@@ -735,36 +914,45 @@ mod tests {
         let mut circuit = Circuit::new(2);
         circuit.add_parameter(Parameter::symbol("unused"));
         let (beta_index, _) = circuit.add_parameter(Parameter::symbol("beta"));
-        let body = vec![Operation {
+        let body_ops = vec![Operation {
             instruction: Instruction::Standard(StandardGate::RY),
             qubits: smallvec![Qubit::new(1)],
             params: smallvec![CircuitParam::Index(beta_index as u32)],
             label: None,
         }];
-        let flow = WhileLoopGate::new(ConditionView::new(Qubit::new(0), 1), body);
+        let body_param_values: Vec<Vec<ParameterValue>> = body_ops
+            .iter()
+            .map(|op| {
+                op.params
+                    .iter()
+                    .map(|p| circuit.parameter_value(p))
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
         circuit
-            .append(
-                Instruction::ControlFlowGate(ControlFlow::WhileLoop(flow)),
-                [Qubit::new(0), Qubit::new(1)],
-                std::iter::empty(),
-                None,
-            )
+            .while_(ClassicalExpr::bool_literal(true), move |body| {
+                for (op, params) in body_ops.into_iter().zip(body_param_values) {
+                    body.append(op.instruction, op.qubits, params, op.label.as_deref())?;
+                }
+                Ok(())
+            })
             .unwrap();
 
         let decomposed = decompose_unitaries(&circuit, UnitaryDecomposeConfig::default()).unwrap();
-        let Instruction::ControlFlowGate(ControlFlow::WhileLoop(flow)) =
+        let Instruction::ClassicalControl(ClassicalControlOp::While(op)) =
             &decomposed.operations()[0].instruction
         else {
-            panic!("expected while gate");
+            panic!("expected while operation");
         };
-        let CircuitParam::Index(index) = flow.body()[0].params[0] else {
+        let CircuitParam::Index(index) = op.body().operations()[0].params[0] else {
             panic!("expected remapped while-body parameter index");
         };
 
         assert_eq!(index, 0);
         assert_eq!(decomposed.parameters().len(), 1);
         assert!(
-            operation_parameter(&decomposed, &flow.body()[0], 0)
+            operation_parameter(&decomposed, &op.body().operations()[0], 0)
                 .get_symbols()
                 .contains("beta")
         );
@@ -782,36 +970,35 @@ mod tests {
                     .mapv(|value| phase * value),
             )
             .unwrap();
-        let body = vec![Operation {
-            instruction: Instruction::UnitaryGate(Box::new(gate)),
-            qubits: smallvec![Qubit::new(1), Qubit::new(2)],
-            params: smallvec![],
-            label: None,
-        }];
-        let flow = IfElseGate::new(ConditionView::new(Qubit::new(0), 1), body, None);
         let mut circuit = Circuit::new(3);
         circuit
-            .append(
-                Instruction::ControlFlowGate(ControlFlow::IfElse(flow)),
-                [Qubit::new(0), Qubit::new(1), Qubit::new(2)],
-                std::iter::empty(),
-                None,
+            .if_else(
+                ClassicalExpr::bool_literal(true),
+                |body| {
+                    body.append(
+                        Instruction::UnitaryGate(Box::new(gate)),
+                        [Qubit::new(1), Qubit::new(2)],
+                        Vec::<ParameterValue>::new(),
+                        None,
+                    )
+                },
+                |_| Ok(()),
             )
             .unwrap();
 
         let decomposed = decompose_unitaries(&circuit, UnitaryDecomposeConfig::default()).unwrap();
         assert!(decomposed.global_phase().is_zero());
-        let Instruction::ControlFlowGate(ControlFlow::IfElse(flow)) =
+        let Instruction::ClassicalControl(ClassicalControlOp::If(op)) =
             &decomposed.operations()[0].instruction
         else {
-            panic!("expected if-else gate");
+            panic!("expected if operation");
         };
         assert!(matches!(
-            flow.true_body()[0].instruction,
+            op.then_body().operations()[0].instruction,
             Instruction::Standard(StandardGate::GPhase)
         ));
         assert!(matches!(
-            flow.true_body()[0].params[0],
+            op.then_body().operations()[0].params[0],
             CircuitParam::Fixed(_)
         ));
     }
@@ -828,47 +1015,41 @@ mod tests {
                     .mapv(|value| phase * value),
             )
             .unwrap();
-        let inner_body = vec![Operation {
-            instruction: Instruction::UnitaryGate(Box::new(gate)),
-            qubits: smallvec![Qubit::new(1)],
-            params: smallvec![],
-            label: None,
-        }];
-        let inner_flow = WhileLoopGate::new(ConditionView::new(Qubit::new(0), 1), inner_body);
-        let outer_body = vec![Operation {
-            instruction: Instruction::ControlFlowGate(ControlFlow::WhileLoop(inner_flow)),
-            qubits: smallvec![Qubit::new(0), Qubit::new(1)],
-            params: smallvec![],
-            label: None,
-        }];
-        let outer_flow = IfElseGate::new(ConditionView::new(Qubit::new(0), 1), outer_body, None);
         let mut circuit = Circuit::new(2);
         circuit
-            .append(
-                Instruction::ControlFlowGate(ControlFlow::IfElse(outer_flow)),
-                [Qubit::new(0), Qubit::new(1)],
-                std::iter::empty(),
-                None,
+            .if_else(
+                ClassicalExpr::bool_literal(true),
+                |body| {
+                    body.while_(ClassicalExpr::bool_literal(true), |inner| {
+                        inner.append(
+                            Instruction::UnitaryGate(Box::new(gate)),
+                            [Qubit::new(1)],
+                            Vec::<ParameterValue>::new(),
+                            None,
+                        )
+                    })
+                },
+                |_| Ok(()),
             )
             .unwrap();
 
         let decomposed = decompose_unitaries(&circuit, UnitaryDecomposeConfig::default()).unwrap();
-        let Instruction::ControlFlowGate(ControlFlow::IfElse(outer_flow)) =
+        let Instruction::ClassicalControl(ClassicalControlOp::If(outer)) =
             &decomposed.operations()[0].instruction
         else {
-            panic!("expected outer if-else gate");
+            panic!("expected outer if operation");
         };
-        let Instruction::ControlFlowGate(ControlFlow::WhileLoop(inner_flow)) =
-            &outer_flow.true_body()[0].instruction
+        let Instruction::ClassicalControl(ClassicalControlOp::While(inner)) =
+            &outer.then_body().operations()[0].instruction
         else {
-            panic!("expected nested while gate");
+            panic!("expected nested while operation");
         };
 
         assert!(matches!(
-            inner_flow.body()[0].instruction,
+            inner.body().operations()[0].instruction,
             Instruction::Standard(StandardGate::GPhase)
         ));
-        assert!(inner_flow.body().iter().any(|operation| matches!(
+        assert!(inner.body().operations().iter().any(|operation| matches!(
             operation.instruction,
             Instruction::Standard(StandardGate::U)
         )));
@@ -882,7 +1063,7 @@ mod tests {
         let gate = UnitaryGate::new("x_body", 1, 0)
             .with_matrix(StandardGate::X.matrix(&[]).unwrap().into_owned())
             .unwrap();
-        let body = vec![
+        let body_ops = vec![
             Operation {
                 instruction: Instruction::UnitaryGate(Box::new(gate)),
                 qubits: smallvec![Qubit::new(1)],
@@ -896,13 +1077,26 @@ mod tests {
                 label: None,
             },
         ];
-        let flow = IfElseGate::new(ConditionView::new(Qubit::new(0), 1), body, None);
+        let body_param_values: Vec<Vec<ParameterValue>> = body_ops
+            .iter()
+            .map(|op| {
+                op.params
+                    .iter()
+                    .map(|p| circuit.parameter_value(p))
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
         circuit
-            .append(
-                Instruction::ControlFlowGate(ControlFlow::IfElse(flow)),
-                [Qubit::new(0), Qubit::new(1)],
-                std::iter::empty(),
-                None,
+            .if_else(
+                ClassicalExpr::bool_literal(true),
+                move |body| {
+                    for (op, params) in body_ops.into_iter().zip(body_param_values) {
+                        body.append(op.instruction, op.qubits, params, op.label.as_deref())?;
+                    }
+                    Ok(())
+                },
+                |_| Ok(()),
             )
             .unwrap();
         let config = UnitaryDecomposeConfig {
@@ -911,12 +1105,12 @@ mod tests {
         };
 
         let decomposed = decompose_unitaries(&circuit, config).unwrap();
-        let Instruction::ControlFlowGate(ControlFlow::IfElse(flow)) =
+        let Instruction::ClassicalControl(ClassicalControlOp::If(op)) =
             &decomposed.operations()[0].instruction
         else {
-            panic!("expected if-else gate");
+            panic!("expected if operation");
         };
-        let body = flow.true_body();
+        let body = op.then_body().operations();
         let CircuitParam::Index(index) = body[1].params[0] else {
             panic!("expected remapped preserved body parameter index");
         };

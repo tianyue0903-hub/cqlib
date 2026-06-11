@@ -17,14 +17,34 @@
 //! unitaries or lower standard gates to a target basis.
 
 use crate::circuit::{
-    Circuit, CircuitParam, ControlFlow, IfElseGate, Instruction, Operation, Parameter, Qubit,
-    StandardGate, WhileLoopGate,
+    Circuit, CircuitParam, ClassicalControlOp, ControlBody, ForOp, IfOp, Instruction, Operation,
+    Parameter, Qubit, StandardGate, SwitchCase, SwitchOp, ValueOperation, WhileOp,
 };
 use crate::compile::CompilerError;
+use crate::compile::transform::{TransformResult, Transformer};
 use smallvec::{SmallVec, smallvec};
 use std::collections::{HashMap, HashSet};
 
 const MAX_DEFINITION_DEPTH: usize = 64;
+
+/// [`Transformer`] adapter for [`expand_definitions`].
+///
+/// Parameter-free — definition expansion never needs configuration.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DecomposeDefinitions;
+
+impl Transformer for DecomposeDefinitions {
+    fn name(&self) -> &'static str {
+        "decompose_definitions"
+    }
+
+    fn transform(&self, circuit: &Circuit) -> Result<TransformResult, CompilerError> {
+        Ok(TransformResult {
+            circuit: expand_definitions(circuit)?,
+            changed: true,
+        })
+    }
+}
 
 /// Expands all circuit-backed definitions in `circuit`.
 ///
@@ -67,7 +87,12 @@ impl<'a> DefinitionExpander<'a> {
     fn new(source: &'a Circuit) -> Result<Self, CompilerError> {
         Ok(Self {
             source,
-            target: Circuit::from_qubits(source.qubits())?,
+            target: Circuit::from_operations(
+                source.qubits(),
+                Vec::<ValueOperation>::new(),
+                Some(source.classical_vars().to_vec()),
+                Some(source.classical_values().to_vec()),
+            )?,
             top_phase: source.global_phase(),
         })
     }
@@ -139,9 +164,9 @@ impl<'a> DefinitionExpander<'a> {
                     self.keep_operation(operation, context, qubit_map, symbol_bindings, operations)
                 }
             }
-            Instruction::ControlFlowGate(flow) => self.expand_control_flow(
+            Instruction::ClassicalControl(control) => self.expand_control_flow(
                 operation,
-                flow,
+                control,
                 context,
                 qubit_map,
                 symbol_bindings,
@@ -242,42 +267,81 @@ impl<'a> DefinitionExpander<'a> {
     fn expand_control_flow(
         &mut self,
         operation: &Operation,
-        flow: &ControlFlow,
+        control: &ClassicalControlOp,
         context: &Circuit,
         qubit_map: &QubitMap<'_>,
         symbol_bindings: &HashMap<String, Parameter>,
         depth: usize,
         operations: &mut Vec<Operation>,
     ) -> Result<Parameter, CompilerError> {
-        let instruction = match flow {
-            ControlFlow::IfElse(gate) => {
-                let true_body =
-                    self.expand_body(gate.true_body(), context, qubit_map, symbol_bindings, depth)?;
-                let false_body = gate
-                    .false_body()
+        let instruction = match control {
+            ClassicalControlOp::If(op) => {
+                let then_body =
+                    self.expand_body(op.then_body(), context, qubit_map, symbol_bindings, depth)?;
+                let else_body = op
+                    .else_body()
                     .map(|body| self.expand_body(body, context, qubit_map, symbol_bindings, depth))
                     .transpose()?;
-                let condition = gate.condition();
-                Instruction::ControlFlowGate(ControlFlow::IfElse(IfElseGate::new(
-                    crate::circuit::ConditionView::new(
-                        map_qubit(condition.qubit, qubit_map)?,
-                        condition.target,
-                    ),
-                    true_body,
-                    false_body,
-                )))
+                Instruction::ClassicalControl(ClassicalControlOp::If(
+                    IfOp::new(
+                        op.condition().clone(),
+                        ControlBody::new(then_body),
+                        else_body.map(ControlBody::new),
+                    )
+                    .map_err(CompilerError::Circuit)?,
+                ))
             }
-            ControlFlow::WhileLoop(gate) => {
+            ClassicalControlOp::While(op) => {
                 let body =
-                    self.expand_body(gate.body(), context, qubit_map, symbol_bindings, depth)?;
-                let condition = gate.condition();
-                Instruction::ControlFlowGate(ControlFlow::WhileLoop(WhileLoopGate::new(
-                    crate::circuit::ConditionView::new(
-                        map_qubit(condition.qubit, qubit_map)?,
-                        condition.target,
-                    ),
-                    body,
-                )))
+                    self.expand_body(op.body(), context, qubit_map, symbol_bindings, depth)?;
+                Instruction::ClassicalControl(ClassicalControlOp::While(
+                    WhileOp::new(op.condition().clone(), ControlBody::new(body))
+                        .map_err(CompilerError::Circuit)?,
+                ))
+            }
+            ClassicalControlOp::For(op) => {
+                let body =
+                    self.expand_body(op.body(), context, qubit_map, symbol_bindings, depth)?;
+                Instruction::ClassicalControl(ClassicalControlOp::For(
+                    ForOp::new(
+                        op.var(),
+                        op.start().clone(),
+                        op.stop().clone(),
+                        op.step().clone(),
+                        ControlBody::new(body),
+                    )
+                    .map_err(CompilerError::Circuit)?,
+                ))
+            }
+            ClassicalControlOp::Switch(op) => {
+                let cases = op
+                    .cases()
+                    .iter()
+                    .map(|case| {
+                        Ok(SwitchCase::new(
+                            case.value(),
+                            ControlBody::new(self.expand_body(
+                                case.body(),
+                                context,
+                                qubit_map,
+                                symbol_bindings,
+                                depth,
+                            )?),
+                        ))
+                    })
+                    .collect::<Result<Vec<_>, CompilerError>>()?;
+                let default = op
+                    .default()
+                    .map(|body| self.expand_body(body, context, qubit_map, symbol_bindings, depth))
+                    .transpose()?
+                    .map(ControlBody::new);
+                Instruction::ClassicalControl(ClassicalControlOp::Switch(
+                    SwitchOp::new(op.target().clone(), cases, default)
+                        .map_err(CompilerError::Circuit)?,
+                ))
+            }
+            ClassicalControlOp::Break | ClassicalControlOp::Continue => {
+                Instruction::ClassicalControl(control.clone())
             }
         };
 
@@ -292,16 +356,17 @@ impl<'a> DefinitionExpander<'a> {
 
     fn expand_body(
         &mut self,
-        body: &[Operation],
+        body: &ControlBody,
         context: &Circuit,
         qubit_map: &QubitMap<'_>,
         symbol_bindings: &HashMap<String, Parameter>,
         depth: usize,
     ) -> Result<Vec<Operation>, CompilerError> {
-        let mut operations = Vec::with_capacity(body.len());
+        let body_ops = body.operations();
+        let mut operations = Vec::with_capacity(body_ops.len());
         let mut phase = Parameter::from(0.0);
 
-        for operation in body {
+        for operation in body_ops {
             let operation_phase = self.expand_operation(
                 operation,
                 context,
@@ -471,6 +536,7 @@ fn fresh_temp_symbol(index: usize, symbol: &str, occupied: &mut HashSet<String>)
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::circuit::ClassicalExpr;
     use crate::circuit::ParameterValue;
     use crate::circuit::gate::{FrozenCircuit, UnitaryGate};
     use ndarray::array;
@@ -728,36 +794,30 @@ mod tests {
         inner.x(Qubit::new(0)).unwrap();
         let gate = inner.to_gate("phase_x").unwrap();
 
-        let body = vec![Operation {
-            instruction: gate,
-            qubits: smallvec![Qubit::new(1)],
-            params: smallvec![],
-            label: None,
-        }];
         let mut circuit = Circuit::new(2);
         circuit
             .if_else(
-                crate::circuit::ConditionView::new(Qubit::new(0), 1),
-                body,
-                None,
+                ClassicalExpr::bool_literal(true),
+                |body| body.append(gate, [Qubit::new(1)], [], None),
+                |_body| Ok(()),
             )
             .unwrap();
 
         let expanded = expand_definitions(&circuit).unwrap();
         assert!(expanded.global_phase().is_zero());
-        let Instruction::ControlFlowGate(ControlFlow::IfElse(gate)) =
+        let Instruction::ClassicalControl(ClassicalControlOp::If(op)) =
             &expanded.operations()[0].instruction
         else {
-            panic!("expected if-else operation");
+            panic!("expected if operation");
         };
-        let true_body = gate.true_body();
-        assert_eq!(true_body.len(), 2);
+        let then_body = op.then_body().operations();
+        assert_eq!(then_body.len(), 2);
         assert!(matches!(
-            true_body[0].instruction,
+            then_body[0].instruction,
             Instruction::Standard(StandardGate::GPhase)
         ));
         assert!(matches!(
-            true_body[1].instruction,
+            then_body[1].instruction,
             Instruction::Standard(StandardGate::X)
         ));
     }

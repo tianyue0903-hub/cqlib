@@ -11,9 +11,9 @@
 // that they have been altered from the originals.
 
 use super::decompose_mcx_small;
+use crate::circuit::value_instruction::ValueInstruction;
 use crate::circuit::{Instruction, Qubit, StandardGate, operation::ValueOperation};
 use crate::compile::error::CompilerError;
-
 fn assert_single_operation(
     operations: &[ValueOperation],
     expected_gate: StandardGate,
@@ -22,7 +22,7 @@ fn assert_single_operation(
     assert_eq!(operations.len(), 1);
     assert!(matches!(
         operations[0].instruction,
-        Instruction::Standard(gate) if gate == expected_gate
+        ValueInstruction::Instruction(Instruction::Standard(gate)) if gate == expected_gate
     ));
     assert_eq!(operations[0].qubits.as_slice(), expected_qubits);
     assert!(operations[0].params.is_empty());

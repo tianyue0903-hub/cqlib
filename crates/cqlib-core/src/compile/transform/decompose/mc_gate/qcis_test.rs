@@ -11,6 +11,7 @@
 // that they have been altered from the originals.
 
 use super::qcis::{decompose_qcis_n_clean, decompose_qcis_no_aux};
+use crate::circuit::value_instruction::ValueInstruction;
 use crate::circuit::{
     Instruction, Parameter, ParameterValue, Qubit, StandardGate, circuit_to_matrix,
 };
@@ -19,7 +20,6 @@ use crate::util::test_utils::{
     EPSILON, assert_selected_matrix_columns_approx_eq, circuit_from_value_operations,
     mc_gate_matrix,
 };
-
 #[test]
 fn zero_controls_emit_original_qcis_gate() {
     let target = Qubit::new(0);
@@ -35,7 +35,7 @@ fn zero_controls_emit_original_qcis_gate() {
         assert_eq!(operations.len(), 1);
         assert!(matches!(
             operations[0].instruction,
-            Instruction::Standard(actual) if actual == gate
+            ValueInstruction::Instruction(Instruction::Standard(actual)) if actual == gate
         ));
         assert_eq!(operations[0].qubits.as_slice(), &[target]);
         if params.is_empty() {
@@ -63,7 +63,7 @@ fn xy_half_rotations_emit_target_basis_changes_around_crx() {
         assert_eq!(operations.len(), 3);
         assert!(matches!(
             operations[0].instruction,
-            Instruction::Standard(StandardGate::RZ)
+            ValueInstruction::Instruction(Instruction::Standard(StandardGate::RZ))
         ));
         assert!(matches!(
             operations[0].params.as_slice(),
@@ -71,7 +71,7 @@ fn xy_half_rotations_emit_target_basis_changes_around_crx() {
         ));
         assert!(matches!(
             operations[1].instruction,
-            Instruction::Standard(StandardGate::CRX)
+            ValueInstruction::Instruction(Instruction::Standard(StandardGate::CRX))
         ));
         assert_eq!(operations[1].qubits.as_slice(), &[control, target]);
         assert!(matches!(

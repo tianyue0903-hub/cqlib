@@ -14,6 +14,7 @@
 
 use super::DECOMPOSE_MCX_NAME;
 use crate::circuit::operation::ValueOperation;
+use crate::circuit::value_instruction::ValueInstruction;
 use crate::compile::error::CompilerError;
 
 /// Returns the inverse of a parameter-free operation sequence.
@@ -40,15 +41,23 @@ pub(super) fn invert_parameter_free_operations(
             });
         }
 
-        let (instruction, inverse_params) =
-            operation
-                .instruction
+        let ValueInstruction::Instruction(inner_inst) = &operation.instruction else {
+            return Err(CompilerError::TransformFailed {
+                name: DECOMPOSE_MCX_NAME,
+                reason: format!(
+                    "MCX operation inversion does not support instruction {:?}",
+                    operation.instruction
+                ),
+            });
+        };
+        let (inverse_inst, inverse_params) =
+            inner_inst
                 .inverse(&[])
                 .ok_or_else(|| CompilerError::TransformFailed {
                     name: DECOMPOSE_MCX_NAME,
                     reason: format!(
                         "MCX operation inversion does not support instruction {:?}",
-                        operation.instruction
+                        inner_inst
                     ),
                 })?;
         if !inverse_params.is_empty() {
@@ -60,7 +69,7 @@ pub(super) fn invert_parameter_free_operations(
         }
 
         inverse_operations.push(ValueOperation {
-            instruction,
+            instruction: ValueInstruction::Instruction(inverse_inst),
             qubits: operation.qubits.clone(),
             params: Default::default(),
             label: operation.label.clone(),

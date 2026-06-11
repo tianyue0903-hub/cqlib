@@ -12,6 +12,7 @@
 
 use super::relative_phase::emit_relative_phase_toffoli;
 use super::test_utils::EPSILON;
+use crate::circuit::value_instruction::ValueInstruction;
 use crate::circuit::{
     Circuit, Instruction, Qubit, StandardGate, circuit_to_matrix, operation::ValueOperation,
 };
@@ -22,7 +23,6 @@ use crate::util::test_utils::{
 };
 use ndarray::Array2;
 use smallvec::smallvec;
-
 fn emit_rccx() -> Vec<ValueOperation> {
     let mut operations = vec![];
     emit_relative_phase_toffoli(&mut operations, Qubit::new(0), Qubit::new(1), Qubit::new(2))
@@ -81,7 +81,7 @@ fn relative_phase_toffoli_emits_rccx_sequence() {
 #[test]
 fn relative_phase_toffoli_appends_after_existing_operations() {
     let prefix = ValueOperation {
-        instruction: Instruction::Standard(StandardGate::X),
+        instruction: ValueInstruction::Instruction(Instruction::Standard(StandardGate::X)),
         qubits: smallvec![Qubit::new(0)],
         params: smallvec![],
         label: None,
@@ -117,7 +117,7 @@ fn relative_phase_toffoli_rejects_second_control_matching_target() {
 #[test]
 fn relative_phase_toffoli_does_not_append_operations_after_validation_error() {
     let prefix = ValueOperation {
-        instruction: Instruction::Standard(StandardGate::X),
+        instruction: ValueInstruction::Instruction(Instruction::Standard(StandardGate::X)),
         qubits: smallvec![Qubit::new(0)],
         params: smallvec![],
         label: None,

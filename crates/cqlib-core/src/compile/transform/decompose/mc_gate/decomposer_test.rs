@@ -12,8 +12,8 @@
 
 use super::{McGateDecomposeConfig, decompose_mc_gates, decompose_mc_gates_for_device};
 use crate::circuit::{
-    Circuit, CircuitParam, ConditionView, ControlFlow, Instruction, MCGate, Operation, Parameter,
-    ParameterValue, Qubit, StandardGate, WhileLoopGate, circuit_to_matrix,
+    Circuit, CircuitParam, ClassicalControlOp, ClassicalExpr, Instruction, MCGate, Operation,
+    Parameter, ParameterValue, Qubit, StandardGate, circuit_to_matrix,
 };
 use crate::compile::CompilerError;
 use crate::compile::resource::{ResourceLimits, ResourcePolicy};
@@ -21,7 +21,6 @@ use crate::device::{Device, PhysicalQubit, Topology};
 use crate::util::test_utils::{
     EPSILON, assert_matrix_approx_eq, assert_selected_matrix_columns_equal_up_to_global_phase,
 };
-use smallvec::smallvec;
 use std::collections::{HashMap, HashSet};
 
 fn config(max_clean: usize, allow_dirty: bool) -> McGateDecomposeConfig {
@@ -51,14 +50,25 @@ fn assert_no_mc_gates(operations: &[Operation]) {
     for operation in operations {
         match &operation.instruction {
             Instruction::McGate(gate) => panic!("unexpected residual multi-controlled gate {gate}"),
-            Instruction::ControlFlowGate(ControlFlow::IfElse(gate)) => {
-                assert_no_mc_gates(gate.true_body());
-                if let Some(false_body) = gate.false_body() {
-                    assert_no_mc_gates(false_body);
+            Instruction::ClassicalControl(ClassicalControlOp::If(op)) => {
+                assert_no_mc_gates(op.then_body().operations());
+                if let Some(else_body) = op.else_body() {
+                    assert_no_mc_gates(else_body.operations());
                 }
             }
-            Instruction::ControlFlowGate(ControlFlow::WhileLoop(gate)) => {
-                assert_no_mc_gates(gate.body());
+            Instruction::ClassicalControl(ClassicalControlOp::While(op)) => {
+                assert_no_mc_gates(op.body().operations());
+            }
+            Instruction::ClassicalControl(ClassicalControlOp::For(op)) => {
+                assert_no_mc_gates(op.body().operations());
+            }
+            Instruction::ClassicalControl(ClassicalControlOp::Switch(op)) => {
+                for case in op.cases() {
+                    assert_no_mc_gates(case.body().operations());
+                }
+                if let Some(default) = op.default() {
+                    assert_no_mc_gates(default.operations());
+                }
             }
             _ => {}
         }
@@ -89,14 +99,25 @@ fn operations_use_qubit(operations: &[Operation], qubit: Qubit) -> bool {
     operations.iter().any(|operation| {
         operation.qubits.contains(&qubit)
             || match &operation.instruction {
-                Instruction::ControlFlowGate(ControlFlow::IfElse(gate)) => {
-                    operations_use_qubit(gate.true_body(), qubit)
-                        || gate
-                            .false_body()
-                            .is_some_and(|body| operations_use_qubit(body, qubit))
+                Instruction::ClassicalControl(ClassicalControlOp::If(op)) => {
+                    operations_use_qubit(op.then_body().operations(), qubit)
+                        || op
+                            .else_body()
+                            .is_some_and(|body| operations_use_qubit(body.operations(), qubit))
                 }
-                Instruction::ControlFlowGate(ControlFlow::WhileLoop(gate)) => {
-                    operations_use_qubit(gate.body(), qubit)
+                Instruction::ClassicalControl(ClassicalControlOp::While(op)) => {
+                    operations_use_qubit(op.body().operations(), qubit)
+                }
+                Instruction::ClassicalControl(ClassicalControlOp::For(op)) => {
+                    operations_use_qubit(op.body().operations(), qubit)
+                }
+                Instruction::ClassicalControl(ClassicalControlOp::Switch(op)) => {
+                    op.cases()
+                        .iter()
+                        .any(|case| operations_use_qubit(case.body().operations(), qubit))
+                        || op
+                            .default()
+                            .is_some_and(|body| operations_use_qubit(body.operations(), qubit))
                 }
                 _ => false,
             }
@@ -668,21 +689,39 @@ fn symbolic_rotation_parameters_are_reinterned_and_bindable() {
 fn if_else_and_while_bodies_are_rebuilt_recursively() {
     let mut circuit = Circuit::new(4);
     let controls = [Qubit::new(0), Qubit::new(1), Qubit::new(2)];
-    let mcx = Operation {
-        instruction: Instruction::McGate(Box::new(MCGate::new(3, StandardGate::X))),
-        qubits: smallvec![controls[0], controls[1], controls[2], Qubit::new(3)],
-        params: smallvec![],
-        label: Some("drop".into()),
-    };
+    let mcx = Instruction::McGate(Box::new(MCGate::new(3, StandardGate::X)));
+    let mcx2 = mcx.clone();
+    let mcx3 = mcx.clone();
     circuit
         .if_else(
-            ConditionView::new(Qubit::new(0), 1),
-            vec![mcx.clone()],
-            Some(vec![mcx.clone()]),
+            ClassicalExpr::bool_literal(true),
+            |body| {
+                body.append(
+                    mcx,
+                    [controls[0], controls[1], controls[2], Qubit::new(3)],
+                    Vec::<ParameterValue>::new(),
+                    Some("drop"),
+                )
+            },
+            |body| {
+                body.append(
+                    mcx2,
+                    [controls[0], controls[1], controls[2], Qubit::new(3)],
+                    Vec::<ParameterValue>::new(),
+                    Some("drop"),
+                )
+            },
         )
         .unwrap();
     circuit
-        .while_loop(ConditionView::new(Qubit::new(1), 1), vec![mcx])
+        .while_(ClassicalExpr::bool_literal(true), |body| {
+            body.append(
+                mcx3,
+                [controls[0], controls[1], controls[2], Qubit::new(3)],
+                Vec::<ParameterValue>::new(),
+                Some("drop"),
+            )
+        })
         .unwrap();
 
     let result = decompose_mc_gates(&circuit, config(2, false)).unwrap();
@@ -705,27 +744,22 @@ fn if_else_and_while_bodies_are_rebuilt_recursively() {
 
 #[test]
 fn nested_control_flow_bodies_are_rebuilt_to_arbitrary_depth() {
-    let mcx = Operation {
-        instruction: Instruction::McGate(Box::new(MCGate::new(3, StandardGate::X))),
-        qubits: smallvec![Qubit::new(0), Qubit::new(1), Qubit::new(2), Qubit::new(3)],
-        params: smallvec![],
-        label: None,
-    };
-    let nested_while = Operation {
-        instruction: Instruction::ControlFlowGate(ControlFlow::WhileLoop(WhileLoopGate::new(
-            ConditionView::new(Qubit::new(1), 1),
-            vec![mcx],
-        ))),
-        qubits: smallvec![Qubit::new(0), Qubit::new(1), Qubit::new(2), Qubit::new(3)],
-        params: smallvec![],
-        label: Some("keep-inner".into()),
-    };
+    let mcx = Instruction::McGate(Box::new(MCGate::new(3, StandardGate::X)));
     let mut circuit = Circuit::new(4);
     circuit
         .if_else(
-            ConditionView::new(Qubit::new(0), 1),
-            vec![nested_while],
-            None,
+            ClassicalExpr::bool_literal(true),
+            |body| {
+                body.while_(ClassicalExpr::bool_literal(true), |inner| {
+                    inner.append(
+                        mcx,
+                        [Qubit::new(0), Qubit::new(1), Qubit::new(2), Qubit::new(3)],
+                        Vec::<ParameterValue>::new(),
+                        Some("keep-inner"),
+                    )
+                })
+            },
+            |_| Ok(()),
         )
         .unwrap();
 
@@ -743,44 +777,46 @@ fn nested_control_flow_bodies_are_rebuilt_to_arbitrary_depth() {
             Qubit::new(4),
         ]
     );
-    let Instruction::ControlFlowGate(ControlFlow::IfElse(if_else)) =
+    let Instruction::ClassicalControl(ClassicalControlOp::If(if_op)) =
         &result.circuit.operations()[0].instruction
     else {
-        panic!("expected if/else");
+        panic!("expected if operation");
     };
-    let Instruction::ControlFlowGate(ControlFlow::WhileLoop(while_loop)) =
-        &if_else.true_body()[0].instruction
+    let Instruction::ClassicalControl(ClassicalControlOp::While(while_op)) =
+        &if_op.then_body().operations()[0].instruction
     else {
         panic!("expected nested while loop");
     };
-    assert_eq!(while_loop.num_qubits(), 5);
-    assert_eq!(if_else.true_body()[0].label.as_deref(), Some("keep-inner"));
+    assert_eq!(while_op.used_qubits().len(), 5);
+    // The closure-based API does not set operation labels, so
+    // the preserved while operation label is None.
+    assert_eq!(if_op.then_body().operations()[0].label.as_deref(), None);
 }
 
 #[test]
 fn symbolic_parameter_inside_while_body_is_reinterned() {
     let mut circuit = Circuit::new(3);
-    let (theta, _) = circuit.add_parameter(Parameter::symbol("theta"));
-    let body = vec![Operation {
-        instruction: Instruction::McGate(Box::new(MCGate::new(2, StandardGate::RZ))),
-        qubits: smallvec![Qubit::new(0), Qubit::new(1), Qubit::new(2)],
-        params: smallvec![CircuitParam::Index(theta as u32)],
-        label: None,
-    }];
     circuit
-        .while_loop(ConditionView::new(Qubit::new(0), 1), body)
+        .while_(ClassicalExpr::bool_literal(true), |body| {
+            body.append(
+                Instruction::McGate(Box::new(MCGate::new(2, StandardGate::RZ))),
+                [Qubit::new(0), Qubit::new(1), Qubit::new(2)],
+                [ParameterValue::Param(Parameter::symbol("theta"))],
+                None,
+            )
+        })
         .unwrap();
 
     let result = decompose_mc_gates(&circuit, config(1, false)).unwrap();
 
-    let Instruction::ControlFlowGate(ControlFlow::WhileLoop(gate)) =
+    let Instruction::ClassicalControl(ClassicalControlOp::While(op)) =
         &result.circuit.operations()[0].instruction
     else {
         panic!("expected while loop");
     };
-    assert_no_mc_gates(gate.body());
+    assert_no_mc_gates(op.body().operations());
     assert!(result.circuit.symbols().contains("theta"));
-    for operation in gate.body() {
+    for operation in op.body().operations() {
         for param in &operation.params {
             if let CircuitParam::Index(index) = param {
                 assert!(
@@ -980,36 +1016,38 @@ fn duplicate_mc_gate_qubits_are_rejected_by_synthesis() {
 }
 
 #[test]
-fn missing_parameter_index_inside_control_flow_is_rejected() {
+fn symbolic_parameter_inside_control_flow_body_is_interned() {
     let mut circuit = Circuit::new(2);
-    let body = vec![Operation {
-        instruction: Instruction::McGate(Box::new(MCGate::new(1, StandardGate::RZ))),
-        qubits: smallvec![Qubit::new(0), Qubit::new(1)],
-        params: smallvec![CircuitParam::Index(999)],
-        label: None,
-    }];
     circuit
-        .while_loop(ConditionView::new(Qubit::new(0), 1), body)
+        .while_(ClassicalExpr::bool_literal(true), |body| {
+            body.append(
+                Instruction::McGate(Box::new(MCGate::new(1, StandardGate::RZ))),
+                [Qubit::new(0), Qubit::new(1)],
+                [ParameterValue::Param(Parameter::symbol("theta"))],
+                None,
+            )
+        })
         .unwrap();
 
-    let error = decompose_mc_gates(&circuit, McGateDecomposeConfig::default()).unwrap_err();
+    let result = decompose_mc_gates(&circuit, McGateDecomposeConfig::default()).unwrap();
 
-    assert!(
-        matches!(error, CompilerError::InvalidInput(message) if message.contains("missing parameter index 999"))
-    );
+    assert!(result.changed);
+    assert!(result.circuit.symbols().contains("theta"));
+    assert_no_mc_gates(result.circuit.operations());
 }
 
 #[test]
 fn non_finite_fixed_parameter_inside_control_flow_is_rejected() {
     let mut circuit = Circuit::new(2);
-    let body = vec![Operation {
-        instruction: Instruction::McGate(Box::new(MCGate::new(1, StandardGate::RZ))),
-        qubits: smallvec![Qubit::new(0), Qubit::new(1)],
-        params: smallvec![CircuitParam::Fixed(f64::NAN)],
-        label: None,
-    }];
     circuit
-        .while_loop(ConditionView::new(Qubit::new(0), 1), body)
+        .while_(ClassicalExpr::bool_literal(true), |body| {
+            body.append(
+                Instruction::McGate(Box::new(MCGate::new(1, StandardGate::RZ))),
+                [Qubit::new(0), Qubit::new(1)],
+                [ParameterValue::Fixed(f64::NAN)],
+                None,
+            )
+        })
         .unwrap();
 
     let error = decompose_mc_gates(&circuit, McGateDecomposeConfig::default()).unwrap_err();

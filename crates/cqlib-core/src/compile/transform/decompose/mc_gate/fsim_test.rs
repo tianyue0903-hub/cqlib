@@ -16,6 +16,7 @@ use super::{
     phase::decompose_phase_no_aux,
     rotation::decompose_rotation_no_aux,
 };
+use crate::circuit::value_instruction::ValueInstruction;
 use crate::circuit::{
     Instruction, Parameter, ParameterValue, Qubit, StandardGate, circuit_to_matrix,
 };
@@ -39,7 +40,7 @@ fn zero_controls_emit_original_standard_fsim_and_ignore_clean_ancillas() {
     assert_eq!(operations.len(), 1);
     assert!(matches!(
         operations[0].instruction,
-        Instruction::Standard(StandardGate::FSIM)
+        ValueInstruction::Instruction(Instruction::Standard(StandardGate::FSIM))
     ));
     assert_eq!(operations[0].qubits.as_slice(), &[first, second]);
     assert!(matches!(

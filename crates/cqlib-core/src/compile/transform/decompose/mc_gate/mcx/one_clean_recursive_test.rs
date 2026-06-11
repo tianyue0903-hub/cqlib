@@ -16,6 +16,7 @@ use super::{
     test_utils::{EPSILON, selected_basis_states, single_nonzero_statevector_output},
     utils::invert_parameter_free_operations,
 };
+use crate::circuit::value_instruction::ValueInstruction;
 use crate::circuit::{
     Directive, Instruction, ParameterValue, Qubit, StandardGate, circuit_to_matrix,
     operation::ValueOperation,
@@ -237,31 +238,31 @@ fn one_clean_recursive_with_five_controls_matches_mcx() {
 fn invert_parameter_free_operations_reverses_and_inverts_operations() {
     let operations = vec![
         ValueOperation {
-            instruction: Instruction::Standard(StandardGate::H),
+            instruction: ValueInstruction::Instruction(Instruction::Standard(StandardGate::H)),
             qubits: smallvec![Qubit::new(0)],
             params: smallvec![],
             label: None,
         },
         ValueOperation {
-            instruction: Instruction::Standard(StandardGate::CX),
+            instruction: ValueInstruction::Instruction(Instruction::Standard(StandardGate::CX)),
             qubits: smallvec![Qubit::new(0), Qubit::new(1)],
             params: smallvec![],
             label: None,
         },
         ValueOperation {
-            instruction: Instruction::Standard(StandardGate::T),
+            instruction: ValueInstruction::Instruction(Instruction::Standard(StandardGate::T)),
             qubits: smallvec![Qubit::new(1)],
             params: smallvec![],
             label: None,
         },
         ValueOperation {
-            instruction: Instruction::Standard(StandardGate::TDG),
+            instruction: ValueInstruction::Instruction(Instruction::Standard(StandardGate::TDG)),
             qubits: smallvec![Qubit::new(2)],
             params: smallvec![],
             label: None,
         },
         ValueOperation {
-            instruction: Instruction::Standard(StandardGate::CCX),
+            instruction: ValueInstruction::Instruction(Instruction::Standard(StandardGate::CCX)),
             qubits: smallvec![Qubit::new(0), Qubit::new(1), Qubit::new(2)],
             params: smallvec![],
             label: None,
@@ -269,31 +270,31 @@ fn invert_parameter_free_operations_reverses_and_inverts_operations() {
     ];
     let expected = vec![
         ValueOperation {
-            instruction: Instruction::Standard(StandardGate::CCX),
+            instruction: ValueInstruction::Instruction(Instruction::Standard(StandardGate::CCX)),
             qubits: smallvec![Qubit::new(0), Qubit::new(1), Qubit::new(2)],
             params: smallvec![],
             label: None,
         },
         ValueOperation {
-            instruction: Instruction::Standard(StandardGate::T),
+            instruction: ValueInstruction::Instruction(Instruction::Standard(StandardGate::T)),
             qubits: smallvec![Qubit::new(2)],
             params: smallvec![],
             label: None,
         },
         ValueOperation {
-            instruction: Instruction::Standard(StandardGate::TDG),
+            instruction: ValueInstruction::Instruction(Instruction::Standard(StandardGate::TDG)),
             qubits: smallvec![Qubit::new(1)],
             params: smallvec![],
             label: None,
         },
         ValueOperation {
-            instruction: Instruction::Standard(StandardGate::CX),
+            instruction: ValueInstruction::Instruction(Instruction::Standard(StandardGate::CX)),
             qubits: smallvec![Qubit::new(0), Qubit::new(1)],
             params: smallvec![],
             label: None,
         },
         ValueOperation {
-            instruction: Instruction::Standard(StandardGate::H),
+            instruction: ValueInstruction::Instruction(Instruction::Standard(StandardGate::H)),
             qubits: smallvec![Qubit::new(0)],
             params: smallvec![],
             label: None,
@@ -308,7 +309,7 @@ fn invert_parameter_free_operations_reverses_and_inverts_operations() {
 #[test]
 fn invert_parameter_free_operations_rejects_parameters() {
     let operation = ValueOperation {
-        instruction: Instruction::Standard(StandardGate::RZ),
+        instruction: ValueInstruction::Instruction(Instruction::Standard(StandardGate::RZ)),
         qubits: smallvec![Qubit::new(0)],
         params: smallvec![ParameterValue::Fixed(0.5)],
         label: None,
@@ -328,7 +329,7 @@ fn invert_parameter_free_operations_rejects_parameters() {
 #[test]
 fn invert_parameter_free_operations_rejects_non_invertible_instructions() {
     let operation = ValueOperation {
-        instruction: Instruction::Directive(Directive::Measure),
+        instruction: ValueInstruction::Instruction(Instruction::Directive(Directive::Measure)),
         qubits: smallvec![Qubit::new(0)],
         params: smallvec![],
         label: None,

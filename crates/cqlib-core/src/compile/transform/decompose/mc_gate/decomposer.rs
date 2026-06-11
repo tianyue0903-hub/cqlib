@@ -35,16 +35,17 @@ use super::{
     decompose_swap_no_aux, decompose_unitary_n_clean, decompose_unitary_no_aux,
 };
 use crate::circuit::operation::ValueOperation;
+use crate::circuit::value_instruction::ValueInstruction;
 use crate::circuit::{
-    Circuit, CircuitParam, ControlFlow, IfElseGate, Instruction, MCGate, Operation, ParameterValue,
-    Qubit, StandardGate, WhileLoopGate,
+    Circuit, CircuitParam, ClassicalControlOp, ControlBody, ForOp, IfOp, Instruction, MCGate,
+    Operation, ParameterValue, Qubit, StandardGate, SwitchCase, SwitchOp, WhileOp,
 };
 use crate::compile::CompilerError;
 use crate::compile::resource::{
     AncillaRequirement, ResourceError, ResourceLimits, ResourceManager, ResourcePolicy,
     ResourceRequest,
 };
-use crate::compile::transform::TransformResult;
+use crate::compile::transform::{TransformResult, Transformer};
 use crate::device::Device;
 use smallvec::SmallVec;
 use std::collections::BTreeSet;
@@ -63,6 +64,36 @@ pub struct McGateDecomposeConfig {
     pub resource_policy: ResourcePolicy,
     /// Hard logical-qubit limits for this decomposition pass.
     pub resource_limits: ResourceLimits,
+}
+
+/// [`Transformer`] adapter for [`decompose_mc_gates`].
+///
+/// Configuration is bound at construction time.
+#[derive(Debug, Clone)]
+pub struct DecomposeMcGates {
+    config: McGateDecomposeConfig,
+}
+
+impl DecomposeMcGates {
+    pub fn new(config: McGateDecomposeConfig) -> Self {
+        Self { config }
+    }
+}
+
+impl Default for DecomposeMcGates {
+    fn default() -> Self {
+        Self::new(McGateDecomposeConfig::default())
+    }
+}
+
+impl Transformer for DecomposeMcGates {
+    fn name(&self) -> &'static str {
+        DECOMPOSE_MC_GATES_NAME
+    }
+
+    fn transform(&self, circuit: &Circuit) -> Result<TransformResult, CompilerError> {
+        decompose_mc_gates(circuit, self.config)
+    }
 }
 
 /// Rewrites every supported [`Instruction::McGate`] in `circuit`.
@@ -161,7 +192,12 @@ struct McGateDecomposer<'a> {
 
 impl<'a> McGateDecomposer<'a> {
     fn new(source: &'a Circuit, config: McGateDecomposeConfig) -> Result<Self, CompilerError> {
-        let mut target = Circuit::from_qubits(source.qubits())?;
+        let mut target = Circuit::from_operations(
+            source.qubits(),
+            Vec::<ValueOperation>::new(),
+            Some(source.classical_vars().to_vec()),
+            Some(source.classical_values().to_vec()),
+        )?;
         target.set_global_phase(source.global_phase());
         let resources =
             ResourceManager::from_circuit(&target, config.resource_policy, config.resource_limits)
@@ -208,8 +244,8 @@ impl<'a> McGateDecomposer<'a> {
     ) -> Result<Vec<Operation>, CompilerError> {
         match &operation.instruction {
             Instruction::McGate(gate) => self.decompose_mc_operation(gate, operation),
-            Instruction::ControlFlowGate(flow) => {
-                Ok(vec![self.rebuild_control_flow(operation, flow)?])
+            Instruction::ClassicalControl(control) => {
+                Ok(vec![self.rebuild_control_flow(operation, control)?])
             }
             _ => Ok(vec![Operation {
                 instruction: operation.instruction.clone(),
@@ -223,31 +259,71 @@ impl<'a> McGateDecomposer<'a> {
     fn rebuild_control_flow(
         &mut self,
         operation: &Operation,
-        flow: &ControlFlow,
+        control: &ClassicalControlOp,
     ) -> Result<Operation, CompilerError> {
-        let instruction = match flow {
-            ControlFlow::IfElse(gate) => {
-                let true_body = self.rebuild_sequence(gate.true_body())?;
-                let false_body = gate
-                    .false_body()
-                    .map(|body| self.rebuild_sequence(body))
+        let instruction = match control {
+            ClassicalControlOp::If(op) => {
+                let then_body = self.rebuild_sequence(op.then_body().operations())?;
+                let else_body = op
+                    .else_body()
+                    .map(|body| self.rebuild_sequence(body.operations()))
                     .transpose()?;
-                Instruction::ControlFlowGate(ControlFlow::IfElse(IfElseGate::new(
-                    gate.condition(),
-                    true_body,
-                    false_body,
-                )))
+                Instruction::ClassicalControl(ClassicalControlOp::If(
+                    IfOp::new(
+                        op.condition().clone(),
+                        ControlBody::new(then_body),
+                        else_body.map(ControlBody::new),
+                    )
+                    .map_err(CompilerError::Circuit)?,
+                ))
             }
-            ControlFlow::WhileLoop(gate) => {
-                let body = self.rebuild_sequence(gate.body())?;
-                Instruction::ControlFlowGate(ControlFlow::WhileLoop(WhileLoopGate::new(
-                    gate.condition(),
-                    body,
-                )))
+            ClassicalControlOp::While(op) => {
+                let body = self.rebuild_sequence(op.body().operations())?;
+                Instruction::ClassicalControl(ClassicalControlOp::While(
+                    WhileOp::new(op.condition().clone(), ControlBody::new(body))
+                        .map_err(CompilerError::Circuit)?,
+                ))
+            }
+            ClassicalControlOp::For(op) => {
+                let body = self.rebuild_sequence(op.body().operations())?;
+                Instruction::ClassicalControl(ClassicalControlOp::For(
+                    ForOp::new(
+                        op.var(),
+                        op.start().clone(),
+                        op.stop().clone(),
+                        op.step().clone(),
+                        ControlBody::new(body),
+                    )
+                    .map_err(CompilerError::Circuit)?,
+                ))
+            }
+            ClassicalControlOp::Switch(op) => {
+                let cases = op
+                    .cases()
+                    .iter()
+                    .map(|case| {
+                        Ok(SwitchCase::new(
+                            case.value(),
+                            ControlBody::new(self.rebuild_sequence(case.body().operations())?),
+                        ))
+                    })
+                    .collect::<Result<Vec<_>, CompilerError>>()?;
+                let default = op
+                    .default()
+                    .map(|body| self.rebuild_sequence(body.operations()))
+                    .transpose()?
+                    .map(ControlBody::new);
+                Instruction::ClassicalControl(ClassicalControlOp::Switch(
+                    SwitchOp::new(op.target().clone(), cases, default)
+                        .map_err(CompilerError::Circuit)?,
+                ))
+            }
+            ClassicalControlOp::Break | ClassicalControlOp::Continue => {
+                Instruction::ClassicalControl(control.clone())
             }
         };
-        let qubits = match &instruction {
-            Instruction::ControlFlowGate(flow) => flow.ordered_qubits(&self.target.qubits()),
+        let qubits: SmallVec<[Qubit; 3]> = match &instruction {
+            Instruction::ClassicalControl(cc) => cc.used_qubits().into_iter().collect(),
             _ => SmallVec::new(),
         };
         Ok(Operation {
@@ -619,8 +695,16 @@ impl<'a> McGateDecomposer<'a> {
         &mut self,
         operation: ValueOperation,
     ) -> Result<Operation, CompilerError> {
+        let instruction = match operation.instruction {
+            ValueInstruction::Instruction(inst) => inst,
+            ValueInstruction::ClassicalControl(_) => {
+                return Err(CompilerError::InvariantViolation(
+                    "synthesis produced unexpected classical control".into(),
+                ));
+            }
+        };
         Ok(Operation {
-            instruction: operation.instruction,
+            instruction,
             qubits: operation.qubits,
             params: operation
                 .params

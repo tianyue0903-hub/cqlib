@@ -11,6 +11,7 @@
 // that they have been altered from the originals.
 
 use super::phase::{decompose_phase_n_clean, decompose_phase_no_aux};
+use crate::circuit::value_instruction::ValueInstruction;
 use crate::circuit::{
     Instruction, Parameter, ParameterValue, Qubit, StandardGate, circuit_to_matrix,
 };
@@ -19,7 +20,6 @@ use crate::util::test_utils::{
     EPSILON, assert_selected_matrix_columns_approx_eq, assert_standard_operation,
     assert_value_operations_only_use_qubits, circuit_from_value_operations, mc_gate_matrix,
 };
-
 #[test]
 fn zero_controls_emit_original_standard_phase_gates() {
     let target = Qubit::new(3);
@@ -41,7 +41,7 @@ fn zero_controls_emit_original_standard_phase_gates() {
     assert_eq!(operations.len(), 1);
     assert!(matches!(
         operations[0].instruction,
-        Instruction::Standard(StandardGate::Phase)
+        ValueInstruction::Instruction(Instruction::Standard(StandardGate::Phase))
     ));
     assert_eq!(operations[0].qubits.as_slice(), &[target]);
     assert!(matches!(
@@ -65,7 +65,7 @@ fn one_control_phase_emits_conditional_phase_and_crz() {
     assert_eq!(operations.len(), 2);
     assert!(matches!(
         operations[0].instruction,
-        Instruction::Standard(StandardGate::Phase)
+        ValueInstruction::Instruction(Instruction::Standard(StandardGate::Phase))
     ));
     assert_eq!(operations[0].qubits.as_slice(), &[control]);
     assert!(matches!(
@@ -74,7 +74,7 @@ fn one_control_phase_emits_conditional_phase_and_crz() {
     ));
     assert!(matches!(
         operations[1].instruction,
-        Instruction::Standard(StandardGate::CRZ)
+        ValueInstruction::Instruction(Instruction::Standard(StandardGate::CRZ))
     ));
     assert_eq!(operations[1].qubits.as_slice(), &[control, target]);
     assert!(matches!(

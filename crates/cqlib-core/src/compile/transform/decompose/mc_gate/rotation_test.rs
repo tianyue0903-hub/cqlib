@@ -14,10 +14,10 @@ use super::{
     mc_su2::{Su2RotationAxis, decompose_mc_su2_n_clean, decompose_mc_su2_no_aux},
     rotation::{decompose_rotation_n_clean, decompose_rotation_no_aux},
 };
+use crate::circuit::value_instruction::ValueInstruction;
 use crate::circuit::{Instruction, Parameter, ParameterValue, Qubit, StandardGate};
 use crate::compile::error::CompilerError;
 use crate::util::test_utils::assert_value_operations_equal;
-
 #[test]
 fn standard_rotation_fast_paths_are_preserved() {
     let control = Qubit::new(0);
@@ -34,7 +34,7 @@ fn standard_rotation_fast_paths_are_preserved() {
         assert_eq!(zero.len(), 1);
         assert!(matches!(
             zero[0].instruction,
-            Instruction::Standard(gate) if gate == expected_zero
+            ValueInstruction::Instruction(Instruction::Standard(gate)) if gate == expected_zero
         ));
         assert_eq!(zero[0].qubits.as_slice(), &[target]);
 
@@ -42,7 +42,7 @@ fn standard_rotation_fast_paths_are_preserved() {
         assert_eq!(one.len(), 1);
         assert!(matches!(
             one[0].instruction,
-            Instruction::Standard(gate) if gate == expected_one
+            ValueInstruction::Instruction(Instruction::Standard(gate)) if gate == expected_one
         ));
         assert_eq!(one[0].qubits.as_slice(), &[control, target]);
     }

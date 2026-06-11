@@ -12,6 +12,7 @@
 
 use super::{Su2RotationAxis, decompose_mc_su2_n_clean};
 use crate::circuit::operation::ValueOperation;
+use crate::circuit::value_instruction::ValueInstruction;
 use crate::circuit::{
     Instruction, Parameter, ParameterValue, Qubit, StandardGate, circuit_to_matrix,
 };
@@ -228,7 +229,9 @@ fn decomposition_has_mcx_controlled_rotation_mcx_structure() {
             decompose_mc_su2_n_clean(axis, &theta, &controls, target, &clean_ancillas).unwrap();
         let mut expected = mcx.clone();
         expected.push(ValueOperation {
-            instruction: Instruction::Standard(controlled_rotation(axis)),
+            instruction: ValueInstruction::Instruction(Instruction::Standard(controlled_rotation(
+                axis,
+            ))),
             qubits: smallvec![accumulator, target],
             params: smallvec![theta],
             label: None,
@@ -301,7 +304,7 @@ fn symbolic_theta_is_passed_unchanged_to_controlled_rotation() {
         matches!(
             (&operation.instruction, operation.params.as_slice()),
             (
-                Instruction::Standard(StandardGate::CRX),
+               ValueInstruction::Instruction(Instruction::Standard(StandardGate::CRX)),
                 [ParameterValue::Param(parameter)]
             ) if parameter == &theta
         )

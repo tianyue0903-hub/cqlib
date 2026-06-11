@@ -12,6 +12,7 @@
 
 use super::pauli_rotation::{decompose_pauli_rotation_n_clean, decompose_pauli_rotation_no_aux};
 use super::rzz::{decompose_mc_rzz_n_clean, decompose_mc_rzz_no_aux};
+use crate::circuit::value_instruction::ValueInstruction;
 use crate::circuit::{
     Instruction, ParameterValue, Qubit, StandardGate, circuit_to_matrix, operation::ValueOperation,
 };
@@ -25,7 +26,7 @@ use std::f64::consts::PI;
 fn assert_is_rx(operation: &ValueOperation, qubit: Qubit, angle: f64) {
     assert!(matches!(
         operation.instruction,
-        Instruction::Standard(StandardGate::RX)
+        ValueInstruction::Instruction(Instruction::Standard(StandardGate::RX))
     ));
     assert_eq!(operation.qubits.as_slice(), &[qubit]);
     assert!(matches!(
@@ -37,7 +38,7 @@ fn assert_is_rx(operation: &ValueOperation, qubit: Qubit, angle: f64) {
 fn assert_crz(operation: &ValueOperation, control: Qubit, target: Qubit, theta: f64) {
     assert!(matches!(
         operation.instruction,
-        Instruction::Standard(StandardGate::CRZ)
+        ValueInstruction::Instruction(Instruction::Standard(StandardGate::CRZ))
     ));
     assert_eq!(operation.qubits.as_slice(), &[control, target]);
     assert!(matches!(
@@ -66,7 +67,7 @@ fn zero_controls_emits_standard_gate_for_all_four_rotations() {
         assert_eq!(operations.len(), 1);
         assert!(matches!(
             operations[0].instruction,
-            Instruction::Standard(gate) if gate == rotation
+            ValueInstruction::Instruction(Instruction::Standard(gate)) if gate == rotation
         ));
         assert_eq!(operations[0].qubits.as_slice(), &[first, second]);
         assert!(matches!(

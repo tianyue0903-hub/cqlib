@@ -11,6 +11,7 @@
 // that they have been altered from the originals.
 
 use super::rzz::{decompose_mc_rzz_n_clean, decompose_mc_rzz_no_aux};
+use crate::circuit::value_instruction::ValueInstruction;
 use crate::circuit::{
     Instruction, Parameter, ParameterValue, Qubit, StandardGate, circuit_to_matrix,
 };
@@ -19,7 +20,6 @@ use crate::util::test_utils::{
     EPSILON, assert_selected_matrix_columns_equal_up_to_global_phase, assert_standard_operation,
     assert_value_operations_equal, circuit_from_value_operations, mc_gate_matrix,
 };
-
 #[test]
 fn zero_controls_emits_bare_rzz() {
     let first = Qubit::new(0);
@@ -31,7 +31,7 @@ fn zero_controls_emits_bare_rzz() {
     assert_eq!(operations.len(), 1);
     assert!(matches!(
         operations[0].instruction,
-        Instruction::Standard(StandardGate::RZZ)
+        ValueInstruction::Instruction(Instruction::Standard(StandardGate::RZZ))
     ));
     assert_eq!(operations[0].qubits.as_slice(), &[first, second]);
     assert!(matches!(
@@ -53,7 +53,7 @@ fn one_control_structure_is_cx_crz_cx() {
     assert_standard_operation(&operations[0], StandardGate::CX, &[first, second]);
     assert!(matches!(
         operations[1].instruction,
-        Instruction::Standard(StandardGate::CRZ)
+        ValueInstruction::Instruction(Instruction::Standard(StandardGate::CRZ))
     ));
     assert_eq!(operations[1].qubits.as_slice(), &[control, second]);
     assert!(matches!(
