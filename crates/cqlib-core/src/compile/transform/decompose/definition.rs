@@ -280,6 +280,9 @@ impl<'a> DefinitionExpander<'a> {
         Ok(phase)
     }
 
+    // Control-flow expansion carries the recursive source context, qubit map,
+    // symbol bindings, depth counter, and output buffer together.
+    #[allow(clippy::too_many_arguments)]
     fn expand_control_flow(
         &mut self,
         operation: &Operation,

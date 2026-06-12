@@ -35,7 +35,7 @@ const MATRIX_TOLERANCE: f64 = 1e-10;
 /// The returned phase satisfies `lhs * rhs = exp(i * phase) * rhs * lhs` on the
 /// expanded local Hilbert space.  The caller controls the maximum support size
 /// to prevent exponential blow-up.
-pub(super) fn matrix_commutation(
+pub fn matrix_commutation(
     lhs_inst: &Instruction,
     lhs_qubits: &[Qubit],
     lhs_params: &[Parameter],
@@ -56,57 +56,33 @@ pub(super) fn matrix_commutation(
         return None;
     }
 
-    let Some(lhs_values) = lhs_params
+    let lhs_values = lhs_params
         .iter()
         .map(|param| param.evaluate(&None).ok())
-        .collect::<Option<Vec<_>>>()
-    else {
-        return None;
-    };
-    let Some(rhs_values) = rhs_params
+        .collect::<Option<Vec<_>>>()?;
+    let rhs_values = rhs_params
         .iter()
         .map(|param| param.evaluate(&None).ok())
-        .collect::<Option<Vec<_>>>()
-    else {
-        return None;
-    };
-    let Some(lhs_matrix) = lhs_inst.matrix(&lhs_values) else {
-        return None;
-    };
-    let Some(rhs_matrix) = rhs_inst.matrix(&rhs_values) else {
-        return None;
-    };
+        .collect::<Option<Vec<_>>>()?;
+    let lhs_matrix = lhs_inst.matrix(&lhs_values)?;
+    let rhs_matrix = rhs_inst.matrix(&rhs_values)?;
 
-    let Some(lhs_positions) = lhs_qubits
+    let lhs_positions = lhs_qubits
         .iter()
         .map(|qubit| combined_qubits.iter().position(|item| item == qubit))
-        .collect::<Option<Vec<_>>>()
-    else {
-        return None;
-    };
-    let Some(rhs_positions) = rhs_qubits
+        .collect::<Option<Vec<_>>>()?;
+    let rhs_positions = rhs_qubits
         .iter()
         .map(|qubit| combined_qubits.iter().position(|item| item == qubit))
-        .collect::<Option<Vec<_>>>()
-    else {
-        return None;
-    };
+        .collect::<Option<Vec<_>>>()?;
 
-    let Some(expanded_lhs) = expand_unitary(lhs_matrix, &lhs_positions, combined_qubits.len())
-    else {
-        return None;
-    };
-    let Some(expanded_rhs) = expand_unitary(rhs_matrix, &rhs_positions, combined_qubits.len())
-    else {
-        return None;
-    };
+    let expanded_lhs = expand_unitary(lhs_matrix, &lhs_positions, combined_qubits.len())?;
+    let expanded_rhs = expand_unitary(rhs_matrix, &rhs_positions, combined_qubits.len())?;
 
     let lhs_rhs = expanded_lhs.dot(&expanded_rhs);
     let rhs_lhs = expanded_rhs.dot(&expanded_lhs);
 
-    let Some(phase) = phase_between(&lhs_rhs, &rhs_lhs) else {
-        return None;
-    };
+    let phase = phase_between(&lhs_rhs, &rhs_lhs)?;
 
     if phase.abs() <= MATRIX_TOLERANCE {
         Some(Commutation::Exact)

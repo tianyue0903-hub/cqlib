@@ -36,13 +36,11 @@ pub fn decompose_swap_no_aux(
 ) -> Result<Vec<ValueOperation>, CompilerError> {
     validate_swap_qubits(controls, first, second, &[])?;
     if controls.is_empty() {
-        let mut operations = vec![];
-        operations.push(ValueOperation::from_standard(
+        return Ok(vec![ValueOperation::from_standard(
             StandardGate::SWAP,
             [first, second],
             [],
-        ));
-        return Ok(operations);
+        )]);
     }
 
     let mut first_controls = controls.to_vec();

@@ -21,16 +21,10 @@ use std::collections::HashSet;
 /// Groups and qubits within each group are inspected in slice order.
 pub fn find_duplicate_qubit(qubit_groups: &[&[Qubit]]) -> Option<Qubit> {
     let mut seen = HashSet::with_capacity(qubit_groups.iter().map(|qubits| qubits.len()).sum());
-    for qubit in qubit_groups
+    qubit_groups
         .iter()
         .flat_map(|qubits| qubits.iter().copied())
-    {
-        if !seen.insert(qubit) {
-            return Some(qubit);
-        }
-    }
-
-    None
+        .find(|&qubit| !seen.insert(qubit))
 }
 
 #[cfg(test)]

@@ -171,12 +171,8 @@ impl CommutationChecker {
         rhs_qubits: &[Qubit],
         rhs_params: &[Parameter],
     ) -> CommutationResult {
-        let Some((lhs_expected_qubits, lhs_expected_params)) = lhs_inst.gate_arity() else {
-            return None;
-        };
-        let Some((rhs_expected_qubits, rhs_expected_params)) = rhs_inst.gate_arity() else {
-            return None;
-        };
+        let (lhs_expected_qubits, lhs_expected_params) = lhs_inst.gate_arity()?;
+        let (rhs_expected_qubits, rhs_expected_params) = rhs_inst.gate_arity()?;
         if lhs_qubits.len() != lhs_expected_qubits
             || lhs_params.len() != lhs_expected_params
             || rhs_qubits.len() != rhs_expected_qubits

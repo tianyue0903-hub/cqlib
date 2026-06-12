@@ -26,6 +26,9 @@ use crate::compile::CompilerError;
 use crate::device::{Device, PhysicalQubit, Topology};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
+type DirectedQubitPair = (PhysicalQubit, PhysicalQubit);
+type TwoQubitErrorMap = BTreeMap<DirectedQubitPair, f64>;
+
 /// Compiler-local physical graph with usable qubits, distances, and calibration data.
 ///
 /// The graph intentionally separates undirected routing connectivity from
@@ -39,9 +42,9 @@ pub struct PhysicalLayoutGraph {
     physical_index: BTreeMap<PhysicalQubit, usize>,
     adjacency: Vec<Vec<usize>>,
     distances: DistanceTable,
-    directed_couplings: BTreeSet<(PhysicalQubit, PhysicalQubit)>,
+    directed_couplings: BTreeSet<DirectedQubitPair>,
     readout_errors: BTreeMap<PhysicalQubit, f64>,
-    two_qubit_errors: BTreeMap<(PhysicalQubit, PhysicalQubit), f64>,
+    two_qubit_errors: TwoQubitErrorMap,
     has_readout_error_data: bool,
     has_two_qubit_error_data: bool,
 }
@@ -68,8 +71,7 @@ impl PhysicalLayoutGraph {
         let directed_couplings = collect_directed_couplings(device.topology(), &usable);
         let (readout_errors, has_readout_error_data) =
             collect_readout_errors(device, &physical_qubits)?;
-        let (two_qubit_errors, has_two_qubit_error_data) =
-            collect_two_qubit_errors(device, &usable)?;
+        let two_qubit_error_data = collect_two_qubit_errors(device, &usable)?;
 
         Ok(Self {
             physical_qubits,
@@ -78,9 +80,9 @@ impl PhysicalLayoutGraph {
             distances,
             directed_couplings,
             readout_errors,
-            two_qubit_errors,
+            two_qubit_errors: two_qubit_error_data.errors,
             has_readout_error_data,
-            has_two_qubit_error_data,
+            has_two_qubit_error_data: two_qubit_error_data.has_data,
         })
     }
 
@@ -221,18 +223,18 @@ impl DistanceTable {
     ) -> Self {
         let mut distances = vec![vec![None; qubits.len()]; qubits.len()];
 
-        for start_index in 0..qubits.len() {
+        for (start_index, item) in distances.iter_mut().enumerate().take(qubits.len()) {
             let mut queue = VecDeque::new();
-            distances[start_index][start_index] = Some(0);
+            item[start_index] = Some(0);
             queue.push_back(start_index);
 
             while let Some(current_index) = queue.pop_front() {
-                let current_distance = distances[start_index][current_index]
-                    .expect("queued nodes have assigned distances");
+                let current_distance =
+                    item[current_index].expect("queued nodes have assigned distances");
 
                 for neighbor_index in adjacency[current_index].iter().copied() {
-                    if distances[start_index][neighbor_index].is_none() {
-                        distances[start_index][neighbor_index] = Some(current_distance + 1);
+                    if item[neighbor_index].is_none() {
+                        item[neighbor_index] = Some(current_distance + 1);
                         queue.push_back(neighbor_index);
                     }
                 }
@@ -328,7 +330,7 @@ fn collect_readout_errors(
 fn collect_directed_couplings(
     topology: &Topology,
     usable: &BTreeSet<PhysicalQubit>,
-) -> BTreeSet<(PhysicalQubit, PhysicalQubit)> {
+) -> BTreeSet<DirectedQubitPair> {
     let mut couplings = BTreeSet::new();
     for control in usable {
         for target in topology.successors(*control) {
@@ -340,10 +342,15 @@ fn collect_directed_couplings(
     couplings
 }
 
+struct TwoQubitErrors {
+    errors: TwoQubitErrorMap,
+    has_data: bool,
+}
+
 fn collect_two_qubit_errors(
     device: &Device,
     usable: &BTreeSet<PhysicalQubit>,
-) -> Result<(BTreeMap<(PhysicalQubit, PhysicalQubit), f64>, bool), CompilerError> {
+) -> Result<TwoQubitErrors, CompilerError> {
     let default_error = device.default_two_qubit_error();
     if let Some(error) = default_error {
         validate_probability(error, "default two-qubit error")?;
@@ -373,7 +380,7 @@ fn collect_two_qubit_errors(
     }
 
     let has_data = has_specific_data || default_error.is_some();
-    Ok((errors, has_data))
+    Ok(TwoQubitErrors { errors, has_data })
 }
 
 fn validate_probability(value: f64, name: &str) -> Result<(), CompilerError> {

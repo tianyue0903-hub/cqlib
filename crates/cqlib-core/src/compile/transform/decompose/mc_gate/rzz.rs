@@ -57,14 +57,9 @@ pub fn decompose_mc_rzz_no_aux(
                 reason: format!("RZZ interaction qubits must be distinct; both are {first}"),
             });
         }
-        let mut operations = vec![];
-        operations.push(ValueOperation::from_standard(
-            StandardGate::RZZ,
-            [first, second],
-            [],
-        ));
-        operations[0].params.push(theta.clone());
-        return Ok(operations);
+        let mut operation = ValueOperation::from_standard(StandardGate::RZZ, [first, second], []);
+        operation.params.push(theta.clone());
+        return Ok(vec![operation]);
     }
 
     check_rzz_qubits(controls, first, second, &[])?;

@@ -76,7 +76,7 @@ enum ErrorMitigationState {
 #[derive(Debug, Clone)]
 enum RunRecord {
     Zne(ZneRunRecord),
-    VirtualDistillation(VirtualDistillationRunRecord),
+    VirtualDistillation(Box<VirtualDistillationRunRecord>),
 }
 
 #[derive(Debug, Clone)]
@@ -312,13 +312,13 @@ impl ErrorMitigation {
                     shots_numerator,
                     shots_denominator,
                 },
-            ) => RunRecord::VirtualDistillation(self.run_virtual_distillation(
+            ) => RunRecord::VirtualDistillation(Box::new(self.run_virtual_distillation(
                 config,
                 hamiltonian,
                 shots_numerator,
                 shots_denominator,
                 estimator,
-            )?),
+            )?)),
             (MitigationMethod::Zne(_), _) | (MitigationMethod::VirtualDistillation(_), _) => {
                 return Err(ErrorMitigationError::RunArgsMethodMismatch);
             }
@@ -411,7 +411,7 @@ impl ErrorMitigation {
                 ProcessArgs::VirtualDistillation,
             ) => match record.as_ref() {
                 RunRecord::VirtualDistillation(record) => {
-                    self.get_virtual_distillation_mitigated(record)?
+                    self.get_virtual_distillation_mitigated(record.as_ref())?
                 }
                 RunRecord::Zne(_) => {
                     return Err(ErrorMitigationError::ProcessArgsMethodMismatch);

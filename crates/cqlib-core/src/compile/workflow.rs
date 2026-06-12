@@ -422,7 +422,7 @@ impl CompilerWorkflow {
     /// constraints for the final lowering stage.
     fn resolve_target_basis(&self) -> Result<Option<Vec<Instruction>>, CompilerError> {
         if let Some(target_basis) = &self.config.target_basis {
-            validate_workflow_target_basis_config(&target_basis)?;
+            validate_workflow_target_basis_config(target_basis)?;
             return Ok(Some(target_basis.to_vec()));
         }
 

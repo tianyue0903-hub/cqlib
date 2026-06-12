@@ -105,9 +105,11 @@ fn decompose_hadamard_with(
     mut decompose_rotation: impl FnMut(StandardGate, f64) -> Result<Vec<ValueOperation>, CompilerError>,
 ) -> Result<Vec<ValueOperation>, CompilerError> {
     if controls.is_empty() {
-        let mut operations = vec![];
-        operations.push(ValueOperation::from_standard(StandardGate::H, [target], []));
-        return Ok(operations);
+        return Ok(vec![ValueOperation::from_standard(
+            StandardGate::H,
+            [target],
+            [],
+        )]);
     }
 
     let Some((phase_target, phase_controls)) = controls.split_last() else {

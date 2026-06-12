@@ -253,6 +253,7 @@ pub fn greedy_layout_prepared(
 /// Connected physical pairs are considered first, ordered by distance and
 /// qubit IDs. If no connected vacant pair remains, all ordered vacant pairs are
 /// considered so the caller gets a deterministic failure or least-bad choice.
+#[allow(clippy::too_many_arguments)]
 fn choose_pair_candidate(
     interaction: &Interaction,
     left_logical: usize,
@@ -293,8 +294,8 @@ fn choose_pair_candidate(
             if !vacant[left_physical] {
                 continue;
             }
-            for right_physical in 0..vacant.len() {
-                if left_physical == right_physical || !vacant[right_physical] {
+            for (right_physical, item) in vacant.iter().enumerate() {
+                if left_physical == right_physical || !item {
                     continue;
                 }
                 evaluated += 1;
@@ -327,6 +328,7 @@ fn choose_pair_candidate(
 /// `anchored_physical` is the already-placed endpoint. `anchor_is_left`
 /// indicates whether that endpoint corresponds to the left side of
 /// `interaction`, preserving direction-sensitive scoring.
+#[allow(clippy::too_many_arguments)]
 fn choose_single_candidate(
     interaction: &Interaction,
     candidate_logical: usize,
@@ -342,8 +344,8 @@ fn choose_single_candidate(
 
     // The anchored endpoint fixes one side of the logical interaction; each
     // vacant physical qubit is evaluated as the other endpoint.
-    for candidate_physical in 0..vacant.len() {
-        if !vacant[candidate_physical] {
+    for (candidate_physical, item) in vacant.iter().enumerate() {
+        if !item {
             continue;
         }
         evaluated += 1;
@@ -407,8 +409,8 @@ fn choose_idle_candidate(
     // Idle qubits are placed near the already-used region when possible. This
     // keeps future routing options compact without pretending that idle qubits
     // impose a hard interaction constraint.
-    for candidate_physical in 0..vacant.len() {
-        if !vacant[candidate_physical] {
+    for (candidate_physical, item) in vacant.iter().enumerate() {
+        if !item {
             continue;
         }
         evaluated += 1;
@@ -462,6 +464,7 @@ impl CandidateCost {
     ///
     /// The cost is local to the current placement decision; final layout
     /// quality is still evaluated later by [`LayoutObjective::score_layout`].
+    #[allow(clippy::too_many_arguments)]
     fn for_interaction(
         interaction: &Interaction,
         left_logical: usize,
@@ -554,6 +557,7 @@ fn compare_cost(a: CandidateCost, b: CandidateCost) -> Ordering {
 ///
 /// Ties are resolved by physical qubit IDs so the greedy result is
 /// reproducible across runs.
+#[allow(clippy::too_many_arguments)]
 fn update_best_pair(
     interaction: &Interaction,
     left_logical: usize,
