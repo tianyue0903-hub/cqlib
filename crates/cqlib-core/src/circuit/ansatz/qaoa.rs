@@ -62,7 +62,11 @@ impl QAOAAnsatz {
     ///
     /// Returns `CircuitError::InvalidOperation` if there's an internal error building
     /// the default mixer Hamiltonian.
-    pub fn new(cost_operator: Hamiltonian) -> Result<Self, CircuitError> {
+    pub fn new(mut cost_operator: Hamiltonian) -> Result<Self, CircuitError> {
+        // Normalize Pauli phases into the coefficients before Hermiticity validation.
+        // For example, 1.0 * (+iX) becomes i * X and is correctly rejected later,
+        // while i * (-iX) becomes 1.0 * X and remains a valid Hermitian term.
+        cost_operator.simplify();
         let num_qubits = cost_operator.num_qubits;
 
         // Build the default X-mixer: H_B = \sum_{i=0}^{n-1} X_i
@@ -97,13 +101,14 @@ impl QAOAAnsatz {
     /// Overrides the default mixer Hamiltonian.
     ///
     /// The custom mixer must act on the same number of qubits as the cost operator.
-    pub fn mixer(mut self, mixer_operator: Hamiltonian) -> Result<Self, CircuitError> {
+    pub fn mixer(mut self, mut mixer_operator: Hamiltonian) -> Result<Self, CircuitError> {
         if mixer_operator.num_qubits != self.cost_operator.num_qubits {
             return Err(CircuitError::QubitCountMismatch {
                 expected: self.cost_operator.num_qubits,
                 actual: mixer_operator.num_qubits,
             });
         }
+        mixer_operator.simplify();
         self.mixer_operator = mixer_operator;
         Ok(self)
     }
