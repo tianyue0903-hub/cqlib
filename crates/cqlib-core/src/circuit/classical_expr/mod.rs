@@ -39,17 +39,18 @@
 //!
 //! `Bit` and `Bool` are intentionally distinct: control-flow conditions
 //! require `Bool`, so a measured `Bit` must be explicitly converted via
-//! [`ClassicalExpr::bit_to_bool`]. `BitVec` interprets index `0` as the
-//! least-significant bit; [`ClassicalExpr::bit_vec_to_uint`] provides a
-//! little-endian conversion to `UInt`.
+//! [`ClassicalExpr::to_bool`]. `BitVec` interprets index `0` as the
+//! least-significant bit; [`ClassicalExpr::to_uint`] provides a little-endian
+//! conversion to `UInt`.
 //!
 //! [`ClassicalType`]: super::ClassicalType
 //!
 //! # Building expressions
 //!
-//! Expressions are constructed via typed static methods on [`ClassicalExpr`].
-//! Every constructor validates operand types at build time and returns
-//! `Result<ClassicalExpr, CircuitError>`.
+//! Expressions are constructed from literals, runtime classical handles, and
+//! typed builders on [`ClassicalExpr`]. [`ClassicalVar`] and [`ClassicalValue`]
+//! handles can be used directly as expression sources; direct operator use is
+//! equivalent to converting the handle with `.expr()` first.
 //!
 //! ## Leaf nodes
 //!
@@ -66,41 +67,44 @@
 //! use cqlib_core::circuit::{ClassicalExpr, ClassicalType, ClassicalVar};
 //!
 //! let flag = ClassicalVar::new(Default::default(), 0, ClassicalType::Bool);
-//! let expr = ClassicalExpr::var(flag);           // Bool
+//! let expr = flag.expr();                        // Bool
 //! let lit  = ClassicalExpr::bool_literal(true);  // Bool
 //! let num  = ClassicalExpr::uint_literal(8, 42).unwrap(); // UInt(8)
 //! ```
 //!
 //! ## Unary operations
 //!
-//! | Constructor | Signature | Produces |
-//! |-------------|-----------|----------|
-//! | `not(expr)` | `Bool → Bool`, `Bit → Bit` | same type as input |
+//! | Operation | Signature | Produces |
+//! |-----------|-----------|----------|
+//! | `!expr` | `Bool → Bool`, `Bit → Bit` | same type as input |
+//! | `try_not(expr)` | `Bool → Bool`, `Bit → Bit` | same type as input |
 //!
-//! `not` on `Bool` is logical negation; on `Bit` it is bitwise inversion.
+//! Negation on `Bool` is logical negation; on `Bit` it is bitwise inversion.
+//! Use `try_not` when invalid input should return [`CircuitError`] instead of
+//! panicking through the operator trait.
 //!
 //! ```rust
-//! # use cqlib_core::circuit::{ClassicalExpr, ClassicalType, ClassicalVar};
+//! # use cqlib_core::circuit::{ClassicalType, ClassicalVar};
 //! # let flag = ClassicalVar::new(Default::default(), 0, ClassicalType::Bool);
-//! let cond = ClassicalExpr::not(ClassicalExpr::var(flag)).unwrap(); // Bool
+//! let cond = !flag; // Bool
 //! ```
 //!
 //! ## Binary operations
 //!
-//! | Constructor | Signature | Produces |
-//! |-------------|-----------|----------|
-//! | `and(lhs, rhs)` | `Bool×Bool → Bool`, `Bit×Bit → Bit` | same type |
-//! | `or(lhs, rhs)` | same | same type |
-//! | `xor(lhs, rhs)` | same | same type |
+//! | Operation | Signature | Produces |
+//! |-----------|-----------|----------|
+//! | `lhs & rhs` / `try_and(lhs, rhs)` | `Bool×Bool → Bool`, `Bit×Bit → Bit` | same type |
+//! | `lhs \| rhs` / `try_or(lhs, rhs)` | same | same type |
+//! | `lhs ^ rhs` / `try_xor(lhs, rhs)` | same | same type |
 //!
 //! Both operands must have the **same** type. `Bool` and `Bit` cannot be mixed.
 //!
 //! ```rust
-//! # use cqlib_core::circuit::{ClassicalExpr, ClassicalType, ClassicalVar, CircuitId};
+//! # use cqlib_core::circuit::{ClassicalType, ClassicalVar, CircuitId};
 //! # let cid = CircuitId::new();
-//! let a = ClassicalExpr::var(ClassicalVar::new(cid, 0, ClassicalType::Bool));
-//! let b = ClassicalExpr::var(ClassicalVar::new(cid, 1, ClassicalType::Bool));
-//! let both = ClassicalExpr::and(a, b).unwrap(); // Bool
+//! let a = ClassicalVar::new(cid, 0, ClassicalType::Bool);
+//! let b = ClassicalVar::new(cid, 1, ClassicalType::Bool);
+//! let both = a & b; // Bool
 //! ```
 //!
 //! ## Comparison operations
@@ -129,17 +133,17 @@
 //!
 //! | Constructor | Signature | Produces |
 //! |-------------|-----------|----------|
-//! | `bit_to_bool(expr)` | `Bit → Bool` | `Bool` |
-//! | `bit_vec_to_uint(expr)` | `BitVec(w) → UInt(w)` | `UInt(w)` |
+//! | `expr.to_bool()` / `bit_to_bool(expr)` | `Bit → Bool` | `Bool` |
+//! | `expr.to_uint()` / `bit_vec_to_uint(expr)` | `BitVec(w) → UInt(w)` | `UInt(w)` |
 //!
-//! Casts are **explicit** — there is no implicit promotion. `bit_vec_to_uint`
+//! Casts are **explicit** — there is no implicit promotion. `to_uint`
 //! interprets bit index `0` as the least-significant bit.
 //!
 //! ```rust
 //! # use cqlib_core::circuit::{ClassicalExpr, ClassicalType, ClassicalValue, CircuitId};
 //! # let cid = CircuitId::new();
 //! let measured = ClassicalExpr::value(ClassicalValue::new(cid, 0, ClassicalType::Bit));
-//! let condition = ClassicalExpr::bit_to_bool(measured).unwrap(); // Bool
+//! let condition = measured.to_bool().unwrap(); // Bool
 //! ```
 //!
 //! ## Conditional selection
@@ -256,12 +260,12 @@
 //!
 //! // not(not(a)) → a
 //! let a = ClassicalExpr::bool_literal(true);
-//! let expr = ClassicalExpr::not(ClassicalExpr::not(a.clone()).unwrap()).unwrap();
+//! let expr = ClassicalExpr::try_not(ClassicalExpr::try_not(a.clone()).unwrap()).unwrap();
 //! assert_eq!(expr.simplified(), a);
 //!
 //! // and(b, true) → b
 //! let b = ClassicalExpr::bool_literal(false);
-//! let expr = ClassicalExpr::and(b.clone(), ClassicalExpr::bool_literal(true)).unwrap();
+//! let expr = ClassicalExpr::try_and(b.clone(), ClassicalExpr::bool_literal(true)).unwrap();
 //! assert_eq!(expr.simplified(), b);
 //!
 //! // eq(x, x) → true
@@ -288,12 +292,12 @@
 //!
 //! ```text
 //! measure q[0] → value: Bit
-//! bit_to_bool(value) → condition: Bool
+//! value.to_bool() → condition: Bool
 //! if condition { ... }
 //! ```
 //!
 //! ```rust
-//! use cqlib_core::circuit::{Circuit, ClassicalExpr, Qubit};
+//! use cqlib_core::circuit::{Circuit, Qubit};
 //!
 //! fn build() -> Result<Circuit, Box<dyn std::error::Error>> {
 //!     let mut circuit = Circuit::new(2);
@@ -301,7 +305,7 @@
 //!     let q1 = Qubit::new(1);
 //!
 //!     let measured = circuit.measure(q0)?;
-//!     let condition = ClassicalExpr::bit_to_bool(measured.expr())?;
+//!     let condition = measured.expr().to_bool()?;
 //!     circuit.if_(condition, |body| {
 //!         body.x(q1)?;
 //!         Ok(())
@@ -325,7 +329,7 @@
 //!
 //!     circuit.while_(running.expr(), |body| {
 //!         let measured = body.measure(q0)?;
-//!         body.store(running, ClassicalExpr::bit_to_bool(measured.expr())?)?;
+//!         body.store(running, measured.expr().to_bool()?)?;
 //!         Ok(())
 //!     })?;
 //!

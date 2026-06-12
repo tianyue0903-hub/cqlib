@@ -1214,7 +1214,7 @@ fn test_dump_condition_value_zero() {
     circuit.h(q0).unwrap();
     let measured = circuit.measure(q0).unwrap();
     let condition =
-        ClassicalExpr::not(ClassicalExpr::bit_to_bool(measured.expr()).unwrap()).unwrap();
+        ClassicalExpr::try_not(ClassicalExpr::bit_to_bool(measured.expr()).unwrap()).unwrap();
     circuit
         .if_(condition, |body| {
             body.x(q1)?;

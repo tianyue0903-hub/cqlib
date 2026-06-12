@@ -16,11 +16,46 @@
 //! them into typed runtime values. They do not measure qubits, write classical
 //! storage, or transfer control. Control-flow statements consume these
 //! expressions in a later layer.
+//!
+//! Build expressions with the typed constructors on [`ClassicalExpr`].
+//! [`ClassicalVar`] and [`ClassicalValue`] handles can be converted directly
+//! into expressions, so `var.expr()`, `ClassicalExpr::from(var)`, and passing a
+//! handle to a `try_*` builder are equivalent expression sources. Leaf
+//! constructors such as [`ClassicalExpr::bool_literal`] and
+//! [`ClassicalExpr::bit_literal`] are infallible. Constructors that validate
+//! operand types return `Result<ClassicalExpr, CircuitError>`; the fallible
+//! logical builders use a `try_` prefix, for example
+//! [`ClassicalExpr::try_not`], [`ClassicalExpr::try_and`],
+//! [`ClassicalExpr::try_or`], and [`ClassicalExpr::try_xor`].
+//!
+//! Prefer Rust bit operators when the expression types are already known:
+//! `!source`, `lhs & rhs`, `lhs | rhs`, and `lhs ^ rhs`. Each source may be a
+//! [`ClassicalExpr`], [`ClassicalVar`], or [`ClassicalValue`]. These operator
+//! overloads panic if the operands are not matching `Bool` or matching `Bit`
+//! expressions, because the standard operator traits cannot return `Result`.
+//! Use the fallible `try_*` builders when invalid input should be reported as
+//! [`CircuitError`] instead of a panic.
+//!
+//! ```rust
+//! use cqlib_core::circuit::{CircuitId, ClassicalExpr, ClassicalType, ClassicalVar};
+//!
+//! let cid = CircuitId::new();
+//! let a = ClassicalVar::new(cid, 0, ClassicalType::Bool);
+//! let b = ClassicalVar::new(cid, 1, ClassicalType::Bool);
+//!
+//! let condition = !a & b;
+//! assert_eq!(condition.ty(), ClassicalType::Bool);
+//!
+//! let checked = ClassicalExpr::try_and(ClassicalExpr::try_not(a)?, b)?;
+//! assert_eq!(checked.ty(), ClassicalType::Bool);
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
 
 use crate::circuit::classical::{ClassicalType, ClassicalValue, ClassicalVar};
 use crate::circuit::error::CircuitError;
 use std::collections::{BTreeSet, HashMap};
 use std::num::NonZeroU32;
+use std::ops::{BitAnd, BitOr, BitXor, Not};
 
 /// Unary operators for classical expressions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -456,7 +491,8 @@ impl ClassicalExpr {
     }
 
     /// Creates a `not` expression for `Bool` or `Bit` values.
-    pub fn not(expr: Self) -> Result<Self, CircuitError> {
+    pub fn try_not(expr: impl Into<Self>) -> Result<Self, CircuitError> {
+        let expr = expr.into();
         match expr.ty() {
             ClassicalType::Bool | ClassicalType::Bit => Ok(Self {
                 node: Box::new(ClassicalExprNode {
@@ -474,7 +510,9 @@ impl ClassicalExpr {
     }
 
     /// Creates an `and` expression for matching `Bool` or matching `Bit` values.
-    pub fn and(lhs: Self, rhs: Self) -> Result<Self, CircuitError> {
+    pub fn try_and(lhs: impl Into<Self>, rhs: impl Into<Self>) -> Result<Self, CircuitError> {
+        let lhs = lhs.into();
+        let rhs = rhs.into();
         let ty = lhs.ty();
         if ty != rhs.ty() {
             return Err(CircuitError::InvalidOperation(format!(
@@ -501,7 +539,9 @@ impl ClassicalExpr {
     }
 
     /// Creates an `or` expression for matching `Bool` or matching `Bit` values.
-    pub fn or(lhs: Self, rhs: Self) -> Result<Self, CircuitError> {
+    pub fn try_or(lhs: impl Into<Self>, rhs: impl Into<Self>) -> Result<Self, CircuitError> {
+        let lhs = lhs.into();
+        let rhs = rhs.into();
         let ty = lhs.ty();
         if ty != rhs.ty() {
             return Err(CircuitError::InvalidOperation(format!(
@@ -528,7 +568,9 @@ impl ClassicalExpr {
     }
 
     /// Creates an `xor` expression for matching `Bool` or matching `Bit` values.
-    pub fn xor(lhs: Self, rhs: Self) -> Result<Self, CircuitError> {
+    pub fn try_xor(lhs: impl Into<Self>, rhs: impl Into<Self>) -> Result<Self, CircuitError> {
+        let lhs = lhs.into();
+        let rhs = rhs.into();
         let ty = lhs.ty();
         if ty != rhs.ty() {
             return Err(CircuitError::InvalidOperation(format!(
@@ -739,6 +781,16 @@ impl ClassicalExpr {
                 "bit_vec_to_uint expects BitVec, got {ty:?}"
             ))),
         }
+    }
+
+    /// Converts this `Bit` expression to `Bool`.
+    pub fn to_bool(self) -> Result<Self, CircuitError> {
+        Self::bit_to_bool(self)
+    }
+
+    /// Converts this `BitVec` expression to a little-endian `UInt`.
+    pub fn to_uint(self) -> Result<Self, CircuitError> {
+        Self::bit_vec_to_uint(self)
     }
 
     /// Creates an expression that chooses between two same-typed values.
@@ -961,6 +1013,81 @@ impl ClassicalExpr {
         })
     }
 }
+
+impl From<ClassicalVar> for ClassicalExpr {
+    fn from(var: ClassicalVar) -> Self {
+        Self::var(var)
+    }
+}
+
+impl From<ClassicalValue> for ClassicalExpr {
+    fn from(value: ClassicalValue) -> Self {
+        Self::value(value)
+    }
+}
+
+macro_rules! impl_expr_not {
+    ($ty:ty) => {
+        impl Not for $ty {
+            type Output = ClassicalExpr;
+
+            fn not(self) -> Self::Output {
+                ClassicalExpr::try_not(self)
+                    .expect("ClassicalExpr ! operator requires a Bool or Bit expression")
+            }
+        }
+    };
+}
+
+macro_rules! impl_expr_binary_ops {
+    ($ty:ty) => {
+        impl<Rhs> BitAnd<Rhs> for $ty
+        where
+            Rhs: Into<ClassicalExpr>,
+        {
+            type Output = ClassicalExpr;
+
+            fn bitand(self, rhs: Rhs) -> Self::Output {
+                ClassicalExpr::try_and(self, rhs).expect(
+                    "ClassicalExpr & operator requires matching Bool or matching Bit expressions",
+                )
+            }
+        }
+
+        impl<Rhs> BitOr<Rhs> for $ty
+        where
+            Rhs: Into<ClassicalExpr>,
+        {
+            type Output = ClassicalExpr;
+
+            fn bitor(self, rhs: Rhs) -> Self::Output {
+                ClassicalExpr::try_or(self, rhs).expect(
+                    "ClassicalExpr | operator requires matching Bool or matching Bit expressions",
+                )
+            }
+        }
+
+        impl<Rhs> BitXor<Rhs> for $ty
+        where
+            Rhs: Into<ClassicalExpr>,
+        {
+            type Output = ClassicalExpr;
+
+            fn bitxor(self, rhs: Rhs) -> Self::Output {
+                ClassicalExpr::try_xor(self, rhs).expect(
+                    "ClassicalExpr ^ operator requires matching Bool or matching Bit expressions",
+                )
+            }
+        }
+    };
+}
+
+impl_expr_not!(ClassicalExpr);
+impl_expr_not!(ClassicalVar);
+impl_expr_not!(ClassicalValue);
+impl_expr_binary_ops!(ClassicalExpr);
+impl_expr_binary_ops!(ClassicalVar);
+impl_expr_binary_ops!(ClassicalValue);
 
 #[cfg(test)]
 #[path = "expr_test.rs"]

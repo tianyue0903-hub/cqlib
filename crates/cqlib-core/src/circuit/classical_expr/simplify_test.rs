@@ -86,119 +86,119 @@ fn leaf_bitvec_literal_is_unchanged() {
 #[test]
 fn double_not_bool() {
     let x = mk_bool_var(0);
-    let expr = ClassicalExpr::not(ClassicalExpr::not(x.clone()).unwrap()).unwrap();
+    let expr = ClassicalExpr::try_not(ClassicalExpr::try_not(x.clone()).unwrap()).unwrap();
     assert_eq!(simplify(&expr), x);
 }
 
 #[test]
 fn double_not_bit() {
     let x = mk_bit_var(0);
-    let expr = ClassicalExpr::not(ClassicalExpr::not(x.clone()).unwrap()).unwrap();
+    let expr = ClassicalExpr::try_not(ClassicalExpr::try_not(x.clone()).unwrap()).unwrap();
     assert_eq!(simplify(&expr), x);
 }
 
 #[test]
 fn single_not_is_unchanged() {
     let x = mk_bool_var(0);
-    let expr = ClassicalExpr::not(x.clone()).unwrap();
+    let expr = ClassicalExpr::try_not(x.clone()).unwrap();
     assert_eq!(simplify(&expr), expr);
 }
 
 #[test]
 fn and_with_bool_true_rhs() {
     let x = mk_bool_var(0);
-    let expr = ClassicalExpr::and(x.clone(), ClassicalExpr::bool_literal(true)).unwrap();
+    let expr = ClassicalExpr::try_and(x.clone(), ClassicalExpr::bool_literal(true)).unwrap();
     assert_eq!(simplify(&expr), x);
 }
 
 #[test]
 fn and_with_bool_true_lhs() {
     let x = mk_bool_var(0);
-    let expr = ClassicalExpr::and(ClassicalExpr::bool_literal(true), x.clone()).unwrap();
+    let expr = ClassicalExpr::try_and(ClassicalExpr::bool_literal(true), x.clone()).unwrap();
     assert_eq!(simplify(&expr), x);
 }
 
 #[test]
 fn and_with_bit_true_rhs() {
     let x = mk_bit_var(0);
-    let expr = ClassicalExpr::and(x.clone(), ClassicalExpr::bit_literal(true)).unwrap();
+    let expr = ClassicalExpr::try_and(x.clone(), ClassicalExpr::bit_literal(true)).unwrap();
     assert_eq!(simplify(&expr), x);
 }
 
 #[test]
 fn and_with_bit_true_lhs() {
     let x = mk_bit_var(0);
-    let expr = ClassicalExpr::and(ClassicalExpr::bit_literal(true), x.clone()).unwrap();
+    let expr = ClassicalExpr::try_and(ClassicalExpr::bit_literal(true), x.clone()).unwrap();
     assert_eq!(simplify(&expr), x);
 }
 
 #[test]
 fn and_with_false_is_not_identity() {
     let x = mk_bool_var(0);
-    let expr = ClassicalExpr::and(x.clone(), ClassicalExpr::bool_literal(false)).unwrap();
+    let expr = ClassicalExpr::try_and(x.clone(), ClassicalExpr::bool_literal(false)).unwrap();
     assert_eq!(simplify(&expr), expr);
 }
 
 #[test]
 fn or_with_bool_false_rhs() {
     let x = mk_bool_var(0);
-    let expr = ClassicalExpr::or(x.clone(), ClassicalExpr::bool_literal(false)).unwrap();
+    let expr = ClassicalExpr::try_or(x.clone(), ClassicalExpr::bool_literal(false)).unwrap();
     assert_eq!(simplify(&expr), x);
 }
 
 #[test]
 fn or_with_bool_false_lhs() {
     let x = mk_bool_var(0);
-    let expr = ClassicalExpr::or(ClassicalExpr::bool_literal(false), x.clone()).unwrap();
+    let expr = ClassicalExpr::try_or(ClassicalExpr::bool_literal(false), x.clone()).unwrap();
     assert_eq!(simplify(&expr), x);
 }
 
 #[test]
 fn or_with_true_is_not_identity() {
     let x = mk_bool_var(0);
-    let expr = ClassicalExpr::or(x.clone(), ClassicalExpr::bool_literal(true)).unwrap();
+    let expr = ClassicalExpr::try_or(x.clone(), ClassicalExpr::bool_literal(true)).unwrap();
     assert_eq!(simplify(&expr), expr);
 }
 
 #[test]
 fn xor_with_bool_false_rhs() {
     let x = mk_bool_var(0);
-    let expr = ClassicalExpr::xor(x.clone(), ClassicalExpr::bool_literal(false)).unwrap();
+    let expr = ClassicalExpr::try_xor(x.clone(), ClassicalExpr::bool_literal(false)).unwrap();
     assert_eq!(simplify(&expr), x);
 }
 
 #[test]
 fn xor_with_bool_false_lhs() {
     let x = mk_bool_var(0);
-    let expr = ClassicalExpr::xor(ClassicalExpr::bool_literal(false), x.clone()).unwrap();
+    let expr = ClassicalExpr::try_xor(ClassicalExpr::bool_literal(false), x.clone()).unwrap();
     assert_eq!(simplify(&expr), x);
 }
 
 #[test]
 fn xor_with_bit_false_rhs() {
     let x = mk_bit_var(0);
-    let expr = ClassicalExpr::xor(x.clone(), ClassicalExpr::bit_literal(false)).unwrap();
+    let expr = ClassicalExpr::try_xor(x.clone(), ClassicalExpr::bit_literal(false)).unwrap();
     assert_eq!(simplify(&expr), x);
 }
 
 #[test]
 fn and_same_var_bool() {
     let x = mk_bool_var(0);
-    let expr = ClassicalExpr::and(x.clone(), x.clone()).unwrap();
+    let expr = ClassicalExpr::try_and(x.clone(), x.clone()).unwrap();
     assert_eq!(simplify(&expr), x);
 }
 
 #[test]
 fn or_same_var_bool() {
     let x = mk_bool_var(0);
-    let expr = ClassicalExpr::or(x.clone(), x.clone()).unwrap();
+    let expr = ClassicalExpr::try_or(x.clone(), x.clone()).unwrap();
     assert_eq!(simplify(&expr), x);
 }
 
 #[test]
 fn and_same_var_bit() {
     let x = mk_bit_var(0);
-    let expr = ClassicalExpr::and(x.clone(), x.clone()).unwrap();
+    let expr = ClassicalExpr::try_and(x.clone(), x.clone()).unwrap();
     assert_eq!(simplify(&expr), x);
 }
 
@@ -206,61 +206,61 @@ fn and_same_var_bit() {
 fn and_different_vars_not_simplified() {
     let x = mk_bool_var(0);
     let y = mk_bool_var(1);
-    let expr = ClassicalExpr::and(x.clone(), y.clone()).unwrap();
+    let expr = ClassicalExpr::try_and(x.clone(), y.clone()).unwrap();
     assert_eq!(simplify(&expr), expr);
 }
 
 #[test]
 fn xor_same_var_bool() {
     let x = mk_bool_var(0);
-    let expr = ClassicalExpr::xor(x.clone(), x).unwrap();
+    let expr = ClassicalExpr::try_xor(x.clone(), x).unwrap();
     assert_eq!(simplify(&expr), ClassicalExpr::bool_literal(false));
 }
 
 #[test]
 fn xor_same_var_bit() {
     let x = mk_bit_var(0);
-    let expr = ClassicalExpr::xor(x.clone(), x).unwrap();
+    let expr = ClassicalExpr::try_xor(x.clone(), x).unwrap();
     assert_eq!(simplify(&expr), ClassicalExpr::bit_literal(false));
 }
 
 #[test]
 fn and_with_complement_rhs() {
     let x = mk_bool_var(0);
-    let not_x = ClassicalExpr::not(x.clone()).unwrap();
-    let expr = ClassicalExpr::and(x, not_x).unwrap();
+    let not_x = ClassicalExpr::try_not(x.clone()).unwrap();
+    let expr = ClassicalExpr::try_and(x, not_x).unwrap();
     assert_eq!(simplify(&expr), ClassicalExpr::bool_literal(false));
 }
 
 #[test]
 fn and_with_complement_lhs() {
     let x = mk_bool_var(0);
-    let not_x = ClassicalExpr::not(x.clone()).unwrap();
-    let expr = ClassicalExpr::and(not_x, x).unwrap();
+    let not_x = ClassicalExpr::try_not(x.clone()).unwrap();
+    let expr = ClassicalExpr::try_and(not_x, x).unwrap();
     assert_eq!(simplify(&expr), ClassicalExpr::bool_literal(false));
 }
 
 #[test]
 fn or_with_complement() {
     let x = mk_bool_var(0);
-    let not_x = ClassicalExpr::not(x.clone()).unwrap();
-    let expr = ClassicalExpr::or(x, not_x).unwrap();
+    let not_x = ClassicalExpr::try_not(x.clone()).unwrap();
+    let expr = ClassicalExpr::try_or(x, not_x).unwrap();
     assert_eq!(simplify(&expr), ClassicalExpr::bool_literal(true));
 }
 
 #[test]
 fn xor_with_complement() {
     let x = mk_bool_var(0);
-    let not_x = ClassicalExpr::not(x.clone()).unwrap();
-    let expr = ClassicalExpr::xor(x, not_x).unwrap();
+    let not_x = ClassicalExpr::try_not(x.clone()).unwrap();
+    let expr = ClassicalExpr::try_xor(x, not_x).unwrap();
     assert_eq!(simplify(&expr), ClassicalExpr::bool_literal(true));
 }
 
 #[test]
 fn complement_bit_type() {
     let x = mk_bit_var(0);
-    let not_x = ClassicalExpr::not(x.clone()).unwrap();
-    let expr = ClassicalExpr::and(x, not_x).unwrap();
+    let not_x = ClassicalExpr::try_not(x.clone()).unwrap();
+    let expr = ClassicalExpr::try_and(x, not_x).unwrap();
     assert_eq!(simplify(&expr), ClassicalExpr::bit_literal(false));
 }
 
@@ -269,9 +269,9 @@ fn non_complement_not_simplified() {
     // and(not(a), not(b)) — neither side is the complement of the other
     let a = mk_bool_var(0);
     let b = mk_bool_var(1);
-    let not_a = ClassicalExpr::not(a).unwrap();
-    let not_b = ClassicalExpr::not(b).unwrap();
-    let expr = ClassicalExpr::and(not_a, not_b).unwrap();
+    let not_a = ClassicalExpr::try_not(a).unwrap();
+    let not_b = ClassicalExpr::try_not(b).unwrap();
+    let expr = ClassicalExpr::try_and(not_a, not_b).unwrap();
     assert_eq!(simplify(&expr), expr);
 }
 
@@ -392,9 +392,11 @@ fn cast_runtime_bit_unchanged() {
 fn nested_double_negation() {
     // not(not(not(not(x)))) → x
     let x = mk_bool_var(0);
-    let expr = ClassicalExpr::not(
-        ClassicalExpr::not(ClassicalExpr::not(ClassicalExpr::not(x.clone()).unwrap()).unwrap())
-            .unwrap(),
+    let expr = ClassicalExpr::try_not(
+        ClassicalExpr::try_not(
+            ClassicalExpr::try_not(ClassicalExpr::try_not(x.clone()).unwrap()).unwrap(),
+        )
+        .unwrap(),
     )
     .unwrap();
     assert_eq!(simplify(&expr), x);
@@ -404,8 +406,8 @@ fn nested_double_negation() {
 fn and_of_simplified_children() {
     // and(not(not(x)), true) → x
     let x = mk_bool_var(0);
-    let not_not_x = ClassicalExpr::not(ClassicalExpr::not(x.clone()).unwrap()).unwrap();
-    let expr = ClassicalExpr::and(not_not_x, ClassicalExpr::bool_literal(true)).unwrap();
+    let not_not_x = ClassicalExpr::try_not(ClassicalExpr::try_not(x.clone()).unwrap()).unwrap();
+    let expr = ClassicalExpr::try_and(not_not_x, ClassicalExpr::bool_literal(true)).unwrap();
     assert_eq!(simplify(&expr), x);
 }
 
@@ -425,8 +427,9 @@ fn deep_tree_all_rules_combined() {
     // or(and(not(not(x)), true), false) ∧ select(eq(x,x), y, z) ... — target: x ∧ y
     // Actually keep it simple: eq(and(not(not(a)), true), a) → true
     let a = mk_bool_var(0);
-    let not_not_a = ClassicalExpr::not(ClassicalExpr::not(a.clone()).unwrap()).unwrap();
-    let and_with_true = ClassicalExpr::and(not_not_a, ClassicalExpr::bool_literal(true)).unwrap();
+    let not_not_a = ClassicalExpr::try_not(ClassicalExpr::try_not(a.clone()).unwrap()).unwrap();
+    let and_with_true =
+        ClassicalExpr::try_and(not_not_a, ClassicalExpr::bool_literal(true)).unwrap();
     let expr = ClassicalExpr::eq(and_with_true, a).unwrap();
     assert_eq!(simplify(&expr), ClassicalExpr::bool_literal(true));
 }
@@ -448,7 +451,7 @@ fn concat_recurses_into_parts() {
     let bx = mk_bit_var(2);
     let by = mk_bit_var(3);
     let simplified_child =
-        ClassicalExpr::and(bx.clone(), ClassicalExpr::bit_literal(true)).unwrap();
+        ClassicalExpr::try_and(bx.clone(), ClassicalExpr::bit_literal(true)).unwrap();
     let concat_expr = ClassicalExpr::concat([simplified_child, by.clone()]).unwrap();
     let expected = ClassicalExpr::concat([bx, by]).unwrap();
     assert_eq!(simplify(&concat_expr), expected);
@@ -459,8 +462,8 @@ fn pack_bits_recurses_into_bits() {
     // pack_bits([and(bit, true), and(true, bit)]) → pack_bits([bit, bit])
     let b0 = mk_bit_var(0);
     let b1 = mk_bit_var(1);
-    let child0 = ClassicalExpr::and(b0.clone(), ClassicalExpr::bit_literal(true)).unwrap();
-    let child1 = ClassicalExpr::and(ClassicalExpr::bit_literal(true), b1.clone()).unwrap();
+    let child0 = ClassicalExpr::try_and(b0.clone(), ClassicalExpr::bit_literal(true)).unwrap();
+    let child1 = ClassicalExpr::try_and(ClassicalExpr::bit_literal(true), b1.clone()).unwrap();
     let expr = ClassicalExpr::pack_bits([child0, child1]).unwrap();
     let expected = ClassicalExpr::pack_bits([b0, b1]).unwrap();
     assert_eq!(simplify(&expr), expected);
@@ -471,13 +474,13 @@ fn simplify_is_idempotent() {
     // Build a moderately complex expression and verify s(s(expr)) == s(expr)
     let x = mk_bool_var(0);
     let y = mk_bool_var(1);
-    let not_x = ClassicalExpr::not(x.clone()).unwrap();
-    let inner = ClassicalExpr::and(
-        ClassicalExpr::not(not_x).unwrap(), // not(not(x))
+    let not_x = ClassicalExpr::try_not(x.clone()).unwrap();
+    let inner = ClassicalExpr::try_and(
+        ClassicalExpr::try_not(not_x).unwrap(), // not(not(x))
         ClassicalExpr::bool_literal(true),
     )
     .unwrap();
-    let expr = ClassicalExpr::or(inner, y).unwrap();
+    let expr = ClassicalExpr::try_or(inner, y).unwrap();
 
     let once = simplify(&expr);
     let twice = simplify(&once);
@@ -491,10 +494,10 @@ fn simplify_preserves_type() {
         ClassicalExpr::bit_literal(false),
         ClassicalExpr::uint_literal(8, 42).unwrap(),
         ClassicalExpr::bit_vec_literal(4, 0b1010).unwrap(),
-        ClassicalExpr::not(mk_bool_var(0)).unwrap(),
-        ClassicalExpr::and(mk_bool_var(0), mk_bool_var(1)).unwrap(),
-        ClassicalExpr::or(mk_bool_var(0), mk_bool_var(1)).unwrap(),
-        ClassicalExpr::xor(mk_bit_var(0), mk_bit_var(1)).unwrap(),
+        ClassicalExpr::try_not(mk_bool_var(0)).unwrap(),
+        ClassicalExpr::try_and(mk_bool_var(0), mk_bool_var(1)).unwrap(),
+        ClassicalExpr::try_or(mk_bool_var(0), mk_bool_var(1)).unwrap(),
+        ClassicalExpr::try_xor(mk_bit_var(0), mk_bit_var(1)).unwrap(),
         ClassicalExpr::eq(mk_uint_var(0, 4), mk_uint_var(1, 4)).unwrap(),
         ClassicalExpr::bit_to_bool(mk_bit_var(0)).unwrap(),
         ClassicalExpr::select(mk_bool_var(0), mk_bool_var(1), mk_bool_var(2)).unwrap(),
@@ -520,8 +523,8 @@ fn simplify_vars_are_subset() {
     let a = mk_bool_var(0);
     let b = mk_bool_var(1);
     // and(a, not(a)) → false — removes all vars
-    let not_a = ClassicalExpr::not(a.clone()).unwrap();
-    let expr = ClassicalExpr::and(a.clone(), not_a).unwrap();
+    let not_a = ClassicalExpr::try_not(a.clone()).unwrap();
+    let expr = ClassicalExpr::try_and(a.clone(), not_a).unwrap();
     let simplified = simplify(&expr);
     let sv = simplified.vars();
     assert!(
@@ -531,7 +534,7 @@ fn simplify_vars_are_subset() {
     );
 
     // and(a, b) and a ≠ b — vars preserved
-    let expr2 = ClassicalExpr::and(a.clone(), b.clone()).unwrap();
+    let expr2 = ClassicalExpr::try_and(a.clone(), b.clone()).unwrap();
     let s2 = simplify(&expr2);
     assert!(s2.vars().len() <= expr2.vars().len());
     for v in s2.vars() {
@@ -544,7 +547,7 @@ fn simplify_values_are_subset() {
     let v0 = mk_bool_value(0);
     let v1 = mk_bool_value(1);
     // or(v0, v0) → v0 (idempotence) — vars subset preserved
-    let expr = ClassicalExpr::or(v0.clone(), v0.clone()).unwrap();
+    let expr = ClassicalExpr::try_or(v0.clone(), v0.clone()).unwrap();
     let simplified = simplify(&expr);
     assert!(simplified.values().len() <= expr.values().len());
     for val in simplified.values() {
@@ -552,7 +555,7 @@ fn simplify_values_are_subset() {
     }
 
     // and(v0, v1) with v0 ≠ v1 — unchanged
-    let expr2 = ClassicalExpr::and(v0, v1).unwrap();
+    let expr2 = ClassicalExpr::try_and(v0, v1).unwrap();
     let s2 = simplify(&expr2);
     assert_eq!(s2, expr2);
 }

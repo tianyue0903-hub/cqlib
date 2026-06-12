@@ -117,7 +117,7 @@ mod tests {
         let circuit_id = CircuitId::new();
         let bit = ClassicalVar::new(circuit_id, 1, ClassicalType::Bit);
         let value = ClassicalValue::new(circuit_id, 2, ClassicalType::Bit);
-        let condition = ClassicalExpr::and(
+        let condition = ClassicalExpr::try_and(
             ClassicalExpr::bit_to_bool(bit.expr()).unwrap(),
             ClassicalExpr::bit_to_bool(value.expr()).unwrap(),
         )

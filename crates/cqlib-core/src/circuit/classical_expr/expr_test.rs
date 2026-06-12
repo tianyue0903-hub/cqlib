@@ -31,19 +31,85 @@ fn boolean_and_bit_operations_are_typed_separately() {
     let b0 = ClassicalExpr::var(ClassicalVar::new(test_circuit_id(), 0, ClassicalType::Bool));
     let b1 = ClassicalExpr::var(ClassicalVar::new(test_circuit_id(), 1, ClassicalType::Bool));
     assert_eq!(
-        ClassicalExpr::and(b0.clone(), b1.clone()).unwrap().ty(),
+        ClassicalExpr::try_and(b0.clone(), b1.clone()).unwrap().ty(),
         ClassicalType::Bool
     );
-    assert_eq!(ClassicalExpr::not(b0).unwrap().ty(), ClassicalType::Bool);
+    assert_eq!(
+        ClassicalExpr::try_not(b0).unwrap().ty(),
+        ClassicalType::Bool
+    );
 
     let bit0 = ClassicalExpr::var(ClassicalVar::new(test_circuit_id(), 2, ClassicalType::Bit));
     let bit1 = ClassicalExpr::var(ClassicalVar::new(test_circuit_id(), 3, ClassicalType::Bit));
     assert_eq!(
-        ClassicalExpr::xor(bit0.clone(), bit1).unwrap().ty(),
+        ClassicalExpr::try_xor(bit0.clone(), bit1).unwrap().ty(),
         ClassicalType::Bit
     );
 
-    assert!(ClassicalExpr::and(b1, bit0).is_err());
+    assert!(ClassicalExpr::try_and(b1, bit0).is_err());
+}
+
+#[test]
+fn rust_bit_operators_build_boolean_and_bit_expressions() {
+    let b0 = ClassicalExpr::var(ClassicalVar::new(test_circuit_id(), 0, ClassicalType::Bool));
+    let b1 = ClassicalExpr::var(ClassicalVar::new(test_circuit_id(), 1, ClassicalType::Bool));
+
+    assert_eq!((!b0.clone()).ty(), ClassicalType::Bool);
+    assert_eq!((b0.clone() & b1.clone()).ty(), ClassicalType::Bool);
+    assert_eq!((b0.clone() | b1.clone()).ty(), ClassicalType::Bool);
+    assert_eq!((b0 ^ b1).ty(), ClassicalType::Bool);
+
+    let bit0 = ClassicalExpr::var(ClassicalVar::new(test_circuit_id(), 2, ClassicalType::Bit));
+    let bit1 = ClassicalExpr::var(ClassicalVar::new(test_circuit_id(), 3, ClassicalType::Bit));
+
+    assert_eq!((!bit0.clone()).ty(), ClassicalType::Bit);
+    assert_eq!((bit0.clone() & bit1.clone()).ty(), ClassicalType::Bit);
+    assert_eq!((bit0.clone() | bit1.clone()).ty(), ClassicalType::Bit);
+    assert_eq!((bit0 ^ bit1).ty(), ClassicalType::Bit);
+}
+
+#[test]
+fn classical_handles_convert_directly_to_expressions() {
+    let var = ClassicalVar::new(test_circuit_id(), 0, ClassicalType::Bool);
+    let value = ClassicalValue::new(test_circuit_id(), 1, ClassicalType::Bit);
+
+    let var_expr = ClassicalExpr::from(var);
+    let value_expr = ClassicalExpr::from(value);
+
+    assert_eq!(var_expr.ty(), ClassicalType::Bool);
+    assert_eq!(value_expr.ty(), ClassicalType::Bit);
+}
+
+#[test]
+fn classical_handles_can_use_expression_operators_directly() {
+    let flag = ClassicalVar::new(test_circuit_id(), 0, ClassicalType::Bool);
+    let ready = ClassicalVar::new(test_circuit_id(), 1, ClassicalType::Bool);
+    let value = ClassicalValue::new(test_circuit_id(), 2, ClassicalType::Bool);
+
+    assert_eq!((!flag).ty(), ClassicalType::Bool);
+    assert_eq!((flag & ready).ty(), ClassicalType::Bool);
+    assert_eq!((flag | ready.expr()).ty(), ClassicalType::Bool);
+    assert_eq!((flag.expr() ^ ready).ty(), ClassicalType::Bool);
+    assert_eq!((flag & value).ty(), ClassicalType::Bool);
+
+    let bit_var = ClassicalVar::new(test_circuit_id(), 3, ClassicalType::Bit);
+    let bit_value = ClassicalValue::new(test_circuit_id(), 4, ClassicalType::Bit);
+
+    assert_eq!((!bit_value).ty(), ClassicalType::Bit);
+    assert_eq!((bit_var & bit_value).ty(), ClassicalType::Bit);
+}
+
+#[test]
+fn fallible_logical_builders_accept_classical_handles() {
+    let flag = ClassicalVar::new(test_circuit_id(), 0, ClassicalType::Bool);
+    let ready = ClassicalVar::new(test_circuit_id(), 1, ClassicalType::Bool);
+    let measured = ClassicalValue::new(test_circuit_id(), 2, ClassicalType::Bit);
+
+    assert_eq!(
+        ClassicalExpr::try_and(flag, ready).unwrap().ty(),
+        ClassicalType::Bool
+    );
+    assert!(ClassicalExpr::try_and(flag, measured).is_err());
 }
 
 #[test]
@@ -76,6 +142,8 @@ fn casts_are_explicit() {
         ClassicalExpr::bit_to_bool(bit).unwrap().ty(),
         ClassicalType::Bool
     );
+    let bit = ClassicalExpr::var(ClassicalVar::new(test_circuit_id(), 3, ClassicalType::Bit));
+    assert_eq!(bit.to_bool().unwrap().ty(), ClassicalType::Bool);
 
     let bits = ClassicalExpr::var(ClassicalVar::new(
         test_circuit_id(),
@@ -86,14 +154,33 @@ fn casts_are_explicit() {
         ClassicalExpr::bit_vec_to_uint(bits).unwrap().ty(),
         ClassicalType::uint(5).unwrap()
     );
+    let bits = ClassicalExpr::var(ClassicalVar::new(
+        test_circuit_id(),
+        4,
+        ClassicalType::bit_vec(5).unwrap(),
+    ));
+    assert_eq!(
+        bits.to_uint().unwrap().ty(),
+        ClassicalType::uint(5).unwrap()
+    );
 
     assert!(ClassicalExpr::bit_to_bool(ClassicalExpr::bool_literal(true)).is_err());
+    assert!(ClassicalExpr::bool_literal(true).to_bool().is_err());
     assert!(
         ClassicalExpr::bit_vec_to_uint(ClassicalExpr::var(ClassicalVar::new(
             test_circuit_id(),
             2,
             ClassicalType::uint(5).unwrap()
         )))
+        .is_err()
+    );
+    assert!(
+        ClassicalExpr::var(ClassicalVar::new(
+            test_circuit_id(),
+            5,
+            ClassicalType::uint(5).unwrap()
+        ))
+        .to_uint()
         .is_err()
     );
 }
