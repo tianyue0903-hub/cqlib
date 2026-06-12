@@ -20,6 +20,7 @@
 //! | Format | Description | Load Module | Dump Module |
 //! |--------|-------------|--------------|-------------|
 //! | OpenQASM 2.0 | IBM's quantum assembly language | [`qasm2::load`] | [`qasm2::dump`] |
+//! | OpenQASM 3.0 | OpenQASM 3 circuit language | [`qasm3::load`] | [`qasm3::dump`] |
 //! | QCIS | Telecom Quantum's intermediate format | [`qcis::load`] | [`qcis::dump`] |
 //!
 //! ## Quick Start
@@ -58,20 +59,24 @@
 //!
 //! ```rust
 //! use cqlib_core::circuit::{Circuit, Qubit};
-//! use cqlib_core::ir::{qasm2_dumps, qcis_dumps};
+//! use cqlib_core::ir::{qasm2_dumps, qasm3_dumps, qcis_dumps};
 //!
 //! let mut circuit = Circuit::new(2);
 //! circuit.h(Qubit::new(0)).unwrap();
 //! circuit.cz(Qubit::new(0), Qubit::new(1)).unwrap();
 //!
 //! let qasm = qasm2_dumps(&circuit).unwrap();
+//! let qasm3 = qasm3_dumps(&circuit).unwrap();
 //! let qcis = qcis_dumps(&circuit).unwrap();
 //! ```
 
 pub mod qasm2;
+pub mod qasm3;
 pub mod qcis;
 
 pub use qasm2::dump::{dump as qasm2_dump, dumps as qasm2_dumps};
 pub use qasm2::load::{load as qasm2_load, loads as qasm2_loads};
+pub use qasm3::dump::{dump as qasm3_dump, dumps as qasm3_dumps};
+pub use qasm3::load::{load as qasm3_load, loads as qasm3_loads};
 pub use qcis::dump::{dump as qcis_dump, dumps as qcis_dumps};
 pub use qcis::load::{load as qcis_load, loads as qcis_loads};

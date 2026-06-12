@@ -32,6 +32,7 @@ ndarray = { version = "0.17", features = ["approx", "rayon"] }
 num = "0.4"
 numpy = "0.27"
 num-complex = "0.4"
+oq3_semantics = "0.7.0"
 rayon = "1.11.0"
 rand = "0.9"
 proptest = "1.6"

@@ -42,6 +42,7 @@ indexmap.workspace = true
 ndarray.workspace = true
 num.workspace = true
 num-complex.workspace = true
+oq3_semantics.workspace = true
 rayon.workspace = true
 rand.workspace = true
 regex.workspace = true
