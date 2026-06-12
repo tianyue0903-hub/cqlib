@@ -101,10 +101,15 @@ impl Transformer for DecomposeUnitaries {
     }
 
     fn transform(&self, circuit: &Circuit) -> Result<TransformResult, CompilerError> {
-        Ok(TransformResult {
-            circuit: decompose_unitaries(circuit, self.config)?,
-            changed: true,
-        })
+        let result = decompose_unitaries_transform(circuit, self.config)?;
+        if result.changed {
+            Ok(result)
+        } else {
+            Ok(TransformResult {
+                circuit: circuit.clone(),
+                changed: false,
+            })
+        }
     }
 }
 
@@ -129,6 +134,13 @@ pub fn decompose_unitaries(
     circuit: &Circuit,
     config: UnitaryDecomposeConfig,
 ) -> Result<Circuit, CompilerError> {
+    Ok(decompose_unitaries_transform(circuit, config)?.circuit)
+}
+
+fn decompose_unitaries_transform(
+    circuit: &Circuit,
+    config: UnitaryDecomposeConfig,
+) -> Result<TransformResult, CompilerError> {
     let decomposer = UnitaryDecomposer {
         source: circuit,
         target: Circuit::from_operations(
@@ -139,6 +151,7 @@ pub fn decompose_unitaries(
         )?,
         top_phase: circuit.global_phase(),
         config,
+        changed: false,
     };
     decomposer.run()
 }
@@ -148,6 +161,7 @@ struct UnitaryDecomposer<'a> {
     target: Circuit,
     top_phase: Parameter,
     config: UnitaryDecomposeConfig,
+    changed: bool,
 }
 
 enum SequenceTarget<'a> {
@@ -161,14 +175,17 @@ struct Decomposition {
 }
 
 impl<'a> UnitaryDecomposer<'a> {
-    fn run(mut self) -> Result<Circuit, CompilerError> {
+    fn run(mut self) -> Result<TransformResult, CompilerError> {
         let phase_delta =
             self.apply_sequence(self.source.operations(), SequenceTarget::TopLevel)?;
         if phase_delta.abs() > PHASE_EPS {
             self.top_phase = self.top_phase + Parameter::from(phase_delta);
         }
         self.target.set_global_phase(self.top_phase);
-        Ok(self.target)
+        Ok(TransformResult {
+            circuit: self.target,
+            changed: self.changed,
+        })
     }
 
     fn apply_sequence(
@@ -319,6 +336,7 @@ impl<'a> UnitaryDecomposer<'a> {
         gate: &UnitaryGate,
         operation: &Operation,
     ) -> Result<Decomposition, CompilerError> {
+        self.changed = true;
         if operation.qubits.len() != gate.num_qubits() as usize {
             return Err(CompilerError::TransformFailed {
                 name: SYNTHESIS_NAME,
@@ -637,7 +655,7 @@ mod tests {
     use crate::circuit::Qubit;
     use crate::circuit::gate::gate_matrix;
     use crate::circuit::symbolic_matrix::{SymbolicComplex, SymbolicMatrix};
-    use crate::circuit::{ClassicalExpr, circuit_to_matrix};
+    use crate::circuit::{CircuitError, ClassicalExpr, circuit_to_matrix};
     use approx::assert_abs_diff_eq;
     use ndarray::array;
 
@@ -647,6 +665,21 @@ mod tests {
             Some(CircuitParam::Index(index)) => circuit.parameters()[*index as usize].clone(),
             None => panic!("operation has no parameter at position {position}"),
         }
+    }
+
+    #[test]
+    fn transform_reports_unchanged_without_unitary_gates() {
+        let mut circuit = Circuit::new(1);
+        circuit.h(Qubit::new(0)).unwrap();
+
+        let result = DecomposeUnitaries::default().transform(&circuit).unwrap();
+
+        assert!(!result.changed);
+        assert_eq!(result.circuit.operations().len(), 1);
+        assert!(matches!(
+            result.circuit.operations()[0].instruction,
+            Instruction::Standard(StandardGate::H)
+        ));
     }
 
     #[test]
@@ -1170,14 +1203,14 @@ mod tests {
             .with_symbolic_matrix(["theta"], matrix)
             .unwrap();
         let mut circuit = Circuit::new(1);
-        circuit
+        let err = circuit
             .unitary_with_params(gate, vec![Qubit::new(0)], vec![f64::NAN.into()])
-            .unwrap();
+            .unwrap_err();
 
-        let err = decompose_unitaries(&circuit, UnitaryDecomposeConfig::default()).unwrap_err();
-
-        assert!(matches!(err, CompilerError::InvalidInput(_)));
-        assert!(err.to_string().contains("non-finite") || err.to_string().contains("NaN"));
+        assert!(matches!(
+            err,
+            CircuitError::InvalidParameterValue(0, value) if value.is_nan()
+        ));
     }
 
     #[test]

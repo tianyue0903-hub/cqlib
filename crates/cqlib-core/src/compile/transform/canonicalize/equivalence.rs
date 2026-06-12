@@ -26,7 +26,9 @@
 //! this predicate representation-based makes fixed-point detection cheap,
 //! deterministic, and aligned with the pass contract.
 
-use crate::circuit::{Circuit, CircuitParam, ControlFlow, Instruction, Operation};
+use crate::circuit::{
+    Circuit, CircuitParam, ClassicalControlOp, ClassicalDataOp, ControlBody, Instruction, Operation,
+};
 
 pub(super) fn circuits_equivalent_for_canonicalize(lhs: &Circuit, rhs: &Circuit) -> bool {
     lhs.qubits() == rhs.qubits()
@@ -63,24 +65,81 @@ fn instructions_equal(lhs: &Instruction, rhs: &Instruction) -> bool {
                 && lhs.num_params() == rhs.num_params()
         }
         (Instruction::UnitaryGate(lhs), Instruction::UnitaryGate(rhs)) => lhs == rhs,
+        (Instruction::ClassicalData(lhs), Instruction::ClassicalData(rhs)) => {
+            classical_data_equal(lhs, rhs)
+        }
+        (Instruction::ClassicalControl(lhs), Instruction::ClassicalControl(rhs)) => {
+            classical_control_equal(lhs, rhs)
+        }
+        _ => false,
+    }
+}
+
+fn classical_data_equal(lhs: &ClassicalDataOp, rhs: &ClassicalDataOp) -> bool {
+    match (lhs, rhs) {
         (
-            Instruction::ControlFlowGate(ControlFlow::IfElse(lhs)),
-            Instruction::ControlFlowGate(ControlFlow::IfElse(rhs)),
-        ) => {
+            ClassicalDataOp::Store {
+                target: lhs_target,
+                value: lhs_value,
+            },
+            ClassicalDataOp::Store {
+                target: rhs_target,
+                value: rhs_value,
+            },
+        ) => lhs_target == rhs_target && lhs_value == rhs_value,
+        (
+            ClassicalDataOp::MeasureBit { result: lhs },
+            ClassicalDataOp::MeasureBit { result: rhs },
+        )
+        | (
+            ClassicalDataOp::MeasureBits { result: lhs },
+            ClassicalDataOp::MeasureBits { result: rhs },
+        ) => lhs == rhs,
+        _ => false,
+    }
+}
+
+fn classical_control_equal(lhs: &ClassicalControlOp, rhs: &ClassicalControlOp) -> bool {
+    match (lhs, rhs) {
+        (ClassicalControlOp::If(lhs), ClassicalControlOp::If(rhs)) => {
             lhs.condition() == rhs.condition()
-                && operation_slices_equal(lhs.true_body(), rhs.true_body())
-                && match (lhs.false_body(), rhs.false_body()) {
-                    (Some(lhs), Some(rhs)) => operation_slices_equal(lhs, rhs),
+                && bodies_equal(lhs.then_body(), rhs.then_body())
+                && match (lhs.else_body(), rhs.else_body()) {
+                    (Some(lhs), Some(rhs)) => bodies_equal(lhs, rhs),
                     (None, None) => true,
                     _ => false,
                 }
         }
-        (
-            Instruction::ControlFlowGate(ControlFlow::WhileLoop(lhs)),
-            Instruction::ControlFlowGate(ControlFlow::WhileLoop(rhs)),
-        ) => lhs.condition() == rhs.condition() && operation_slices_equal(lhs.body(), rhs.body()),
+        (ClassicalControlOp::While(lhs), ClassicalControlOp::While(rhs)) => {
+            lhs.condition() == rhs.condition() && bodies_equal(lhs.body(), rhs.body())
+        }
+        (ClassicalControlOp::For(lhs), ClassicalControlOp::For(rhs)) => {
+            lhs.var() == rhs.var()
+                && lhs.start() == rhs.start()
+                && lhs.stop() == rhs.stop()
+                && lhs.step() == rhs.step()
+                && bodies_equal(lhs.body(), rhs.body())
+        }
+        (ClassicalControlOp::Switch(lhs), ClassicalControlOp::Switch(rhs)) => {
+            lhs.target() == rhs.target()
+                && lhs.cases().len() == rhs.cases().len()
+                && lhs.cases().iter().zip(rhs.cases()).all(|(lhs, rhs)| {
+                    lhs.value() == rhs.value() && bodies_equal(lhs.body(), rhs.body())
+                })
+                && match (lhs.default(), rhs.default()) {
+                    (Some(lhs), Some(rhs)) => bodies_equal(lhs, rhs),
+                    (None, None) => true,
+                    _ => false,
+                }
+        }
+        (ClassicalControlOp::Break, ClassicalControlOp::Break)
+        | (ClassicalControlOp::Continue, ClassicalControlOp::Continue) => true,
         _ => false,
     }
+}
+
+fn bodies_equal(lhs: &ControlBody, rhs: &ControlBody) -> bool {
+    operation_slices_equal(lhs.operations(), rhs.operations())
 }
 
 fn circuit_params_equal(lhs: &[CircuitParam], rhs: &[CircuitParam]) -> bool {

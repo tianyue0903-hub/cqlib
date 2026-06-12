@@ -13,7 +13,7 @@
 
 //! Public compiler entry point.
 //!
-//! [`compiler`] runs the configured [`CompilerWorkflow`](super::workflow::CompilerWorkflow)
+//! The compiler entry point runs the configured [`CompilerWorkflow`]
 //! and returns the optimized circuit plus step-level diagnostics. The workflow
 //! starts from a logical circuit, applies canonicalization, definition
 //! expansion, knowledge-based rewrite, unitary and multi-controlled-gate
@@ -40,7 +40,7 @@ use super::workflow::CompilerWorkflow;
 use crate::circuit::{Circuit, Instruction};
 use crate::compile::resource::ResourcePolicy;
 use crate::compile::{CompilerError, WorkflowStepReport};
-use crate::device::Device;
+use crate::device::{Device, Layout};
 
 /// Optimization effort selected for the compiler workflow.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -75,6 +75,13 @@ pub struct CompileConfig {
     /// qubits before target-basis translation. Final directed-gate legalization
     /// remains a separate compiler concern.
     pub device: Option<Device>,
+    /// Optional caller-supplied initial logical-to-physical layout.
+    ///
+    /// This is meaningful only when [`Self::device`] is set. When provided,
+    /// the workflow skips automatic SABRE layout selection and routes from
+    /// this layout directly. The seed still controls routing trials, but no
+    /// automatic layout candidates are generated.
+    pub initial_layout: Option<Layout>,
     /// Ancillary-resource permission for pre-layout decomposition passes.
     ///
     /// This controls whether logical clean ancillas may be allocated or dirty
@@ -82,6 +89,10 @@ pub struct CompileConfig {
     /// [`Self::device`] rather than this policy.
     pub resource_policy: ResourcePolicy,
     /// Optional deterministic seed for heuristic layout/routing passes.
+    ///
+    /// The seed affects only device layout/routing. Logical-only compilation
+    /// has no random stage. When [`Self::initial_layout`] is provided, the seed
+    /// controls routing trials but not automatic layout selection.
     pub seed: Option<u32>,
 }
 
@@ -121,6 +132,7 @@ pub struct CompileResult {
 ///         mode: CompileMode::Normal,
 ///         target_basis: None,
 ///         device: None,
+///         initial_layout: None,
 ///         resource_policy: ResourcePolicy::default(),
 ///         seed: Some(7),
 ///     },

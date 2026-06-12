@@ -12,8 +12,8 @@
 
 use super::{McGateDecomposeConfig, decompose_mc_gates, decompose_mc_gates_for_device};
 use crate::circuit::{
-    Circuit, CircuitParam, ClassicalControlOp, ClassicalExpr, Instruction, MCGate, Operation,
-    Parameter, ParameterValue, Qubit, StandardGate, circuit_to_matrix,
+    Circuit, CircuitError, CircuitParam, ClassicalControlOp, ClassicalExpr, Instruction, MCGate,
+    Operation, Parameter, ParameterValue, Qubit, StandardGate, circuit_to_matrix,
 };
 use crate::compile::CompilerError;
 use crate::compile::resource::{ResourceLimits, ResourcePolicy};
@@ -1039,7 +1039,7 @@ fn symbolic_parameter_inside_control_flow_body_is_interned() {
 #[test]
 fn non_finite_fixed_parameter_inside_control_flow_is_rejected() {
     let mut circuit = Circuit::new(2);
-    circuit
+    let error = circuit
         .while_(ClassicalExpr::bool_literal(true), |body| {
             body.append(
                 Instruction::McGate(Box::new(MCGate::new(1, StandardGate::RZ))),
@@ -1048,11 +1048,7 @@ fn non_finite_fixed_parameter_inside_control_flow_is_rejected() {
                 None,
             )
         })
-        .unwrap();
+        .unwrap_err();
 
-    let error = decompose_mc_gates(&circuit, McGateDecomposeConfig::default()).unwrap_err();
-
-    assert!(
-        matches!(error, CompilerError::InvalidInput(message) if message.contains("non-finite"))
-    );
+    assert!(matches!(error, CircuitError::InvalidParameterValue(0, value) if value.is_nan()));
 }

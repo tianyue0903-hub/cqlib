@@ -18,12 +18,15 @@
 //! value operation carries self-contained parameter expressions rather than
 //! circuit-local parameter-table indices. The module does not choose an
 //! algorithm, allocate ancillary qubits, or normalize open controls. Those
-//! responsibilities belong to the future `mc_gate` decomposition planner.
+//! responsibilities belong to the circuit-level multi-controlled-gate
+//! decomposition layer.
 //!
-//! The module currently defines the intended synthesis surface only. The
-//! algorithms are public so callers can explicitly select an implementation,
-//! but they are deliberately not connected to an active compiler entry point
-//! until their implementations and semantic tests land.
+//! The functions are public so callers can explicitly select an implementation
+//! when they already know the required ancillary-resource contract. Normal
+//! compiler execution should go through
+//! [`decompose_mc_gates`](super::decompose_mc_gates) or
+//! [`DecomposeMcGates`](super::DecomposeMcGates), which perform circuit
+//! traversal, resource-aware algorithm selection, and circuit rebuild.
 //!
 //! # Algorithm references
 //!

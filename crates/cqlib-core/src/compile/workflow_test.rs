@@ -14,22 +14,27 @@
 use super::CompilerWorkflow;
 use crate::circuit::gate::FrozenCircuit;
 use crate::circuit::{
-    Circuit, CircuitGate, Instruction, MCGate, ParameterValue, Qubit, StandardGate, UnitaryGate,
+    Circuit, CircuitGate, CircuitParam, Instruction, MCGate, Parameter, ParameterValue, Qubit,
+    StandardGate, UnitaryGate,
 };
 use crate::compile::resource::ResourcePolicy;
 use crate::compile::{CompileConfig, CompileMode, CompilerError, compile};
-use crate::device::Device;
+use crate::device::{Device, Layout};
 use crate::util::test_utils::{
-    contains_high_level_gate, standard_ops, step_changed, two_qubit_device,
+    assert_compiled_circuit_equivalent, contains_high_level_gate, standard_ops, step_changed,
+    two_qubit_device,
 };
 use ndarray::array;
 use num_complex::Complex64;
+use std::collections::HashMap;
+use std::f64::consts::PI;
 
 fn compile_config(mode: CompileMode) -> CompileConfig {
     CompileConfig {
         mode,
         target_basis: None,
         device: None,
+        initial_layout: None,
         resource_policy: ResourcePolicy::default(),
         seed: None,
     }
@@ -39,6 +44,46 @@ fn run_workflow(circuit: &Circuit, mode: CompileMode) -> super::CompileResult {
     CompilerWorkflow::new(compile_config(mode))
         .run(circuit)
         .unwrap()
+}
+
+fn binding_case(bindings: &[(&'static str, f64)]) -> Option<HashMap<&'static str, f64>> {
+    Some(bindings.iter().copied().collect())
+}
+
+fn assert_bindings_preserve_semantics(
+    source: &Circuit,
+    compiled: &Circuit,
+    binding_cases: &[Option<HashMap<&'static str, f64>>],
+) {
+    for bindings in binding_cases {
+        let bound_source = source.assign_parameters(bindings).unwrap();
+        let bound_compiled = compiled.assign_parameters(bindings).unwrap();
+        assert_compiled_circuit_equivalent(&bound_compiled, &bound_source);
+    }
+}
+
+fn operation_parameter(circuit: &Circuit, param: &CircuitParam) -> Parameter {
+    match param {
+        CircuitParam::Fixed(value) => Parameter::from(*value),
+        CircuitParam::Index(index) => circuit
+            .parameters()
+            .get_index(*index as usize)
+            .cloned()
+            .expect("parameter index should exist in rebuilt workflow circuit"),
+    }
+}
+
+fn circuit_contains_symbol(circuit: &Circuit, symbol: &str) -> bool {
+    if circuit.global_phase().get_symbols().contains(symbol) {
+        return true;
+    }
+
+    circuit
+        .operations()
+        .iter()
+        .flat_map(|operation| operation.params.iter())
+        .map(|param| operation_parameter(circuit, param))
+        .any(|parameter| parameter.get_symbols().contains(symbol))
 }
 
 #[test]
@@ -201,6 +246,213 @@ fn workflow_decomposes_multi_controlled_gates() {
 }
 
 #[test]
+fn workflow_reports_rewrite_change_for_symbolic_merge() {
+    let q0 = Qubit::new(0);
+    let theta = Parameter::symbol("theta");
+    let mut circuit = Circuit::new(1);
+    circuit.rz(q0, theta.clone()).unwrap();
+    circuit.rz(q0, 0.5).unwrap();
+
+    let result = run_workflow(&circuit, CompileMode::Normal);
+
+    assert!(
+        step_changed(&result, "optimize.pre_decomposition")
+            || step_changed(&result, "optimize.post_decomposition")
+    );
+    assert_eq!(result.circuit.operations().len(), 1);
+    let merged = operation_parameter(&result.circuit, &result.circuit.operations()[0].params[0]);
+    assert!(merged.provably_equal(&(theta.clone() + Parameter::from(0.5)), 1e-12));
+    assert_bindings_preserve_semantics(
+        &circuit,
+        &result.circuit,
+        &[
+            binding_case(&[("theta", 0.0)]),
+            binding_case(&[("theta", 0.25)]),
+            binding_case(&[("theta", -PI / 4.0)]),
+        ],
+    );
+}
+
+#[test]
+fn workflow_decomposes_parameterized_mc_gate() {
+    let qubits = (0..3).map(Qubit::new).collect::<Vec<_>>();
+    let theta = Parameter::symbol("theta");
+    let mut circuit = Circuit::new(3);
+    circuit
+        .append(
+            Instruction::McGate(Box::new(MCGate::new(2, StandardGate::RZ))),
+            qubits,
+            vec![ParameterValue::Param(theta.clone())],
+            None,
+        )
+        .unwrap();
+
+    let result = run_workflow(&circuit, CompileMode::Normal);
+
+    assert!(step_changed(&result, "decompose.mc_gates"));
+    assert!(!contains_high_level_gate(&result.circuit));
+    assert!(circuit_contains_symbol(&result.circuit, "theta"));
+    assert_bindings_preserve_semantics(
+        &circuit,
+        &result.circuit,
+        &[
+            binding_case(&[("theta", 0.0)]),
+            binding_case(&[("theta", 0.31)]),
+            binding_case(&[("theta", PI / 3.0)]),
+        ],
+    );
+}
+
+#[test]
+fn workflow_routes_parameterized_circuit_when_device_present() {
+    let q0 = Qubit::new(0);
+    let q2 = Qubit::new(2);
+    let theta = Parameter::symbol("theta");
+    let phi = Parameter::symbol("phi");
+    let mut circuit = Circuit::new(3);
+    circuit.rx(q0, theta.clone()).unwrap();
+    circuit.rz(q2, phi.clone()).unwrap();
+    circuit.cx(q0, q2).unwrap();
+
+    let result = CompilerWorkflow::new(CompileConfig {
+        mode: CompileMode::Normal,
+        target_basis: None,
+        device: Some(Device::line("workflow-param-line", 3).unwrap()),
+        initial_layout: None,
+        resource_policy: ResourcePolicy::default(),
+        seed: Some(11),
+    })
+    .run(&circuit)
+    .unwrap();
+
+    assert!(step_changed(&result, "route.sabre"));
+    assert!(circuit_contains_symbol(&result.circuit, "theta"));
+    assert!(circuit_contains_symbol(&result.circuit, "phi"));
+    assert!(result.circuit.operations().iter().any(|operation| {
+        matches!(
+            operation.instruction,
+            Instruction::Standard(StandardGate::RX)
+        ) && matches!(operation.params.as_slice(), [CircuitParam::Index(_)])
+    }));
+    assert!(result.circuit.operations().iter().any(|operation| {
+        matches!(
+            operation.instruction,
+            Instruction::Standard(StandardGate::RZ)
+        ) && matches!(operation.params.as_slice(), [CircuitParam::Index(_)])
+    }));
+}
+
+#[test]
+fn workflow_routes_from_supplied_initial_layout() {
+    let mut circuit = Circuit::new(1);
+    circuit.h(Qubit::new(0)).unwrap();
+    let layout = Layout::from_pairs(&[(0, 2)], 3).unwrap();
+
+    let result = CompilerWorkflow::new(CompileConfig {
+        mode: CompileMode::Normal,
+        target_basis: None,
+        device: Some(Device::line("layout-line", 3).unwrap()),
+        initial_layout: Some(layout),
+        resource_policy: ResourcePolicy::default(),
+        seed: Some(17),
+    })
+    .run(&circuit)
+    .unwrap();
+
+    let route = result
+        .steps
+        .iter()
+        .find(|step| step.name == "route.sabre")
+        .unwrap();
+    assert!(!route.skipped);
+    assert!(route.changed);
+    assert!(
+        route
+            .reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("supplied initial layout"))
+    );
+    assert_eq!(
+        result.circuit.operations()[0].qubits.as_slice(),
+        &[Qubit::new(2)]
+    );
+}
+
+#[test]
+fn workflow_rejects_initial_layout_without_device() {
+    let mut circuit = Circuit::new(1);
+    circuit.h(Qubit::new(0)).unwrap();
+    let layout = Layout::from_pairs(&[(0, 0)], 1).unwrap();
+
+    let err = CompilerWorkflow::new(CompileConfig {
+        mode: CompileMode::Normal,
+        target_basis: None,
+        device: None,
+        initial_layout: Some(layout),
+        resource_policy: ResourcePolicy::default(),
+        seed: None,
+    })
+    .run(&circuit)
+    .unwrap_err();
+
+    assert!(matches!(
+        err,
+        CompilerError::InvalidInput(reason) if reason.contains("initial layout requires a target device")
+    ));
+}
+
+#[test]
+fn workflow_target_translation_keeps_parameterized_semantics() {
+    let q0 = Qubit::new(0);
+    let q1 = Qubit::new(1);
+    let theta = Parameter::symbol("theta");
+    let mut circuit = Circuit::new(2);
+    circuit.h(q0).unwrap();
+    circuit.crz(q0, q1, theta.clone()).unwrap();
+
+    let result = CompilerWorkflow::new(CompileConfig {
+        mode: CompileMode::Normal,
+        target_basis: Some(vec![
+            Instruction::Standard(StandardGate::RZ),
+            Instruction::Standard(StandardGate::X2P),
+            Instruction::Standard(StandardGate::X2M),
+            Instruction::Standard(StandardGate::Y2P),
+            Instruction::Standard(StandardGate::Y2M),
+            Instruction::Standard(StandardGate::CZ),
+            Instruction::Standard(StandardGate::GPhase),
+        ]),
+        device: None,
+        initial_layout: None,
+        resource_policy: ResourcePolicy::default(),
+        seed: None,
+    })
+    .run(&circuit)
+    .unwrap();
+
+    assert!(step_changed(&result, "translate.target_basis"));
+    assert!(circuit_contains_symbol(&result.circuit, "theta"));
+    assert!(standard_ops(&result.circuit).iter().all(|gate| matches!(
+        gate,
+        StandardGate::RZ
+            | StandardGate::X2P
+            | StandardGate::X2M
+            | StandardGate::Y2P
+            | StandardGate::Y2M
+            | StandardGate::CZ
+            | StandardGate::GPhase
+    )));
+    assert_bindings_preserve_semantics(
+        &circuit,
+        &result.circuit,
+        &[
+            binding_case(&[("theta", 0.0)]),
+            binding_case(&[("theta", 0.21)]),
+            binding_case(&[("theta", -PI / 5.0)]),
+        ],
+    );
+}
+
+#[test]
 fn target_basis_translation_runs_after_definition_decomposition() {
     let q0 = Qubit::new(0);
     let q1 = Qubit::new(1);
@@ -219,6 +471,7 @@ fn target_basis_translation_runs_after_definition_decomposition() {
             Instruction::Standard(StandardGate::CZ),
         ]),
         device: None,
+        initial_layout: None,
         resource_policy: ResourcePolicy::default(),
         seed: None,
     })
@@ -247,6 +500,7 @@ fn explicit_target_basis_runs_lowering() {
             Instruction::Standard(StandardGate::CZ),
         ]),
         device: None,
+        initial_layout: None,
         resource_policy: ResourcePolicy::default(),
         seed: None,
     })
@@ -273,6 +527,7 @@ fn target_basis_failure_is_reported() {
         mode: CompileMode::Normal,
         target_basis: Some(vec![Instruction::Standard(StandardGate::CZ)]),
         device: None,
+        initial_layout: None,
         resource_policy: ResourcePolicy::default(),
         seed: None,
     })
@@ -294,6 +549,7 @@ fn mc_gate_target_basis_is_rejected_by_workflow_contract() {
             StandardGate::X,
         )))]),
         device: None,
+        initial_layout: None,
         resource_policy: ResourcePolicy::default(),
         seed: None,
     })
@@ -318,6 +574,7 @@ fn device_native_gates_are_used_as_target_basis() {
         mode: CompileMode::Enhanced,
         target_basis: None,
         device: Some(device),
+        initial_layout: None,
         resource_policy: ResourcePolicy::default(),
         seed: None,
     })
@@ -345,6 +602,7 @@ fn device_workflow_routes_circuit_before_target_translation() {
         mode: CompileMode::Normal,
         target_basis: None,
         device: Some(device),
+        initial_layout: None,
         resource_policy: ResourcePolicy::default(),
         seed: Some(7),
     })
@@ -382,6 +640,7 @@ fn routed_swaps_are_lowered_to_device_native_basis() {
         mode: CompileMode::Normal,
         target_basis: None,
         device: Some(device),
+        initial_layout: None,
         resource_policy: ResourcePolicy::default(),
         seed: Some(7),
     })
@@ -412,6 +671,7 @@ fn enhanced_device_workflow_runs_post_routing_cleanup() {
         mode: CompileMode::Enhanced,
         target_basis: None,
         device: Some(device),
+        initial_layout: None,
         resource_policy: ResourcePolicy::default(),
         seed: Some(7),
     })
@@ -444,6 +704,7 @@ fn device_capacity_blocks_clean_ancilla_allocation_but_allows_no_aux_fallback() 
         mode: CompileMode::Normal,
         target_basis: None,
         device: Some(device),
+        initial_layout: None,
         resource_policy: ResourcePolicy {
             max_pre_layout_clean_ancillas: 2,
             allow_dirty_borrowing: false,
@@ -468,6 +729,7 @@ fn device_capacity_rejects_source_circuit_that_is_too_wide() {
         mode: CompileMode::Normal,
         target_basis: None,
         device: Some(device),
+        initial_layout: None,
         resource_policy: ResourcePolicy::default(),
         seed: None,
     })
@@ -498,6 +760,7 @@ fn device_capacity_rejects_too_wide_source_before_mc_decomposition() {
         mode: CompileMode::Normal,
         target_basis: None,
         device: Some(device),
+        initial_layout: None,
         resource_policy: ResourcePolicy::default(),
         seed: None,
     })

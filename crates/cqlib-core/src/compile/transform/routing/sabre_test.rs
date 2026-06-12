@@ -33,11 +33,11 @@ fn sabre_routing_auto_layout_routes_non_embeddable_interactions() {
 
     let result = route_sabre(&circuit, &device, &objective, &config).unwrap();
 
-    assert!(result.changed);
-    assert!(result.swap_count > 0);
-    assert_eq!(result.circuit.qubits().len(), 3);
-    assert_all_two_qubit_operations_are_adjacent_on_line(&result.circuit);
-    assert_two_qubit_operations_supported_by_topology(&result.circuit, device.topology());
+    assert!(result.changed(&circuit));
+    assert!(result.swap_count() > 0);
+    assert_eq!(result.circuit().qubits().len(), 3);
+    assert_all_two_qubit_operations_are_adjacent_on_line(result.circuit());
+    assert_two_qubit_operations_supported_by_topology(result.circuit(), device.topology());
 }
 
 #[test]
@@ -50,10 +50,10 @@ fn sabre_routing_keeps_adjacent_two_qubit_circuit_without_swap() {
 
     let result = route_sabre(&circuit, &device, &objective, &config).unwrap();
 
-    assert!(!result.changed);
-    assert_eq!(result.swap_count, 0);
-    assert_eq!(result.diagnostics.trials_evaluated, config.routing_trials);
-    assert_eq!(result.circuit.operations().len(), 1);
+    assert!(!result.changed(&circuit));
+    assert_eq!(result.swap_count(), 0);
+    assert_eq!(result.diagnostics().trials_evaluated, config.routing_trials);
+    assert_eq!(result.circuit().operations().len(), 1);
 }
 
 #[test]
@@ -66,9 +66,9 @@ fn sabre_routing_keeps_parameterized_single_qubit_circuit_unchanged() {
 
     let result = route_sabre(&circuit, &device, &objective, &config).unwrap();
 
-    assert!(!result.changed);
-    assert_eq!(result.swap_count, 0);
-    assert_eq!(result.circuit.operations().len(), 1);
+    assert!(!result.changed(&circuit));
+    assert_eq!(result.swap_count(), 0);
+    assert_eq!(result.circuit().operations().len(), 1);
 }
 
 #[test]
@@ -88,8 +88,8 @@ fn sabre_routing_keeps_empty_and_interaction_free_circuits_topology_valid() {
     for circuit in [&empty, &single_qubit_layers] {
         let result = route_sabre(circuit, &device, &objective, &config).unwrap();
 
-        assert_eq!(result.swap_count, 0);
-        assert_two_qubit_operations_supported_by_topology(&result.circuit, device.topology());
+        assert_eq!(result.swap_count(), 0);
+        assert_two_qubit_operations_supported_by_topology(result.circuit(), device.topology());
     }
 }
 
@@ -105,8 +105,8 @@ fn sabre_routing_outputs_only_supported_edges_on_star_device() {
 
     let result = route_sabre(&circuit, &device, &objective, &config).unwrap();
 
-    assert!(result.changed);
-    assert_two_qubit_operations_supported_by_topology(&result.circuit, device.topology());
+    assert!(result.changed(&circuit));
+    assert_two_qubit_operations_supported_by_topology(result.circuit(), device.topology());
 }
 
 #[test]
@@ -121,8 +121,8 @@ fn sabre_routing_preserves_adjacent_line_circuit_without_swaps() {
 
     let result = route_sabre(&circuit, &device, &objective, &config).unwrap();
 
-    assert_eq!(result.swap_count, 0);
-    assert_two_qubit_operations_supported_by_topology(&result.circuit, device.topology());
+    assert_eq!(result.swap_count(), 0);
+    assert_two_qubit_operations_supported_by_topology(result.circuit(), device.topology());
 }
 
 proptest! {
@@ -138,7 +138,7 @@ proptest! {
 
         let result = route_sabre(&circuit, &device, &objective, &config).unwrap();
 
-        assert_two_qubit_operations_supported_by_topology(&result.circuit, device.topology());
+        assert_two_qubit_operations_supported_by_topology(result.circuit(), device.topology());
     }
 }
 
@@ -153,8 +153,8 @@ fn sabre_identity_no_swap_rebuild_should_report_changed_instead_of_panicking() {
 
     let result = route_sabre(&circuit, &device, &objective, &config).unwrap();
 
-    assert!(result.changed);
-    assert_two_qubit_operations_supported_by_topology(&result.circuit, device.topology());
+    assert!(result.changed(&circuit));
+    assert_two_qubit_operations_supported_by_topology(result.circuit(), device.topology());
 }
 
 #[test]
@@ -171,7 +171,14 @@ fn sabre_changed_detects_non_identity_layout_without_swaps() {
     )
     .unwrap();
 
-    assert!(routing_changed(&circuit, &circuit, 0, &layout));
+    let routed = RoutedCircuit {
+        circuit: circuit.clone(),
+        initial_layout: layout.clone(),
+        final_layout: layout,
+        swap_count: 0,
+        diagnostics: Default::default(),
+    };
+    assert!(routed.changed(&circuit));
 }
 
 #[test]
@@ -188,18 +195,21 @@ fn sabre_routing_is_reproducible_for_same_seed() {
     let second = route_sabre(&circuit, &device, &objective, &config).unwrap();
 
     assert_eq!(
-        first.initial_layout.l2p_map(),
-        second.initial_layout.l2p_map()
-    );
-    assert_eq!(first.final_layout.l2p_map(), second.final_layout.l2p_map());
-    assert_eq!(first.swap_count, second.swap_count);
-    assert_eq!(
-        first.diagnostics.operation_count,
-        second.diagnostics.operation_count
+        first.initial_layout().l2p_map(),
+        second.initial_layout().l2p_map()
     );
     assert_eq!(
-        first.layout_score.as_ref().map(|score| score.total),
-        second.layout_score.as_ref().map(|score| score.total)
+        first.final_layout().l2p_map(),
+        second.final_layout().l2p_map()
+    );
+    assert_eq!(first.swap_count(), second.swap_count());
+    assert_eq!(
+        first.diagnostics().operation_count,
+        second.diagnostics().operation_count
+    );
+    assert_eq!(
+        first.layout_score().map(|score| score.total),
+        second.layout_score().map(|score| score.total)
     );
 }
 

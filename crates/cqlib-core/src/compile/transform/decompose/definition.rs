@@ -39,10 +39,15 @@ impl Transformer for DecomposeDefinitions {
     }
 
     fn transform(&self, circuit: &Circuit) -> Result<TransformResult, CompilerError> {
-        Ok(TransformResult {
-            circuit: expand_definitions(circuit)?,
-            changed: true,
-        })
+        let result = expand_definitions_transform(circuit)?;
+        if result.changed {
+            Ok(result)
+        } else {
+            Ok(TransformResult {
+                circuit: circuit.clone(),
+                changed: false,
+            })
+        }
     }
 }
 
@@ -74,6 +79,10 @@ impl Transformer for DecomposeDefinitions {
 /// ));
 /// ```
 pub fn expand_definitions(circuit: &Circuit) -> Result<Circuit, CompilerError> {
+    Ok(expand_definitions_transform(circuit)?.circuit)
+}
+
+fn expand_definitions_transform(circuit: &Circuit) -> Result<TransformResult, CompilerError> {
     DefinitionExpander::new(circuit)?.run()
 }
 
@@ -81,6 +90,7 @@ struct DefinitionExpander<'a> {
     source: &'a Circuit,
     target: Circuit,
     top_phase: Parameter,
+    changed: bool,
 }
 
 impl<'a> DefinitionExpander<'a> {
@@ -94,10 +104,11 @@ impl<'a> DefinitionExpander<'a> {
                 Some(source.classical_values().to_vec()),
             )?,
             top_phase: source.global_phase(),
+            changed: false,
         })
     }
 
-    fn run(mut self) -> Result<Circuit, CompilerError> {
+    fn run(mut self) -> Result<TransformResult, CompilerError> {
         let qubit_map = QubitMap::Identity;
         let symbol_bindings = HashMap::new();
 
@@ -118,7 +129,10 @@ impl<'a> DefinitionExpander<'a> {
         }
 
         self.target.set_global_phase(self.top_phase);
-        Ok(self.target)
+        Ok(TransformResult {
+            circuit: self.target,
+            changed: self.changed,
+        })
     }
 
     fn expand_operation(
@@ -132,6 +146,7 @@ impl<'a> DefinitionExpander<'a> {
     ) -> Result<Parameter, CompilerError> {
         match &operation.instruction {
             Instruction::CircuitGate(gate) => {
+                self.changed = true;
                 let definition = gate.circuit();
                 self.expand_definition(
                     gate.name(),
@@ -148,6 +163,7 @@ impl<'a> DefinitionExpander<'a> {
             }
             Instruction::UnitaryGate(gate) => {
                 if let Some(definition) = gate.circuit().as_ref() {
+                    self.changed = true;
                     self.expand_definition(
                         gate.label(),
                         definition.circuit(),
@@ -549,6 +565,21 @@ mod tests {
             CircuitParam::Fixed(value) => Parameter::from(*value),
             CircuitParam::Index(index) => circuit.parameters()[*index as usize].clone(),
         }
+    }
+
+    #[test]
+    fn transform_reports_unchanged_without_circuit_backed_definitions() {
+        let mut circuit = Circuit::new(1);
+        circuit.h(Qubit::new(0)).unwrap();
+
+        let result = DecomposeDefinitions.transform(&circuit).unwrap();
+
+        assert!(!result.changed);
+        assert_eq!(result.circuit.operations().len(), 1);
+        assert!(matches!(
+            result.circuit.operations()[0].instruction,
+            Instruction::Standard(StandardGate::H)
+        ));
     }
 
     #[test]

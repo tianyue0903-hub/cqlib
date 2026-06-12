@@ -98,6 +98,9 @@ pub fn sabre_route(
     config: &SabreConfig,
 ) -> Result<SabreRoutingResult, CompilerError> {
     validate_routing_config(config)?;
+    // Build a dense, reusable view of the physical topology once. The routing
+    // loop indexes into this structure heavily for adjacency, distance, and
+    // deterministic candidate ordering.
     let physical = PhysicalLayoutGraph::from_device(device)?;
     let target = RoutingTarget::from_physical(&physical)?;
     let logical_qubits = circuit
@@ -110,6 +113,9 @@ pub fn sabre_route(
     let sabre = SabreDag::from_operations(circuit.operations())?;
     validate_reachable_interactions_for_target(&sabre, &target, &initial_layout)?;
 
+    // Trials share the normalized layout and DAG but use independent seeds for
+    // tie-breaking. Selection stays deterministic for a configured seed because
+    // result comparison falls back to the trial index.
     let trial_results = trial_seeds(config.seed, config.routing_trials)
         .into_par_iter()
         .enumerate()
@@ -131,6 +137,9 @@ pub fn sabre_route(
         })
         .expect("routing_trials is validated to be non-zero");
 
+    // Routing rewrites operation qubits but keeps symbolic parameters by index.
+    // Rebuild the routed circuit's parameter table in first-use order, then
+    // remap nested control-flow bodies to the new table.
     let mut parameter_order = IndexSet::<Parameter>::new();
     for operation in &best.operations {
         for param in &operation.params {
@@ -247,6 +256,8 @@ pub(crate) fn route_trial_unchecked(
     let mut output = TrialOutput::new(seed);
     let mut state = RoutingState::new(sabre, target, initial_layout.clone(), heuristic, seed);
 
+    // Initial operations are dependency-free one-qubit or non-quantum work.
+    // They can be emitted immediately under the starting layout.
     for operation in &sabre.initial {
         output
             .operations
@@ -267,6 +278,9 @@ pub(crate) fn route_trial_unchecked(
     let mut search_steps_since_decay_reset = 0usize;
     while !state.front_layer.is_empty() {
         let mut current_swaps = Vec::new();
+        // Search accumulates speculative SWAPs until at least one front-layer
+        // node becomes adjacent. Those SWAPs are emitted only when the routed
+        // node is actually emitted, preserving a compact operation stream.
         while routable_nodes.is_empty() && current_swaps.len() <= heuristic.attempt_limit {
             let best_swap = state.choose_best_swap(target, heuristic)?;
             state.apply_swap(best_swap.physical, target)?;
@@ -297,6 +311,9 @@ pub(crate) fn route_trial_unchecked(
         }
 
         if routable_nodes.is_empty() {
+            // The heuristic failed to make progress within its attempt budget.
+            // Roll back speculative swaps, then force progress along a shortest
+            // path so the router cannot livelock on a poor local score.
             for swap in current_swaps.drain(..).rev() {
                 state.apply_swap(swap, target)?;
             }
@@ -338,6 +355,10 @@ pub(crate) fn route_trial_unchecked(
     })
 }
 
+/// Derives per-trial seeds from an optional workflow seed.
+///
+/// A configured seed seeds the seed generator, not every trial directly. This
+/// gives reproducible but distinct tie-breaking streams per trial.
 pub(crate) fn trial_seeds(seed: Option<u64>, count: usize) -> Vec<u64> {
     let mut rng = StdRng::seed_from_u64(seed.unwrap_or_else(rand::random));
     (0..count).map(|_| rng.random()).collect()
@@ -426,6 +447,11 @@ pub(crate) struct RoutingTarget {
 }
 
 impl RoutingTarget {
+    /// Builds the dense routing view used by SABRE scoring.
+    ///
+    /// The target keeps both semantic physical-qubit ids and dense indices.
+    /// Dense indices make layer scoring cheap; semantic ids keep diagnostics
+    /// and emitted SWAP operations stable.
     pub(crate) fn from_physical(physical: &PhysicalLayoutGraph) -> Result<Self, CompilerError> {
         let physical_qubits = physical.physical_qubits().to_vec();
         let physical_set = physical_qubits.iter().copied().collect::<BTreeSet<_>>();
@@ -596,6 +622,11 @@ struct SwapChoice {
 }
 
 impl RoutingState {
+    /// Creates mutable state for one SABRE routing trial.
+    ///
+    /// `required_predecessors` is the mutable readiness counter for DAG
+    /// scheduling. Lookahead temporarily edits the same counters and restores
+    /// them before returning to the real routing loop.
     fn new(
         sabre: &SabreDag,
         target: &RoutingTarget,
@@ -624,6 +655,10 @@ impl RoutingState {
         }
     }
 
+    /// Applies a physical SWAP to the layout and all cached layer scores.
+    ///
+    /// The layout and every cached layer must move together; otherwise future
+    /// SWAP deltas would be scored against stale physical positions.
     fn apply_swap(
         &mut self,
         swap: [PhysicalQubit; 2],
@@ -663,6 +698,9 @@ impl RoutingState {
             let node = &sabre.graph[node_id];
             match &node.kind {
                 SabreNodeKind::TwoQ(pair) => {
+                    // A two-qubit node that is still non-adjacent becomes part
+                    // of the front layer. Adjacent nodes flush any pending
+                    // SWAPs and are emitted under the current layout.
                     let physical = [
                         physical_for(&self.layout, pair[0])?,
                         physical_for(&self.layout, pair[1])?,
@@ -687,6 +725,9 @@ impl RoutingState {
                     }
                 }
                 SabreNodeKind::Synchronize => {
+                    // Synchronize nodes preserve parent-level ordering around
+                    // classical or barrier-like effects but do not add an
+                    // adjacency constraint of their own.
                     output.apply_pending_swaps(pending_swaps.take());
                     for operation in &node.operations {
                         output
@@ -695,6 +736,9 @@ impl RoutingState {
                     }
                 }
                 SabreNodeKind::ControlFlow(flow) => {
+                    // Control-flow bodies are routed recursively from the
+                    // current entry layout and restore that layout on exit, so
+                    // parent routing can continue with a single layout state.
                     output.apply_pending_swaps(pending_swaps.take());
                     self.route_control_flow_node(
                         flow,
@@ -734,6 +778,10 @@ impl RoutingState {
         let Some((first, rest)) = operations.split_first() else {
             return Ok(());
         };
+        // The SABRE DAG keeps the representative control-flow operation first
+        // and may attach additional bookkeeping operations after it. Rebuild the
+        // first operation with routed bodies, then map the remaining operations
+        // through the unchanged parent layout.
         let routed = match flow {
             SabreControlFlow::If {
                 condition,
@@ -1146,6 +1194,11 @@ impl TrialOutput {
     }
 }
 
+/// Routes a control-flow body and restores its entry layout before exit.
+///
+/// A control-flow body must be layout-neutral from the parent router's point of
+/// view: whichever branch or iteration executes, the body exits with the same
+/// logical-to-physical mapping it entered with.
 fn route_control_flow_body(
     sabre: &SabreDag,
     target: &RoutingTarget,
@@ -1188,6 +1241,11 @@ fn route_control_flow_body(
     Ok(result)
 }
 
+/// Computes SWAPs that restore one layout to another on the target graph.
+///
+/// Token swapping computes an epilogue that returns every live logical qubit to
+/// its entry physical location. Vacant physical qubits are irrelevant and are
+/// omitted from the token mapping.
 fn restore_layout_swaps(
     target: &RoutingTarget,
     current: &Layout,
@@ -1246,6 +1304,11 @@ fn map_operation(operation: &Operation, layout: &Layout) -> Result<Operation, Co
     })
 }
 
+/// Remaps operation parameter indices into the routed circuit's parameter table.
+///
+/// Parameter indices are scoped to a circuit table, while routed nested
+/// operations are rebuilt before the final table exists. This function walks
+/// recursively so every body points at the reordered routed table.
 fn remap_parameter_indices(
     operation: &Operation,
     parameter_indices: &[u32],
@@ -1352,6 +1415,10 @@ fn physical_for(layout: &Layout, logical: LogicalQubit) -> Result<PhysicalQubit,
     })
 }
 
+/// Validates that every interaction in a SABRE DAG is physically reachable.
+///
+/// Reachability is recursive because control-flow bodies are routed with the
+/// same physical topology and entry-layout contract as parent operations.
 pub(crate) fn validate_reachable_interactions_for_target(
     sabre: &SabreDag,
     target: &RoutingTarget,
@@ -1441,6 +1508,10 @@ fn trial_quality(operations: &[Operation], swap_count: usize) -> TrialQuality {
     }
 }
 
+/// Estimates ASAP two-qubit depth for trial ranking.
+///
+/// This is not a full scheduler. Control-flow contributes the maximum local
+/// branch or body depth, and parent operations are chained by used qubits.
 fn two_qubit_depth(operations: &[Operation]) -> usize {
     let mut qubit_depths = BTreeMap::<Qubit, usize>::new();
     let mut max_depth = 0usize;

@@ -70,17 +70,17 @@
 //!
 //! # Module overview
 //!
-//! - [`lexer`](crate::compile::knowledge::rule_dsl::lexer) – Tokenizer that
+//! - [`lexer`] – Tokenizer that
 //!   produces span-based tokens borrowing from the input string.
-//! - [`parser`](crate::compile::knowledge::rule_dsl::parser) – Recursive-descent
+//! - [`parser`] – Recursive-descent
 //!   parser that extracts raw expression text and delegates evaluation to
-//!   [`Parameter::try_from`](crate::circuit::Parameter).
-//! - [`ast`](crate::compile::knowledge::rule_dsl::ast) – AST definitions (`RuleDef`, `GatePattern`).
-//! - [`lower`](crate::compile::knowledge::rule_dsl::lower) – Lowering logic from
+//!   [`crate::circuit::Parameter::try_from`].
+//! - [`ast`] – AST definitions (`RuleDef`, `GatePattern`).
+//! - [`lower`] – Lowering logic from
 //!   AST to the runtime `Rule` type.
-//! - [`load`](crate::compile::knowledge::rule_dsl::load) – Convenience helpers
+//! - [`load`] – Convenience helpers
 //!   for loading rules from files or strings.
-//! - [`dump`](crate::compile::knowledge::rule_dsl::dump) – Serialization helpers
+//! - [`dump`] – Serialization helpers
 //!   for writing `Rule` or `RuleDef` back to the DSL text format.
 
 pub mod ast;

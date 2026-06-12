@@ -13,9 +13,25 @@
 //! Knowledge-based local circuit rewrite.
 //!
 //! This pass consumes validated compiler knowledge rules and applies them as
-//! dependency-aware local rewrites.  In production mode it behaves as a
-//! conservative optimizer; in lowering mode it can use decomposition rules and
-//! an explicit target gate basis.
+//! dependency-aware local rewrites. It is a local rewrite engine, not a global
+//! optimizer: it searches bounded operation windows, checks rule conditions,
+//! applies cost policy, and rebuilds the affected circuit regions.
+//!
+//! [`RewriteConfig::production`] selects the conservative optimization mode
+//! used by normal compiler cleanup. It enables simplification, cancellation,
+//! merge, and canonicalization rules and accepts rewrites only under the local
+//! cost model. [`RewriteConfig::lowering`] enables decomposition and
+//! hardware-native rules as well, allowing local expansion when the caller has
+//! requested explicit target-basis lowering.
+//!
+//! Target-basis translation is expressed by calling
+//! [`RewriteConfig::with_target_instructions`]. The rewriter then rejects a
+//! lowering result that still contains gate-like instructions outside the
+//! configured basis.
+//!
+//! The pass recurses into supported structured classical-control bodies. It
+//! does not synthesize arbitrary matrix-backed unitaries, choose layouts, route
+//! through device topology, or perform directed-coupling legalization.
 
 mod basis;
 mod config;

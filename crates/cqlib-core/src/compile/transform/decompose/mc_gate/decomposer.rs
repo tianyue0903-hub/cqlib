@@ -75,6 +75,7 @@ pub struct DecomposeMcGates {
 }
 
 impl DecomposeMcGates {
+    /// Creates a transformer with an explicit resource policy and limits.
     pub fn new(config: McGateDecomposeConfig) -> Self {
         Self { config }
     }
@@ -191,6 +192,10 @@ struct McGateDecomposer<'a> {
 }
 
 impl<'a> McGateDecomposer<'a> {
+    /// Creates the target circuit shell and initializes ancillary bookkeeping.
+    ///
+    /// The target shell is built before resource initialization so the manager
+    /// sees exactly the logical qubits that are already occupied.
     fn new(source: &'a Circuit, config: McGateDecomposeConfig) -> Result<Self, CompilerError> {
         let mut target = Circuit::from_operations(
             source.qubits(),
@@ -210,6 +215,10 @@ impl<'a> McGateDecomposer<'a> {
         })
     }
 
+    /// Rebuilds the source circuit in order and verifies all leases are idle.
+    ///
+    /// Ancilla leases are scoped to the synthesis of one source operation and
+    /// must all be released when the pass completes.
     fn run(mut self) -> Result<TransformResult, CompilerError> {
         let source = self.source;
         for operation in source.operations() {
@@ -227,6 +236,10 @@ impl<'a> McGateDecomposer<'a> {
         })
     }
 
+    /// Rebuilds a sequence of operations for a control-flow body.
+    ///
+    /// Bodies are rebuilt into plain operation vectors first; their enclosing
+    /// control instruction is reconstructed by the caller.
     fn rebuild_sequence(
         &mut self,
         source_operations: &[Operation],
@@ -238,6 +251,10 @@ impl<'a> McGateDecomposer<'a> {
         Ok(operations)
     }
 
+    /// Rebuilds one source operation, possibly expanding it to many operations.
+    ///
+    /// Preserved operations still pass through parameter remapping so the target
+    /// circuit owns a consistent parameter table.
     fn rebuild_operation(
         &mut self,
         operation: &Operation,
@@ -256,6 +273,11 @@ impl<'a> McGateDecomposer<'a> {
         }
     }
 
+    /// Rebuilds a classical-control operation while recursively lowering bodies.
+    ///
+    /// Classical structure is preserved exactly. The operation qubit list is
+    /// recomputed from the rebuilt instruction because body expansion may add
+    /// ancillas.
     fn rebuild_control_flow(
         &mut self,
         operation: &Operation,
@@ -334,6 +356,10 @@ impl<'a> McGateDecomposer<'a> {
         })
     }
 
+    /// Decomposes one storage-level `McGate` operation.
+    ///
+    /// Storage-level parameters are resolved against the source circuit before
+    /// invoking pure value-level synthesis primitives.
     fn decompose_mc_operation(
         &mut self,
         gate: &MCGate,
@@ -374,6 +400,10 @@ impl<'a> McGateDecomposer<'a> {
         Ok(())
     }
 
+    /// Dispatches synthesis by base-gate arity and parameter contract.
+    ///
+    /// Each branch validates the primitive signature before trying
+    /// resource-dependent synthesis candidates.
     fn synthesize_mc_gate(
         &mut self,
         gate: StandardGate,
@@ -580,6 +610,11 @@ impl<'a> McGateDecomposer<'a> {
         decompose_pauli_no_aux(pauli, controls, target)
     }
 
+    /// Tries a clean-ancilla construction before a no-auxiliary fallback.
+    ///
+    /// Most non-Pauli controlled gates have one preferred clean-ancilla
+    /// construction and one no-auxiliary fallback. Resource policy decides
+    /// whether the clean construction can be attempted.
     fn synthesize_with_optional_clean(
         &mut self,
         required_ancillas: usize,
@@ -648,6 +683,10 @@ impl<'a> McGateDecomposer<'a> {
         Ok(Some(operations))
     }
 
+    /// Resolves source-table parameters into value-level synthesis parameters.
+    ///
+    /// This keeps primitive synthesis independent from the source circuit's
+    /// storage indices.
     fn resolve_source_params(
         &self,
         params: &[CircuitParam],
@@ -680,6 +719,10 @@ impl<'a> McGateDecomposer<'a> {
         }
     }
 
+    /// Interns source parameters into the target circuit's parameter table.
+    ///
+    /// Preserved operations may still reference source parameters; after this
+    /// step all parameter indices are local to the rebuilt circuit.
     fn remap_source_params(
         &mut self,
         params: &[CircuitParam],
@@ -691,6 +734,11 @@ impl<'a> McGateDecomposer<'a> {
             .collect()
     }
 
+    /// Converts a synthesized value-level operation into target storage form.
+    ///
+    /// MC synthesis primitives are expected to emit only flat quantum
+    /// operations. Recursive classical control is handled by
+    /// [`Self::rebuild_control_flow`], not by primitive synthesis.
     fn intern_value_operation(
         &mut self,
         operation: ValueOperation,
@@ -732,6 +780,11 @@ impl<'a> McGateDecomposer<'a> {
         }
     }
 
+    /// Appends a rebuilt top-level operation through `Circuit::append`.
+    ///
+    /// `Circuit::append` accepts value-level parameters. Convert target-table
+    /// indices back to values so append enforces the same validation path as
+    /// user construction.
     fn append_top_level(&mut self, operation: Operation) -> Result<(), CompilerError> {
         let params = operation
             .params

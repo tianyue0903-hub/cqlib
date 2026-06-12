@@ -34,12 +34,21 @@
 //!   `GPhase` marker in that body;
 //! - rewrites multi-controlled gates into exact existing `StandardGate` forms
 //!   when the IR has such a form, without decomposition;
-//! - removes strict no-ops, including labeled no-ops, because operation labels
-//!   are not semantic compiler barriers;
+//! - removes strict no-ops, including labeled no-ops and self-stores
+//!   (`store v <- v`) on classical variables;
 //! - canonicalizes barrier scopes and merges adjacent barriers when their scopes
 //!   are equal or one scope is a superset of the other;
-//! - recursively canonicalizes `IfElse` and `WhileLoop` bodies and recomputes the
-//!   outer control-flow operation qubit list in circuit-global qubit order.
+//! - preserves `ClassicalData` instructions such as stores and measurements
+//!   while validating their qubit width and parameter shape;
+//! - simplifies runtime classical expressions embedded in `ClassicalControl`
+//!   and `ClassicalData` operations via [`ClassicalExpr::simplified`] (e.g.
+//!   `not(not(x)) → x`, `eq(x, x) → true`, `and(x, true) → x`);
+//! - recursively canonicalizes structured `ClassicalControl` bodies for `if`,
+//!   `while`, `for`, and `switch`, preserving `break`/`continue` markers and
+//!   recomputing each outer control-flow operation qubit list in circuit-global
+//!   qubit order.
+//!
+//! [`ClassicalExpr::simplified`]: crate::circuit::classical_expr::ClassicalExpr::simplified
 //!
 //! # Non-Goals
 //!
@@ -75,11 +84,16 @@
 //! - any retained `GPhase` is a zero-qubit marker;
 //! - a control-flow body contains `GPhase` only at index `0`, and only when its
 //!   phase is nonzero;
-//! - no removable strict no-op remains;
+//! - no removable strict no-op remains (including self-stores on classical
+//!   variables);
 //! - barriers are sorted, deduplicated, label-free, non-empty, and no adjacent
 //!   barrier pair is mergeable;
 //! - the parameter and symbol tables are consistent and contain no unused
 //!   parameter entries;
+//! - classical variable and value tables are preserved with stable handles;
+//!   unused entries may remain after expression simplification or no-op removal;
+//! - controlling expressions in `if`/`while`/`for`/`switch` and stored
+//!   expressions in `ClassicalDataOp::Store` are in simplified form;
 //! - running canonicalization a second time is unchanged.
 //!
 //! The configuration type exposes a small set of behavior switches for focused
@@ -91,6 +105,38 @@
 //! `recurse_control_flow` leaves control-flow bodies in their input
 //! representation. Parameter rebuilding and simplification remain part of the
 //! canonicalization contract in all configurations.
+//!
+//! # Quantum-Classical Example
+//!
+//! The pass treats structured classical control as first-class circuit IR.
+//! Controlling expressions are simplified inline, body-level no-ops are
+//! removed, `GPhase` is folded, and the outer qubit list is recomputed from
+//! the canonicalized body.
+//!
+//! ```rust
+//! use cqlib_core::circuit::{Circuit, ClassicalExpr, ClassicalType, Qubit};
+//! use cqlib_core::compile::transform::canonicalize_circuit;
+//!
+//! let mut circuit = Circuit::new(2);
+//! // eq(x, x) → true after simplification
+//! let x = ClassicalExpr::uint_literal(8, 42).unwrap();
+//! let tautology = ClassicalExpr::eq(x.clone(), x).unwrap();
+//!
+//! circuit.if_(tautology, |body| {
+//!     body.i(Qubit::new(1))?;    // no-op, removed
+//!     body.h(Qubit::new(1))?;
+//!     Ok(())
+//! }).unwrap();
+//!
+//! let result = canonicalize_circuit(&circuit).unwrap();
+//! // Body: I-gate removed, condition simplified to `true`
+//! assert_eq!(result.circuit.operations().len(), 1);
+//! // Only the qubit actually used (q[1]) appears in the outer qubit list
+//! assert_eq!(
+//!     result.circuit.operations()[0].qubits.as_slice(),
+//!     &[Qubit::new(1)],
+//! );
+//! ```
 
 mod canonicalizer;
 mod config;

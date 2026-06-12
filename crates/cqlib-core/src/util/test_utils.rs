@@ -13,8 +13,8 @@
 //! Shared helpers for crate-local tests.
 
 use crate::circuit::{
-    Circuit, Instruction, MCGate, ParameterValue, Qubit, StandardGate, circuit_to_matrix,
-    operation::ValueOperation,
+    Circuit, Instruction, MCGate, ParameterValue, Qubit, StandardGate, ValueInstruction,
+    circuit_to_matrix, operation::ValueOperation,
 };
 use crate::compile::CompileResult;
 use crate::compile::transform::decompose::mc_gate::Su2RotationAxis;
@@ -36,7 +36,7 @@ pub fn assert_standard_operation(
 ) {
     assert!(matches!(
         operation.instruction,
-        Instruction::Standard(gate) if gate == expected_gate
+        ValueInstruction::Instruction(Instruction::Standard(gate)) if gate == expected_gate
     ));
     assert_eq!(operation.qubits.as_slice(), expected_qubits);
     assert!(operation.params.is_empty());
@@ -51,7 +51,10 @@ pub fn assert_value_operations_equal(actual: &[ValueOperation], expected: &[Valu
             &actual_operation.instruction,
             &expected_operation.instruction,
         ) {
-            (Instruction::Standard(actual_gate), Instruction::Standard(expected_gate)) => {
+            (
+                ValueInstruction::Instruction(Instruction::Standard(actual_gate)),
+                ValueInstruction::Instruction(Instruction::Standard(expected_gate)),
+            ) => {
                 assert_eq!(actual_gate, expected_gate);
             }
             (actual_instruction, expected_instruction) => {
@@ -108,19 +111,15 @@ pub fn circuit_from_value_operations(
     num_qubits: usize,
     operations: Vec<ValueOperation>,
 ) -> Circuit {
-    let mut circuit = Circuit::new(num_qubits);
-    for operation in operations {
-        let label = operation.label;
-        circuit
-            .append(
-                operation.instruction,
-                operation.qubits,
-                operation.params,
-                label.as_deref(),
-            )
-            .unwrap();
-    }
-    circuit
+    Circuit::from_operations(
+        (0..num_qubits)
+            .map(|index| Qubit::new(index as u32))
+            .collect(),
+        operations,
+        None,
+        None,
+    )
+    .unwrap()
 }
 
 /// Applies value operations to a clone of an initial statevector.
@@ -214,6 +213,14 @@ pub fn assert_is_unitary(matrix: &Array2<Complex64>, epsilon: f64) {
             );
         }
     }
+}
+
+/// Returns whether a compiler workflow step changed the circuit.
+pub fn step_changed(result: &CompileResult, name: &str) -> bool {
+    result
+        .steps
+        .iter()
+        .any(|step| step.name == name && step.changed && !step.skipped)
 }
 
 /// Asserts approximate equality for selected matrix columns.
@@ -603,13 +610,13 @@ pub fn contains_high_level_gate(circuit: &Circuit) -> bool {
 }
 
 /// Returns whether a named compiler workflow step reported a change.
-pub fn step_changed(result: &CompileResult, name: &str) -> bool {
-    result
-        .steps
-        .iter()
-        .find(|step| step.name == name)
-        .is_some_and(|step| step.changed)
-}
+// pub fn step_changed(result: &CompileResult, name: &str) -> bool {
+//     result
+//         .steps
+//         .iter()
+//         .find(|step| step.name == name)
+//         .is_some_and(|step| step.changed)
+// }
 
 /// Asserts that an operation is a standard gate with a single fixed parameter.
 pub fn assert_fixed_parameter_operation(
@@ -620,7 +627,7 @@ pub fn assert_fixed_parameter_operation(
 ) {
     assert!(matches!(
         operation.instruction,
-        Instruction::Standard(gate) if gate == expected_gate
+        ValueInstruction::Instruction(Instruction::Standard(gate)) if gate == expected_gate
     ));
     assert_eq!(operation.qubits.as_slice(), expected_qubits);
     assert!(matches!(

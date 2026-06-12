@@ -43,26 +43,42 @@ impl RuleId {
 /// Coarse compiler use-case for a rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RuleKind {
+    /// Algebraic simplification that removes redundant structure.
     Simplify,
+    /// Cancellation rule for inverse or repeated gates.
     Cancel,
+    /// Merge rule for combining compatible neighboring gates.
     Merge,
+    /// Explicit commutation rule of the form `A; B -> B; A`.
     Commute,
+    /// Decomposition or lowering rule.
     Decompose,
+    /// Canonical representation rule.
     Canonicalize,
+    /// Rule that rewrites toward a hardware-native instruction set.
     HardwareNative,
+    /// Rule without a more specific compiler use-case.
     Other,
 }
 
 /// Precomputed metadata used by rule selection and diagnostics.
 #[derive(Debug, Clone)]
 pub struct RuleMetadata {
+    /// Stable id assigned by the containing library.
     pub id: RuleId,
+    /// Coarse compiler use-case for this rule.
     pub kind: RuleKind,
+    /// Number of operations in the match pattern.
     pub pattern_len: usize,
+    /// Number of operations emitted by the rewrite target.
     pub rewrite_len: usize,
+    /// Number of distinct rule-local qubit labels used by the rule.
     pub qubit_count: usize,
+    /// First instruction in the match pattern.
     pub first_instruction: Instruction,
+    /// Static operation-count delta, `rewrite_len - pattern_len`.
     pub cost_delta: isize,
+    /// Whether the rule has non-empty parameter conditions.
     pub has_conditions: bool,
 }
 
@@ -75,15 +91,21 @@ struct RuleGateMetadata {
 /// Errors produced while building or extending a rule library.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum RuleLibraryError {
+    /// A rule failed structural validation.
     #[error("invalid rule {name}: {source}")]
     InvalidRule {
+        /// Name of the invalid rule.
         name: String,
+        /// Validation failure.
         source: RuleValidationError,
     },
+    /// A library cannot contain two rules with the same name.
     #[error("duplicate rule name: {0}")]
     DuplicateRuleName(String),
+    /// A rule uses an instruction that cannot be indexed by the matcher.
     #[error("unsupported instruction for rule library index: {instruction}")]
     UnsupportedInstruction { instruction: String },
+    /// Loading or parsing rule DSL failed.
     #[error("failed to load rules: {0}")]
     Load(LoadError),
 }
@@ -100,10 +122,15 @@ pub struct RuleLibrary {
 }
 
 impl RuleLibrary {
+    /// Creates an empty rule library.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Returns the lazily loaded builtin compiler rule library.
+    ///
+    /// Builtin sources are embedded at compile time and validated while the
+    /// library is initialized.
     pub fn builtin_rules() -> Result<&'static RuleLibrary, RuleLibraryError> {
         match BUILTIN_RULES.get_or_init(|| {
             let mut library = RuleLibrary::new();
@@ -120,12 +147,16 @@ impl RuleLibrary {
         }
     }
 
+    /// Builds a library from already constructed rules.
+    ///
+    /// Rules are structurally validated before insertion.
     pub fn from_rules(rules: Vec<Rule>, kind: RuleKind) -> Result<Self, RuleLibraryError> {
         let mut library = Self::new();
         library.extend_rules(rules, kind)?;
         Ok(library)
     }
 
+    /// Parses and validates rules from a DSL source string.
     pub fn from_dsl_str(source: &str, kind: RuleKind) -> Result<Self, RuleLibraryError> {
         Self::from_rules(
             load_rules_from_str(source).map_err(RuleLibraryError::Load)?,
@@ -133,6 +164,7 @@ impl RuleLibrary {
         )
     }
 
+    /// Loads, parses, and validates rules from a DSL file.
     pub fn from_dsl_file(path: impl AsRef<Path>, kind: RuleKind) -> Result<Self, RuleLibraryError> {
         Self::from_rules(
             load_rules_from_file(path).map_err(RuleLibraryError::Load)?,
@@ -140,6 +172,11 @@ impl RuleLibrary {
         )
     }
 
+    /// Adds one rule to the library and returns its assigned id.
+    ///
+    /// When `validate` is `true`, structural validation runs before indexing.
+    /// Builtin rule loading may pass `false` after DSL lowering has already
+    /// produced trusted validated rules.
     pub fn add_rule(
         &mut self,
         rule: Rule,
@@ -214,6 +251,10 @@ impl RuleLibrary {
         Ok(id)
     }
 
+    /// Extends the library with structurally validated rules of one kind.
+    ///
+    /// The update is atomic with respect to this library: if any rule fails,
+    /// the original library is left unchanged.
     pub fn extend_rules(
         &mut self,
         rules: Vec<Rule>,
@@ -239,38 +280,47 @@ impl RuleLibrary {
         Ok(ids)
     }
 
+    /// Returns the number of rules in this library.
     pub fn len(&self) -> usize {
         self.rules.len()
     }
 
+    /// Returns whether this library contains no rules.
     pub fn is_empty(&self) -> bool {
         self.rules.is_empty()
     }
 
+    /// Returns all rules in insertion order.
     pub fn rules(&self) -> &[Rule] {
         &self.rules
     }
 
+    /// Returns a rule by id.
     pub fn get(&self, id: RuleId) -> Option<&Rule> {
         self.rules.get(id.0)
     }
 
+    /// Returns precomputed metadata for a rule id.
     pub fn metadata(&self, id: RuleId) -> Option<&RuleMetadata> {
         self.metadata.get(id.0)
     }
 
+    /// Looks up a rule id by rule name.
     pub fn id_by_name(&self, name: &str) -> Option<RuleId> {
         self.name_map.get(name).copied()
     }
 
+    /// Looks up a rule by rule name.
     pub fn get_by_name(&self, name: &str) -> Option<&Rule> {
         self.id_by_name(name).and_then(|id| self.get(id))
     }
 
+    /// Returns whether a rule with `name` exists.
     pub fn contains(&self, name: &str) -> bool {
         self.name_map.contains_key(name)
     }
 
+    /// Returns rules whose first match instruction has the same matcher key.
     pub fn candidates_for_first_instruction(
         &self,
         instruction: &Instruction,
@@ -289,6 +339,7 @@ impl RuleLibrary {
             .unwrap_or(&[]))
     }
 
+    /// Returns rules registered under a coarse compiler kind.
     pub fn rules_by_kind(&self, kind: RuleKind) -> &[RuleId] {
         self.kind_map
             .get(&kind)
@@ -296,6 +347,11 @@ impl RuleLibrary {
             .unwrap_or(&[])
     }
 
+    /// Filters rules by required match-side and rewrite-side instruction keys.
+    ///
+    /// A rule is returned only when every instruction key in its match pattern
+    /// is present in `op_instructions` and every rewrite target key is present
+    /// in `target_instructions`.
     pub fn filter_rule_ids_by_instruction_keys(
         &self,
         op_instructions: &[Instruction],

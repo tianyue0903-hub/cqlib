@@ -12,9 +12,11 @@
 
 //! Canonicalizer entry point and round orchestration.
 
+use crate::circuit::value_instruction::storage_operation_to_value;
 use crate::circuit::{
-    Circuit, CircuitError, CircuitParam, ControlFlow, Directive, IfElseGate, Instruction,
-    Operation, Parameter, StandardGate, WhileLoopGate,
+    Circuit, CircuitError, CircuitParam, ClassicalControlOp, ClassicalDataOp, ControlBody,
+    Directive, ForOp, IfOp, Instruction, Operation, Parameter, StandardGate, SwitchCase, SwitchOp,
+    ValueOperation, WhileOp,
 };
 use crate::compile::CompilerError;
 use crate::compile::transform::transformer::{TransformResult, Transformer};
@@ -93,7 +95,11 @@ impl Canonicalizer {
         // example, parameter simplification can turn `theta - theta` into a
         // fixed zero, which then lets the next pass remove a rotation. The loop
         // therefore proves a stable representation before reporting success.
-        let mut current = circuit.clone();
+        let mut current = rebuild_circuit_from_value_operations(
+            circuit,
+            value_operations_from(circuit)?,
+            circuit.global_phase(),
+        )?;
         for round in 1..=self.config.round_limit() {
             let next = CanonicalizeRound::new(&current, &self.config).run()?;
             verify_circuit(
@@ -124,6 +130,10 @@ impl Canonicalizer {
 // Transformer integration keeps only the common circuit/changed shape; callers
 // that need canonicalization rounds should use `Canonicalizer::run` directly.
 impl Transformer for Canonicalizer {
+    fn name(&self) -> &'static str {
+        "canonicalize"
+    }
+
     fn transform(&self, circuit: &Circuit) -> Result<TransformResult, CompilerError> {
         let result = self.run(circuit)?;
         Ok(TransformResult {
@@ -171,29 +181,12 @@ impl<'a> CanonicalizeRound<'a> {
             }
         }
 
-        for operation in top_level {
-            self.append_top_level(operation)?;
-        }
-
         let phase = compiler_parameter(self.top_phase.canonicalized())?;
-        self.target.set_global_phase(phase);
-        Ok(self.target)
-    }
-
-    fn append_top_level(&mut self, operation: Operation) -> Result<(), CompilerError> {
-        let params = operation
-            .params
-            .iter()
-            .map(|param| self.target.parameter_value(param))
+        let operations = top_level
+            .into_iter()
+            .map(|operation| self.value_operation(operation))
             .collect::<Result<Vec<_>, _>>()?;
-
-        self.target.append(
-            operation.instruction,
-            operation.qubits,
-            params,
-            operation.label.as_deref(),
-        )?;
-        Ok(())
+        rebuild_circuit_from_value_operations(self.source, operations, phase)
     }
 
     fn canonicalize_body(&mut self, body: &[Operation]) -> Result<Vec<Operation>, CompilerError> {
@@ -242,6 +235,11 @@ impl<'a> CanonicalizeRound<'a> {
             instruction = self.rewrite_control_flow_instruction(instruction)?;
         }
 
+        // Simplify runtime classical expressions embedded in data ops.
+        if let Instruction::ClassicalData(data) = &instruction {
+            instruction = Instruction::ClassicalData(simplify_classical_data_op(data));
+        }
+
         let qubits = canonicalize_operation_qubits(&instruction, &operation.qubits, self.config);
         let semantic_params = operation
             .params
@@ -286,8 +284,8 @@ impl<'a> CanonicalizeRound<'a> {
         // not preserved from input. This prevents deleted body no-ops from
         // keeping dead qubits visible to later analysis passes.
         if matches!(scope, ScopeKind::TopLevel | ScopeKind::ControlFlowBody) {
-            if let Instruction::ControlFlowGate(flow) = &operation.instruction {
-                operation.qubits = flow.ordered_qubits(&self.target.qubits());
+            if let Instruction::ClassicalControl(control) = &operation.instruction {
+                operation.qubits = control.used_qubits().into_iter().collect();
             }
         }
 
@@ -299,28 +297,105 @@ impl<'a> CanonicalizeRound<'a> {
         instruction: Instruction,
     ) -> Result<Instruction, CompilerError> {
         match instruction {
-            Instruction::ControlFlowGate(ControlFlow::IfElse(gate)) => {
-                let true_body = self.canonicalize_body(gate.true_body())?;
-                let false_body = gate
-                    .false_body()
-                    .map(|body| self.canonicalize_body(body))
-                    .transpose()?;
-                Ok(Instruction::ControlFlowGate(ControlFlow::IfElse(
-                    IfElseGate::new(gate.condition(), true_body, false_body),
-                )))
-            }
-            Instruction::ControlFlowGate(ControlFlow::WhileLoop(gate)) => {
-                let body = self.canonicalize_body(gate.body())?;
-                Ok(Instruction::ControlFlowGate(ControlFlow::WhileLoop(
-                    WhileLoopGate::new(gate.condition(), body),
-                )))
-            }
+            Instruction::ClassicalControl(control) => Ok(Instruction::ClassicalControl(
+                self.rewrite_control_flow(control)?,
+            )),
             _ => Ok(instruction),
         }
     }
 
+    /// Rebuilds one structured classical-control operation after body
+    /// rewriting and expression simplification.
+    fn rewrite_control_flow(
+        &mut self,
+        control: ClassicalControlOp,
+    ) -> Result<ClassicalControlOp, CompilerError> {
+        match control {
+            ClassicalControlOp::If(op) => {
+                let then_body = self.canonicalize_control_body(op.then_body())?;
+                let else_body = op
+                    .else_body()
+                    .map(|body| self.canonicalize_control_body(body))
+                    .transpose()?;
+                Ok(ClassicalControlOp::If(
+                    IfOp::new(op.condition().simplified(), then_body, else_body)
+                        .map_err(CompilerError::Circuit)?,
+                ))
+            }
+            ClassicalControlOp::While(op) => {
+                let body = self.canonicalize_control_body(op.body())?;
+                Ok(ClassicalControlOp::While(
+                    WhileOp::new(op.condition().simplified(), body)
+                        .map_err(CompilerError::Circuit)?,
+                ))
+            }
+            ClassicalControlOp::For(op) => {
+                let body = self.canonicalize_control_body(op.body())?;
+                Ok(ClassicalControlOp::For(
+                    ForOp::new(
+                        op.var(),
+                        op.start().simplified(),
+                        op.stop().simplified(),
+                        op.step().simplified(),
+                        body,
+                    )
+                    .map_err(CompilerError::Circuit)?,
+                ))
+            }
+            ClassicalControlOp::Switch(op) => {
+                let mut cases = Vec::with_capacity(op.cases().len());
+                for case in op.cases() {
+                    cases.push(SwitchCase::new(
+                        case.value(),
+                        self.canonicalize_control_body(case.body())?,
+                    ));
+                }
+                let default = op
+                    .default()
+                    .map(|body| self.canonicalize_control_body(body))
+                    .transpose()?;
+                Ok(ClassicalControlOp::Switch(
+                    SwitchOp::new(op.target().simplified(), cases, default)
+                        .map_err(CompilerError::Circuit)?,
+                ))
+            }
+            ClassicalControlOp::Break => Ok(ClassicalControlOp::Break),
+            ClassicalControlOp::Continue => Ok(ClassicalControlOp::Continue),
+        }
+    }
+
+    /// Canonicalizes a structured control-flow body and wraps it back in `ControlBody`.
+    fn canonicalize_control_body(
+        &mut self,
+        body: &ControlBody,
+    ) -> Result<ControlBody, CompilerError> {
+        Ok(ControlBody::new(self.canonicalize_body(body.operations())?))
+    }
+
     fn intern_parameter(&mut self, param: Parameter) -> Result<CircuitParam, CompilerError> {
         Ok(self.target.map_param(param)?)
+    }
+
+    /// Resolves canonical operation parameters into value-level operations.
+    ///
+    /// Final circuit construction goes through [`Circuit::from_operations`] so
+    /// the rebuilt circuit can inherit the source circuit's classical-handle
+    /// identity and validate `ClassicalData`/`ClassicalControl` operations.
+    fn value_operation(&self, operation: Operation) -> Result<ValueOperation, CompilerError> {
+        storage_operation_to_value(operation, &|param| self.target.parameter_value(param))
+            .map_err(CompilerError::Circuit)
+    }
+}
+
+/// Simplifies the runtime classical expression inside a [`ClassicalDataOp`].
+fn simplify_classical_data_op(op: &ClassicalDataOp) -> ClassicalDataOp {
+    match op {
+        ClassicalDataOp::Store { target, value } => ClassicalDataOp::Store {
+            target: *target,
+            value: value.simplified(),
+        },
+        ClassicalDataOp::MeasureBit { result } => ClassicalDataOp::MeasureBit { result: *result },
+        ClassicalDataOp::MeasureBits { result } => ClassicalDataOp::MeasureBits { result: *result },
     }
 }
 
@@ -328,6 +403,37 @@ fn compiler_parameter<T>(
     result: Result<T, crate::circuit::error::ParameterError>,
 ) -> Result<T, CompilerError> {
     result.map_err(|error| CompilerError::Circuit(CircuitError::InvalidParameter(error)))
+}
+
+/// Converts a circuit operation list into value-level operations without
+/// remapping classical handles.
+fn value_operations_from(circuit: &Circuit) -> Result<Vec<ValueOperation>, CompilerError> {
+    circuit
+        .operations()
+        .iter()
+        .cloned()
+        .map(|operation| {
+            storage_operation_to_value(operation, &|param| circuit.parameter_value(param))
+                .map_err(CompilerError::Circuit)
+        })
+        .collect()
+}
+
+/// Rebuilds a circuit while preserving runtime classical tables and handles.
+fn rebuild_circuit_from_value_operations(
+    source: &Circuit,
+    operations: Vec<ValueOperation>,
+    global_phase: Parameter,
+) -> Result<Circuit, CompilerError> {
+    let mut target = Circuit::from_operations(
+        source.qubits(),
+        operations,
+        Some(source.classical_vars().to_vec()),
+        Some(source.classical_values().to_vec()),
+    )
+    .map_err(CompilerError::Circuit)?;
+    target.set_global_phase(global_phase);
+    Ok(target)
 }
 
 #[derive(Debug, Clone, Copy)]

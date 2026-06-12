@@ -18,7 +18,12 @@ use crate::compile::CompilerError;
 pub struct TransformResult {
     /// Transformed circuit.
     pub circuit: Circuit,
-    /// Whether the transform changed the input representation.
+    /// Whether the transform changed the compiler IR representation.
+    ///
+    /// A transform reports `false` when it found no applicable operation or
+    /// reached the same representation. This is a transform-local contract:
+    /// callers should not pre-scan circuits to infer whether a transform should
+    /// run.
     pub changed: bool,
 }
 

@@ -10,7 +10,7 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
-//! Circuit decomposition building blocks.
+//! Circuit decomposition transforms and synthesis building blocks.
 //!
 //! This module separates decomposition by the representation that is available
 //! for an operation:
@@ -24,15 +24,30 @@
 //!   multi-controlled gates, plus the circuit-level resource-aware
 //!   `decompose_mc_gates` entry point.
 //!
-//! These are independent decomposition entry points rather than a complete
-//! compiler pipeline. Target-basis lowering, layout, routing, and scheduling
-//! belong to their respective compiler stages. A caller that needs both
-//! definition expansion and matrix synthesis should run [`expand_definitions`]
-//! before [`unitary::unitary::decompose_unitaries`], so circuit-backed unitary
-//! gates are expanded before the matrix-only synthesis stage is reached.
+//! The workflow-facing adapters [`DecomposeDefinitions`],
+//! [`DecomposeUnitaries`], and [`DecomposeMcGates`] implement
+//! [`Transformer`](crate::compile::transform::Transformer). They are expected
+//! to report `changed = false` when no operation in their scope was lowered.
+//!
+//! # Recommended Order
+//!
+//! Run definition expansion before matrix synthesis so circuit-backed unitary
+//! gates are expanded before the matrix-only [`decompose_unitaries`] stage is
+//! reached. Run multi-controlled gate decomposition after unitary synthesis so
+//! the circuit-level planner can apply resource policy and control-flow
+//! traversal to the remaining high-level controlled operations.
+//!
+//! These are decomposition entry points, not a complete compiler pipeline.
+//! Target-basis lowering belongs to [`rewrite`](crate::compile::transform::rewrite),
+//! initial placement belongs to [`layout`](crate::compile::transform::layout),
+//! and SWAP insertion belongs to [`routing`](crate::compile::transform::routing).
+//! Directed-coupling legalization and scheduling are separate compiler
+//! concerns.
 
 pub mod definition;
 pub mod mc_gate;
 pub mod unitary;
 
-pub use definition::expand_definitions;
+pub use definition::{DecomposeDefinitions, expand_definitions};
+pub use mc_gate::{DecomposeMcGates, McGateDecomposeConfig, decompose_mc_gates};
+pub use unitary::decompose::{DecomposeUnitaries, UnitaryDecomposeConfig, decompose_unitaries};

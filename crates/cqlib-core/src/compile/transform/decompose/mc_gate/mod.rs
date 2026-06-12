@@ -261,7 +261,7 @@
 //!
 //! Callers must provide ancillas that are distinct from all controls and
 //! targets. Duplicate-qubit errors are returned as
-//! [`CompilerError::TransformFailed`].
+//! [`crate::compile::CompilerError::TransformFailed`].
 
 pub mod decomposer;
 pub mod fsim;
@@ -277,7 +277,9 @@ pub mod rzz;
 pub mod swap;
 pub mod unitary;
 
-pub use decomposer::{McGateDecomposeConfig, decompose_mc_gates, decompose_mc_gates_for_device};
+pub use decomposer::{
+    DecomposeMcGates, McGateDecomposeConfig, decompose_mc_gates, decompose_mc_gates_for_device,
+};
 
 pub use fsim::{decompose_fsim_n_clean, decompose_fsim_no_aux};
 

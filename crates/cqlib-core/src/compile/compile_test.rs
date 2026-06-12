@@ -12,10 +12,12 @@
 // that they have been altered from the originals.
 
 use super::{CompileConfig, CompileMode, compile};
-use crate::circuit::{Circuit, Instruction, MCGate, ParameterValue, Qubit, StandardGate};
+use crate::circuit::{
+    Circuit, CircuitParam, Instruction, MCGate, Parameter, ParameterValue, Qubit, StandardGate,
+};
 use crate::compile::CompilerError;
 use crate::compile::resource::ResourcePolicy;
-use crate::device::Device;
+use crate::device::{Device, Layout};
 use crate::util::test_utils::{
     assert_compiled_circuit_equivalent, assert_only_standard_gates,
     assert_two_qubit_operations_supported_by_topology, bell_circuit, contains_high_level_gate,
@@ -23,6 +25,8 @@ use crate::util::test_utils::{
     standard_ops, step_changed,
 };
 use proptest::prelude::*;
+use std::collections::HashMap;
+use std::f64::consts::PI;
 
 fn compile_normal(circuit: &Circuit) -> super::CompileResult {
     compile(
@@ -31,6 +35,7 @@ fn compile_normal(circuit: &Circuit) -> super::CompileResult {
             mode: CompileMode::Normal,
             target_basis: None,
             device: None,
+            initial_layout: None,
             resource_policy: ResourcePolicy::default(),
             seed: None,
         },
@@ -40,6 +45,64 @@ fn compile_normal(circuit: &Circuit) -> super::CompileResult {
 
 fn assert_compiled_matrix_equivalent(actual: &Circuit, expected: &Circuit) {
     assert_compiled_circuit_equivalent(actual, expected);
+}
+
+fn operation_parameter(circuit: &Circuit, param: &CircuitParam) -> Parameter {
+    match param {
+        CircuitParam::Fixed(value) => Parameter::from(*value),
+        CircuitParam::Index(index) => circuit
+            .parameters()
+            .get_index(*index as usize)
+            .cloned()
+            .expect("parameter index should exist in compiled circuit"),
+    }
+}
+
+fn circuit_contains_symbol(circuit: &Circuit, symbol: &str) -> bool {
+    if circuit.global_phase().get_symbols().contains(symbol) {
+        return true;
+    }
+
+    circuit
+        .operations()
+        .iter()
+        .flat_map(|operation| operation.params.iter())
+        .map(|param| operation_parameter(circuit, param))
+        .any(|parameter| parameter.get_symbols().contains(symbol))
+}
+
+fn stable_circuit_debug(circuit: &Circuit) -> String {
+    let parameters = circuit
+        .parameters()
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    format!(
+        "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
+        circuit.qubits(),
+        circuit.symbols(),
+        parameters,
+        circuit.classical_vars(),
+        circuit.classical_values(),
+        circuit.operations(),
+        circuit.global_phase().to_string(),
+    )
+}
+
+fn binding_case(bindings: &[(&'static str, f64)]) -> Option<HashMap<&'static str, f64>> {
+    Some(bindings.iter().copied().collect())
+}
+
+fn assert_bindings_preserve_semantics(
+    source: &Circuit,
+    compiled: &Circuit,
+    binding_cases: &[Option<HashMap<&'static str, f64>>],
+) {
+    for bindings in binding_cases {
+        let bound_source = source.assign_parameters(bindings).unwrap();
+        let bound_compiled = compiled.assign_parameters(bindings).unwrap();
+        assert_compiled_matrix_equivalent(&bound_compiled, &bound_source);
+    }
 }
 
 fn compile_to_basis(circuit: &Circuit, basis: Vec<StandardGate>) -> super::CompileResult {
@@ -54,6 +117,7 @@ fn compile_to_basis(circuit: &Circuit, basis: Vec<StandardGate>) -> super::Compi
                     .collect::<Vec<_>>(),
             ),
             device: None,
+            initial_layout: None,
             resource_policy: ResourcePolicy::default(),
             seed: None,
         },
@@ -85,6 +149,7 @@ fn compile_on_device_checked(
             mode: CompileMode::Normal,
             target_basis: None,
             device: Some(device),
+            initial_layout: None,
             resource_policy: ResourcePolicy::default(),
             seed: Some(seed),
         },
@@ -398,6 +463,7 @@ fn compile_bell_to_h_cz_basis() {
                 Instruction::Standard(StandardGate::CZ),
             ]),
             device: None,
+            initial_layout: None,
             resource_policy: ResourcePolicy::default(),
             seed: None,
         },
@@ -482,6 +548,7 @@ proptest! {
             mode: CompileMode::Enhanced,
             target_basis: None,
             device: Some(device),
+            initial_layout: None,
             resource_policy: ResourcePolicy::default(),
             seed: Some(2026),
         };
@@ -489,7 +556,10 @@ proptest! {
         let first = compile(&circuit, config.clone()).unwrap();
         let second = compile(&circuit, config).unwrap();
 
-        prop_assert_eq!(format!("{:?}", first.circuit), format!("{:?}", second.circuit));
+        prop_assert_eq!(
+            stable_circuit_debug(&first.circuit),
+            stable_circuit_debug(&second.circuit)
+        );
         prop_assert_eq!(first.changed, second.changed);
         prop_assert_eq!(first.steps, second.steps);
     }
@@ -506,6 +576,7 @@ fn compile_with_same_seed_is_deterministic() {
         mode: CompileMode::Enhanced,
         target_basis: None,
         device: Some(device),
+        initial_layout: None,
         resource_policy: ResourcePolicy::default(),
         seed: Some(1234),
     };
@@ -514,12 +585,48 @@ fn compile_with_same_seed_is_deterministic() {
     let second = compile(&circuit, config).unwrap();
 
     assert_eq!(
-        format!("{:?}", first.circuit),
-        format!("{:?}", second.circuit)
+        stable_circuit_debug(&first.circuit),
+        stable_circuit_debug(&second.circuit)
     );
     assert_eq!(first.changed, second.changed);
     assert_eq!(first.mode, second.mode);
     assert_eq!(first.steps, second.steps);
+}
+
+#[test]
+fn compile_with_same_seed_and_initial_layout_is_deterministic() {
+    let q0 = Qubit::new(0);
+    let q1 = Qubit::new(1);
+    let mut circuit = Circuit::new(2);
+    circuit.h(q0).unwrap();
+    circuit.cx(q0, q1).unwrap();
+    let layout = Layout::from_pairs(&[(0, 2), (1, 0)], 3).unwrap();
+    let config = CompileConfig {
+        mode: CompileMode::Enhanced,
+        target_basis: None,
+        device: Some(Device::line("initial-layout-line", 3).unwrap()),
+        initial_layout: Some(layout),
+        resource_policy: ResourcePolicy::default(),
+        seed: Some(99),
+    };
+
+    let first = compile(&circuit, config.clone()).unwrap();
+    let second = compile(&circuit, config).unwrap();
+
+    assert_eq!(
+        stable_circuit_debug(&first.circuit),
+        stable_circuit_debug(&second.circuit)
+    );
+    assert_eq!(first.changed, second.changed);
+    assert_eq!(first.steps, second.steps);
+    assert!(
+        first
+            .steps
+            .iter()
+            .find(|step| step.name == "route.sabre")
+            .and_then(|step| step.reason.as_deref())
+            .is_some_and(|reason| reason.contains("supplied initial layout"))
+    );
 }
 
 #[test]
@@ -534,6 +641,7 @@ fn compile_qft3_reports_unsupported_h_cz_target_basis() {
                 Instruction::Standard(StandardGate::CZ),
             ]),
             device: None,
+            initial_layout: None,
             resource_policy: ResourcePolicy::default(),
             seed: None,
         },
@@ -580,6 +688,7 @@ fn compile_merges_consecutive_same_axis_rotations() {
             mode: CompileMode::Enhanced,
             target_basis: None,
             device: None,
+            initial_layout: None,
             resource_policy: ResourcePolicy::default(),
             seed: None,
         },
@@ -589,6 +698,167 @@ fn compile_merges_consecutive_same_axis_rotations() {
     assert!(result.changed);
     assert!(result.circuit.operations().is_empty());
     assert_compiled_matrix_equivalent(&result.circuit, &circuit);
+}
+
+#[test]
+fn compile_merges_symbolic_single_qubit_rotation() {
+    let q0 = Qubit::new(0);
+    let theta = Parameter::symbol("theta");
+    let mut circuit = Circuit::new(1);
+    circuit.rz(q0, theta.clone()).unwrap();
+    circuit.rz(q0, 0.5).unwrap();
+
+    let result = compile_normal(&circuit);
+
+    assert!(result.changed);
+    assert_eq!(standard_ops(&result.circuit), vec![StandardGate::RZ]);
+    let merged = operation_parameter(&result.circuit, &result.circuit.operations()[0].params[0]);
+    assert!(merged.provably_equal(&(theta.clone() + Parameter::from(0.5)), 1e-12));
+    assert!(merged.get_symbols().contains("theta"));
+    assert_bindings_preserve_semantics(
+        &circuit,
+        &result.circuit,
+        &[
+            binding_case(&[("theta", 0.0)]),
+            binding_case(&[("theta", 0.25)]),
+            binding_case(&[("theta", -0.5)]),
+            binding_case(&[("theta", PI / 2.0)]),
+        ],
+    );
+}
+
+#[test]
+fn compile_preserves_parameterized_two_qubit_decomposition() {
+    let q0 = Qubit::new(0);
+    let q1 = Qubit::new(1);
+    let theta = Parameter::symbol("theta");
+    let phi = Parameter::symbol("phi");
+    let mut circuit = Circuit::new(2);
+    circuit.rx(q0, 0.17).unwrap();
+    circuit.crz(q0, q1, theta.clone()).unwrap();
+    circuit.fsim(q0, q1, 0.13, phi.clone()).unwrap();
+
+    let basis = qcis_cz_basis();
+    let result = compile_to_basis(&circuit, basis.clone());
+
+    assert!(step_changed(&result, "translate.target_basis"));
+    assert_only_standard_gates(&result.circuit, &basis);
+    assert!(circuit_contains_symbol(&result.circuit, "theta"));
+    assert!(circuit_contains_symbol(&result.circuit, "phi"));
+    assert_bindings_preserve_semantics(
+        &circuit,
+        &result.circuit,
+        &[
+            binding_case(&[("theta", 0.0), ("phi", 0.0)]),
+            binding_case(&[("theta", 0.2), ("phi", -0.3)]),
+            binding_case(&[("theta", PI / 4.0), ("phi", -PI / 7.0)]),
+        ],
+    );
+}
+
+#[test]
+fn compile_preserves_parameterized_mc_gate_decomposition() {
+    let qubits = (0..4).map(Qubit::new).collect::<Vec<_>>();
+    let theta = Parameter::symbol("theta");
+    let mut circuit = Circuit::new(4);
+    circuit
+        .append(
+            Instruction::McGate(Box::new(MCGate::new(2, StandardGate::RZ))),
+            vec![qubits[0], qubits[1], qubits[3]],
+            vec![ParameterValue::Param(theta.clone())],
+            None,
+        )
+        .unwrap();
+
+    let result = compile_normal(&circuit);
+
+    assert!(step_changed(&result, "decompose.mc_gates"));
+    assert!(!contains_high_level_gate(&result.circuit));
+    assert!(circuit_contains_symbol(&result.circuit, "theta"));
+    assert_bindings_preserve_semantics(
+        &circuit,
+        &result.circuit,
+        &[
+            binding_case(&[("theta", 0.0)]),
+            binding_case(&[("theta", 0.31)]),
+            binding_case(&[("theta", -PI / 3.0)]),
+        ],
+    );
+}
+
+#[test]
+fn compile_routes_parameterized_circuit_and_preserves_semantics() {
+    let q0 = Qubit::new(0);
+    let q1 = Qubit::new(1);
+    let q2 = Qubit::new(2);
+    let theta = Parameter::symbol("theta");
+    let phi = Parameter::symbol("phi");
+    let mut circuit = Circuit::new(3);
+    circuit.rx(q0, theta.clone()).unwrap();
+    circuit.rz(q2, phi.clone()).unwrap();
+    circuit.cx(q0, q2).unwrap();
+    circuit.rzz(q1, q2, 0.37).unwrap();
+
+    let result = compile(
+        &circuit,
+        CompileConfig {
+            mode: CompileMode::Normal,
+            target_basis: None,
+            device: Some(Device::line("param-line", 3).unwrap()),
+            initial_layout: None,
+            resource_policy: ResourcePolicy::default(),
+            seed: Some(9),
+        },
+    )
+    .unwrap();
+
+    assert!(
+        result
+            .steps
+            .iter()
+            .any(|step| step.name == "route.sabre" && !step.skipped)
+    );
+    assert!(circuit_contains_symbol(&result.circuit, "theta"));
+    assert!(circuit_contains_symbol(&result.circuit, "phi"));
+    assert!(result.circuit.operations().iter().any(|operation| {
+        matches!(
+            operation.instruction,
+            Instruction::Standard(StandardGate::RX)
+        ) && matches!(operation.params.as_slice(), [CircuitParam::Index(_)])
+    }));
+    assert!(result.circuit.operations().iter().any(|operation| {
+        matches!(
+            operation.instruction,
+            Instruction::Standard(StandardGate::RZ)
+        ) && matches!(operation.params.as_slice(), [CircuitParam::Index(_)])
+    }));
+}
+
+#[test]
+fn compile_target_basis_translation_preserves_parameterized_semantics() {
+    let q0 = Qubit::new(0);
+    let q1 = Qubit::new(1);
+    let theta = Parameter::symbol("theta");
+    let mut circuit = Circuit::new(2);
+    circuit.h(q0).unwrap();
+    circuit.crz(q0, q1, theta.clone()).unwrap();
+    circuit.ry(q1, -0.19).unwrap();
+
+    let basis = qcis_cz_basis();
+    let result = compile_to_basis(&circuit, basis.clone());
+
+    assert!(step_changed(&result, "translate.target_basis"));
+    assert_only_standard_gates(&result.circuit, &basis);
+    assert!(circuit_contains_symbol(&result.circuit, "theta"));
+    assert_bindings_preserve_semantics(
+        &circuit,
+        &result.circuit,
+        &[
+            binding_case(&[("theta", 0.0)]),
+            binding_case(&[("theta", 0.41)]),
+            binding_case(&[("theta", -PI / 5.0)]),
+        ],
+    );
 }
 
 // ── Decomposition ──
@@ -932,6 +1202,7 @@ fn compile_reports_fsim_gap_for_pure_rzz_native_basis() {
                 StandardGate::GPhase,
             ])),
             device: None,
+            initial_layout: None,
             resource_policy: ResourcePolicy::default(),
             seed: None,
         },
@@ -972,6 +1243,7 @@ fn compile_ghz3_routes_on_line_device_and_lowers_to_h_cz() {
             mode: CompileMode::Normal,
             target_basis: None,
             device: Some(device),
+            initial_layout: None,
             resource_policy: ResourcePolicy::default(),
             seed: Some(42),
         },
@@ -1005,6 +1277,7 @@ fn compile_ghz5_routes_on_line_device() {
             mode: CompileMode::Normal,
             target_basis: None,
             device: Some(device),
+            initial_layout: None,
             resource_policy: ResourcePolicy::default(),
             seed: Some(17),
         },
@@ -1044,6 +1317,7 @@ fn compile_toffoli_on_4q_line_device_requires_target_basis_for_ccx_lowering() {
             mode: CompileMode::Normal,
             target_basis: None,
             device: Some(device),
+            initial_layout: None,
             resource_policy: ResourcePolicy::default(),
             seed: Some(17),
         },
@@ -1169,6 +1443,7 @@ fn compile_enhanced_ghz3_routes_and_cleans_up() {
             mode: CompileMode::Enhanced,
             target_basis: None,
             device: Some(device),
+            initial_layout: None,
             resource_policy: ResourcePolicy::default(),
             seed: Some(42),
         },
@@ -1213,6 +1488,7 @@ fn compile_reports_error_for_unsupported_target_basis() {
             mode: CompileMode::Normal,
             target_basis: Some(vec![Instruction::Standard(StandardGate::CZ)]),
             device: None,
+            initial_layout: None,
             resource_policy: ResourcePolicy::default(),
             seed: None,
         },
@@ -1234,6 +1510,7 @@ fn compile_rejects_circuit_wider_than_device() {
             mode: CompileMode::Normal,
             target_basis: None,
             device: Some(device),
+            initial_layout: None,
             resource_policy: ResourcePolicy::default(),
             seed: None,
         },

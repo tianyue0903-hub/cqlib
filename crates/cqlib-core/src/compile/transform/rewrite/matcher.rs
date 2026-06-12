@@ -104,6 +104,11 @@ struct BlockContext<'a> {
 }
 
 impl<'a> BlockContext<'a> {
+    /// Builds cached matching context for one linear operation block.
+    ///
+    /// Per-position instruction keys and resolved symbolic parameters are
+    /// cached once because rule matching probes the same operation many times
+    /// across anchors, rules, and commutation checks.
     fn new(circuit: &'a Circuit, operations: &'a [Operation]) -> Result<Self, CompilerError> {
         let mut resolved_params = Vec::with_capacity(operations.len());
         let mut instruction_keys = Vec::with_capacity(operations.len());
@@ -224,6 +229,11 @@ fn rewrite_commutation_config() -> CommutationConfig {
     }
 }
 
+/// Adds one rule to the compiled rule set and first-key index.
+///
+/// The compiled representation keeps both full source order and unique
+/// match/rewrite key sets. Source order drives the dependency-aware scan;
+/// unique sets are used for cheap static filters before binding work starts.
 fn push_compiled_rule(
     rules: &mut Vec<CompiledRule>,
     first_key_map: &mut HashMap<RewriteInstructionKey, SmallVec<[usize; 8]>>,
@@ -396,6 +406,10 @@ fn build_kind_index(library: &RuleLibrary) -> HashMap<usize, RuleKind> {
     index
 }
 
+/// Applies conservative static filters before expensive rule matching.
+///
+/// These checks reject impossible or disabled rules before the matcher clones
+/// bindings or asks the commutation oracle.
 fn rule_passes_static_filters(
     rule: &CompiledRule,
     config: &RewriteConfig,
@@ -409,6 +423,10 @@ fn rule_passes_static_filters(
         && rule_passes_target_filter(rule, target_context, block)
 }
 
+/// Checks whether a rule is legal for an optional target-basis context.
+///
+/// Target lowering rules must only replace operations present in this block,
+/// and their replacement keys must be legal for the target context.
 fn rule_passes_target_filter(
     rule: &CompiledRule,
     target_context: Option<&TargetContext>,
@@ -427,6 +445,11 @@ fn rule_passes_target_filter(
             .all(|key| target_context.allows_rewrite_key(key))
 }
 
+/// Tries to match one compiled rule at one anchor position.
+///
+/// The anchor must match the first rule item exactly. Later items may be found
+/// after commuting past unrelated operations, but the first item owns the
+/// candidate's source position and first-key index lookup.
 fn try_match_rule(
     block: &BlockContext<'_>,
     anchor: usize,
@@ -460,6 +483,9 @@ fn try_match_rule(
             if block.key(position) != item_key {
                 continue;
             }
+            // Matching is non-contiguous only when every skipped operation can
+            // commute with the already matched prefix and the candidate item.
+            // This preserves the observable order of non-commuting operations.
             if !can_skip_between(
                 block,
                 cursor..position,
@@ -490,6 +516,9 @@ fn try_match_rule(
     if !knowledge_conditions_hold(rule.conditions.as_deref(), &bindings) {
         return Ok(None);
     }
+    // A skipped operation may sit before a later matched operation. Verify the
+    // complete match after all positions are known, including future matches
+    // that were not available to `can_skip_between` earlier in the scan.
     if !skipped_sources_commute_with_future_matches(
         block,
         &skipped_positions,
@@ -515,6 +544,9 @@ fn try_match_rule(
         return Ok(None);
     }
 
+    // Cost is computed on matched source positions only. Skipped operations
+    // remain in place around the replacement and therefore are not part of the
+    // before/after objective.
     let before = cost_for_operation_positions(block, &matched_positions, target_context);
     let after = cost_for_replacements(&replacements, target_context);
     if !config.allows_rewrite(compiled.kind, before, after) {
@@ -537,6 +569,11 @@ fn try_match_rule(
     }))
 }
 
+/// Checks whether operations between a matched prefix and candidate can be skipped.
+///
+/// Only skipped operations touching the match's active qubits can constrain the
+/// rewrite. Operations on disjoint qubits are independent in this local block
+/// model and do not need oracle calls.
 fn can_skip_between(
     block: &BlockContext<'_>,
     skipped: Range<usize>,
@@ -589,6 +626,10 @@ fn can_skip_between(
     Ok(true)
 }
 
+/// Verifies skipped operations commute with all future matched positions.
+///
+/// This second pass catches skipped operations that were seen before all later
+/// match positions were known.
 fn skipped_sources_commute_with_future_matches(
     block: &BlockContext<'_>,
     skipped_positions: &[usize],
@@ -619,6 +660,11 @@ fn skipped_sources_commute_with_future_matches(
     true
 }
 
+/// Verifies replacements can be emitted without crossing skipped operations.
+///
+/// The replacement will be emitted at the match site while skipped operations
+/// remain around it. Every replacement touching a skipped operation's qubits
+/// must commute with that skipped operation.
 fn replacements_commute_with_skipped(
     block: &BlockContext<'_>,
     skipped_positions: &[usize],
@@ -744,6 +790,10 @@ pub(super) fn resolve_operation_param(
     }
 }
 
+/// Computes the local rewrite cost for matched source operations.
+///
+/// The selector compares local alternatives; full-circuit scheduling is outside
+/// the rewrite pass.
 fn cost_for_operation_positions(
     block: &BlockContext<'_>,
     positions: &[usize],
@@ -822,6 +872,11 @@ fn add_instruction_cost(
     }
 }
 
+/// Updates the local ASAP-style depth estimate for one operation.
+///
+/// Repeated qubits within one operation are treated as a single dependency
+/// edge. The estimate is deterministic and suitable for local ranking, but it
+/// is not a substitute for a backend scheduler.
 fn update_depth_estimate(
     cost: &mut LocalRewriteCost,
     depths: &mut HashMap<Qubit, usize>,

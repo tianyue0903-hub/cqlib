@@ -30,14 +30,15 @@
 //! validity, routing legality, or hardware direction constraints.
 
 use crate::circuit::{
-    Circuit, CircuitParam, ControlFlow, Directive, Instruction, Operation, Parameter, StandardGate,
+    Circuit, CircuitParam, ClassicalControlOp, ClassicalDataOp, Directive, Instruction, Operation,
+    Parameter, StandardGate,
 };
 use crate::compile::CompilerError;
 use smallvec::SmallVec;
 use std::collections::{BTreeSet, HashSet};
 
 use super::config::CanonicalizeConfig;
-use super::ops::{BarrierRelation, barrier_relation, is_strict_noop};
+use super::ops::{BarrierRelation, barrier_relation, is_strict_noop, parameter_is_exact_zero};
 
 #[derive(Debug, Clone, Copy)]
 pub enum VerifyMode<'a> {
@@ -87,40 +88,9 @@ fn verify_operations(
         verify_operation_params(circuit, operation, &op_scope)?;
 
         match &operation.instruction {
-            Instruction::ControlFlowGate(ControlFlow::IfElse(gate)) => {
-                if !circuit_qubits.contains(&gate.condition().qubit) {
-                    return Err(CompilerError::InvalidInput(format!(
-                        "{op_scope} condition references unknown qubit {}",
-                        gate.condition().qubit
-                    )));
-                }
-                let body_mode = match mode {
-                    VerifyMode::Output { config } if !config.recurses_control_flow() => {
-                        VerifyMode::Input
-                    }
-                    _ => mode,
-                };
-                verify_operations(circuit, gate.true_body(), "if_else.true", body_mode)?;
-                if let Some(false_body) = gate.false_body() {
-                    verify_operations(circuit, false_body, "if_else.false", body_mode)?;
-                }
-                verify_control_flow_qubits(circuit, operation, mode, &op_scope)?;
-            }
-            Instruction::ControlFlowGate(ControlFlow::WhileLoop(gate)) => {
-                if !circuit_qubits.contains(&gate.condition().qubit) {
-                    return Err(CompilerError::InvalidInput(format!(
-                        "{op_scope} condition references unknown qubit {}",
-                        gate.condition().qubit
-                    )));
-                }
-                let body_mode = match mode {
-                    VerifyMode::Output { config } if !config.recurses_control_flow() => {
-                        VerifyMode::Input
-                    }
-                    _ => mode,
-                };
-                verify_operations(circuit, gate.body(), "while_loop.body", body_mode)?;
-                verify_control_flow_qubits(circuit, operation, mode, &op_scope)?;
+            Instruction::ClassicalControl(control) => {
+                verify_classical_control(circuit, control, mode, &op_scope)?;
+                verify_control_flow_qubits(operation, mode, &op_scope)?;
             }
             Instruction::Standard(StandardGate::GPhase) => match mode {
                 VerifyMode::Input => {}
@@ -140,7 +110,7 @@ fn verify_operations(
                             "{op_scope} has malformed GPhase parameters"
                         )));
                     }
-                    if exact_zero(&circuit.resolve_parameter(&operation.params[0])?)? {
+                    if parameter_is_exact_zero(&circuit.resolve_parameter(&operation.params[0])?)? {
                         return Err(CompilerError::InvariantViolation(format!(
                             "{op_scope} contains zero GPhase"
                         )));
@@ -170,12 +140,6 @@ fn verify_operations(
     }
 
     Ok(())
-}
-
-fn exact_zero(param: &Parameter) -> Result<bool, CompilerError> {
-    param.is_exact_zero().map_err(|error| {
-        CompilerError::InvalidInput(format!("parameter cannot be evaluated: {error}"))
-    })
 }
 
 fn verify_no_duplicate_qubits(operation: &Operation, scope: &str) -> Result<(), CompilerError> {
@@ -218,11 +182,26 @@ fn verify_instruction_arity(operation: &Operation, scope: &str) -> Result<(), Co
                 )));
             }
         }
-        Instruction::ControlFlowGate(_) => {
+        Instruction::ClassicalControl(_) => {
             if !operation.params.is_empty() {
                 return Err(CompilerError::InvalidInput(format!(
                     "{scope} control-flow operation expects 0 parameters, got {}",
                     operation.params.len()
+                )));
+            }
+        }
+        Instruction::ClassicalData(ClassicalDataOp::MeasureBits { result }) => {
+            if !operation.params.is_empty() {
+                return Err(CompilerError::InvalidInput(format!(
+                    "{scope} measure_bits expects 0 parameters, got {}",
+                    operation.params.len()
+                )));
+            }
+            let expected = result.ty().width() as usize;
+            if operation.qubits.len() != expected {
+                return Err(CompilerError::InvalidInput(format!(
+                    "{scope} qubit count mismatch: expected {expected}, got {}",
+                    operation.qubits.len()
                 )));
             }
         }
@@ -293,13 +272,12 @@ fn verify_parameter_finite(param: &Parameter, scope: &str) -> Result<(), Compile
 }
 
 fn verify_control_flow_qubits(
-    circuit: &Circuit,
     operation: &Operation,
     mode: VerifyMode<'_>,
     scope: &str,
 ) -> Result<(), CompilerError> {
-    let expected = match &operation.instruction {
-        Instruction::ControlFlowGate(flow) => flow.ordered_qubits(&circuit.qubits()),
+    let expected: SmallVec<[_; 3]> = match &operation.instruction {
+        Instruction::ClassicalControl(control) => control.used_qubits().into_iter().collect(),
         _ => SmallVec::new(),
     };
     match mode {
@@ -320,6 +298,73 @@ fn verify_control_flow_qubits(
                 )));
             }
         }
+    }
+    Ok(())
+}
+
+fn verify_classical_control(
+    circuit: &Circuit,
+    control: &ClassicalControlOp,
+    mode: VerifyMode<'_>,
+    scope: &str,
+) -> Result<(), CompilerError> {
+    let body_mode = match mode {
+        VerifyMode::Output { config } if !config.recurses_control_flow() => VerifyMode::Input,
+        _ => mode,
+    };
+
+    match control {
+        ClassicalControlOp::If(op) => {
+            verify_operations(
+                circuit,
+                op.then_body().operations(),
+                &format!("{scope}.then"),
+                body_mode,
+            )?;
+            if let Some(body) = op.else_body() {
+                verify_operations(
+                    circuit,
+                    body.operations(),
+                    &format!("{scope}.else"),
+                    body_mode,
+                )?;
+            }
+        }
+        ClassicalControlOp::While(op) => {
+            verify_operations(
+                circuit,
+                op.body().operations(),
+                &format!("{scope}.body"),
+                body_mode,
+            )?;
+        }
+        ClassicalControlOp::For(op) => {
+            verify_operations(
+                circuit,
+                op.body().operations(),
+                &format!("{scope}.body"),
+                body_mode,
+            )?;
+        }
+        ClassicalControlOp::Switch(op) => {
+            for case in op.cases() {
+                verify_operations(
+                    circuit,
+                    case.body().operations(),
+                    &format!("{scope}.case({})", case.value()),
+                    body_mode,
+                )?;
+            }
+            if let Some(body) = op.default() {
+                verify_operations(
+                    circuit,
+                    body.operations(),
+                    &format!("{scope}.default"),
+                    body_mode,
+                )?;
+            }
+        }
+        ClassicalControlOp::Break | ClassicalControlOp::Continue => {}
     }
     Ok(())
 }
@@ -404,17 +449,30 @@ fn collect_used_parameters(operations: &[Operation], used: &mut BTreeSet<u32>) {
                 used.insert(*index);
             }
         }
-        match &operation.instruction {
-            Instruction::ControlFlowGate(ControlFlow::IfElse(gate)) => {
-                collect_used_parameters(gate.true_body(), used);
-                if let Some(false_body) = gate.false_body() {
-                    collect_used_parameters(false_body, used);
-                }
-            }
-            Instruction::ControlFlowGate(ControlFlow::WhileLoop(gate)) => {
-                collect_used_parameters(gate.body(), used);
-            }
-            _ => {}
+        if let Instruction::ClassicalControl(control) = &operation.instruction {
+            collect_control_parameters(control, used);
         }
+    }
+}
+
+fn collect_control_parameters(control: &ClassicalControlOp, used: &mut BTreeSet<u32>) {
+    match control {
+        ClassicalControlOp::If(op) => {
+            collect_used_parameters(op.then_body().operations(), used);
+            if let Some(body) = op.else_body() {
+                collect_used_parameters(body.operations(), used);
+            }
+        }
+        ClassicalControlOp::While(op) => collect_used_parameters(op.body().operations(), used),
+        ClassicalControlOp::For(op) => collect_used_parameters(op.body().operations(), used),
+        ClassicalControlOp::Switch(op) => {
+            for case in op.cases() {
+                collect_used_parameters(case.body().operations(), used);
+            }
+            if let Some(body) = op.default() {
+                collect_used_parameters(body.operations(), used);
+            }
+        }
+        ClassicalControlOp::Break | ClassicalControlOp::Continue => {}
     }
 }

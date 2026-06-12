@@ -12,7 +12,10 @@
 
 //! Operation-level canonicalization helpers.
 
-use crate::circuit::{Directive, Instruction, Operation, Parameter, Qubit, StandardGate};
+use crate::circuit::{
+    ClassicalDataOp, ClassicalExprKind, Directive, Instruction, Operation, Parameter, Qubit,
+    StandardGate,
+};
 use crate::compile::CompilerError;
 use smallvec::SmallVec;
 
@@ -26,12 +29,12 @@ pub(super) fn is_strict_noop(
     Ok(match instruction {
         Instruction::Standard(StandardGate::I) => true,
         Instruction::Standard(StandardGate::GPhase) => match params.first() {
-            Some(param) => exact_zero(param)?,
+            Some(param) => parameter_is_exact_zero(param)?,
             None => false,
         },
         Instruction::Directive(Directive::Barrier) => qubits.is_empty(),
         Instruction::Delay => match params.first() {
-            Some(param) => exact_zero(param)?,
+            Some(param) => parameter_is_exact_zero(param)?,
             None => false,
         },
         Instruction::Standard(
@@ -47,27 +50,32 @@ pub(super) fn is_strict_noop(
             | StandardGate::CRY
             | StandardGate::CRZ,
         ) => match params.first() {
-            Some(param) => exact_zero(param)?,
+            Some(param) => parameter_is_exact_zero(param)?,
             None => false,
         },
         Instruction::Standard(StandardGate::RXY) => match params.first() {
-            Some(param) => exact_zero(param)?,
+            Some(param) => parameter_is_exact_zero(param)?,
             None => false,
         },
         Instruction::Standard(StandardGate::FSIM) => {
-            params.len() == 2 && exact_zero(&params[0])? && exact_zero(&params[1])?
+            params.len() == 2
+                && parameter_is_exact_zero(&params[0])?
+                && parameter_is_exact_zero(&params[1])?
         }
         Instruction::Standard(StandardGate::U) => {
             params.len() == 3
-                && exact_zero(&params[0])?
-                && exact_zero(&params[1])?
-                && exact_zero(&params[2])?
+                && parameter_is_exact_zero(&params[0])?
+                && parameter_is_exact_zero(&params[1])?
+                && parameter_is_exact_zero(&params[2])?
+        }
+        Instruction::ClassicalData(ClassicalDataOp::Store { target, value }) => {
+            matches!(value.kind(), ClassicalExprKind::Var(v) if *v == *target)
         }
         _ => false,
     })
 }
 
-fn exact_zero(param: &Parameter) -> Result<bool, CompilerError> {
+pub(super) fn parameter_is_exact_zero(param: &Parameter) -> Result<bool, CompilerError> {
     param.is_exact_zero().map_err(|error| {
         CompilerError::InvalidInput(format!("parameter cannot be evaluated: {error}"))
     })

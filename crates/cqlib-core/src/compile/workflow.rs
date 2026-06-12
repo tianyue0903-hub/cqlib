@@ -39,18 +39,17 @@
 //! and the output canonicalizer removes representation noise introduced by
 //! previous stages.
 
-use crate::circuit::{Circuit, ControlFlow, Instruction};
+use crate::circuit::{Circuit, Instruction};
 use crate::compile::CompilerError;
 use crate::compile::resource::ResourceLimits;
 use crate::compile::sabre::{SabreConfig, SabreHeuristicConfig, SabreTrialObjective};
-use crate::compile::transform::decompose::expand_definitions;
-use crate::compile::transform::decompose::mc_gate::{McGateDecomposeConfig, decompose_mc_gates};
-use crate::compile::transform::decompose::unitary::decompose::{
-    UnitaryDecomposeConfig, decompose_unitaries,
+use crate::compile::transform::decompose::{
+    DecomposeDefinitions, DecomposeMcGates, DecomposeUnitaries, McGateDecomposeConfig,
 };
+use crate::compile::transform::layout::build_physical_layout_graph;
 use crate::compile::transform::{
     Canonicalizer, KnowledgeRewriter, LayoutObjective, RewriteConfig, TransformResult, Transformer,
-    build_physical_layout_graph, route_sabre,
+    route_sabre, route_with_layout,
 };
 
 use super::{CompileConfig, CompileMode, CompileResult};
@@ -70,68 +69,21 @@ pub struct WorkflowStepReport {
     pub reason: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct WorkflowStep {
-    stage: &'static str,
-    name: &'static str,
+struct WorkflowState {
+    current: Circuit,
+    changed: bool,
+    steps: Vec<WorkflowStepReport>,
+    target_basis: Option<Vec<Instruction>>,
 }
 
-const STEP_RESOLVE_TARGET: WorkflowStep = WorkflowStep {
-    stage: "pre_init",
-    name: "resolve.target",
-};
-const STEP_VALIDATE_RESOURCES: WorkflowStep = WorkflowStep {
-    stage: "pre_init",
-    name: "validate.resources",
-};
-const STEP_CANONICALIZE_INPUT: WorkflowStep = WorkflowStep {
-    stage: "init",
-    name: "canonicalize.input",
-};
-const STEP_DECOMPOSE_DEFINITIONS: WorkflowStep = WorkflowStep {
-    stage: "init",
-    name: "decompose.definitions",
-};
-const STEP_OPTIMIZE_PRE_DECOMPOSITION: WorkflowStep = WorkflowStep {
-    stage: "optimization",
-    name: "optimize.pre_decomposition",
-};
-const STEP_DECOMPOSE_UNITARY: WorkflowStep = WorkflowStep {
-    stage: "translation",
-    name: "decompose.unitary",
-};
-const STEP_DECOMPOSE_MC_GATES: WorkflowStep = WorkflowStep {
-    stage: "translation",
-    name: "decompose.mc_gates",
-};
-const STEP_CANONICALIZE_AFTER_DECOMPOSITION: WorkflowStep = WorkflowStep {
-    stage: "optimization",
-    name: "canonicalize.after_decomposition",
-};
-const STEP_OPTIMIZE_POST_DECOMPOSITION: WorkflowStep = WorkflowStep {
-    stage: "optimization",
-    name: "optimize.post_decomposition",
-};
-const STEP_ROUTE_SABRE: WorkflowStep = WorkflowStep {
-    stage: "routing",
-    name: "route.sabre",
-};
-const STEP_OPTIMIZE_POST_ROUTING: WorkflowStep = WorkflowStep {
-    stage: "optimization",
-    name: "optimize.post_routing",
-};
-const STEP_TRANSLATE_TARGET_BASIS: WorkflowStep = WorkflowStep {
-    stage: "translation",
-    name: "translate.target_basis",
-};
-const STEP_OPTIMIZE_TARGET_CLEANUP: WorkflowStep = WorkflowStep {
-    stage: "optimization",
-    name: "optimize.target_cleanup",
-};
-const STEP_CANONICALIZE_OUTPUT: WorkflowStep = WorkflowStep {
-    stage: "output",
-    name: "canonicalize.output",
-};
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RewritePhase {
+    PreDecomposition,
+    PostDecomposition,
+    PostRouting,
+    TargetTranslation,
+    TargetCleanup,
+}
 
 /// Compiler optimization workflow built from completed compiler transforms.
 pub struct CompilerWorkflow {
@@ -153,343 +105,157 @@ impl CompilerWorkflow {
     /// execution metadata.
     pub fn run(&self, circuit: &Circuit) -> Result<CompileResult, CompilerError> {
         let resolved_target = self.resolve_target_basis()?;
+        let mut state = WorkflowState {
+            current: circuit.clone(),
+            changed: false,
+            steps: Vec::new(),
+            target_basis: resolved_target,
+        };
 
-        let mut current = circuit.clone();
-        let mut changed = false;
-        let mut steps = Vec::new();
-        self.record_pre_init(&mut steps, resolved_target.as_ref());
-        self.validate_resources(circuit, &mut steps)?;
-
-        match self.config.mode {
-            CompileMode::Normal => {
-                self.run_normal_stages(&mut current, &mut changed, &mut steps, &resolved_target)?
-            }
-            CompileMode::Enhanced => {
-                self.run_enhanced_stages(&mut current, &mut changed, &mut steps, &resolved_target)?
-            }
-        }
+        self.record_pre_init(&mut state);
+        self.validate_resources(circuit, &mut state)?;
+        self.lower_init(&mut state)?;
+        self.lower_decompose(&mut state)?;
+        self.lower_optimize(&mut state)?;
+        self.lower_physical(&mut state)?;
+        self.lower_target(&mut state)?;
+        self.lower_output(&mut state)?;
 
         Ok(CompileResult {
-            circuit: current,
-            changed,
+            circuit: state.current,
+            changed: state.changed,
             mode: self.config.mode,
-            steps,
+            steps: state.steps,
         })
     }
 
-    fn run_normal_stages(
-        &self,
-        current: &mut Circuit,
-        changed: &mut bool,
-        steps: &mut Vec<WorkflowStepReport>,
-        target_basis: &Option<Vec<Instruction>>,
-    ) -> Result<(), CompilerError> {
+    /// Establishes a stable high-level IR before gate-specific lowering.
+    ///
+    /// Definition expansion precedes the first rewrite pass so knowledge rules
+    /// see the operations contained by user-defined gates.
+    fn lower_init(&self, state: &mut WorkflowState) -> Result<(), CompilerError> {
+        apply_circuit_transform(state, "init", "canonicalize.input", |circuit| {
+            Canonicalizer::production().transform(circuit)
+        })?;
+        self.apply_definition_decomposition(state)?;
         apply_circuit_transform(
-            current,
-            changed,
-            steps,
-            STEP_CANONICALIZE_INPUT,
+            state,
+            "optimization",
+            "optimize.pre_decomposition",
+            |circuit| {
+                KnowledgeRewriter::new(self.rewrite_config(RewritePhase::PreDecomposition)?)
+                    .transform(circuit)
+            },
+        )
+    }
+
+    /// Lowers opaque unitary and multi-controlled operations.
+    ///
+    /// Routing and target-basis translation only operate on concrete operation
+    /// families, so this stage runs before physical and target lowering.
+    fn lower_decompose(&self, state: &mut WorkflowState) -> Result<(), CompilerError> {
+        self.apply_unitary_decomposition(state)?;
+        self.apply_mc_gate_decomposition(state)?;
+        apply_circuit_transform(
+            state,
+            "optimization",
+            "canonicalize.after_decomposition",
             |circuit| Canonicalizer::production().transform(circuit),
-        )?;
-        self.apply_definition_decomposition(current, changed, steps)?;
+        )
+    }
+
+    fn lower_optimize(&self, state: &mut WorkflowState) -> Result<(), CompilerError> {
         apply_circuit_transform(
-            current,
-            changed,
-            steps,
-            STEP_OPTIMIZE_PRE_DECOMPOSITION,
-            |circuit| KnowledgeRewriter::new(RewriteConfig::production()).transform(circuit),
-        )?;
-        self.apply_unitary_decomposition(current, changed, steps)?;
-        self.apply_mc_gate_decomposition(current, changed, steps)?;
-        apply_circuit_transform(
-            current,
-            changed,
-            steps,
-            STEP_CANONICALIZE_AFTER_DECOMPOSITION,
-            |circuit| Canonicalizer::production().transform(circuit),
-        )?;
-        apply_circuit_transform(
-            current,
-            changed,
-            steps,
-            STEP_OPTIMIZE_POST_DECOMPOSITION,
-            |circuit| KnowledgeRewriter::new(RewriteConfig::production()).transform(circuit),
-        )?;
-        self.apply_layout_and_routing(current, changed, steps, CompileMode::Normal)?;
-        self.apply_target_translation(
-            current,
-            changed,
-            steps,
-            target_basis,
-            RewriteConfig::lowering(),
-        )?;
-        apply_circuit_transform(
-            current,
-            changed,
-            steps,
-            STEP_CANONICALIZE_OUTPUT,
-            |circuit| Canonicalizer::production().transform(circuit),
-        )?;
+            state,
+            "optimization",
+            "optimize.post_decomposition",
+            |circuit| {
+                KnowledgeRewriter::new(self.rewrite_config(RewritePhase::PostDecomposition)?)
+                    .transform(circuit)
+            },
+        )
+    }
+
+    /// Applies optional physical lowering from logical to physical qubits.
+    fn lower_physical(&self, state: &mut WorkflowState) -> Result<(), CompilerError> {
+        self.apply_layout_and_routing(state)?;
+        if self.config.mode == CompileMode::Enhanced {
+            self.apply_post_routing_cleanup(state)?;
+        }
         Ok(())
     }
 
-    fn run_enhanced_stages(
-        &self,
-        current: &mut Circuit,
-        changed: &mut bool,
-        steps: &mut Vec<WorkflowStepReport>,
-        target_basis: &Option<Vec<Instruction>>,
-    ) -> Result<(), CompilerError> {
-        apply_circuit_transform(
-            current,
-            changed,
-            steps,
-            STEP_CANONICALIZE_INPUT,
-            |circuit| Canonicalizer::production().transform(circuit),
-        )?;
-        self.apply_definition_decomposition(current, changed, steps)?;
-        apply_circuit_transform(
-            current,
-            changed,
-            steps,
-            STEP_OPTIMIZE_PRE_DECOMPOSITION,
-            |circuit| {
-                KnowledgeRewriter::new(
-                    RewriteConfig::production()
-                        .with_max_rounds(16)
-                        .with_max_window_ops(32)
-                        .with_max_pattern_len(12),
-                )
-                .transform(circuit)
-            },
-        )?;
-        self.apply_unitary_decomposition(current, changed, steps)?;
-        self.apply_mc_gate_decomposition(current, changed, steps)?;
-        apply_circuit_transform(
-            current,
-            changed,
-            steps,
-            STEP_CANONICALIZE_AFTER_DECOMPOSITION,
-            |circuit| Canonicalizer::production().transform(circuit),
-        )?;
-        apply_circuit_transform(
-            current,
-            changed,
-            steps,
-            STEP_OPTIMIZE_POST_DECOMPOSITION,
-            |circuit| {
-                KnowledgeRewriter::new(
-                    RewriteConfig::production()
-                        .with_max_rounds(16)
-                        .with_max_window_ops(32)
-                        .with_max_pattern_len(12),
-                )
-                .transform(circuit)
-            },
-        )?;
-        self.apply_layout_and_routing(current, changed, steps, CompileMode::Enhanced)?;
-        self.apply_post_routing_cleanup(current, changed, steps)?;
-        self.apply_target_translation(
-            current,
-            changed,
-            steps,
-            target_basis,
-            RewriteConfig::lowering()
-                .with_max_rounds(16)
-                .with_max_window_ops(32)
-                .with_max_pattern_len(12),
-        )?;
-        let cleanup_rewrite_config = match target_basis.as_deref() {
-            Some(target_basis) => RewriteConfig::production()
-                .with_max_rounds(16)
-                .with_max_window_ops(32)
-                .with_max_pattern_len(12)
-                .with_target_instructions(target_basis.to_vec())?,
-            None => RewriteConfig::production()
-                .with_max_rounds(16)
-                .with_max_window_ops(32)
-                .with_max_pattern_len(12),
-        };
-        apply_circuit_transform(
-            current,
-            changed,
-            steps,
-            STEP_OPTIMIZE_TARGET_CLEANUP,
-            |circuit| KnowledgeRewriter::new(cleanup_rewrite_config).transform(circuit),
-        )?;
-        apply_circuit_transform(
-            current,
-            changed,
-            steps,
-            STEP_CANONICALIZE_OUTPUT,
-            |circuit| Canonicalizer::production().transform(circuit),
-        )?;
+    /// Applies optional target-basis translation and target-aware cleanup.
+    ///
+    /// This stage runs after routing because routing may insert SWAPs and expose
+    /// new target-aware rewrite opportunities.
+    fn lower_target(&self, state: &mut WorkflowState) -> Result<(), CompilerError> {
+        self.apply_target_translation(state)?;
+        if self.config.mode == CompileMode::Enhanced {
+            let mut cleanup_config = self.rewrite_config(RewritePhase::TargetCleanup)?;
+            if let Some(target_basis) = state.target_basis.as_deref() {
+                cleanup_config = cleanup_config.with_target_instructions(target_basis.to_vec())?;
+            }
+            apply_circuit_transform(
+                state,
+                "optimization",
+                "optimize.target_cleanup",
+                |circuit| KnowledgeRewriter::new(cleanup_config).transform(circuit),
+            )?;
+        }
         Ok(())
+    }
+
+    fn lower_output(&self, state: &mut WorkflowState) -> Result<(), CompilerError> {
+        apply_circuit_transform(state, "output", "canonicalize.output", |circuit| {
+            Canonicalizer::production().transform(circuit)
+        })
+    }
+
+    /// Builds the rewrite configuration for a workflow phase.
+    ///
+    /// Target translation uses the lowering rule set. Other phases use the
+    /// production optimizer, with Enhanced mode only increasing bounded search
+    /// budgets rather than changing correctness requirements.
+    fn rewrite_config(&self, phase: RewritePhase) -> Result<RewriteConfig, CompilerError> {
+        let mut config = match phase {
+            RewritePhase::TargetTranslation => RewriteConfig::lowering(),
+            RewritePhase::PreDecomposition
+            | RewritePhase::PostDecomposition
+            | RewritePhase::PostRouting
+            | RewritePhase::TargetCleanup => RewriteConfig::production(),
+        };
+
+        if self.config.mode == CompileMode::Enhanced {
+            config = config
+                .with_max_rounds(16)
+                .with_max_window_ops(32)
+                .with_max_pattern_len(12);
+        }
+
+        Ok(config)
     }
 
     fn apply_definition_decomposition(
         &self,
-        current: &mut Circuit,
-        changed: &mut bool,
-        steps: &mut Vec<WorkflowStepReport>,
+        state: &mut WorkflowState,
     ) -> Result<(), CompilerError> {
-        let mut operation_stack = vec![current.operations()];
-        let mut has_circuit_backed_definition = false;
-        while let Some(operations) = operation_stack.pop() {
-            if operations
-                .iter()
-                .any(|operation| match &operation.instruction {
-                    Instruction::CircuitGate(_) => true,
-                    Instruction::UnitaryGate(gate) => gate.circuit().is_some(),
-                    Instruction::ControlFlowGate(flow) => {
-                        match flow {
-                            ControlFlow::IfElse(gate) => {
-                                operation_stack.push(gate.true_body());
-                                if let Some(false_body) = gate.false_body() {
-                                    operation_stack.push(false_body);
-                                }
-                            }
-                            ControlFlow::WhileLoop(gate) => operation_stack.push(gate.body()),
-                        }
-                        false
-                    }
-                    _ => false,
-                })
-            {
-                has_circuit_backed_definition = true;
-                break;
-            }
-        }
-
-        if !has_circuit_backed_definition {
-            steps.push(WorkflowStepReport {
-                stage: STEP_DECOMPOSE_DEFINITIONS.stage,
-                name: STEP_DECOMPOSE_DEFINITIONS.name,
-                changed: false,
-                skipped: false,
-                reason: None,
-            });
-            return Ok(());
-        }
-
-        apply_circuit_transform(
-            current,
-            changed,
-            steps,
-            STEP_DECOMPOSE_DEFINITIONS,
-            |circuit| {
-                Ok(TransformResult {
-                    circuit: expand_definitions(circuit)?,
-                    changed: true,
-                })
-            },
-        )
-    }
-
-    fn apply_unitary_decomposition(
-        &self,
-        current: &mut Circuit,
-        changed: &mut bool,
-        steps: &mut Vec<WorkflowStepReport>,
-    ) -> Result<(), CompilerError> {
-        let mut operation_stack = vec![current.operations()];
-        let mut has_unitary_gate = false;
-        while let Some(operations) = operation_stack.pop() {
-            if operations
-                .iter()
-                .any(|operation| match &operation.instruction {
-                    Instruction::UnitaryGate(_) => true,
-                    Instruction::ControlFlowGate(flow) => {
-                        match flow {
-                            ControlFlow::IfElse(gate) => {
-                                operation_stack.push(gate.true_body());
-                                if let Some(false_body) = gate.false_body() {
-                                    operation_stack.push(false_body);
-                                }
-                            }
-                            ControlFlow::WhileLoop(gate) => operation_stack.push(gate.body()),
-                        }
-                        false
-                    }
-                    _ => false,
-                })
-            {
-                has_unitary_gate = true;
-                break;
-            }
-        }
-
-        if !has_unitary_gate {
-            steps.push(WorkflowStepReport {
-                stage: STEP_DECOMPOSE_UNITARY.stage,
-                name: STEP_DECOMPOSE_UNITARY.name,
-                changed: false,
-                skipped: false,
-                reason: None,
-            });
-            return Ok(());
-        }
-
-        apply_circuit_transform(current, changed, steps, STEP_DECOMPOSE_UNITARY, |circuit| {
-            Ok(TransformResult {
-                circuit: decompose_unitaries(circuit, UnitaryDecomposeConfig::default())?,
-                changed: true,
-            })
+        apply_circuit_transform(state, "init", "decompose.definitions", |circuit| {
+            DecomposeDefinitions.transform(circuit)
         })
     }
 
-    fn apply_mc_gate_decomposition(
-        &self,
-        current: &mut Circuit,
-        changed: &mut bool,
-        steps: &mut Vec<WorkflowStepReport>,
-    ) -> Result<(), CompilerError> {
+    fn apply_unitary_decomposition(&self, state: &mut WorkflowState) -> Result<(), CompilerError> {
+        apply_circuit_transform(state, "translation", "decompose.unitary", |circuit| {
+            DecomposeUnitaries::default().transform(circuit)
+        })
+    }
+
+    fn apply_mc_gate_decomposition(&self, state: &mut WorkflowState) -> Result<(), CompilerError> {
         let config = self.mc_gate_decompose_config();
-        let mut operation_stack = vec![current.operations()];
-        let mut has_mc_gate = false;
-        while let Some(operations) = operation_stack.pop() {
-            if operations
-                .iter()
-                .any(|operation| match &operation.instruction {
-                    Instruction::McGate(_) => true,
-                    Instruction::ControlFlowGate(flow) => {
-                        match flow {
-                            ControlFlow::IfElse(gate) => {
-                                operation_stack.push(gate.true_body());
-                                if let Some(false_body) = gate.false_body() {
-                                    operation_stack.push(false_body);
-                                }
-                            }
-                            ControlFlow::WhileLoop(gate) => operation_stack.push(gate.body()),
-                        }
-                        false
-                    }
-                    _ => false,
-                })
-            {
-                has_mc_gate = true;
-                break;
-            }
-        }
-
-        if !has_mc_gate {
-            steps.push(WorkflowStepReport {
-                stage: STEP_DECOMPOSE_MC_GATES.stage,
-                name: STEP_DECOMPOSE_MC_GATES.name,
-                changed: false,
-                skipped: false,
-                reason: None,
-            });
-            return Ok(());
-        }
-
-        apply_circuit_transform(
-            current,
-            changed,
-            steps,
-            STEP_DECOMPOSE_MC_GATES,
-            |circuit| decompose_mc_gates(circuit, config),
-        )
+        apply_circuit_transform(state, "translation", "decompose.mc_gates", |circuit| {
+            DecomposeMcGates::new(config).transform(circuit)
+        })
     }
 
     fn mc_gate_decompose_config(&self) -> McGateDecomposeConfig {
@@ -509,10 +275,14 @@ impl CompilerWorkflow {
         }
     }
 
+    /// Performs capacity-style resource preflight before lowering starts.
+    ///
+    /// Detailed ancillary leasing is still enforced by the decomposition
+    /// resource manager when a specific synthesis candidate is selected.
     fn validate_resources(
         &self,
         circuit: &Circuit,
-        steps: &mut Vec<WorkflowStepReport>,
+        state: &mut WorkflowState,
     ) -> Result<(), CompilerError> {
         let resource_limits = self.resource_limits();
         if let Some(max_total_qubits) = resource_limits.max_total_qubits {
@@ -523,9 +293,9 @@ impl CompilerWorkflow {
                 )));
             }
         }
-        steps.push(WorkflowStepReport {
-            stage: STEP_VALIDATE_RESOURCES.stage,
-            name: STEP_VALIDATE_RESOURCES.name,
+        state.steps.push(WorkflowStepReport {
+            stage: "pre_init",
+            name: "validate.resources",
             changed: false,
             skipped: false,
             reason: resource_limits
@@ -535,119 +305,121 @@ impl CompilerWorkflow {
         Ok(())
     }
 
-    fn apply_layout_and_routing(
-        &self,
-        current: &mut Circuit,
-        changed: &mut bool,
-        steps: &mut Vec<WorkflowStepReport>,
-        mode: CompileMode,
-    ) -> Result<(), CompilerError> {
+    /// Runs layout selection and SABRE routing, or records a skipped routing step.
+    ///
+    /// A caller-supplied initial layout bypasses layout search but still uses
+    /// the same SABRE router and trial settings. Without a supplied layout, the
+    /// workflow derives a layout objective from the configured target device.
+    fn apply_layout_and_routing(&self, state: &mut WorkflowState) -> Result<(), CompilerError> {
         let Some(device) = self.config.device.as_ref() else {
-            steps.push(WorkflowStepReport {
-                stage: STEP_ROUTE_SABRE.stage,
-                name: STEP_ROUTE_SABRE.name,
-                changed: false,
-                skipped: true,
-                reason: Some("no target device configured".to_string()),
-            });
+            if self.config.initial_layout.is_some() {
+                return Err(CompilerError::InvalidInput(
+                    "initial layout requires a target device".to_string(),
+                ));
+            }
+            record_skipped(
+                state,
+                "routing",
+                "route.sabre",
+                "no target device configured",
+            );
             return Ok(());
         };
 
-        let physical = build_physical_layout_graph(device)?;
-        let objective = match mode {
-            CompileMode::Normal => LayoutObjective::auto_from_physical(&physical),
-            CompileMode::Enhanced => {
-                if physical.has_fidelity_data() {
-                    LayoutObjective::fidelity_required(&physical)?
-                } else {
-                    LayoutObjective::topology_only()
-                }
-            }
-        };
-        let config = sabre_config_for_mode(mode, self.config.seed);
-        let routed = route_sabre(current, device, &objective, &config)?;
-        let route_changed = routed.changed;
-        *current = routed.circuit;
-        *changed |= route_changed;
+        let config = sabre_config_for_mode(self.config.mode, self.config.seed);
+        let (route_changed, swap_count, trials_evaluated, supplied_layout) =
+            if let Some(initial_layout) = self.config.initial_layout.as_ref() {
+                let routed = route_with_layout(&state.current, device, initial_layout, &config)?;
+                let route_changed = routed.changed(&state.current);
+                let swap_count = routed.swap_count();
+                let trials_evaluated = routed.diagnostics().trials_evaluated;
+                state.current = routed.into_circuit();
+                (route_changed, swap_count, trials_evaluated, true)
+            } else {
+                let physical = build_physical_layout_graph(device)?;
+                let objective = match self.config.mode {
+                    CompileMode::Normal => LayoutObjective::auto_from_physical(&physical),
+                    CompileMode::Enhanced => {
+                        if physical.has_fidelity_data() {
+                            LayoutObjective::fidelity_required(&physical)?
+                        } else {
+                            LayoutObjective::topology_only()
+                        }
+                    }
+                };
+                let routed = route_sabre(&state.current, device, &objective, &config)?;
+                let route_changed = routed.changed(&state.current);
+                let swap_count = routed.swap_count();
+                let trials_evaluated = routed.diagnostics().trials_evaluated;
+                state.current = routed.into_routed().into_circuit();
+                (route_changed, swap_count, trials_evaluated, false)
+            };
+        state.changed |= route_changed;
 
-        steps.push(WorkflowStepReport {
-            stage: STEP_ROUTE_SABRE.stage,
-            name: STEP_ROUTE_SABRE.name,
+        let reason = if supplied_layout {
+            format!(
+                "inserted {} swap operations using {} routing trials from supplied initial layout",
+                swap_count, trials_evaluated
+            )
+        } else {
+            format!(
+                "inserted {} swap operations using {} routing trials",
+                swap_count, trials_evaluated
+            )
+        };
+
+        state.steps.push(WorkflowStepReport {
+            stage: "routing",
+            name: "route.sabre",
             changed: route_changed,
             skipped: false,
-            reason: Some(format!(
-                "inserted {} swap operations using {} routing trials",
-                routed.swap_count, routed.diagnostics.trials_evaluated
-            )),
+            reason: Some(reason),
         });
         Ok(())
     }
 
-    fn apply_post_routing_cleanup(
-        &self,
-        current: &mut Circuit,
-        changed: &mut bool,
-        steps: &mut Vec<WorkflowStepReport>,
-    ) -> Result<(), CompilerError> {
+    fn apply_post_routing_cleanup(&self, state: &mut WorkflowState) -> Result<(), CompilerError> {
         if self.config.device.is_none() {
-            steps.push(WorkflowStepReport {
-                stage: STEP_OPTIMIZE_POST_ROUTING.stage,
-                name: STEP_OPTIMIZE_POST_ROUTING.name,
-                changed: false,
-                skipped: true,
-                reason: Some("routing was skipped".to_string()),
-            });
+            record_skipped(
+                state,
+                "optimization",
+                "optimize.post_routing",
+                "routing was skipped",
+            );
             return Ok(());
         }
 
-        apply_circuit_transform(
-            current,
-            changed,
-            steps,
-            STEP_OPTIMIZE_POST_ROUTING,
-            |circuit| {
-                KnowledgeRewriter::new(
-                    RewriteConfig::production()
-                        .with_max_rounds(16)
-                        .with_max_window_ops(32)
-                        .with_max_pattern_len(12),
-                )
+        apply_circuit_transform(state, "optimization", "optimize.post_routing", |circuit| {
+            KnowledgeRewriter::new(self.rewrite_config(RewritePhase::PostRouting)?)
                 .transform(circuit)
-            },
-        )
+        })
     }
 
-    fn apply_target_translation(
-        &self,
-        current: &mut Circuit,
-        changed: &mut bool,
-        steps: &mut Vec<WorkflowStepReport>,
-        target_basis: &Option<Vec<Instruction>>,
-        config: RewriteConfig,
-    ) -> Result<(), CompilerError> {
-        let Some(target_basis) = target_basis.as_deref() else {
-            steps.push(WorkflowStepReport {
-                stage: STEP_TRANSLATE_TARGET_BASIS.stage,
-                name: STEP_TRANSLATE_TARGET_BASIS.name,
-                changed: false,
-                skipped: true,
-                reason: Some("no target basis configured".to_string()),
-            });
+    fn apply_target_translation(&self, state: &mut WorkflowState) -> Result<(), CompilerError> {
+        let Some(target_basis) = state.target_basis.as_deref() else {
+            record_skipped(
+                state,
+                "translation",
+                "translate.target_basis",
+                "no target basis configured",
+            );
             return Ok(());
         };
+        let target_basis = target_basis.to_vec();
+        let config = self
+            .rewrite_config(RewritePhase::TargetTranslation)?
+            .with_target_instructions(target_basis)?;
 
-        apply_circuit_transform(
-            current,
-            changed,
-            steps,
-            STEP_TRANSLATE_TARGET_BASIS,
-            |circuit| {
-                KnowledgeRewriter::new(config.with_target_instructions(target_basis.to_vec())?)
-                    .transform(circuit)
-            },
-        )
+        apply_circuit_transform(state, "translation", "translate.target_basis", |circuit| {
+            KnowledgeRewriter::new(config).transform(circuit)
+        })
     }
 
+    /// Resolves the target instruction basis from explicit config or device data.
+    ///
+    /// Explicit basis configuration wins over device native gates. If no
+    /// explicit basis is supplied, a device may still provide native-gate
+    /// constraints for the final lowering stage.
     fn resolve_target_basis(&self) -> Result<Option<Vec<Instruction>>, CompilerError> {
         if let Some(target_basis) = &self.config.target_basis {
             validate_workflow_target_basis_config(&target_basis)?;
@@ -666,12 +438,8 @@ impl CompilerWorkflow {
         Ok(Some(target_basis.to_vec()))
     }
 
-    fn record_pre_init(
-        &self,
-        steps: &mut Vec<WorkflowStepReport>,
-        target_basis: Option<&Vec<Instruction>>,
-    ) {
-        let reason = if let Some(basis) = target_basis {
+    fn record_pre_init(&self, state: &mut WorkflowState) {
+        let reason = if let Some(basis) = &state.target_basis {
             if self.config.target_basis.is_some() {
                 Some(format!(
                     "resolved explicit target basis with {} instructions",
@@ -689,9 +457,9 @@ impl CompilerWorkflow {
             Some("no target constraints configured".to_string())
         };
 
-        steps.push(WorkflowStepReport {
-            stage: STEP_RESOLVE_TARGET.stage,
-            name: STEP_RESOLVE_TARGET.name,
+        state.steps.push(WorkflowStepReport {
+            stage: "pre_init",
+            name: "resolve.target",
             changed: false,
             skipped: false,
             reason,
@@ -700,23 +468,37 @@ impl CompilerWorkflow {
 }
 
 fn apply_circuit_transform(
-    current: &mut Circuit,
-    workflow_changed: &mut bool,
-    steps: &mut Vec<WorkflowStepReport>,
-    step: WorkflowStep,
+    state: &mut WorkflowState,
+    stage: &'static str,
+    name: &'static str,
     transform: impl FnOnce(&Circuit) -> Result<TransformResult, CompilerError>,
 ) -> Result<(), CompilerError> {
-    let TransformResult { circuit, changed } = transform(current)?;
-    *current = circuit;
-    *workflow_changed |= changed;
-    steps.push(WorkflowStepReport {
-        stage: step.stage,
-        name: step.name,
+    let TransformResult { circuit, changed } = transform(&state.current)?;
+    state.current = circuit;
+    state.changed |= changed;
+    state.steps.push(WorkflowStepReport {
+        stage,
+        name,
         changed,
         skipped: false,
         reason: None,
     });
     Ok(())
+}
+
+fn record_skipped(
+    state: &mut WorkflowState,
+    stage: &'static str,
+    name: &'static str,
+    reason: impl Into<String>,
+) {
+    state.steps.push(WorkflowStepReport {
+        stage,
+        name,
+        changed: false,
+        skipped: true,
+        reason: Some(reason.into()),
+    });
 }
 
 fn sabre_config_for_mode(mode: CompileMode, seed: Option<u32>) -> SabreConfig {

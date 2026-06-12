@@ -24,12 +24,16 @@ use std::collections::{BTreeSet, HashSet};
 /// One gate-like item in a rule match or rewrite block.
 #[derive(Debug, Clone)]
 pub struct RuleItem {
+    /// Gate-like instruction matched or emitted by this item.
     pub instruction: Instruction,
+    /// Rule-local qubit labels used by this item.
     pub qubits: SmallVec<[u32; 3]>,
+    /// Optional symbolic or fixed parameters for this item.
     pub params: Option<SmallVec<[ParameterValue; 1]>>,
 }
 
 impl RuleItem {
+    /// Builds a standard-gate rule item.
     pub fn standard(gate: StandardGate, qubits: &[u32], params: Vec<ParameterValue>) -> Self {
         Self {
             instruction: Instruction::Standard(gate),
@@ -42,6 +46,7 @@ impl RuleItem {
         }
     }
 
+    /// Builds a multi-controlled-gate rule item.
     pub fn mc_gate(gate: MCGate, qubits: &[u32], params: Vec<ParameterValue>) -> Self {
         Self {
             instruction: Instruction::McGate(Box::new(gate)),
@@ -143,8 +148,10 @@ impl RuleItem {
 #[derive(Debug, Clone)]
 /// Parameter constraints required for a rewrite rule to apply.
 pub enum Condition {
+    /// Requires two parameter expressions to be equal.
     Eq(Parameter, Parameter),
-    EqMod(Parameter, Parameter, Parameter), // lhs == rhs mod modulus
+    /// Requires `lhs == rhs mod modulus`.
+    EqMod(Parameter, Parameter, Parameter),
 }
 
 impl Condition {
@@ -170,6 +177,7 @@ impl Condition {
 #[derive(Debug, Clone)]
 /// Runtime rewrite rule: match operations plus optional conditions and target.
 pub struct Rule {
+    /// Stable human-readable rule name.
     pub name: String,
     /// Operations to match in the source circuit.
     pub operations: SmallVec<[RuleItem; 4]>,
@@ -181,36 +189,45 @@ pub struct Rule {
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum RuleValidationError {
+    /// A rule must match at least one source operation.
     #[error("rule match block is empty")]
     EmptyMatch,
+    /// The rule contains an instruction that the rule runtime cannot match.
     #[error("unsupported instruction: {instruction}")]
     UnsupportedInstruction { instruction: String },
+    /// A rule item uses the wrong number of qubits for its instruction.
     #[error("wrong qubit count for {instruction}: expected {expected}, got {got}")]
     WrongQubitCount {
         instruction: String,
         expected: usize,
         got: usize,
     },
+    /// A rule item uses the wrong number of parameters for its instruction.
     #[error("wrong parameter count for {instruction}: expected {expected}, got {got}")]
     WrongParamCount {
         instruction: String,
         expected: usize,
         got: usize,
     },
+    /// A single rule item repeats one rule-local qubit label.
     #[error("duplicate qubit {qubit} in {instruction}")]
     DuplicateQubit { instruction: String, qubit: u32 },
+    /// A rewrite target references a qubit label absent from the match block.
     #[error("rewrite qubit {qubit} is not bound by the match block")]
     UnboundRewriteQubit { qubit: u32 },
+    /// A rewrite parameter references a symbol absent from the match block.
     #[error("rewrite symbol {symbol} is not bound by the match block")]
     UnboundRewriteSymbol { symbol: String },
+    /// A condition references a symbol absent from the match block.
     #[error("condition symbol {symbol} is not bound by the match block")]
     UnboundConditionSymbol { symbol: String },
+    /// Rule-local qubit labels must form a dense range starting at zero.
     #[error("qubit labels must be dense from 0, found {labels:?}")]
     NonDenseQubitLabels { labels: Vec<u32> },
 }
 
 impl Rule {
-    /// Helper: build a simple Rule with no conditions.
+    /// Builds a rule with no conditions.
     pub fn new(name: &str, ops: Vec<RuleItem>, target: Vec<RuleItem>) -> Rule {
         Rule {
             name: name.to_string(),

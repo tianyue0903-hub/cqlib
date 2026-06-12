@@ -12,8 +12,8 @@
 
 use super::{KnowledgeRewriter, RewriteConfig};
 use crate::circuit::{
-    Circuit, CircuitParam, ConditionView, ControlFlow, Directive, Instruction, MCGate, Operation,
-    Parameter, Qubit, StandardGate,
+    Circuit, CircuitParam, ClassicalControlOp, ClassicalExpr, Directive, Instruction, MCGate,
+    Operation, Parameter, Qubit, StandardGate,
 };
 use crate::compile::CompilerError;
 use crate::compile::knowledge::library::RuleKind;
@@ -529,45 +529,33 @@ fn preserves_control_flow_body_local_global_phase() {
     let q0 = Qubit::new(0);
     let q1 = Qubit::new(1);
     let mut circuit = Circuit::new(2);
-    let body = vec![
-        Operation {
-            instruction: Instruction::Standard(StandardGate::H),
-            qubits: smallvec![q1],
-            params: smallvec![],
-            label: None,
-        },
-        Operation {
-            instruction: Instruction::Standard(StandardGate::Y),
-            qubits: smallvec![q1],
-            params: smallvec![],
-            label: None,
-        },
-        Operation {
-            instruction: Instruction::Standard(StandardGate::H),
-            qubits: smallvec![q1],
-            params: smallvec![],
-            label: None,
-        },
-    ];
     circuit
-        .if_else(ConditionView::new(q0, 1), body, None)
+        .if_else(
+            ClassicalExpr::bool_literal(true),
+            |body| {
+                body.h(q1)?;
+                body.y(q1)?;
+                body.h(q1)
+            },
+            |_| Ok(()),
+        )
         .unwrap();
 
     let result = KnowledgeRewriter::production().run(&circuit).unwrap();
 
     assert!(result.changed);
-    let Instruction::ControlFlowGate(ControlFlow::IfElse(gate)) =
+    let Instruction::ClassicalControl(ClassicalControlOp::If(op)) =
         &result.circuit.operations()[0].instruction
     else {
-        panic!("expected if-else operation");
+        panic!("expected if operation");
     };
-    assert_eq!(gate.true_body().len(), 2);
+    assert_eq!(op.then_body().operations().len(), 2);
     assert!(matches!(
-        gate.true_body()[0].instruction,
+        op.then_body().operations()[0].instruction,
         Instruction::Standard(StandardGate::GPhase)
     ));
     assert!(matches!(
-        gate.true_body()[1].instruction,
+        op.then_body().operations()[1].instruction,
         Instruction::Standard(StandardGate::Y)
     ));
 }
@@ -576,54 +564,41 @@ fn preserves_control_flow_body_local_global_phase() {
 fn rewrites_false_branch_and_while_body() {
     let q0 = Qubit::new(0);
     let q1 = Qubit::new(1);
-    let cancel_body = vec![
-        Operation {
-            instruction: Instruction::Standard(StandardGate::H),
-            qubits: smallvec![q1],
-            params: smallvec![],
-            label: None,
-        },
-        Operation {
-            instruction: Instruction::Standard(StandardGate::H),
-            qubits: smallvec![q1],
-            params: smallvec![],
-            label: None,
-        },
-    ];
 
     let mut if_circuit = Circuit::new(2);
     if_circuit
         .if_else(
-            ConditionView::new(q0, 1),
-            vec![Operation {
-                instruction: Instruction::Standard(StandardGate::X),
-                qubits: smallvec![q1],
-                params: smallvec![],
-                label: None,
-            }],
-            Some(cancel_body.clone()),
+            ClassicalExpr::bool_literal(true),
+            |body| body.x(q1),
+            |body| {
+                body.h(q1)?;
+                body.h(q1)
+            },
         )
         .unwrap();
     let if_result = KnowledgeRewriter::production().run(&if_circuit).unwrap();
-    let Instruction::ControlFlowGate(ControlFlow::IfElse(if_gate)) =
+    let Instruction::ClassicalControl(ClassicalControlOp::If(if_op)) =
         &if_result.circuit.operations()[0].instruction
     else {
-        panic!("expected if-else operation");
+        panic!("expected if operation");
     };
-    assert_eq!(if_gate.true_body().len(), 1);
-    assert_eq!(if_gate.false_body().unwrap().len(), 0);
+    assert_eq!(if_op.then_body().operations().len(), 1);
+    assert!(if_op.else_body().unwrap().operations().is_empty());
 
     let mut while_circuit = Circuit::new(2);
     while_circuit
-        .while_loop(ConditionView::new(q0, 1), cancel_body)
+        .while_(ClassicalExpr::bool_literal(true), |body| {
+            body.h(q1)?;
+            body.h(q1)
+        })
         .unwrap();
     let while_result = KnowledgeRewriter::production().run(&while_circuit).unwrap();
-    let Instruction::ControlFlowGate(ControlFlow::WhileLoop(while_gate)) =
+    let Instruction::ClassicalControl(ClassicalControlOp::While(while_op)) =
         &while_result.circuit.operations()[0].instruction
     else {
-        panic!("expected while-loop operation");
+        panic!("expected while operation");
     };
-    assert!(while_gate.body().is_empty());
+    assert!(while_op.body().operations().is_empty());
 }
 
 #[test]
@@ -632,34 +607,26 @@ fn rewrites_control_flow_body_with_valid_rebuilt_parameter_table() {
     let q1 = Qubit::new(1);
     let theta = Parameter::symbol("theta");
     let mut circuit = Circuit::new(2);
-    let (theta_index, _) = circuit.add_parameter(theta.clone());
-    let body = vec![
-        Operation {
-            instruction: Instruction::Standard(StandardGate::RZ),
-            qubits: smallvec![q1],
-            params: smallvec![CircuitParam::Index(theta_index as u32)],
-            label: None,
-        },
-        Operation {
-            instruction: Instruction::Standard(StandardGate::RZ),
-            qubits: smallvec![q1],
-            params: smallvec![CircuitParam::Fixed(0.5)],
-            label: None,
-        },
-    ];
     circuit
-        .if_else(ConditionView::new(q0, 1), body, None)
+        .if_else(
+            ClassicalExpr::bool_literal(true),
+            |body| {
+                body.rz(q1, theta.clone())?;
+                body.rz(q1, 0.5)
+            },
+            |_| Ok(()),
+        )
         .unwrap();
 
     let config = RewriteConfig::production().with_enabled_kinds(vec![RuleKind::Merge]);
     let result = KnowledgeRewriter::new(config).run(&circuit).unwrap();
-    let Instruction::ControlFlowGate(ControlFlow::IfElse(gate)) =
+    let Instruction::ClassicalControl(ClassicalControlOp::If(op)) =
         &result.circuit.operations()[0].instruction
     else {
-        panic!("expected if-else operation");
+        panic!("expected if operation");
     };
-    assert_eq!(gate.true_body().len(), 1);
-    let body_param = &gate.true_body()[0].params[0];
+    assert_eq!(op.then_body().operations().len(), 1);
+    let body_param = &op.then_body().operations()[0].params[0];
     let merged = operation_param(&result.circuit, body_param);
     assert!(merged.provably_equal(&(theta + Parameter::from(0.5)), 1e-12));
 }

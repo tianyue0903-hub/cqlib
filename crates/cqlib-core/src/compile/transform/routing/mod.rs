@@ -23,6 +23,20 @@
 //! device topology facts. Concrete algorithms live in submodules such as
 //! [`sabre`].
 //!
+//! # Entry Points
+//!
+//! - [`route_sabre`] selects an initial layout with SABRE layout refinement,
+//!   then routes the circuit from that layout.
+//! - [`route_with_layout`] routes from a caller-supplied initial layout and
+//!   skips automatic layout selection.
+//!
+//! The public compiler workflow uses [`route_with_layout`] when
+//! [`CompileConfig::initial_layout`](crate::compile::CompileConfig::initial_layout)
+//! is set, otherwise it uses [`route_sabre`]. Routed circuits use physical
+//! qubit identifiers and guarantee undirected physical adjacency for routed
+//! two-qubit operations. Target-basis translation and directed native-gate
+//! legalization remain separate compiler stages.
+//!
 //! # Example
 //!
 //! ```
@@ -61,11 +75,11 @@
 //!     &SabreConfig::default(),
 //! )?;
 //!
-//! assert_all_two_qubit_ops_are_local(&routed.circuit);
+//! assert_all_two_qubit_ops_are_local(routed.circuit());
 //! # fn assert_all_two_qubit_ops_are_local(_: &Circuit) {}
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 
 pub mod sabre;
 
-pub use sabre::{RoutingResult, route_sabre};
+pub use sabre::{RoutedCircuit, SabreRouteResult, route_sabre, route_with_layout};

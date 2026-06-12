@@ -12,7 +12,7 @@
 
 //! Target-basis policy for knowledge-based rewrite.
 
-use crate::circuit::{Circuit, ControlFlow, Instruction, Operation, StandardGate};
+use crate::circuit::{Circuit, ClassicalControlOp, Instruction, Operation, StandardGate};
 use crate::compile::error::CompilerError;
 use crate::compile::knowledge::library::RuleKind;
 use crate::compile::knowledge::matcher::KnowledgeInstructionKey as RewriteInstructionKey;
@@ -182,34 +182,66 @@ fn scan_operations(
             Instruction::UnitaryGate(_) | Instruction::CircuitGate(_) => {
                 scan.add_unsupported(&operation.instruction);
             }
-            Instruction::ControlFlowGate(flow) => {
+            Instruction::ClassicalControl(cc) => {
                 if recurse_control_flow {
-                    match flow {
-                        ControlFlow::IfElse(gate) => {
+                    match cc {
+                        ClassicalControlOp::If(op) => {
                             scan_operations(
-                                gate.true_body(),
+                                op.then_body().operations(),
                                 physical_keys,
                                 recurse_control_flow,
                                 scan,
                             );
-                            if let Some(false_body) = gate.false_body() {
+                            if let Some(else_body) = op.else_body() {
                                 scan_operations(
-                                    false_body,
+                                    else_body.operations(),
                                     physical_keys,
                                     recurse_control_flow,
                                     scan,
                                 );
                             }
                         }
-                        ControlFlow::WhileLoop(gate) => {
-                            scan_operations(gate.body(), physical_keys, recurse_control_flow, scan);
+                        ClassicalControlOp::While(op) => {
+                            scan_operations(
+                                op.body().operations(),
+                                physical_keys,
+                                recurse_control_flow,
+                                scan,
+                            );
                         }
+                        ClassicalControlOp::For(op) => {
+                            scan_operations(
+                                op.body().operations(),
+                                physical_keys,
+                                recurse_control_flow,
+                                scan,
+                            );
+                        }
+                        ClassicalControlOp::Switch(op) => {
+                            for case in op.cases() {
+                                scan_operations(
+                                    case.body().operations(),
+                                    physical_keys,
+                                    recurse_control_flow,
+                                    scan,
+                                );
+                            }
+                            if let Some(default) = op.default() {
+                                scan_operations(
+                                    default.operations(),
+                                    physical_keys,
+                                    recurse_control_flow,
+                                    scan,
+                                );
+                            }
+                        }
+                        ClassicalControlOp::Break | ClassicalControlOp::Continue => {}
                     }
                 } else {
                     scan.control_flow_ops += 1;
                 }
             }
-            Instruction::Directive(_) | Instruction::Delay => {}
+            Instruction::ClassicalData(_) | Instruction::Directive(_) | Instruction::Delay => {}
         }
     }
 }

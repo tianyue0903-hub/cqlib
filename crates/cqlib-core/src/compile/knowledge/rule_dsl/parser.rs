@@ -15,7 +15,7 @@
 //! Expression parsing is delegated to [`Parameter::try_from`] by extracting
 //! the raw text span from the input string. This avoids building a custom
 //! expression AST and reuses the full symbolic math support in
-//! [`Parameter`](crate::circuit::Parameter).
+//! [`Parameter`].
 
 use crate::circuit::Parameter;
 use crate::compile::knowledge::rule::Condition;

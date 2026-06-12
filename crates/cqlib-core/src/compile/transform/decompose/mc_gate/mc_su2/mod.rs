@@ -15,8 +15,15 @@
 //! This module implements explicit algorithm choices for rotations whose
 //! single-qubit target gate is `RX`, `RY`, or `RZ`. Callers provide flattened
 //! controls and select either an ancillary-qubit-free decomposition or a
-//! clean-accumulator decomposition. Resource planning and algorithm selection
-//! belong to the future `mc_gate` decomposition planner.
+//! clean-accumulator decomposition. Direct callers are responsible for
+//! providing controls and ancillary qubits that satisfy the selected
+//! algorithm's contract.
+//!
+//! Normal compiler execution should use the circuit-level
+//! [`decompose_mc_gates`](super::decompose_mc_gates) entry point or the
+//! [`DecomposeMcGates`](super::DecomposeMcGates) transformer. That layer owns
+//! resource planning, algorithm selection, control-flow traversal, and circuit
+//! rebuild.
 //!
 //! The ancillary-qubit-free implementation is an axis-rotation specialization
 //! of the linear multi-controlled SU(2) construction from Vale et al.,

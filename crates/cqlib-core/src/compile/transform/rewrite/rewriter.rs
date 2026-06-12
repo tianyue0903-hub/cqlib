@@ -12,9 +12,10 @@
 
 //! Transformer entry point and circuit rebuild logic for knowledge rewrite.
 
+use crate::circuit::operation::ValueOperation;
 use crate::circuit::{
-    Circuit, CircuitParam, ControlFlow, IfElseGate, Instruction, Operation, Parameter,
-    ParameterValue, Qubit, StandardGate, WhileLoopGate,
+    Circuit, CircuitParam, ClassicalControlOp, ControlBody, ForOp, IfOp, Instruction, Operation,
+    Parameter, ParameterValue, Qubit, StandardGate, SwitchCase, SwitchOp, WhileOp,
 };
 use crate::compile::error::CompilerError;
 use crate::compile::knowledge::library::RuleLibrary;
@@ -174,6 +175,10 @@ fn builtin_compiled_rules() -> Result<Arc<CompiledRuleSet>, CompilerError> {
 // Transformer integration exposes only the generic transform result; direct
 // callers should use `KnowledgeRewriter::run` when rewrite statistics matter.
 impl Transformer for KnowledgeRewriter {
+    fn name(&self) -> &'static str {
+        "knowledge_rewrite"
+    }
+
     fn transform(&self, circuit: &Circuit) -> Result<TransformResult, CompilerError> {
         let result = self.run(circuit)?;
         Ok(TransformResult {
@@ -222,7 +227,12 @@ impl<'a> RoundRewriter<'a> {
             rules,
             config,
             target_context,
-            rebuilt: Circuit::from_qubits(source.qubits())?,
+            rebuilt: Circuit::from_operations(
+                source.qubits(),
+                Vec::<ValueOperation>::new(),
+                Some(source.classical_vars().to_vec()),
+                Some(source.classical_values().to_vec()),
+            )?,
             stats: RoundStats::default(),
         };
         let mut phase_delta = Parameter::from(0.0);
@@ -343,7 +353,7 @@ impl<'a> RoundRewriter<'a> {
         }
 
         let rewritten_instruction = match &operation.instruction {
-            Instruction::ControlFlowGate(flow) => Some(self.rewrite_control_flow(flow)?),
+            Instruction::ClassicalControl(control) => Some(self.rewrite_control_flow(control)?),
             _ => None,
         };
 
@@ -367,27 +377,30 @@ impl<'a> RoundRewriter<'a> {
         }
     }
 
-    fn rewrite_control_flow(&mut self, flow: &ControlFlow) -> Result<Instruction, CompilerError> {
-        let flow = match flow {
-            ControlFlow::IfElse(gate) => {
-                let mut true_body = Vec::with_capacity(gate.true_body().len());
-                let mut true_phase = Parameter::from(0.0);
+    fn rewrite_control_flow(
+        &mut self,
+        control: &ClassicalControlOp,
+    ) -> Result<Instruction, CompilerError> {
+        let cc = match control {
+            ClassicalControlOp::If(op) => {
+                let mut then_body = Vec::with_capacity(op.then_body().operations().len());
+                let mut then_phase = Parameter::from(0.0);
                 self.apply_sequence(
-                    gate.true_body(),
+                    op.then_body().operations(),
                     SequenceTarget::ControlFlowBody {
-                        output: &mut true_body,
-                        phase_delta: &mut true_phase,
+                        output: &mut then_body,
+                        phase_delta: &mut then_phase,
                     },
                 )?;
-                self.prepend_body_phase(&mut true_body, true_phase);
+                self.prepend_body_phase(&mut then_body, then_phase);
 
-                let false_body = gate
-                    .false_body()
+                let else_body = op
+                    .else_body()
                     .map(|body| {
-                        let mut rewritten = Vec::with_capacity(body.len());
+                        let mut rewritten = Vec::with_capacity(body.operations().len());
                         let mut body_phase = Parameter::from(0.0);
                         self.apply_sequence(
-                            body,
+                            body.operations(),
                             SequenceTarget::ControlFlowBody {
                                 output: &mut rewritten,
                                 phase_delta: &mut body_phase,
@@ -398,13 +411,20 @@ impl<'a> RoundRewriter<'a> {
                     })
                     .transpose()?;
 
-                ControlFlow::IfElse(IfElseGate::new(gate.condition(), true_body, false_body))
+                ClassicalControlOp::If(
+                    IfOp::new(
+                        op.condition().clone(),
+                        ControlBody::new(then_body),
+                        else_body.map(ControlBody::new),
+                    )
+                    .map_err(CompilerError::Circuit)?,
+                )
             }
-            ControlFlow::WhileLoop(gate) => {
-                let mut body = Vec::with_capacity(gate.body().len());
+            ClassicalControlOp::While(op) => {
+                let mut body = Vec::with_capacity(op.body().operations().len());
                 let mut body_phase = Parameter::from(0.0);
                 self.apply_sequence(
-                    gate.body(),
+                    op.body().operations(),
                     SequenceTarget::ControlFlowBody {
                         output: &mut body,
                         phase_delta: &mut body_phase,
@@ -412,11 +432,81 @@ impl<'a> RoundRewriter<'a> {
                 )?;
                 self.prepend_body_phase(&mut body, body_phase);
 
-                ControlFlow::WhileLoop(WhileLoopGate::new(gate.condition(), body))
+                ClassicalControlOp::While(
+                    WhileOp::new(op.condition().clone(), ControlBody::new(body))
+                        .map_err(CompilerError::Circuit)?,
+                )
             }
+            ClassicalControlOp::For(op) => {
+                let mut body = Vec::with_capacity(op.body().operations().len());
+                let mut body_phase = Parameter::from(0.0);
+                self.apply_sequence(
+                    op.body().operations(),
+                    SequenceTarget::ControlFlowBody {
+                        output: &mut body,
+                        phase_delta: &mut body_phase,
+                    },
+                )?;
+                self.prepend_body_phase(&mut body, body_phase);
+
+                ClassicalControlOp::For(
+                    ForOp::new(
+                        op.var(),
+                        op.start().clone(),
+                        op.stop().clone(),
+                        op.step().clone(),
+                        ControlBody::new(body),
+                    )
+                    .map_err(CompilerError::Circuit)?,
+                )
+            }
+            ClassicalControlOp::Switch(op) => {
+                let cases = op
+                    .cases()
+                    .iter()
+                    .map(|case| {
+                        let mut rewritten = Vec::with_capacity(case.body().operations().len());
+                        let mut body_phase = Parameter::from(0.0);
+                        self.apply_sequence(
+                            case.body().operations(),
+                            SequenceTarget::ControlFlowBody {
+                                output: &mut rewritten,
+                                phase_delta: &mut body_phase,
+                            },
+                        )?;
+                        self.prepend_body_phase(&mut rewritten, body_phase);
+                        Ok::<_, CompilerError>(SwitchCase::new(
+                            case.value(),
+                            ControlBody::new(rewritten),
+                        ))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let default = op
+                    .default()
+                    .map(|body| {
+                        let mut rewritten = Vec::with_capacity(body.operations().len());
+                        let mut body_phase = Parameter::from(0.0);
+                        self.apply_sequence(
+                            body.operations(),
+                            SequenceTarget::ControlFlowBody {
+                                output: &mut rewritten,
+                                phase_delta: &mut body_phase,
+                            },
+                        )?;
+                        self.prepend_body_phase(&mut rewritten, body_phase);
+                        Ok::<_, CompilerError>(ControlBody::new(rewritten))
+                    })
+                    .transpose()?;
+
+                ClassicalControlOp::Switch(
+                    SwitchOp::new(op.target().clone(), cases, default)
+                        .map_err(CompilerError::Circuit)?,
+                )
+            }
+            ClassicalControlOp::Break | ClassicalControlOp::Continue => control.clone(),
         };
 
-        Ok(Instruction::ControlFlowGate(flow))
+        Ok(Instruction::ClassicalControl(cc))
     }
 
     fn emit_operation(
@@ -569,40 +659,10 @@ impl<'a> RoundRewriter<'a> {
     }
 
     fn control_flow_operation_qubits(instruction: &Instruction) -> SmallVec<[Qubit; 3]> {
-        let mut qubits = SmallVec::new();
-        let mut push_unique = |qubit| {
-            if !qubits.contains(&qubit) {
-                qubits.push(qubit);
-            }
-        };
-
         match instruction {
-            Instruction::ControlFlowGate(ControlFlow::IfElse(gate)) => {
-                for operation in gate.true_body() {
-                    for &qubit in &operation.qubits {
-                        push_unique(qubit);
-                    }
-                }
-                if let Some(false_body) = gate.false_body() {
-                    for operation in false_body {
-                        for &qubit in &operation.qubits {
-                            push_unique(qubit);
-                        }
-                    }
-                }
-                push_unique(gate.condition().qubit);
-            }
-            Instruction::ControlFlowGate(ControlFlow::WhileLoop(gate)) => {
-                for operation in gate.body() {
-                    for &qubit in &operation.qubits {
-                        push_unique(qubit);
-                    }
-                }
-                push_unique(gate.condition().qubit);
-            }
-            _ => {}
+            Instruction::ClassicalControl(cc) => cc.used_qubits().into_iter().collect(),
+            _ => SmallVec::new(),
         }
-        qubits
     }
 
     fn accumulate_phase(target: &mut SequenceTarget<'_>, phase: Parameter) {

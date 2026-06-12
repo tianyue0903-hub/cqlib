@@ -10,13 +10,29 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
-//! Physical topology view used by layout methods.
+//! Physical topology view used by layout and routing preparation.
+//!
+//! This module converts a [`Device`] into the compiler-local view needed by
+//! layout scoring and SABRE routing. The graph contains only usable physical
+//! qubits. Distances and adjacency are undirected because routing can insert
+//! SWAPs along either orientation of a connected edge, while directed coupling
+//! information is retained separately for target-aware scoring and diagnostics.
+//!
+//! Calibration data is optional. Missing readout or two-qubit error data does
+//! not make the graph invalid; callers decide whether topology-only scoring is
+//! acceptable or whether fidelity data is required.
 
 use crate::compile::CompilerError;
 use crate::device::{Device, PhysicalQubit, Topology};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-/// Compiler-local physical graph with usable qubits and distance data.
+/// Compiler-local physical graph with usable qubits, distances, and calibration data.
+///
+/// The graph intentionally separates undirected routing connectivity from
+/// directed coupling support. Use [`Self::distance`] or
+/// [`Self::is_adjacent_undirected`] for routing reachability, and
+/// [`Self::supports_directed_coupling`] when a target-specific direction
+/// matters.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PhysicalLayoutGraph {
     physical_qubits: Vec<PhysicalQubit>,
@@ -31,7 +47,11 @@ pub struct PhysicalLayoutGraph {
 }
 
 impl PhysicalLayoutGraph {
-    /// Builds a layout physical graph from a device, excluding invalid qubits.
+    /// Builds a layout physical graph from a device, excluding unusable qubits.
+    ///
+    /// The resulting graph includes all usable qubits even when the topology is
+    /// disconnected. Disconnected pairs have no finite distance and are rejected
+    /// later by layout or routing checks when an interaction needs them.
     pub fn from_device(device: &Device) -> Result<Self, CompilerError> {
         let physical_qubits: Vec<_> = device.usable_qubits().collect();
         if physical_qubits.is_empty() {
@@ -69,7 +89,7 @@ impl PhysicalLayoutGraph {
         &self.physical_qubits
     }
 
-    /// Returns the distance table over usable physical qubits.
+    /// Returns all-pairs undirected shortest-path distances over usable qubits.
     pub fn distances(&self) -> &DistanceTable {
         &self.distances
     }
@@ -86,14 +106,17 @@ impl PhysicalLayoutGraph {
         self.distances.distance_by_index(a, b)
     }
 
-    /// Returns the undirected shortest-path distance between two physical qubits.
+    /// Returns the undirected shortest-path distance between two usable qubits.
+    ///
+    /// Returns `None` when either qubit is unusable or when the two usable
+    /// qubits are disconnected.
     pub fn distance(&self, a: PhysicalQubit, b: PhysicalQubit) -> Option<u32> {
         let a_index = self.physical_index(a)?;
         let b_index = self.physical_index(b)?;
         self.distance_by_index(a_index, b_index)
     }
 
-    /// Returns whether two physical qubits are adjacent in either direction.
+    /// Returns whether two usable physical qubits are adjacent in either direction.
     pub fn is_adjacent_undirected(&self, a: PhysicalQubit, b: PhysicalQubit) -> bool {
         let Some(a_index) = self.physical_index(a) else {
             return false;
@@ -162,7 +185,7 @@ impl PhysicalLayoutGraph {
         }
     }
 
-    /// Returns whether any calibration/error data is available.
+    /// Returns whether any readout or two-qubit calibration data is available.
     pub fn has_fidelity_data(&self) -> bool {
         self.has_readout_error_data || self.has_two_qubit_error_data
     }
@@ -179,6 +202,9 @@ impl PhysicalLayoutGraph {
 }
 
 /// All-pairs undirected shortest-path distances over usable physical qubits.
+///
+/// A missing distance means the pair is disconnected in the usable undirected
+/// topology or at least one queried qubit is outside this table.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DistanceTable {
     qubits: Vec<PhysicalQubit>,
@@ -187,6 +213,7 @@ pub struct DistanceTable {
 }
 
 impl DistanceTable {
+    /// Builds all-pairs distances by BFS from every usable physical qubit.
     fn from_adjacency(
         qubits: &[PhysicalQubit],
         index: &BTreeMap<PhysicalQubit, usize>,
@@ -225,6 +252,9 @@ impl DistanceTable {
     }
 
     /// Returns the shortest-path distance between two physical qubits.
+    ///
+    /// Returns `None` when either qubit is absent from the table or the pair is
+    /// disconnected.
     pub fn distance(&self, a: PhysicalQubit, b: PhysicalQubit) -> Option<u32> {
         let a_index = self.index.get(&a)?;
         let b_index = self.index.get(&b)?;
@@ -236,7 +266,7 @@ impl DistanceTable {
     }
 }
 
-/// Builds a physical layout graph from a device.
+/// Builds the compiler-local physical layout graph for `device`.
 pub fn build_physical_layout_graph(device: &Device) -> Result<PhysicalLayoutGraph, CompilerError> {
     PhysicalLayoutGraph::from_device(device)
 }
