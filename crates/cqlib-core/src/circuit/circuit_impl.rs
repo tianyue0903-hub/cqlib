@@ -539,6 +539,13 @@ impl Circuit {
         }
 
         let qubits_sv: SmallVec<[Qubit; 3]> = qubits.into_iter().map(|q| q.into()).collect();
+        let mut seen = HashSet::with_capacity(qubits_sv.len());
+        for &qubit in &qubits_sv {
+            if !seen.insert(qubit) {
+                return Err(CircuitError::DuplicateQubits);
+            }
+        }
+
         for qubit in &qubits_sv {
             if !self.qubits.contains(qubit) {
                 return Err(CircuitError::QubitNotFound(qubit.id()));
@@ -549,7 +556,7 @@ impl Circuit {
         }
 
         let mut circuit_params = smallvec![];
-        for p in params {
+        for (param_index, p) in params.into_iter().enumerate() {
             match p {
                 ParameterValue::Param(param) => {
                     let (index, is_new) = self.parameters.insert_full(param.clone());
@@ -560,7 +567,12 @@ impl Circuit {
                     }
                     circuit_params.push(CircuitParam::Index(index as u32));
                 }
-                ParameterValue::Fixed(value) => circuit_params.push(CircuitParam::Fixed(value)),
+                ParameterValue::Fixed(value) => {
+                    if !value.is_finite() {
+                        return Err(CircuitError::InvalidParameterValue(param_index, value));
+                    }
+                    circuit_params.push(CircuitParam::Fixed(value));
+                }
             }
         }
 
@@ -2114,20 +2126,31 @@ fn lower_instruction(
         let params = operation
             .params
             .into_iter()
-            .map(|param| -> Result<CircuitParam, CircuitError> {
-                match param {
-                    ParameterValue::Param(param) => {
-                        let (index, is_new) = circuit.parameters.insert_full(param.clone());
-                        if is_new {
-                            for sym in param.get_symbols() {
-                                circuit.symbols.insert(sym);
+            .enumerate()
+            .map(
+                |(param_index, param)| -> Result<CircuitParam, CircuitError> {
+                    match param {
+                        ParameterValue::Param(param) => {
+                            let (index, is_new) = circuit.parameters.insert_full(param.clone());
+                            if is_new {
+                                for sym in param.get_symbols() {
+                                    circuit.symbols.insert(sym);
+                                }
                             }
+                            Ok(CircuitParam::Index(index as u32))
                         }
-                        Ok(CircuitParam::Index(index as u32))
+                        ParameterValue::Fixed(value) => {
+                            if !value.is_finite() {
+                                return Err(CircuitError::InvalidParameterValue(
+                                    param_index,
+                                    value,
+                                ));
+                            }
+                            Ok(CircuitParam::Fixed(value))
+                        }
                     }
-                    ParameterValue::Fixed(value) => Ok(CircuitParam::Fixed(value)),
-                }
-            })
+                },
+            )
             .collect::<Result<_, _>>()?;
         Ok(Operation {
             instruction,

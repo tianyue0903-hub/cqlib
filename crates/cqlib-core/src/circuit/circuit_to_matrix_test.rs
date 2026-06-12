@@ -660,6 +660,17 @@ fn test_qubits_order_mismatch_returns_error() {
 }
 
 #[test]
+fn apply_gate_to_matrix_rejects_duplicate_bits() {
+    let mut matrix = Array2::eye(4);
+    let gate = StandardGate::CX.matrix(&[]).unwrap();
+
+    assert!(matches!(
+        apply_gate_to_matrix(&mut matrix, gate.as_ref(), &[0, 0]),
+        Err(CircuitError::DuplicateQubits)
+    ));
+}
+
+#[test]
 fn test_symbolic_parameter_returns_error() {
     let theta = Parameter::symbol("theta");
     let mut circuit = Circuit::new(1);
@@ -776,16 +787,14 @@ fn test_parameterized_unitary_gate_rejects_non_finite_param() {
         .with_symbolic_matrix(["theta"], symbolic_phase_matrix("theta"))
         .unwrap();
     let mut circuit = Circuit::new(1);
-    circuit
-        .unitary_with_params(
-            gate,
-            vec![Qubit::new(0)],
-            vec![ParameterValue::Fixed(f64::NAN)],
-        )
-        .unwrap();
+    let result = circuit.unitary_with_params(
+        gate,
+        vec![Qubit::new(0)],
+        vec![ParameterValue::Fixed(f64::NAN)],
+    );
 
     assert!(matches!(
-        circuit_to_matrix(&circuit, None),
+        result,
         Err(CircuitError::InvalidParameterValue(0, value)) if value.is_nan()
     ));
 }

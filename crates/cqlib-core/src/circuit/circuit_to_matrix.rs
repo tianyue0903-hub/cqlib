@@ -142,8 +142,14 @@ pub fn circuit_to_matrix(
         let params: SmallVec<[f64; 4]> = op
             .params
             .iter()
-            .map(|p| match p {
-                CircuitParam::Fixed(value) => Ok(*value),
+            .enumerate()
+            .map(|(param_index, p)| match p {
+                CircuitParam::Fixed(value) => {
+                    if !value.is_finite() {
+                        return Err(CircuitError::InvalidParameterValue(param_index, *value));
+                    }
+                    Ok(*value)
+                }
                 CircuitParam::Index(_) => Err(CircuitError::SymbolicParameterError),
             })
             .collect::<Result<_, _>>()?;
@@ -239,6 +245,7 @@ pub(crate) fn apply_gate_to_matrix(
     gate_matrix: &Array2<Complex64>,
     bits: &[usize],
 ) -> Result<(), CircuitError> {
+    validate_target_bits(matrix.nrows(), bits)?;
     let expected_dim = 1usize << bits.len();
     if gate_matrix.nrows() != expected_dim || gate_matrix.ncols() != expected_dim {
         return Err(CircuitError::QubitCountMismatch {
@@ -251,6 +258,29 @@ pub(crate) fn apply_gate_to_matrix(
         2 => apply_two_qubit_gate(matrix, gate_matrix, bits[0], bits[1]),
         _ => apply_general_gate(matrix, gate_matrix, bits),
     }
+    Ok(())
+}
+
+fn validate_target_bits(matrix_dim: usize, bits: &[usize]) -> Result<(), CircuitError> {
+    if !matrix_dim.is_power_of_two() {
+        return Err(CircuitError::InvalidOperation(format!(
+            "matrix dimension {matrix_dim} is not a power of two"
+        )));
+    }
+
+    let num_qubits = matrix_dim.trailing_zeros() as usize;
+    let mut seen = HashSet::with_capacity(bits.len());
+    for &bit in bits {
+        if bit >= num_qubits {
+            return Err(CircuitError::InvalidOperation(format!(
+                "gate bit {bit} is out of range for {num_qubits} qubits"
+            )));
+        }
+        if !seen.insert(bit) {
+            return Err(CircuitError::DuplicateQubits);
+        }
+    }
+
     Ok(())
 }
 

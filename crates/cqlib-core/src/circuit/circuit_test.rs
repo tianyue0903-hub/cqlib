@@ -84,6 +84,28 @@ fn test_circuit_qubit_validation() {
 }
 
 #[test]
+fn test_operation_rejects_duplicate_qubits() {
+    let mut circuit = Circuit::new(2);
+    let q0 = Qubit::new(0);
+    let q1 = Qubit::new(1);
+
+    assert!(matches!(
+        circuit.cx(q0, q0),
+        Err(CircuitError::DuplicateQubits)
+    ));
+    assert!(matches!(
+        circuit.swap(q1, q1),
+        Err(CircuitError::DuplicateQubits)
+    ));
+
+    let mut circuit = Circuit::new(3);
+    assert!(matches!(
+        circuit.ccx(q0, q0, q1),
+        Err(CircuitError::DuplicateQubits)
+    ));
+}
+
+#[test]
 fn test_from_qubits_and_add() {
     let q0 = Qubit::new(0);
     let q2 = Qubit::new(2);
@@ -178,6 +200,80 @@ fn from_operations_rejects_unknown_operation_qubits() {
     let result = Circuit::from_operations(vec![Qubit::new(0)], operations, None, None);
 
     assert!(matches!(result, Err(CircuitError::QubitNotFound(1))));
+}
+
+#[test]
+fn from_operations_rejects_duplicate_operation_qubits() {
+    let operations = vec![ValueOperation {
+        instruction: ValueInstruction::from_instruction(Instruction::Standard(StandardGate::CX)),
+        qubits: smallvec![Qubit::new(0), Qubit::new(0)],
+        params: smallvec![],
+        label: None,
+    }];
+
+    let result = Circuit::from_operations(vec![Qubit::new(0)], operations, None, None);
+
+    assert!(matches!(result, Err(CircuitError::DuplicateQubits)));
+}
+
+#[test]
+fn append_rejects_non_finite_fixed_parameters() {
+    let mut circuit = Circuit::new(1);
+    let q0 = Qubit::new(0);
+
+    assert!(matches!(
+        circuit.rx(q0, f64::NAN),
+        Err(CircuitError::InvalidParameterValue(0, value)) if value.is_nan()
+    ));
+    assert!(matches!(
+        circuit.rz(q0, f64::INFINITY),
+        Err(CircuitError::InvalidParameterValue(0, value)) if value.is_infinite()
+    ));
+    assert!(circuit.operations().is_empty());
+}
+
+#[test]
+fn from_operations_rejects_non_finite_fixed_parameters() {
+    let operations = vec![ValueOperation {
+        instruction: ValueInstruction::from_instruction(Instruction::Standard(StandardGate::RX)),
+        qubits: smallvec![Qubit::new(0)],
+        params: smallvec![ParameterValue::Fixed(f64::NAN)],
+        label: None,
+    }];
+
+    let result = Circuit::from_operations(vec![Qubit::new(0)], operations, None, None);
+
+    assert!(matches!(
+        result,
+        Err(CircuitError::InvalidParameterValue(0, value)) if value.is_nan()
+    ));
+}
+
+#[test]
+fn from_operations_rejects_non_finite_body_fixed_parameters() {
+    let body = ValueControlBody::new(vec![ValueOperation {
+        instruction: ValueInstruction::from_instruction(Instruction::Standard(StandardGate::RX)),
+        qubits: smallvec![Qubit::new(0)],
+        params: smallvec![ParameterValue::Fixed(f64::NAN)],
+        label: None,
+    }]);
+    let operations = vec![ValueOperation {
+        instruction: ValueInstruction::ClassicalControl(ValueClassicalControlOp::If {
+            condition: ClassicalExpr::bool_literal(true),
+            then_body: body,
+            else_body: None,
+        }),
+        qubits: smallvec![Qubit::new(0)],
+        params: smallvec![],
+        label: None,
+    }];
+
+    let result = Circuit::from_operations(vec![Qubit::new(0)], operations, None, None);
+
+    assert!(matches!(
+        result,
+        Err(CircuitError::InvalidParameterValue(0, value)) if value.is_nan()
+    ));
 }
 
 #[test]

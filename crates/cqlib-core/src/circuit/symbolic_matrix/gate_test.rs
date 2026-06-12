@@ -1266,16 +1266,14 @@ fn test_apply_gate_to_matrix_rejects_out_of_range_bits() {
 #[test]
 fn test_symbolic_rejects_duplicate_qubits_in_operation() {
     let mut circuit = Circuit::new(2);
-    circuit
+    let err = circuit
         .append(
             Instruction::Standard(StandardGate::CX),
             [Qubit::new(0), Qubit::new(0)],
             [],
             None,
         )
-        .unwrap();
-
-    let err = circuit_to_symbolic_matrix(&circuit, None).unwrap_err();
+        .unwrap_err();
 
     assert!(matches!(err, CircuitError::DuplicateQubits));
 }
