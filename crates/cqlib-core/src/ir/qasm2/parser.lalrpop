@@ -30,7 +30,7 @@ Statement: Statement = {
     "barrier" <a:ArgList> ";" => Statement::Barrier(a),
     "reset" <a:Arg> ";" => Statement::Reset(a),
     "measure" <q:Arg> "->" <c:Arg> ";" => Statement::Measure(q, c),
-    "if" "(" <creg:CRegRef> "==" <value:Int> ")" <s:Statement> =>
+    "if" "(" <creg:Id> "==" <value:Int> ")" <s:Statement> =>
         Statement::If(creg, value, Box::new(s)),
     // 门声明
     "gate" <name:Id> <p:("(" <IdList> ")")?> <q:IdList> "{" <body:Statement*> "}" => {
@@ -99,13 +99,6 @@ UnaryOp: UnaryOpCode = {
 };
 
 Arg: Argument = {
-    <id:Id> => Argument::Id(id),
-    <id:Id> "[" <n:Int> "]" => Argument::IndexedId(id, n),
-};
-
-// OpenQASM 2.0 uses a whole creg. Indexed references are accepted as a
-// cqlib-compatible extension and must retain their index in the AST.
-CRegRef: Argument = {
     <id:Id> => Argument::Id(id),
     <id:Id> "[" <n:Int> "]" => Argument::IndexedId(id, n),
 };

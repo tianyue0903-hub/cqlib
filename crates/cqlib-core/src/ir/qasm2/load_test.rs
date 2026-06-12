@@ -343,27 +343,27 @@ fn test_builtin_qelib1_gate_declarations_are_allowed() {
         r#"
         OPENQASM 2.0;
         include "qelib1.inc";
-        qreg q[1];
-        h q[0];
+        qreg q[2];
+        ch q[0], q[1];
         "#,
     )
     .unwrap();
 
-    assert_standard_gate(&circuit, 0, StandardGate::H, &[0], &[]);
+    let Instruction::CircuitGate(gate) = &circuit.operations()[0].instruction else {
+        panic!("expected qelib1 ch to load as CircuitGate");
+    };
+    assert_eq!(gate.name.as_str(), "ch");
+    assert_eq!(gate.num_qubits(), 2);
 }
 
 #[test]
-fn test_qelib1_reserved_gate_names_match_bundled_declarations() {
+fn test_qelib1_reserved_gate_names_match_static_tables() {
     use std::collections::HashSet;
 
-    let program = parser::ProgramBodyParser::new().parse(QELIB1).unwrap();
-    let declared_names: HashSet<&str> = program
-        .statements
+    let declared_names: HashSet<&str> = QELIB1_DIRECT_GATES
         .iter()
-        .filter_map(|statement| match statement {
-            Statement::GateDecl(data) => Some(data.name.as_str()),
-            _ => None,
-        })
+        .chain(QELIB1_CUSTOM_GATES.iter())
+        .copied()
         .collect();
     let reserved_names: HashSet<&str> = QELIB1_RESERVED_GATE_NAMES.iter().copied().collect();
 
@@ -457,9 +457,7 @@ fn test_compile_gate_rolls_back_state_after_circular_dependency() {
         )
         .unwrap();
     let mut converter = AstToCircuit::new(None, Box::new(NullResolver));
-    converter
-        .discovery_pass(&program, DiscoverySource::User)
-        .unwrap();
+    converter.discovery_pass(&program).unwrap();
 
     assert!(matches!(
         converter.compile_gate_if_needed("a"),
@@ -475,9 +473,7 @@ fn test_compile_gate_rolls_back_state_after_body_build_failure() {
         .parse("gate broken q { x missing; }")
         .unwrap();
     let mut converter = AstToCircuit::new(None, Box::new(NullResolver));
-    converter
-        .discovery_pass(&program, DiscoverySource::User)
-        .unwrap();
+    converter.discovery_pass(&program).unwrap();
 
     assert!(matches!(
         converter.compile_gate_if_needed("broken"),
@@ -589,7 +585,7 @@ fn test_if_statement_uses_classical_data_and_control_ir() {
         creg c[1];
         h q[0];
         measure q[0] -> c[0];
-        if (c[0] == 1) x q[1];
+        if (c == 1) x q[1];
         "#,
     )
     .unwrap();
@@ -625,14 +621,65 @@ fn test_if_statement_uses_classical_data_and_control_ir() {
     assert_eq!(*op, ClassicalCompareOp::Eq);
     assert!(matches!(
         lhs.kind(),
-        ClassicalExprKind::ExtractBit { index: 0, .. }
+        ClassicalExprKind::Cast {
+            cast: ClassicalCast::BitVecToUInt,
+            ..
+        }
     ));
-    assert!(matches!(rhs.kind(), ClassicalExprKind::BitLiteral(true)));
+    assert!(matches!(
+        rhs.kind(),
+        ClassicalExprKind::UIntLiteral { value: 1, .. }
+    ));
 }
 
 #[test]
-fn test_indexed_condition_retains_selected_bit() {
+fn test_if_statement_allows_conditional_measurement() {
     let circuit = loads(
+        r#"
+        OPENQASM 2.0;
+        qreg q[1];
+        creg c[1];
+        creg d[1];
+        if (c == 1) measure q[0] -> d[0];
+        "#,
+    )
+    .unwrap();
+
+    let Instruction::ClassicalControl(ClassicalControlOp::If(if_op)) =
+        &circuit.operations()[2].instruction
+    else {
+        panic!("expected if operation");
+    };
+    let body = if_op.then_body().operations();
+    assert_eq!(body.len(), 2);
+    assert!(matches!(
+        body[0].instruction,
+        Instruction::ClassicalData(ClassicalDataOp::MeasureBit { .. })
+    ));
+    assert!(matches!(
+        body[1].instruction,
+        Instruction::ClassicalData(ClassicalDataOp::Store { .. })
+    ));
+}
+
+#[test]
+fn test_if_statement_rejects_conditional_barrier() {
+    let error = loads(
+        r#"
+        OPENQASM 2.0;
+        qreg q[1];
+        creg c[1];
+        if (c == 1) barrier q;
+        "#,
+    )
+    .unwrap_err();
+
+    assert!(error.to_string().contains("Barrier"));
+}
+
+#[test]
+fn test_indexed_condition_is_rejected() {
+    let error = loads(
         r#"
         OPENQASM 2.0;
         qreg q[1];
@@ -640,20 +687,46 @@ fn test_indexed_condition_retains_selected_bit() {
         if (c[2] == 1) x q[0];
         "#,
     )
-    .unwrap();
+    .unwrap_err();
 
-    let Instruction::ClassicalControl(ClassicalControlOp::If(if_op)) =
-        &circuit.operations()[1].instruction
-    else {
-        panic!("expected if operation");
-    };
-    let ClassicalExprKind::Compare { lhs, .. } = if_op.condition().kind() else {
-        panic!("expected equality condition");
-    };
-    assert!(matches!(
-        lhs.kind(),
-        ClassicalExprKind::ExtractBit { index: 2, .. }
-    ));
+    assert!(matches!(error, QasmParseError::ParseError(_)));
+}
+
+#[test]
+fn test_gate_body_rejects_measurement_reset_if_and_indexed_barrier() {
+    for qasm in [
+        r#"
+        OPENQASM 2.0;
+        qreg q[1];
+        creg c[1];
+        gate bad a { measure a -> c[0]; }
+        bad q[0];
+        "#,
+        r#"
+        OPENQASM 2.0;
+        qreg q[1];
+        gate bad a { reset a; }
+        bad q[0];
+        "#,
+        r#"
+        OPENQASM 2.0;
+        qreg q[1];
+        creg c[1];
+        gate bad a { if (c == 1) x a; }
+        bad q[0];
+        "#,
+        r#"
+        OPENQASM 2.0;
+        qreg q[1];
+        gate bad a { barrier a[0]; }
+        bad q[0];
+        "#,
+    ] {
+        assert!(
+            loads(qasm).is_err(),
+            "invalid gate body should fail: {qasm}"
+        );
+    }
 }
 
 #[test]
@@ -664,7 +737,7 @@ fn test_condition_references_correct_classical_register() {
         qreg q[1];
         creg first[2];
         creg second[3];
-        if (second[1] == 1) x q[0];
+        if (second == 1) x q[0];
         "#,
     )
     .unwrap();
@@ -693,16 +766,19 @@ fn test_condition_references_correct_classical_register() {
     let ClassicalExprKind::Compare { lhs, .. } = if_op.condition().kind() else {
         panic!("expected equality condition");
     };
-    let ClassicalExprKind::ExtractBit { value, index } = lhs.kind() else {
-        panic!("expected indexed classical-register read");
+    let ClassicalExprKind::Cast {
+        cast: ClassicalCast::BitVecToUInt,
+        expr,
+    } = lhs.kind()
+    else {
+        panic!("expected bit-vector to uint cast");
     };
-    assert_eq!(*index, 1);
     assert!(matches!(
-        value.kind(),
+        expr.kind(),
         ClassicalExprKind::Var(var) if var == second_var
     ));
     assert!(!matches!(
-        value.kind(),
+        expr.kind(),
         ClassicalExprKind::Var(var) if var == first_var
     ));
 }
