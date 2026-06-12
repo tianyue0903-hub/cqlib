@@ -178,7 +178,7 @@ impl Clone for Circuit {
                 )
             })
             .collect::<Result<Vec<_>, _>>()
-            .expect("a valid circuit must be clonable with complete handle mappings");
+            .expect("a valid circuit must be cloneable with complete handle mappings");
 
         Self {
             circuit_id,

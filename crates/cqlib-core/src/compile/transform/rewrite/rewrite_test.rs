@@ -13,12 +13,11 @@
 use super::{KnowledgeRewriter, RewriteConfig};
 use crate::circuit::{
     Circuit, CircuitParam, ClassicalControlOp, ClassicalExpr, Directive, Instruction, MCGate,
-    Operation, Parameter, Qubit, StandardGate,
+    Parameter, Qubit, StandardGate,
 };
 use crate::compile::CompilerError;
 use crate::compile::knowledge::library::RuleKind;
 use crate::util::test_utils::standard_ops;
-use smallvec::smallvec;
 
 #[test]
 fn cancels_adjacent_self_inverse_gates() {
@@ -526,7 +525,6 @@ fn rejects_zero_round_limit() {
 
 #[test]
 fn preserves_control_flow_body_local_global_phase() {
-    let q0 = Qubit::new(0);
     let q1 = Qubit::new(1);
     let mut circuit = Circuit::new(2);
     circuit
@@ -562,7 +560,6 @@ fn preserves_control_flow_body_local_global_phase() {
 
 #[test]
 fn rewrites_false_branch_and_while_body() {
-    let q0 = Qubit::new(0);
     let q1 = Qubit::new(1);
 
     let mut if_circuit = Circuit::new(2);
@@ -603,7 +600,6 @@ fn rewrites_false_branch_and_while_body() {
 
 #[test]
 fn rewrites_control_flow_body_with_valid_rebuilt_parameter_table() {
-    let q0 = Qubit::new(0);
     let q1 = Qubit::new(1);
     let theta = Parameter::symbol("theta");
     let mut circuit = Circuit::new(2);

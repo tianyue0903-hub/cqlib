@@ -999,20 +999,16 @@ fn malformed_mc_gate_parameter_arity_is_rejected_before_planning() {
 }
 
 #[test]
-fn duplicate_mc_gate_qubits_are_rejected_by_synthesis() {
+fn duplicate_mc_gate_qubits_are_rejected_during_construction() {
     let mut circuit = Circuit::new(3);
-    append_mcx(
-        &mut circuit,
-        &[Qubit::new(0), Qubit::new(0)],
-        Qubit::new(2),
+    let error = circuit.append(
+        Instruction::McGate(Box::new(MCGate::new(2, StandardGate::X))),
+        [Qubit::new(0), Qubit::new(0), Qubit::new(2)],
+        [],
         None,
     );
 
-    let error = decompose_mc_gates(&circuit, config(2, true)).unwrap_err();
-
-    assert!(
-        matches!(error, CompilerError::TransformFailed { reason, .. } if reason.contains("duplicate Q0"))
-    );
+    assert!(matches!(error, Err(CircuitError::DuplicateQubits)));
 }
 
 #[test]

@@ -419,7 +419,7 @@ fn config_can_preserve_barrier_shape_when_disabled() {
     circuit
         .append(
             Instruction::Directive(Directive::Barrier),
-            [Qubit::new(2), Qubit::new(0), Qubit::new(2)],
+            [Qubit::new(2), Qubit::new(0), Qubit::new(1)],
             std::iter::empty(),
             Some("keep-barrier"),
         )
@@ -431,7 +431,7 @@ fn config_can_preserve_barrier_shape_when_disabled() {
 
     assert_eq!(
         op.qubits.as_slice(),
-        &[Qubit::new(2), Qubit::new(0), Qubit::new(2)]
+        &[Qubit::new(2), Qubit::new(0), Qubit::new(1)]
     );
     assert_eq!(op.label.as_deref(), Some("keep-barrier"));
 }
@@ -442,7 +442,7 @@ fn barrier_scopes_are_canonicalized_and_merged() {
     circuit
         .append(
             Instruction::Directive(Directive::Barrier),
-            [Qubit::new(2), Qubit::new(1), Qubit::new(2)],
+            [Qubit::new(2), Qubit::new(1)],
             std::iter::empty(),
             Some("drop-label"),
         )
@@ -761,8 +761,8 @@ fn unknown_qubit_is_rejected() {
 }
 
 #[test]
-fn duplicate_non_barrier_qubit_is_rejected() {
-    let circuit = Circuit::from_operations(
+fn duplicate_non_barrier_qubit_is_rejected_during_construction() {
+    let err = Circuit::from_operations(
         vec![Qubit::new(0)],
         vec![ValueOperation {
             instruction: ValueInstruction::from_instruction(Instruction::Standard(
@@ -775,11 +775,9 @@ fn duplicate_non_barrier_qubit_is_rejected() {
         None,
         None,
     )
-    .unwrap();
+    .unwrap_err();
 
-    let err = canonicalize_circuit(&circuit).unwrap_err();
-    assert!(matches!(err, CompilerError::InvalidInput(_)));
-    assert!(err.to_string().contains("duplicate qubit"));
+    assert!(matches!(err, CircuitError::DuplicateQubits));
 }
 
 #[test]
@@ -954,9 +952,11 @@ fn canonicalization_is_idempotent_for_mixed_production_input() {
     circuit.i(Qubit::new(0)).unwrap();
     circuit.rx(Qubit::new(1), 0.0).unwrap();
     circuit
-        .barrier(vec![Qubit::new(2), Qubit::new(0), Qubit::new(2)])
+        .barrier(vec![Qubit::new(2), Qubit::new(0), Qubit::new(1)])
         .unwrap();
-    circuit.barrier(vec![Qubit::new(0), Qubit::new(2)]).unwrap();
+    circuit
+        .barrier(vec![Qubit::new(0), Qubit::new(2), Qubit::new(1)])
+        .unwrap();
     circuit.h(Qubit::new(2)).unwrap();
     circuit
         .if_else(
