@@ -152,11 +152,7 @@ pub enum Statement {
     /// Gate definition with body: `gate gate_name(params) q { ... }`
     GateDecl(Box<GateDeclData>),
     /// Conditional execution: `if (c == 1) gate q;`.
-    ///
-    /// OpenQASM 2.0 conditions name a whole classical register. Indexed
-    /// references are retained here as a cqlib-compatible extension so the
-    /// parser does not discard the selected bit.
-    If(Argument, i64, Box<Statement>),
+    If(String, i64, Box<Statement>),
 }
 
 /// Data structure holding gate definition content.

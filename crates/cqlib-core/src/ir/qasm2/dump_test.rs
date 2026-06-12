@@ -571,6 +571,54 @@ fn test_dump_if_statement_simple() {
 }
 
 #[test]
+fn test_dump_conditional_measurement() {
+    let mut circuit = Circuit::new(2);
+    let q0 = Qubit::new(0);
+    let q1 = Qubit::new(1);
+    let target = circuit.var(ClassicalType::Bit);
+
+    let measured = circuit.measure(q0).unwrap();
+    let condition = ClassicalExpr::bit_to_bool(measured.expr()).unwrap();
+    circuit
+        .if_(condition, |body| {
+            body.measure_into(q1, target)?;
+            Ok(())
+        })
+        .unwrap();
+
+    let qasm = dumps(&circuit).expect("Dump should succeed");
+    assert_qasm_contains_ordered(
+        &qasm,
+        &[
+            "creg c0[1];",
+            "creg v0[1];",
+            "creg v1[1];",
+            "measure q[0] -> v0[0];",
+            "if (v0 == 1) measure q[1] -> c0[0];",
+        ],
+    );
+    verify_qasm_roundtrip(&qasm, 2);
+}
+
+#[test]
+fn test_dump_conditional_barrier_is_rejected() {
+    let mut circuit = Circuit::new(2);
+    let measured = circuit.measure(Qubit::new(0)).unwrap();
+    let condition = ClassicalExpr::bit_to_bool(measured.expr()).unwrap();
+    circuit
+        .if_(condition, |body| {
+            body.barrier(vec![Qubit::new(1)])?;
+            Ok(())
+        })
+        .unwrap();
+
+    assert!(matches!(
+        dumps(&circuit),
+        Err(QasmDumpError::UnsupportedClassicalControl(_))
+    ));
+}
+
+#[test]
 fn test_dump_measure_into_bitvec_and_multibit_condition() {
     let mut circuit = Circuit::new(3);
     let register = circuit.var(ClassicalType::bit_vec(3).unwrap());
