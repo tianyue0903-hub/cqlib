@@ -22,6 +22,20 @@ use num_complex::Complex64;
 // Tolerance for floating-point comparisons
 const EPSILON: f64 = 1e-10;
 
+fn werner_state(p: f64) -> DensityMatrix {
+    let mut bell = DensityMatrix::new(2);
+    bell.apply_h(0).unwrap();
+    bell.apply_cx(0, 1).unwrap();
+
+    let dim = 4;
+    let mut data: Vec<_> = bell.data().iter().map(|value| *value * p).collect();
+    for i in 0..dim {
+        data[i * dim + i] += Complex64::new((1.0 - p) / dim as f64, 0.0);
+    }
+
+    DensityMatrix::from_density_matrix_state(2, data).unwrap()
+}
+
 #[test]
 fn test_linear_entropy_pure_state() {
     // Pure state |0⟩ should have linear entropy = 0
@@ -184,20 +198,7 @@ fn test_renyi_entropy_partially_mixed() {
     // Werner-like state: ρ = p|Φ+⟩⟨Φ+| + (1-p)I/4
     // For p = 0.5, eigenvalues are: (3/8, 1/8, 1/8, 1/8)
     let p = 0.5;
-    let mut dm = DensityMatrix::new(2);
-    dm.apply_h(0).unwrap();
-    dm.apply_cx(0, 1).unwrap();
-
-    // Scale by p
-    for val in &mut dm.data {
-        *val = *val * p;
-    }
-
-    // Add maximally mixed component
-    let dim = 4;
-    for i in 0..dim {
-        dm.data[i * dim + i] += Complex64::new((1.0 - p) / dim as f64, 0.0);
-    }
+    let dm = werner_state(p);
 
     // Eigenvalues of Werner state with p=0.5: (5/8, 1/8, 1/8, 1/8) = (0.625, 0.125, 0.125, 0.125)
     // For α = 2: Tr(ρ²) = (5/8)² + 3*(1/8)² = 25/64 + 3/64 = 28/64 = 7/16
@@ -418,18 +419,7 @@ fn test_negativity_werner_state() {
 
     // Test entangled case (p = 0.5)
     let p = 0.5;
-    let mut dm = DensityMatrix::new(2);
-    dm.apply_h(0).unwrap();
-    dm.apply_cx(0, 1).unwrap();
-
-    for val in &mut dm.data {
-        *val = *val * p;
-    }
-
-    let dim = 4;
-    for i in 0..dim {
-        dm.data[i * dim + i] += Complex64::new((1.0 - p) / dim as f64, 0.0);
-    }
+    let dm = werner_state(p);
 
     let neg = negativity(&dm, &[0]).unwrap();
     assert!(
@@ -439,17 +429,7 @@ fn test_negativity_werner_state() {
 
     // Test separable case (p = 0.2)
     let p_sep = 0.2;
-    let mut dm_sep = DensityMatrix::new(2);
-    dm_sep.apply_h(0).unwrap();
-    dm_sep.apply_cx(0, 1).unwrap();
-
-    for val in &mut dm_sep.data {
-        *val = *val * p_sep;
-    }
-
-    for i in 0..dim {
-        dm_sep.data[i * dim + i] += Complex64::new((1.0 - p_sep) / dim as f64, 0.0);
-    }
+    let dm_sep = werner_state(p_sep);
 
     let neg_sep = negativity(&dm_sep, &[0]).unwrap();
     assert!(
@@ -647,18 +627,7 @@ fn test_concurrence_werner_state() {
     let p = 0.5;
     let expected_c = (3.0 * p - 1.0) / 2.0;
 
-    let mut dm = DensityMatrix::new(2);
-    dm.apply_h(0).unwrap();
-    dm.apply_cx(0, 1).unwrap();
-
-    for val in &mut dm.data {
-        *val = *val * p;
-    }
-
-    let dim = 4;
-    for i in 0..dim {
-        dm.data[i * dim + i] += Complex64::new((1.0 - p) / dim as f64, 0.0);
-    }
+    let dm = werner_state(p);
 
     let c = concurrence(&dm).unwrap();
     assert!(
@@ -671,17 +640,7 @@ fn test_concurrence_werner_state() {
 
     // Separable case (p = 0.2)
     let p_sep = 0.2;
-    let mut dm_sep = DensityMatrix::new(2);
-    dm_sep.apply_h(0).unwrap();
-    dm_sep.apply_cx(0, 1).unwrap();
-
-    for val in &mut dm_sep.data {
-        *val = *val * p_sep;
-    }
-
-    for i in 0..dim {
-        dm_sep.data[i * dim + i] += Complex64::new((1.0 - p_sep) / dim as f64, 0.0);
-    }
+    let dm_sep = werner_state(p_sep);
 
     let c_sep = concurrence(&dm_sep).unwrap();
     assert!(

@@ -11,6 +11,7 @@
 // that they have been altered from the originals.
 
 use crate::circuit::{Circuit, Qubit, StandardGate};
+use crate::qis::QisError;
 use crate::qis::hamiltonian::Hamiltonian;
 use crate::qis::pauli::{Pauli, PauliString};
 use crate::qis::state::density_matrix::DensityMatrix;
@@ -224,7 +225,7 @@ fn test_partial_trace_bell_state() {
     dm.apply_cx(0, 1).unwrap();
 
     // Tracing out qubit 1 should leave qubit 0 in a maximally mixed state: I/2.
-    let reduced_dm = dm.partial_trace(&[0]);
+    let reduced_dm = dm.partial_trace(&[0]).unwrap();
     assert_eq!(reduced_dm.num_qubits, 1);
 
     let probs = reduced_dm.probabilities();
@@ -239,10 +240,12 @@ fn test_partial_trace_bell_state() {
 }
 
 #[test]
-#[should_panic(expected = "Qubit index out of bounds in partial trace")]
 fn test_partial_trace_out_of_bounds() {
     let dm = DensityMatrix::new(2);
-    let _ = dm.partial_trace(&[2]);
+    assert!(matches!(
+        dm.partial_trace(&[2]),
+        Err(QisError::IndexOutOfBounds { index: 2, max: 1 })
+    ));
 }
 
 #[test]
@@ -251,10 +254,10 @@ fn test_partial_trace_duplicate_qubits() {
     dm.apply_h(0).unwrap();
     dm.apply_cx(0, 1).unwrap();
 
-    // Should behave same as &[0] due to deduplication
-    let reduced_dm = dm.partial_trace(&[0, 0]);
-    assert_eq!(reduced_dm.num_qubits, 1);
-    assert_relative_eq!(reduced_dm.probabilities()[0], 0.5);
+    assert!(matches!(
+        dm.partial_trace(&[0, 0]),
+        Err(QisError::InvalidParameterValue(_))
+    ));
 }
 
 #[test]
@@ -282,6 +285,31 @@ fn test_apply_kraus_bit_flip() {
     assert_relative_eq!(probs[0], 1.0 - p); // |0><0| probability
     assert_relative_eq!(probs[1], p); // |1><1| probability
     assert_relative_eq!(dm.trace().re, 1.0);
+}
+
+#[test]
+fn test_apply_kraus_rejects_invalid_inputs() {
+    let mut dm = DensityMatrix::new(1);
+    let valid = vec![
+        Complex64::new(1.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(1.0, 0.0),
+    ];
+    let wrong_len = vec![Complex64::new(1.0, 0.0)];
+
+    assert!(matches!(
+        dm.apply_kraus(&[], &[0]),
+        Err(QisError::InvalidParameterValue(_))
+    ));
+    assert!(matches!(
+        dm.apply_kraus(std::slice::from_ref(&valid), &[]),
+        Err(QisError::InvalidParameterValue(_))
+    ));
+    assert!(matches!(
+        dm.apply_kraus(&[wrong_len], &[0]),
+        Err(QisError::InvalidParameterValue(_))
+    ));
 }
 
 #[test]

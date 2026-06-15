@@ -72,7 +72,7 @@ use rayon::prelude::*;
 /// assert!(s_l < 1e-10);
 /// ```
 pub fn linear_entropy(dm: &DensityMatrix) -> Result<f64, QisError> {
-    let purity: f64 = dm.data.par_iter().map(|c| c.norm_sqr()).sum();
+    let purity: f64 = dm.data().par_iter().map(|c| c.norm_sqr()).sum();
     Ok(1.0 - purity)
 }
 
@@ -225,7 +225,7 @@ pub fn entanglement_entropy_pure(sv: &Statevector, subsys_a: &[usize]) -> Result
     let dm = DensityMatrix::from_state(sv.num_qubits, sv.data().to_vec())?;
 
     // Compute reduced density matrix by tracing out subsystem B
-    let rho_a = dm.partial_trace(subsys_a);
+    let rho_a = dm.partial_trace(subsys_a)?;
 
     // Entanglement entropy is the Von Neumann entropy of ρ_A
     super::metrics::entropy(&rho_a)
@@ -363,7 +363,7 @@ pub fn concurrence(dm: &DensityMatrix) -> Result<f64, QisError> {
 
     // Build density matrix as faer Mat
     let rho = Mat::from_fn(dim, dim, |row, col| {
-        faer::c64::new(dm.data[row * dim + col].re, dm.data[row * dim + col].im)
+        faer::c64::new(dm.data()[row * dim + col].re, dm.data()[row * dim + col].im)
     });
 
     // Compute spin-flipped matrix: ρ̃ = (σ_y ⊗ σ_y) ρ* (σ_y ⊗ σ_y)

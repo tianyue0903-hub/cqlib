@@ -92,7 +92,7 @@ pub fn purity_pure(sv: &Statevector) -> Result<f64, QisError> {
 ///
 /// Returns a value between 1/2^N (maximally mixed) and 1.0 (pure state).
 pub fn purity_mixed(dm: &DensityMatrix) -> Result<f64, QisError> {
-    let purity: f64 = dm.data.par_iter().map(|c| c.norm_sqr()).sum();
+    let purity: f64 = dm.data().par_iter().map(|c| c.norm_sqr()).sum();
     Ok(purity)
 }
 
@@ -149,7 +149,7 @@ pub fn state_fidelity_pure_mixed(sv: &Statevector, dm: &DensityMatrix) -> Result
     rho_psi.par_iter_mut().enumerate().for_each(|(i, res)| {
         let mut sum = Complex64::new(0.0, 0.0);
         for j in 0..dim {
-            sum += dm.data[i * dim + j] * sv.data()[j];
+            sum += dm.data()[i * dim + j] * sv.data()[j];
         }
         *res = sum;
     });
@@ -173,7 +173,7 @@ fn to_c64(c: Complex64) -> c64 {
 /// Helper to convert a DensityMatrix to a faer Mat<c64>
 pub fn density_matrix_to_faer(dm: &DensityMatrix) -> Mat<c64> {
     let dim = 1 << dm.num_qubits;
-    Mat::from_fn(dim, dim, |row, col| to_c64(dm.data[row * dim + col]))
+    Mat::from_fn(dim, dim, |row, col| to_c64(dm.data()[row * dim + col]))
 }
 
 /// Calculates the von Neumann entropy of a mixed state S(rho) = -Tr(rho log2 rho).
@@ -305,48 +305,7 @@ pub fn partial_transpose(
     dm: &DensityMatrix,
     target_qubits: &[usize],
 ) -> Result<DensityMatrix, QisError> {
-    let n = dm.num_qubits;
-    for &q in target_qubits {
-        if q >= n {
-            return Err(QisError::IndexOutOfBounds {
-                index: q,
-                max: n - 1,
-            });
-        }
-    }
-
-    // Construct a bit mask for the qubits to be swapped (lower n bits for bra).
-    let mut swap_mask = 0usize;
-    for &q in target_qubits {
-        swap_mask |= 1 << q;
-    }
-
-    // Create a new density matrix to store the result.
-    let mut new_dm = DensityMatrix::zeros(n);
-
-    // Perform the partial transpose using parallel bit manipulation.
-    // This is extremely cache-efficient as it only involves index arithmetic.
-    new_dm
-        .data
-        .par_iter_mut()
-        .enumerate()
-        .for_each(|(idx, val)| {
-            // 1. Extract the bra (column) and ket (row) states on target qubits.
-            let lower_swap_bits = idx & swap_mask;
-            let upper_swap_bits = (idx >> n) & swap_mask;
-
-            // 2. Clear the bits to be swapped from the current index.
-            let mut src_idx = idx & !(swap_mask | (swap_mask << n));
-
-            // 3. Cross-assign: original ket becomes bra, original bra becomes ket.
-            src_idx |= upper_swap_bits; // Original ket state -> new bra state
-            src_idx |= lower_swap_bits << n; // Original bra state -> new ket state
-
-            // 4. Read the corresponding element from the original matrix.
-            *val = dm.data[src_idx];
-        });
-
-    Ok(new_dm)
+    dm.partial_transpose(target_qubits)
 }
 
 /// Calculates the logarithmic negativity of a quantum state.

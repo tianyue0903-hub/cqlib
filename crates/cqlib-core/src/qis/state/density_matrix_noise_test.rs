@@ -1388,6 +1388,20 @@ fn test_apply_circuit_classical_control_flow_error() {
 }
 
 #[test]
+fn test_apply_standard_gate_noise_rejects_arity_and_param_mismatch() {
+    let mut sim = DensityMatrixNoise::new(2, None);
+
+    assert!(matches!(
+        sim.apply_standard_gate_noise(StandardGate::CX, &[0], &[]),
+        Err(QisError::InvalidParameterValue(_))
+    ));
+    assert!(matches!(
+        sim.apply_standard_gate_noise(StandardGate::RX, &[0], &[]),
+        Err(QisError::InvalidParameterValue(_))
+    ));
+}
+
+#[test]
 fn test_unitary_gate_fallback_applies_noise() {
     use crate::circuit::gate::UnitaryGate;
 

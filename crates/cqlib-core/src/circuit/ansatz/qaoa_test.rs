@@ -11,8 +11,8 @@
 // that they have been altered from the originals.
 
 use super::*;
-use crate::circuit::ansatz::Ansatz;
 use crate::circuit::Qubit;
+use crate::circuit::ansatz::Ansatz;
 
 #[test]
 fn test_qaoa_ansatz_default_mixer() {

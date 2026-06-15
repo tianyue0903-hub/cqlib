@@ -143,7 +143,7 @@
 //!     .measure_bits_into([Qubit::new(0), Qubit::new(1), Qubit::new(2)], latest)
 //!     .unwrap();
 //!
-//! let execution = StabilizerState::apply_circuit(&c).unwrap();
+//! let execution = StabilizerState::run_circuit(&c).unwrap();
 //! assert_eq!(execution.classical.value(bit.value()), Some(&RuntimeValue::Bit(true)));
 //! assert_eq!(
 //!     execution.classical.value(bits.value()).and_then(RuntimeValue::to_bitstring).as_deref(),
@@ -181,7 +181,7 @@ use rayon::prelude::*;
 use smallvec::SmallVec;
 use std::collections::HashMap;
 
-/// Result returned by [`StabilizerState::apply_circuit`].
+/// Result returned by [`StabilizerState::run_circuit`].
 ///
 /// Contains both the final quantum state and runtime classical data produced
 /// while executing measurement and store operations.
@@ -1471,7 +1471,54 @@ impl StabilizerState {
     /// assert!((probs.values().sum::<f64>() - 1.0).abs() < 1e-10);
     /// ```
     pub fn from_circuit(circuit: &Circuit) -> Result<Self, QisError> {
-        Ok(StabilizerState::run_circuit(circuit, CircuitClassicalMode::Ignore)?.state)
+        let mut state = StabilizerState::new(circuit.num_qubits());
+        state.apply_circuit(circuit)?;
+        Ok(state)
+    }
+
+    /// Applies a Clifford circuit to this stabilizer state in-place.
+    ///
+    /// This state-level entry point ignores terminal measurement declarations,
+    /// matching [`from_circuit`](Self::from_circuit). Use
+    /// [`run_circuit`](Self::run_circuit) when runtime classical measurement
+    /// values are required.
+    pub fn apply_circuit(&mut self, input_circuit: &Circuit) -> Result<(), QisError> {
+        if input_circuit.num_qubits() != self.num_qubits {
+            return Err(QisError::InvalidStateDimension(input_circuit.num_qubits()));
+        }
+        if input_circuit
+            .operations()
+            .iter()
+            .any(|op| matches!(op.instruction, Instruction::ClassicalControl(_)))
+        {
+            return Err(QisError::UnsupportedOperation(
+                "classical control flow is not supported in stabilizer simulation".to_string(),
+            ));
+        }
+
+        let circuit = input_circuit.decompose()?;
+        let qubits = circuit.qubits();
+        let qubit_map: std::collections::HashMap<_, _> = qubits
+            .iter()
+            .enumerate()
+            .map(|(idx, q)| (*q, idx))
+            .collect();
+
+        let parameter_values: Vec<Option<f64>> = circuit
+            .parameters()
+            .iter()
+            .map(|p| p.evaluate(&None).ok())
+            .collect();
+
+        let mut classical = ClassicalState::for_circuit(&circuit);
+        StabilizerState::execute_operations(
+            self,
+            circuit.operations(),
+            &qubit_map,
+            &parameter_values,
+            &mut classical,
+            CircuitClassicalMode::Ignore,
+        )
     }
 
     /// Executes a Clifford circuit and returns both the final state and runtime
@@ -1505,15 +1552,15 @@ impl StabilizerState {
     /// let flag = c.var(ClassicalType::Bool);
     /// c.store(flag, ClassicalExpr::bit_to_bool(measured.expr()).unwrap()).unwrap();
     ///
-    /// let result = StabilizerState::apply_circuit(&c).unwrap();
+    /// let result = StabilizerState::run_circuit(&c).unwrap();
     /// assert_eq!(result.classical.value(measured.value()), Some(&RuntimeValue::Bit(true)));
     /// assert_eq!(result.classical.var(flag), Some(&RuntimeValue::Bool(true)));
     /// ```
-    pub fn apply_circuit(circuit: &Circuit) -> Result<CircuitExecutionResult, QisError> {
-        StabilizerState::run_circuit(circuit, CircuitClassicalMode::Execute)
+    pub fn run_circuit(circuit: &Circuit) -> Result<CircuitExecutionResult, QisError> {
+        StabilizerState::run_circuit_with_mode(circuit, CircuitClassicalMode::Execute)
     }
 
-    fn run_circuit(
+    fn run_circuit_with_mode(
         input_circuit: &Circuit,
         classical_mode: CircuitClassicalMode,
     ) -> Result<CircuitExecutionResult, QisError> {
@@ -1674,6 +1721,34 @@ impl StabilizerState {
             }
         }
         Ok(())
+    }
+
+    /// Applies a standard gate to the stabilizer tableau.
+    ///
+    /// Returns [`QisError::NonCliffordGate`] for gates outside the Clifford set.
+    pub fn apply_standard_gate(
+        &mut self,
+        gate: StandardGate,
+        qubits: &[usize],
+        params: &[f64],
+    ) -> Result<(), QisError> {
+        if qubits.len() != gate.num_qubits() {
+            return Err(QisError::InvalidParameterValue(format!(
+                "Gate {:?} requires {} qubits, got {}",
+                gate,
+                gate.num_qubits(),
+                qubits.len()
+            )));
+        }
+        if params.len() != gate.num_params() {
+            return Err(QisError::InvalidParameterValue(format!(
+                "Gate {:?} requires {} parameters, got {}",
+                gate,
+                gate.num_params(),
+                params.len()
+            )));
+        }
+        self.apply_clifford_gate(gate, qubits, params)
     }
 
     /// Dispatches a [`StandardGate`] to the appropriate Clifford tableau method.

@@ -205,7 +205,7 @@ impl Observable for Hamiltonian {
 
                     // Flat index: (row << n) | col
                     let flat_index = (j << n) | col;
-                    let rho_elem = dm.data[flat_index];
+                    let rho_elem = dm.data()[flat_index];
 
                     // Z operator: add phase (-1)^(number of overlapping Z bits)
                     let z_parity = (j & z_mask).count_ones();
@@ -357,7 +357,7 @@ impl Observable for PauliString {
             .map(|j| {
                 let col = j ^ x_mask;
                 let flat_index = (j << n) | col;
-                let rho_elem = dm.data[flat_index];
+                let rho_elem = dm.data()[flat_index];
                 let z_parity = (j & z_mask).count_ones();
                 let sign = if z_parity % 2 == 1 { -1.0 } else { 1.0 };
                 let phase_factor = base_factor * sign;
