@@ -12,8 +12,8 @@
 
 //! Global-phase equivalence checking for symbolic matrices and circuits.
 //!
-//! Provides [`symbolic_matrices_equivalent_up_to_global_phase`] and
-//! [`circuits_equivalent_up_to_global_phase`] for comparing quantum
+//! Provides [`symbolic_matrices_equivalent()`] and
+//! [`circuits_equivalent()`] for comparing quantum
 //! operations that may differ by a global phase factor. The check is
 //! conservative and depends on the simplification power of
 //! [`Parameter::simplify`](crate::circuit::Parameter::simplify).

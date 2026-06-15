@@ -12,7 +12,7 @@
 
 //! Simulation consistency tests between Statevector and DensityMatrix
 
-use crate::circuit::Circuit;
+use crate::circuit::{Circuit, Qubit};
 use crate::qis::pauli::{Pauli, PauliString};
 use crate::qis::{DensityMatrix, StabilizerState, Statevector};
 use std::f64::consts::PI;
@@ -667,15 +667,15 @@ fn test_multiple_entangling_gates() {
 #[test]
 fn test_clifford_circuits_match_stabilizer_state() {
     let mut bell = Circuit::new(2);
-    bell.h(0.into()).unwrap();
-    bell.cx(0.into(), 1.into()).unwrap();
+    bell.h(Qubit::new(0)).unwrap();
+    bell.cx(Qubit::new(0), Qubit::new(1)).unwrap();
 
     let mut graph = Circuit::new(3);
-    graph.h(0.into()).unwrap();
-    graph.h(1.into()).unwrap();
-    graph.s(2.into()).unwrap();
-    graph.cz(0.into(), 1.into()).unwrap();
-    graph.cx(1.into(), 2.into()).unwrap();
+    graph.h(Qubit::new(0)).unwrap();
+    graph.h(Qubit::new(1)).unwrap();
+    graph.s(Qubit::new(2)).unwrap();
+    graph.cz(Qubit::new(0), Qubit::new(1)).unwrap();
+    graph.cx(Qubit::new(1), Qubit::new(2)).unwrap();
 
     let cases = vec![
         (

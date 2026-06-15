@@ -419,13 +419,13 @@ impl Statevector {
     ///
     /// # Example
     /// ```rust
-    /// use cqlib_core::circuit::Circuit;
+    /// use cqlib_core::circuit::{Circuit, Qubit};
     /// use cqlib_core::qis::Statevector;
     ///
     /// // Create Bell state: |Φ+⟩ = (|00⟩ + |11⟩)/√2
     /// let mut circuit = Circuit::new(2);
-    /// circuit.h(0.into());
-    /// circuit.cx(0.into(), 1.into());
+    /// circuit.h(Qubit::new(0)).unwrap();
+    /// circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
     ///
     /// let sv = Statevector::from_circuit(&circuit).unwrap();
     /// ```

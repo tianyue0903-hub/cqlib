@@ -1290,8 +1290,8 @@ fn test_measurement_interfaces_keep_readout_noise_explicit() {
         .unwrap();
 
     let mut circuit = Circuit::new(1);
-    circuit.x(0.into()).unwrap();
-    let out = circuit.measure(0.into()).unwrap();
+    circuit.x(Qubit::new(0)).unwrap();
+    let out = circuit.measure(Qubit::new(0)).unwrap();
 
     let sim = DensityMatrixNoise::from_circuit(&circuit, Some(noise_model)).unwrap();
     let ideal = sim.probs(&out).unwrap();
@@ -1317,7 +1317,7 @@ fn test_sample_uses_measurement_qubit_order_without_readout_noise() {
         .unwrap();
 
     let mut circuit = Circuit::new(2);
-    circuit.x(0.into()).unwrap();
+    circuit.x(Qubit::new(0)).unwrap();
     let out = circuit
         .measure_bits([Qubit::new(1), Qubit::new(0)])
         .unwrap();
@@ -1340,8 +1340,8 @@ fn test_from_circuit_ignores_terminal_measurement_declarations() {
     use crate::device::Outcome;
 
     let mut circuit = Circuit::new(2);
-    circuit.h(0.into()).unwrap();
-    circuit.cx(0.into(), 1.into()).unwrap();
+    circuit.h(Qubit::new(0)).unwrap();
+    circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
     let out = circuit
         .measure_bits([Qubit::new(1), Qubit::new(0)])
         .unwrap();
@@ -1357,8 +1357,8 @@ fn test_from_circuit_ignores_terminal_measurement_declarations() {
 #[test]
 fn test_apply_circuit_reset_directive() {
     let mut circuit = Circuit::new(1);
-    circuit.x(0.into()).unwrap();
-    circuit.reset(0.into()).unwrap();
+    circuit.x(Qubit::new(0)).unwrap();
+    circuit.reset(Qubit::new(0)).unwrap();
 
     let mut sim = DensityMatrixNoise::new(1, None);
     sim.apply_circuit(&circuit).unwrap();
@@ -1375,7 +1375,7 @@ fn test_apply_circuit_classical_control_flow_error() {
     let mut circuit = Circuit::new(1);
     circuit
         .if_(ClassicalExpr::bool_literal(true), |body| {
-            body.x(0.into())?;
+            body.x(Qubit::new(0))?;
             Ok(())
         })
         .unwrap();

@@ -12,6 +12,7 @@
 
 use super::*;
 use crate::circuit::ansatz::Ansatz;
+use crate::circuit::Qubit;
 
 #[test]
 fn test_qaoa_ansatz_default_mixer() {
@@ -96,7 +97,7 @@ fn test_qaoa_custom_initial_state() {
 
     // Custom initial state: |01> instead of |++>
     let mut initial_circuit = Circuit::new(2);
-    initial_circuit.x(1.into()).unwrap();
+    initial_circuit.x(Qubit::new(1)).unwrap();
 
     let ansatz = QAOAAnsatz::new(h_c)
         .unwrap()
@@ -129,7 +130,7 @@ fn test_qaoa_initial_state_mismatch_error() {
 
     // Initial state with wrong number of qubits (3 instead of 2)
     let mut initial_circuit = Circuit::new(3);
-    initial_circuit.h(0.into()).unwrap();
+    initial_circuit.h(Qubit::new(0)).unwrap();
 
     let result = QAOAAnsatz::new(h_c).unwrap().initial_state(initial_circuit);
     assert!(result.is_err());

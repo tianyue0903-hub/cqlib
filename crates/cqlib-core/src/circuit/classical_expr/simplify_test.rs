@@ -1,4 +1,4 @@
-use super::{ClassicalExpr, simplify};
+use super::{ClassicalExpr, ClassicalExprKind, simplify};
 use crate::circuit::{CircuitId, ClassicalType, ClassicalValue, ClassicalVar};
 use std::sync::OnceLock;
 
@@ -81,6 +81,40 @@ fn leaf_uint_literal_is_unchanged() {
 fn leaf_bitvec_literal_is_unchanged() {
     let expr = ClassicalExpr::bit_vec_literal(4, 0b1010).unwrap();
     assert_eq!(simplify(&expr), expr);
+}
+
+#[test]
+fn type_literals_preserve_width_bearing_classical_types() {
+    let uint = ClassicalType::uint(8).unwrap();
+    let uint_zero = uint.zero_literal().unwrap();
+    let uint_one = uint.one_literal().unwrap();
+    assert_eq!(uint_zero.ty(), uint);
+    assert_eq!(uint_one.ty(), uint);
+    assert!(matches!(
+        uint_zero.kind(),
+        ClassicalExprKind::UIntLiteral { value: 0, .. }
+    ));
+    assert!(matches!(
+        uint_one.kind(),
+        ClassicalExprKind::UIntLiteral { value: 1, .. }
+    ));
+
+    let bit_vec = ClassicalType::bit_vec(8).unwrap();
+    let bit_vec_zero = bit_vec.zero_literal().unwrap();
+    let bit_vec_one = bit_vec.one_literal().unwrap();
+    assert_eq!(bit_vec_zero.ty(), bit_vec);
+    assert_eq!(bit_vec_one.ty(), bit_vec);
+    assert!(matches!(
+        bit_vec_zero.kind(),
+        ClassicalExprKind::BitVecLiteral { value: 0, .. }
+    ));
+    assert!(matches!(
+        bit_vec_one.kind(),
+        ClassicalExprKind::BitVecLiteral { value: 1, .. }
+    ));
+
+    assert!(ClassicalType::uint(129).unwrap().zero_literal().is_err());
+    assert!(ClassicalType::bit_vec(129).unwrap().one_literal().is_err());
 }
 
 #[test]

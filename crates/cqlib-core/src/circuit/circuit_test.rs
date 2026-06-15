@@ -233,6 +233,77 @@ fn append_rejects_non_finite_fixed_parameters() {
 }
 
 #[test]
+fn append_rejects_fixed_instruction_arity_mismatches_without_mutation() {
+    let mut circuit = Circuit::new(2);
+    let q0 = Qubit::new(0);
+    let q1 = Qubit::new(1);
+    let theta = Parameter::symbol("theta");
+
+    assert!(matches!(
+        circuit.append(Instruction::Standard(StandardGate::CX), [q0], [], None),
+        Err(CircuitError::QubitCountMismatch {
+            expected: 2,
+            actual: 1
+        })
+    ));
+    assert!(matches!(
+        circuit.append(Instruction::Standard(StandardGate::H), [q0, q1], [], None,),
+        Err(CircuitError::QubitCountMismatch {
+            expected: 1,
+            actual: 2
+        })
+    ));
+    assert!(matches!(
+        circuit.append(
+            Instruction::Standard(StandardGate::RX),
+            [q0],
+            std::iter::empty(),
+            None,
+        ),
+        Err(CircuitError::ParameterCountMismatch {
+            expected: 1,
+            actual: 0
+        })
+    ));
+    assert!(matches!(
+        circuit.append(
+            Instruction::Standard(StandardGate::RX),
+            [q0],
+            [ParameterValue::Param(theta), ParameterValue::Fixed(0.5),],
+            None,
+        ),
+        Err(CircuitError::ParameterCountMismatch {
+            expected: 1,
+            actual: 2
+        })
+    ));
+
+    assert!(circuit.operations().is_empty());
+    assert!(circuit.parameters().is_empty());
+    assert!(circuit.symbols().is_empty());
+}
+
+#[test]
+fn append_rejects_circuit_gate_parameter_mismatch_immediately() {
+    let theta = Parameter::symbol("theta");
+    let mut inner = Circuit::new(1);
+    inner.rx(Qubit::new(0), theta).unwrap();
+    let gate = inner.to_gate("rx").unwrap();
+
+    let mut circuit = Circuit::new(1);
+    let result = circuit.append(gate, [Qubit::new(0)], [], None);
+
+    assert!(matches!(
+        result,
+        Err(CircuitError::ParameterCountMismatch {
+            expected: 1,
+            actual: 0
+        })
+    ));
+    assert!(circuit.operations().is_empty());
+}
+
+#[test]
 fn from_operations_rejects_non_finite_fixed_parameters() {
     let operations = vec![ValueOperation {
         instruction: ValueInstruction::from_instruction(Instruction::Standard(StandardGate::RX)),
@@ -1217,6 +1288,21 @@ fn test_compose_without_mapping() {
 
     // Verify: 2 operations (1 from qc1, 1 from qc2)
     assert_eq!(qc1.data.len(), 2);
+}
+
+#[test]
+fn compose_without_mapping_merges_qubits_with_matching_ids() {
+    let mut qc1 = Circuit::new(1);
+    qc1.h(Qubit::new(0)).unwrap();
+
+    let mut qc2 = Circuit::new(1);
+    qc2.x(Qubit::new(0)).unwrap();
+
+    qc1.compose(&qc2, None).unwrap();
+
+    assert_eq!(qc1.qubits(), vec![Qubit::new(0)]);
+    assert_eq!(qc1.operations().len(), 2);
+    assert_eq!(qc1.operations()[1].qubits.as_slice(), &[Qubit::new(0)]);
 }
 
 #[test]

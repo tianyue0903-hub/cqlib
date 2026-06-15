@@ -23,7 +23,7 @@
 //!   [`apply_numeric_diagonal_gate`], [`apply_numeric_permutation_gate`] —
 //!   fast-path gate application helpers.
 //!
-//! The parallel-safety helper [`UnsafeSymbolicSlice`] lives here because it
+//! The internal parallel-safety helper `UnsafeSymbolicSlice` lives here because it
 //! is shared by both the symbolic and numeric gate-application paths.
 
 use crate::circuit::CircuitError;
@@ -39,6 +39,10 @@ use std::fmt;
 use std::marker::PhantomData;
 use std::ops::{Add, Mul, Neg, Sub};
 
+/// Complex value whose real and imaginary components are symbolic parameters.
+///
+/// Arithmetic preserves symbolic expressions, allowing matrices to remain
+/// unevaluated until a parameter binding is supplied.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SymbolicComplex {
     /// Real part of the symbolic complex number.
@@ -130,7 +134,7 @@ impl SymbolicComplex {
     /// parts with the given `value`.
     ///
     /// This is used by [`substitute_symbolic_matrix`] to bind
-    /// [`CircuitGate`] parameters.
+    /// [`CircuitGate`](crate::circuit::CircuitGate) parameters.
     pub fn replace(&self, symbol: &str, value: impl Into<Parameter>) -> Self {
         let value = value.into();
         Self::new(
@@ -151,7 +155,7 @@ impl SymbolicComplex {
 
     /// Returns `true` if this value simplifies to exactly zero.
     ///
-    /// First checks [`is_zero_exact`]; if that fails, applies
+    /// First checks [`Self::is_zero_exact`]; if that fails, applies
     /// [`simplify`](Self::simplify) and checks again.
     pub fn simplifies_to_zero(&self) -> Result<bool, ParameterError> {
         if self.is_zero_exact() {
@@ -381,14 +385,14 @@ const INTERNAL_SUB_PREFIX: &str = "__cqlib_internal_sub";
 /// When replacement values reference symbols that are also keys in the
 /// `replacements` map (e.g. swapping `a` and `b`), a two-phase approach is
 /// used: symbols are first renamed to temporary names prefixed with
-/// [`INTERNAL_SUB_PREFIX`], then the temporary names are replaced with the
+/// `INTERNAL_SUB_PREFIX`, then the temporary names are replaced with the
 /// actual values. This avoids the non-deterministic ordering artefacts that
 /// would arise from sequential substitution.
 ///
 /// # Errors
 ///
 /// - [`CircuitError::InvalidOperation`] if any key or replacement value
-///   contains [`INTERNAL_SUB_PREFIX`], which would collide with the
+///   contains the reserved internal substitution prefix, which would collide with the
 ///   algorithm's temporary symbol names.
 pub fn substitute_symbolic_matrix(
     matrix: SymbolicMatrix,
@@ -519,7 +523,7 @@ pub fn symbolic_eye(dim: usize) -> SymbolicMatrix {
 ///
 /// Each output row is constructed by scaling exactly one input row by its
 /// corresponding permutation factor. Uses rayon when the matrix element
-/// count exceeds [`PARALLEL_THRESHOLD_OPS`].
+/// count exceeds the configured parallel threshold.
 pub fn apply_symbolic_permutation_gate(
     matrix: &mut SymbolicMatrix,
     permutation: &[(usize, SymbolicComplex)],
@@ -576,7 +580,7 @@ pub fn apply_symbolic_permutation_gate(
 ///
 /// Only the rows whose diagonal entry is not exactly one are scaled, skipping
 /// identity-scale rows. Uses rayon when the matrix element count exceeds
-/// [`PARALLEL_THRESHOLD_OPS`].
+/// the configured parallel threshold.
 pub fn apply_symbolic_diagonal_gate(
     matrix: &mut SymbolicMatrix,
     diagonal: &[SymbolicComplex],

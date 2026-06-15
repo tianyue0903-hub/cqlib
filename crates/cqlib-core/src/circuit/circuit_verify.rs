@@ -10,6 +10,14 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
+//! Validation of circuit classical-data and structured control-flow invariants.
+//!
+//! The verifier checks that classical handles belong to the circuit, immutable
+//! values have one dominating definition, expressions only read available
+//! values, branch-local values do not escape their region, and `break` and
+//! `continue` appear only in valid terminal positions. Quantum gate arity and
+//! qubit membership are validated when operations are appended, not here.
+
 use crate::circuit::gate::{ClassicalDataOp, Instruction};
 use crate::circuit::{
     Circuit, CircuitError, ClassicalControlOp, ClassicalExpr, ClassicalType, ClassicalValue,
@@ -47,6 +55,14 @@ struct ClassicalVerifier<'a> {
 impl Circuit {
     /// Validates classical handle ownership, measurement definitions, SSA use
     /// availability, and structured control-flow value scope.
+    ///
+    /// Validation does not mutate the circuit and may be called after loading,
+    /// transforming, or manually constructing circuit IR.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`CircuitError`] describing the first ownership, definition,
+    /// type, scope, or control-flow placement violation encountered.
     pub fn validate(&self) -> Result<(), CircuitError> {
         self.validate_with_context(ControlContext::default(), true)
     }

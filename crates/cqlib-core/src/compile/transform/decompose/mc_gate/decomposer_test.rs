@@ -961,41 +961,45 @@ fn unsupported_controlled_gate_families_are_rejected_explicitly() {
 }
 
 #[test]
-fn malformed_mc_gate_arity_is_rejected_before_planning() {
+fn malformed_mc_gate_arity_is_rejected_during_circuit_construction() {
     let mut circuit = Circuit::new(4);
-    circuit
+    let error = circuit
         .append(
             Instruction::McGate(Box::new(MCGate::new(3, StandardGate::X))),
             [Qubit::new(0), Qubit::new(1), Qubit::new(2)],
             [],
             None,
         )
-        .unwrap();
+        .unwrap_err();
 
-    let error = decompose_mc_gates(&circuit, McGateDecomposeConfig::default()).unwrap_err();
-
-    assert!(
-        matches!(error, CompilerError::InvalidInput(message) if message.contains("expects 4 qubits"))
-    );
+    assert!(matches!(
+        error,
+        CircuitError::QubitCountMismatch {
+            expected: 4,
+            actual: 3
+        }
+    ));
 }
 
 #[test]
-fn malformed_mc_gate_parameter_arity_is_rejected_before_planning() {
+fn malformed_mc_gate_parameter_arity_is_rejected_during_circuit_construction() {
     let mut circuit = Circuit::new(2);
-    circuit
+    let error = circuit
         .append(
             Instruction::McGate(Box::new(MCGate::new(1, StandardGate::RZ))),
             [Qubit::new(0), Qubit::new(1)],
             [],
             None,
         )
-        .unwrap();
+        .unwrap_err();
 
-    let error = decompose_mc_gates(&circuit, McGateDecomposeConfig::default()).unwrap_err();
-
-    assert!(
-        matches!(error, CompilerError::InvalidInput(message) if message.contains("expects 1 parameters"))
-    );
+    assert!(matches!(
+        error,
+        CircuitError::ParameterCountMismatch {
+            expected: 1,
+            actual: 0
+        }
+    ));
 }
 
 #[test]

@@ -93,30 +93,35 @@ impl ClassicalType {
 
     /// Returns the zero literal for this type.
     ///
-    /// `Bool` → `false`, `Bit` → `bit_literal(false)`. `UInt` and `BitVec`
-    /// require a width argument; see [`ClassicalExpr::uint_literal`] and
-    /// [`ClassicalExpr::bit_vec_literal`].
-    pub fn zero_literal(self) -> ClassicalExpr {
+    /// Width-bearing literals currently support widths up to 128 bits.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CircuitError`](crate::circuit::CircuitError) when this is a
+    /// `UInt` or `BitVec` wider than the 128-bit literal representation.
+    pub fn zero_literal(self) -> Result<ClassicalExpr, crate::circuit::CircuitError> {
         match self {
-            Self::Bool => ClassicalExpr::bool_literal(false),
-            Self::Bit => ClassicalExpr::bit_literal(false),
-            Self::UInt(_) | Self::BitVec(_) => {
-                ClassicalExpr::bool_literal(false) // fallback; width-bearing types use explicit constructors
-            }
+            Self::Bool => Ok(ClassicalExpr::bool_literal(false)),
+            Self::Bit => Ok(ClassicalExpr::bit_literal(false)),
+            Self::UInt(width) => ClassicalExpr::uint_literal(width.get(), 0),
+            Self::BitVec(width) => ClassicalExpr::bit_vec_literal(width.get(), 0),
         }
     }
 
     /// Returns the one literal for this type.
     ///
-    /// `Bool` → `true`, `Bit` → `bit_literal(true)`. `UInt` and `BitVec`
-    /// require a width argument.
-    pub fn one_literal(self) -> ClassicalExpr {
+    /// Width-bearing literals currently support widths up to 128 bits.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CircuitError`](crate::circuit::CircuitError) when this is a
+    /// `UInt` or `BitVec` wider than the 128-bit literal representation.
+    pub fn one_literal(self) -> Result<ClassicalExpr, crate::circuit::CircuitError> {
         match self {
-            Self::Bool => ClassicalExpr::bool_literal(true),
-            Self::Bit => ClassicalExpr::bit_literal(true),
-            Self::UInt(_) | Self::BitVec(_) => {
-                ClassicalExpr::bool_literal(true) // fallback
-            }
+            Self::Bool => Ok(ClassicalExpr::bool_literal(true)),
+            Self::Bit => Ok(ClassicalExpr::bit_literal(true)),
+            Self::UInt(width) => ClassicalExpr::uint_literal(width.get(), 1),
+            Self::BitVec(width) => ClassicalExpr::bit_vec_literal(width.get(), 1),
         }
     }
 

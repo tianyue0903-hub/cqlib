@@ -71,26 +71,32 @@ impl ForOp {
         })
     }
 
+    /// Returns the mutable unsigned loop variable.
     pub fn var(&self) -> ClassicalVar {
         self.var
     }
 
+    /// Returns the inclusive initial value.
     pub fn start(&self) -> &ClassicalExpr {
         &self.start
     }
 
+    /// Returns the exclusive upper bound.
     pub fn stop(&self) -> &ClassicalExpr {
         &self.stop
     }
 
+    /// Returns the iteration increment.
     pub fn step(&self) -> &ClassicalExpr {
         &self.step
     }
 
+    /// Returns the loop body.
     pub fn body(&self) -> &ControlBody {
         &self.body
     }
 
+    /// Returns mutable variables read by the range expressions.
     pub fn classical_var_reads(&self) -> BTreeSet<ClassicalVar> {
         let mut vars = self.start.vars();
         vars.extend(self.stop.vars());
@@ -98,6 +104,7 @@ impl ForOp {
         vars
     }
 
+    /// Returns immutable values read by the range expressions.
     pub fn classical_value_reads(&self) -> BTreeSet<ClassicalValue> {
         let mut values = self.start.values();
         values.extend(self.stop.values());
@@ -105,12 +112,14 @@ impl ForOp {
         values
     }
 
+    /// Returns the loop variable written by the operation.
     pub fn classical_writes(&self) -> BTreeSet<ClassicalVar> {
         let mut vars = BTreeSet::new();
         vars.insert(self.var);
         vars
     }
 
+    /// Returns qubits used by the loop body.
     pub fn used_qubits(&self) -> BTreeSet<Qubit> {
         self.body.used_qubits()
     }

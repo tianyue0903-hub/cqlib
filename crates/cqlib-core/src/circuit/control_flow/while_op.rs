@@ -34,22 +34,27 @@ impl WhileOp {
         Ok(Self { condition, body })
     }
 
+    /// Returns the boolean loop condition.
     pub fn condition(&self) -> &ClassicalExpr {
         &self.condition
     }
 
+    /// Returns the loop body.
     pub fn body(&self) -> &ControlBody {
         &self.body
     }
 
+    /// Returns mutable variables read by the condition.
     pub fn classical_var_reads(&self) -> BTreeSet<ClassicalVar> {
         self.condition.vars()
     }
 
+    /// Returns immutable values read by the condition.
     pub fn classical_value_reads(&self) -> BTreeSet<ClassicalValue> {
         self.condition.values()
     }
 
+    /// Returns qubits used by the loop body.
     pub fn used_qubits(&self) -> BTreeSet<Qubit> {
         self.body.used_qubits()
     }

@@ -38,6 +38,7 @@ use smallvec::SmallVec;
 use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Semantic kind of an edge between two circuit basic blocks.
 pub enum FlowEdge {
     /// True edge out of `if`, `while`, or `for` headers.
     TrueBranch,
@@ -57,6 +58,10 @@ pub enum FlowEdge {
 }
 
 #[derive(Debug, Clone)]
+/// Control transfer that ends a [`BasicBlock`].
+///
+/// Every block in a valid [`CircuitCFG`] has exactly one terminator, and its
+/// outgoing edges must agree with that terminator.
 pub enum Terminator {
     /// Boolean condition for `if` and `while` headers.
     Branch(ClassicalExpr),
@@ -64,9 +69,13 @@ pub enum Terminator {
     /// `Branch` because `ForOp` has no lossless lowering to the current
     /// expression language.
     ForLoop {
+        /// Loop variable updated for each iteration.
         var: ClassicalVar,
+        /// Inclusive initial value.
         start: ClassicalExpr,
+        /// Exclusive upper bound.
         stop: ClassicalExpr,
+        /// Non-zero iteration increment.
         step: ClassicalExpr,
     },
     /// Unsigned exact-value multi-way branch.
@@ -85,8 +94,11 @@ pub enum Terminator {
 /// operation, not inside the expanded body blocks.
 #[derive(Debug, Clone)]
 pub struct OperationMetadata {
+    /// Qubits attached to the outer control-flow operation.
     pub qubits: SmallVec<[Qubit; 3]>,
+    /// Parameters attached to the outer control-flow operation.
     pub params: SmallVec<[CircuitParam; 1]>,
+    /// Optional diagnostic label of the outer operation.
     pub label: Option<Box<str>>,
 }
 
@@ -101,8 +113,11 @@ impl OperationMetadata {
 }
 
 #[derive(Debug, Clone)]
+/// A switch match value and the entry block of its body.
 pub struct SwitchRegionCase {
+    /// Exact unsigned value matched by this case.
     pub value: u128,
+    /// First block executed when the case matches.
     pub entry: NodeIndex,
 }
 
@@ -112,32 +127,53 @@ pub struct SwitchRegionCase {
 /// text only; region metadata and graph edges define the control-flow shape.
 #[derive(Debug, Clone)]
 pub enum ControlFlowRegion {
+    /// Structured conditional region.
     If {
+        /// Entry block of the then body.
         then_entry: NodeIndex,
+        /// Entry block of the else path, or the merge block when absent.
         else_entry: NodeIndex,
+        /// Block where both branches rejoin.
         merge_block: NodeIndex,
+        /// Whether an explicit else body existed in the source circuit.
         has_else: bool,
+        /// Metadata from the outer control-flow operation.
         outer: OperationMetadata,
     },
+    /// Structured while-loop region.
     While {
+        /// Entry block of the loop body.
         body_entry: NodeIndex,
+        /// First block executed after the loop.
         exit_block: NodeIndex,
+        /// Metadata from the outer control-flow operation.
         outer: OperationMetadata,
     },
+    /// Structured unsigned range-loop region.
     For {
+        /// Entry block of the loop body.
         body_entry: NodeIndex,
+        /// First block executed after the loop.
         exit_block: NodeIndex,
+        /// Metadata from the outer control-flow operation.
         outer: OperationMetadata,
     },
+    /// Structured exact-value switch region.
     Switch {
+        /// Explicit cases in source order.
         cases: Vec<SwitchRegionCase>,
+        /// Entry block of the default path, or the merge block when absent.
         default_entry: NodeIndex,
+        /// Block where all switch paths rejoin.
         merge_block: NodeIndex,
+        /// Whether an explicit default body existed in the source circuit.
         has_default: bool,
+        /// Metadata from the outer control-flow operation.
         outer: OperationMetadata,
     },
 }
 
+/// Straight-line sequence of operations followed by one control transfer.
 #[derive(Debug, Clone)]
 pub struct BasicBlock {
     pub(crate) operations: Vec<Operation>,
@@ -146,6 +182,7 @@ pub struct BasicBlock {
 }
 
 impl BasicBlock {
+    /// Creates an empty, unlabeled block without a terminator.
     pub fn new() -> Self {
         Self {
             operations: Vec::new(),
@@ -154,43 +191,53 @@ impl BasicBlock {
         }
     }
 
+    /// Sets a diagnostic label and returns the updated block.
     pub fn with_label(mut self, label: impl Into<String>) -> Self {
         self.label = Some(label.into());
         self
     }
 
+    /// Appends one non-control-flow storage operation.
     pub fn push_operation(&mut self, op: Operation) {
         self.operations.push(op);
     }
 
+    /// Appends a sequence of non-control-flow storage operations.
     pub fn extend_operations(&mut self, ops: impl IntoIterator<Item = Operation>) {
         self.operations.extend(ops);
     }
 
+    /// Replaces the block terminator.
     pub fn set_terminator(&mut self, terminator: Terminator) {
         self.terminator = Some(terminator);
     }
 
+    /// Returns `true` when the block has neither operations nor a terminator.
     pub fn is_empty(&self) -> bool {
         self.operations.is_empty() && self.terminator.is_none()
     }
 
+    /// Returns `true` when a terminator has been assigned.
     pub fn has_terminator(&self) -> bool {
         self.terminator.is_some()
     }
 
+    /// Returns the number of ordinary operations, excluding the terminator.
     pub fn len(&self) -> usize {
         self.operations.len()
     }
 
+    /// Returns the optional diagnostic label.
     pub fn label(&self) -> Option<&str> {
         self.label.as_deref()
     }
 
+    /// Returns the block terminator, if assigned.
     pub fn terminator(&self) -> Option<&Terminator> {
         self.terminator.as_ref()
     }
 
+    /// Returns the ordinary operations in execution order.
     pub fn operations(&self) -> &[Operation] {
         &self.operations
     }
@@ -202,6 +249,11 @@ impl Default for BasicBlock {
     }
 }
 
+/// Structured control-flow graph representation of a [`Circuit`].
+///
+/// This is not a general unstructured IR. Conditional, loop, and switch
+/// headers require matching [`ControlFlowRegion`] metadata so the graph can
+/// round-trip back to circuit control-flow operations.
 #[derive(Debug)]
 pub struct CircuitCFG {
     pub(crate) qubits: IndexSet<Qubit>,
@@ -216,6 +268,7 @@ pub struct CircuitCFG {
 }
 
 impl CircuitCFG {
+    /// Creates an empty CFG with densely numbered qubits `0..num_qubits`.
     pub fn new(num_qubits: usize) -> Self {
         let qubits = (0..num_qubits).map(|i| Qubit::new(i as u32)).collect();
         Self {
@@ -231,6 +284,7 @@ impl CircuitCFG {
         }
     }
 
+    /// Creates an empty CFG with the supplied logical qubits in insertion order.
     pub fn from_qubits(qubits: Vec<Qubit>) -> Self {
         Self {
             qubits: qubits.into_iter().collect(),
@@ -245,10 +299,14 @@ impl CircuitCFG {
         }
     }
 
+    /// Adds a block and returns its stable graph index.
     pub fn add_block(&mut self, block: BasicBlock) -> NodeIndex {
         self.data.add_node(block)
     }
 
+    /// Adds a directed semantic edge between existing blocks.
+    ///
+    /// Returns `None` without mutation when either endpoint is unknown.
     pub fn add_edge(
         &mut self,
         source: NodeIndex,
@@ -261,22 +319,29 @@ impl CircuitCFG {
         Some(self.data.add_edge(source, target, flow))
     }
 
+    /// Returns the designated entry block.
     pub fn entry_block(&self) -> Option<NodeIndex> {
         self.entry_block
     }
 
+    /// Sets the graph entry block.
+    ///
+    /// The index is checked by [`CircuitCFG::validate`], not by this setter.
     pub fn set_entry_block(&mut self, index: NodeIndex) {
         self.entry_block = Some(index);
     }
 
+    /// Associates structured-region metadata with its header block.
     pub fn set_control_flow_region(&mut self, branch_block: NodeIndex, region: ControlFlowRegion) {
         self.control_flow_regions.insert(branch_block, region);
     }
 
+    /// Returns structured-region metadata owned by `branch_block`.
     pub fn control_flow_region(&self, branch_block: NodeIndex) -> Option<&ControlFlowRegion> {
         self.control_flow_regions.get(&branch_block)
     }
 
+    /// Returns `true` when the block owns a while or for region.
     pub fn is_loop_header(&self, block: NodeIndex) -> bool {
         matches!(
             self.control_flow_region(block),
@@ -284,14 +349,17 @@ impl CircuitCFG {
         )
     }
 
+    /// Iterates over all stable block indices and immutable blocks.
     pub fn blocks(&self) -> impl Iterator<Item = (NodeIndex, &BasicBlock)> {
         self.data.node_indices().map(|i| (i, &self.data[i]))
     }
 
+    /// Returns a mutable block by stable graph index.
     pub fn block_mut(&mut self, index: NodeIndex) -> Option<&mut BasicBlock> {
         self.data.node_weight_mut(index)
     }
 
+    /// Iterates over outgoing target blocks and semantic edge kinds.
     pub fn outgoing_edges(
         &self,
         source: NodeIndex,
@@ -301,26 +369,37 @@ impl CircuitCFG {
             .map(|edge| (edge.target(), edge.weight().clone()))
     }
 
+    /// Returns the number of blocks currently stored in the graph.
     pub fn num_blocks(&self) -> usize {
         self.data.node_indices().count()
     }
 
+    /// Returns the number of logical qubits known to the CFG.
     pub fn num_qubits(&self) -> usize {
         self.qubits.len()
     }
 
+    /// Returns logical qubits in insertion order.
     pub fn qubits(&self) -> Vec<Qubit> {
         self.qubits.iter().cloned().collect()
     }
 
+    /// Returns the static type table for mutable classical variables.
     pub fn classical_vars(&self) -> &[ClassicalType] {
         &self.classical_vars
     }
 
+    /// Returns the static type table for immutable classical values.
     pub fn classical_values(&self) -> &[ClassicalType] {
         &self.classical_values
     }
 
+    /// Expands a structured circuit into a validated CFG.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if operations cannot be expanded into the supported
+    /// structured representation or the generated graph fails validation.
     pub fn from_circuit(circuit: &Circuit) -> Result<Self, CircuitError> {
         let mut cfg = Self::from_qubits(circuit.qubits());
         cfg.symbols = circuit.symbols().clone();
@@ -350,6 +429,13 @@ impl CircuitCFG {
         Ok(cfg)
     }
 
+    /// Checks graph, operation, parameter, edge, terminator, and region invariants.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CircuitError::InvalidControlFlow`] for malformed or
+    /// unreachable graph structure and other [`CircuitError`] variants for
+    /// invalid operations or parameter references.
     pub fn validate(&self) -> Result<(), CircuitError> {
         let entry = self.entry_block.ok_or_else(|| {
             CircuitError::InvalidControlFlow("CFG does not define an entry block".to_string())
@@ -397,6 +483,12 @@ impl CircuitCFG {
         Ok(())
     }
 
+    /// Reconstructs a structured circuit from this CFG.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or stored operations and
+    /// parameters cannot be converted back to value-level circuit IR.
     pub fn to_circuit(&self) -> Result<Circuit, CircuitError> {
         self.validate()?;
         let entry = self.entry_block.expect("validated CFG must define entry");

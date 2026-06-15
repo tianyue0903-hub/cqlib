@@ -11,7 +11,7 @@
 // that they have been altered from the originals.
 
 use super::*;
-use crate::circuit::StandardGate;
+use crate::circuit::{Qubit, StandardGate};
 use crate::qis::hamiltonian::Hamiltonian;
 use crate::qis::pauli::{Pauli, PauliString};
 use num_complex::Complex64;
@@ -1473,7 +1473,7 @@ fn test_from_circuit() {
 
     // Test from_circuit with a simple H gate
     let mut circuit = Circuit::new(1);
-    circuit.h(0.into()).unwrap();
+    circuit.h(Qubit::new(0)).unwrap();
 
     let sv = Statevector::from_circuit(&circuit).unwrap();
     assert_eq!(sv.num_qubits, 1);
@@ -1482,8 +1482,8 @@ fn test_from_circuit() {
 
     // Test from_circuit with Bell state
     let mut circuit2 = Circuit::new(2);
-    circuit2.h(0.into()).unwrap();
-    circuit2.cx(0.into(), 1.into()).unwrap();
+    circuit2.h(Qubit::new(0)).unwrap();
+    circuit2.cx(Qubit::new(0), Qubit::new(1)).unwrap();
 
     let sv2 = Statevector::from_circuit(&circuit2).unwrap();
     assert_eq!(sv2.num_qubits, 2);
@@ -1494,7 +1494,7 @@ fn test_from_circuit() {
 
     // Test from_circuit with parameterized gates
     let mut circuit3 = Circuit::new(1);
-    circuit3.rx(0.into(), PI).unwrap();
+    circuit3.rx(Qubit::new(0), PI).unwrap();
 
     let sv3 = Statevector::from_circuit(&circuit3).unwrap();
     assert_complex_eq(sv3.data[0], c(0.0, 0.0), "RX(π)|0⟩[0] should be 0");
@@ -1507,9 +1507,9 @@ fn test_from_circuit_3qubit_ghz() {
 
     // Create GHZ state via circuit
     let mut circuit = Circuit::new(3);
-    circuit.h(0.into()).unwrap();
-    circuit.cx(0.into(), 1.into()).unwrap();
-    circuit.cx(0.into(), 2.into()).unwrap();
+    circuit.h(Qubit::new(0)).unwrap();
+    circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
+    circuit.cx(Qubit::new(0), Qubit::new(2)).unwrap();
 
     let sv = Statevector::from_circuit(&circuit).unwrap();
     assert_eq!(sv.num_qubits, 3);
@@ -1532,8 +1532,8 @@ fn test_from_circuit_ignores_terminal_measurement_declarations() {
     use crate::device::Outcome;
 
     let mut circuit = Circuit::new(2);
-    circuit.h(0.into()).unwrap();
-    circuit.cx(0.into(), 1.into()).unwrap();
+    circuit.h(Qubit::new(0)).unwrap();
+    circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
     let out = circuit
         .measure_bits([Qubit::new(1), Qubit::new(0)])
         .unwrap();
@@ -1822,8 +1822,8 @@ fn test_statevector_data_alignment() {
 #[test]
 fn test_apply_circuit_bell_state() {
     let mut circuit = Circuit::new(2);
-    circuit.h(0.into()).unwrap();
-    circuit.cx(0.into(), 1.into()).unwrap();
+    circuit.h(Qubit::new(0)).unwrap();
+    circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
 
     let mut sv = Statevector::new(2);
     sv.apply_circuit(&circuit).unwrap();
@@ -1838,7 +1838,7 @@ fn test_apply_circuit_bell_state() {
 #[test]
 fn test_apply_circuit_parameterized() {
     let mut circuit = Circuit::new(1);
-    circuit.rx(0.into(), PI / 2.0).unwrap();
+    circuit.rx(Qubit::new(0), PI / 2.0).unwrap();
 
     let mut sv = Statevector::new(1);
     sv.apply_circuit(&circuit).unwrap();
@@ -1862,9 +1862,11 @@ fn test_apply_circuit_parameterized() {
 fn test_apply_circuit_toffoli() {
     // |110⟩ with CCX(0,1,2) -> |111⟩
     let mut circuit = Circuit::new(3);
-    circuit.x(0.into()).unwrap();
-    circuit.x(1.into()).unwrap();
-    circuit.ccx(0.into(), 1.into(), 2.into()).unwrap();
+    circuit.x(Qubit::new(0)).unwrap();
+    circuit.x(Qubit::new(1)).unwrap();
+    circuit
+        .ccx(Qubit::new(0), Qubit::new(1), Qubit::new(2))
+        .unwrap();
 
     let mut sv = Statevector::new(3);
     sv.apply_circuit(&circuit).unwrap();
@@ -1884,10 +1886,10 @@ fn test_apply_circuit_toffoli() {
 fn test_apply_circuit_incremental() {
     // Apply H first to get |+⟩, then apply Z to get |-
     let mut h_circuit = Circuit::new(1);
-    h_circuit.h(0.into()).unwrap();
+    h_circuit.h(Qubit::new(0)).unwrap();
 
     let mut z_circuit = Circuit::new(1);
-    z_circuit.z(0.into()).unwrap();
+    z_circuit.z(Qubit::new(0)).unwrap();
 
     let mut sv = Statevector::new(1);
     sv.apply_circuit(&h_circuit).unwrap();
@@ -1906,7 +1908,7 @@ fn test_apply_circuit_incremental() {
 #[test]
 fn test_apply_circuit_dimension_mismatch() {
     let mut circuit = Circuit::new(2);
-    circuit.h(0.into()).unwrap();
+    circuit.h(Qubit::new(0)).unwrap();
 
     let mut sv = Statevector::new(1);
     let result = sv.apply_circuit(&circuit);
@@ -1920,8 +1922,8 @@ fn test_apply_circuit_dimension_mismatch() {
 #[test]
 fn test_apply_circuit_reset_directive() {
     let mut circuit = Circuit::new(1);
-    circuit.x(0.into()).unwrap();
-    circuit.reset(0.into()).unwrap();
+    circuit.x(Qubit::new(0)).unwrap();
+    circuit.reset(Qubit::new(0)).unwrap();
 
     let mut sv = Statevector::new(1);
     sv.apply_circuit(&circuit).unwrap();
@@ -1937,7 +1939,7 @@ fn test_apply_circuit_classical_control_flow_error() {
     let mut circuit = Circuit::new(1);
     circuit
         .if_(ClassicalExpr::bool_literal(true), |body| {
-            body.x(0.into())?;
+            body.x(Qubit::new(0))?;
             Ok(())
         })
         .unwrap();
@@ -2093,7 +2095,7 @@ fn test_sample_uses_measurement_qubit_order() {
     use crate::device::{Outcome, Status};
 
     let mut circuit = Circuit::new(2);
-    circuit.x(0.into()).unwrap();
+    circuit.x(Qubit::new(0)).unwrap();
     let out = circuit
         .measure_bits([Qubit::new(1), Qubit::new(0)])
         .unwrap();
@@ -2121,9 +2123,9 @@ fn test_probs_marginalizes_unmeasured_qubits() {
     use crate::device::Outcome;
 
     let mut circuit = Circuit::new(2);
-    circuit.h(0.into()).unwrap();
-    circuit.cx(0.into(), 1.into()).unwrap();
-    let out = circuit.measure(0.into()).unwrap();
+    circuit.h(Qubit::new(0)).unwrap();
+    circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
+    let out = circuit.measure(Qubit::new(0)).unwrap();
 
     let sv = Statevector::from_circuit(&circuit).unwrap();
     let probs = sv.probs(&out).unwrap();
@@ -2139,7 +2141,7 @@ fn test_sample_rejects_measurement_qubit_outside_state() {
 
     let sv = Statevector::new(1);
     let mut circuit = Circuit::new(3);
-    let measurement = circuit.measure(2.into()).unwrap();
+    let measurement = circuit.measure(Qubit::new(2)).unwrap();
 
     assert!(matches!(
         sv.sample(&measurement, 1),

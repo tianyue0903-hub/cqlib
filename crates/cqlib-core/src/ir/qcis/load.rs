@@ -249,9 +249,7 @@ pub fn loads(qcis: &str) -> Result<Circuit> {
     let mut existing_qubits: HashSet<u32> = HashSet::new();
 
     for line in qcis.lines() {
-        if let Err(e) = process_line(line, &mut c, &mut existing_qubits) {
-            return Err(e);
-        }
+        process_line(line, &mut c, &mut existing_qubits)?
     }
 
     Ok(c)

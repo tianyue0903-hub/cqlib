@@ -47,20 +47,26 @@ const PARALLEL_THRESHOLD_OPS: usize = 1 << 20;
 
 /// Computes the unitary matrix representation of a quantum circuit.
 ///
-/// This function simulates the circuit by applying each gate's unitary matrix to the full system state.
-/// The result is a $2^N \times 2^N$ matrix, where $N$ is the number of qubits.
+/// This function applies each operation to an initially identity matrix. The
+/// result is a $2^N \times 2^N$ dense matrix, where $N$ is the number of
+/// circuit qubits, and includes the circuit's global phase.
+///
+/// The first entry in `qubits_order` is the least-significant basis-state bit.
+/// When no order is supplied, qubits are sorted by numeric identifier. Matrix
+/// storage grows as $4^N$, so this function is intended for small circuits.
 ///
 /// # Arguments
 ///
 /// * `circuit` - The quantum circuit to simulate.
-/// * `qubits_order` - Optional custom ordering of qubits for the output matrix.
-///   If `None`, defaults to sorting qubit indices ascendingly (Little-Endian: q0=LSB).
+/// * `qubits_order` - Optional complete ordering of the circuit's numeric qubit
+///   identifiers, from least-significant to most-significant basis-state bit.
 ///
-/// # Returns
+/// # Errors
 ///
-/// * `Ok(Array2<Complex64>)` - The resulting unitary matrix.
-/// * `Err(CircuitError)` - If the circuit contains unresolved symbolic parameters,
-///   non-unitary operations, invalid qubit ordering, or unsupported gate definitions.
+/// Returns an error if `qubits_order` is not an exact permutation of the
+/// circuit qubits, the circuit contains unresolved parameters or non-unitary
+/// operations, a gate definition is invalid, or the dense matrix dimensions
+/// cannot be represented.
 ///
 /// # Example
 ///
@@ -70,8 +76,8 @@ const PARALLEL_THRESHOLD_OPS: usize = 1 << 20;
 /// use cqlib_core::circuit::circuit_to_matrix;
 ///
 /// let mut circuit = Circuit::new(2);
-/// circuit.h(Qubit::new(0));
-/// circuit.cx(Qubit::new(0), Qubit::new(1));
+/// circuit.h(Qubit::new(0)).unwrap();
+/// circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
 ///
 /// let matrix = circuit_to_matrix(&circuit, None).unwrap();
 /// // matrix is now the 4x4 unitary of the Bell state preparation.
@@ -254,9 +260,9 @@ pub(crate) fn apply_gate_to_matrix(
         });
     }
     match bits.len() {
-        1 => apply_single_qubit_gate(matrix, gate_matrix, bits[0]),
-        2 => apply_two_qubit_gate(matrix, gate_matrix, bits[0], bits[1]),
-        _ => apply_general_gate(matrix, gate_matrix, bits),
+        1 => apply_single_qubit_gate(matrix, gate_matrix, bits[0])?,
+        2 => apply_two_qubit_gate(matrix, gate_matrix, bits[0], bits[1])?,
+        _ => apply_general_gate(matrix, gate_matrix, bits)?,
     }
     Ok(())
 }
@@ -306,7 +312,11 @@ impl<'a> UnsafeSlice<'a> {
     }
 }
 
-fn apply_single_qubit_gate(matrix: &mut Array2<Complex64>, gate: &Array2<Complex64>, bit: usize) {
+fn apply_single_qubit_gate(
+    matrix: &mut Array2<Complex64>,
+    gate: &Array2<Complex64>,
+    bit: usize,
+) -> Result<(), CircuitError> {
     let dim = matrix.nrows(); // 2^N
     let cols = matrix.ncols(); // 2^N, same as dim
 
@@ -319,9 +329,11 @@ fn apply_single_qubit_gate(matrix: &mut Array2<Complex64>, gate: &Array2<Complex
     let total_ops = dim * cols;
     let parallel = total_ops >= PARALLEL_THRESHOLD_OPS;
 
-    let slice = matrix
-        .as_slice_mut()
-        .expect("Matrix must be contiguous (standard layout)");
+    let slice = matrix.as_slice_mut().ok_or_else(|| {
+        CircuitError::InvalidOperation(
+            "target matrix must use contiguous standard layout".to_string(),
+        )
+    })?;
     let unsafe_slice = UnsafeSlice::new(slice);
 
     let process_block = |i: usize| unsafe {
@@ -350,6 +362,7 @@ fn apply_single_qubit_gate(matrix: &mut Array2<Complex64>, gate: &Array2<Complex
     } else {
         (0..dim).step_by(step * 2).for_each(process_block);
     }
+    Ok(())
 }
 
 fn apply_two_qubit_gate(
@@ -357,7 +370,7 @@ fn apply_two_qubit_gate(
     gate: &Array2<Complex64>,
     b0: usize,
     b1: usize,
-) {
+) -> Result<(), CircuitError> {
     let dim = matrix.nrows();
     let cols = matrix.ncols();
 
@@ -367,7 +380,11 @@ fn apply_two_qubit_gate(
     let off0 = 1 << b0;
     let off1 = 1 << b1;
 
-    let slice = matrix.as_slice_mut().expect("Matrix must be contiguous");
+    let slice = matrix.as_slice_mut().ok_or_else(|| {
+        CircuitError::InvalidOperation(
+            "target matrix must use contiguous standard layout".to_string(),
+        )
+    })?;
     let unsafe_slice = UnsafeSlice::new(slice);
 
     let loop_limit = dim >> 2;
@@ -437,9 +454,14 @@ fn apply_two_qubit_gate(
     } else {
         (0..loop_limit).for_each(process_idx);
     }
+    Ok(())
 }
 
-fn apply_general_gate(matrix: &mut Array2<Complex64>, gate: &Array2<Complex64>, bits: &[usize]) {
+fn apply_general_gate(
+    matrix: &mut Array2<Complex64>,
+    gate: &Array2<Complex64>,
+    bits: &[usize],
+) -> Result<(), CircuitError> {
     let dim = matrix.nrows();
     let cols = matrix.ncols();
     let num_targets = bits.len();
@@ -461,7 +483,11 @@ fn apply_general_gate(matrix: &mut Array2<Complex64>, gate: &Array2<Complex64>, 
         *gate_offset_ref = offset;
     }
 
-    let slice = matrix.as_slice_mut().expect("Matrix must be contiguous");
+    let slice = matrix.as_slice_mut().ok_or_else(|| {
+        CircuitError::InvalidOperation(
+            "target matrix must use contiguous standard layout".to_string(),
+        )
+    })?;
     let unsafe_slice = UnsafeSlice::new(slice);
 
     let loop_limit = dim >> num_targets;
@@ -517,6 +543,7 @@ fn apply_general_gate(matrix: &mut Array2<Complex64>, gate: &Array2<Complex64>, 
             process_idx(i, &mut row_ptrs, &mut input_vec);
         }
     }
+    Ok(())
 }
 
 #[cfg(test)]

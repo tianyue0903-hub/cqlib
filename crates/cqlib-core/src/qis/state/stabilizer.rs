@@ -113,12 +113,12 @@
 //!
 //! **From a Clifford circuit:**
 //! ```rust
-//! use cqlib_core::circuit::Circuit;
+//! use cqlib_core::circuit::{Circuit, Qubit};
 //! use cqlib_core::qis::StabilizerState;
 //!
 //! let mut c = Circuit::new(2);
-//! c.h(0.into()).unwrap();
-//! c.cx(0.into(), 1.into()).unwrap();
+//! c.h(Qubit::new(0)).unwrap();
+//! c.cx(Qubit::new(0), Qubit::new(1)).unwrap();
 //! let stab = StabilizerState::from_circuit(&c).unwrap();
 //! let stabilizers = stab.get_stabilizers();
 //! // Bell state is stabilized by +XX and +ZZ
@@ -131,11 +131,11 @@
 //! use cqlib_core::qis::{RuntimeValue, StabilizerState};
 //!
 //! let mut c = Circuit::new(3);
-//! c.x(0.into()).unwrap();
-//! c.x(2.into()).unwrap();
+//! c.x(Qubit::new(0)).unwrap();
+//! c.x(Qubit::new(2)).unwrap();
 //!
 //! // The returned measurement carries both the IR value and measured qubit order.
-//! let bit = c.measure(0.into()).unwrap();
+//! let bit = c.measure(Qubit::new(0)).unwrap();
 //!
 //! // `measure_bits_into` also writes a mutable variable copy for later classical use.
 //! let latest = c.var(ClassicalType::bit_vec(3).unwrap());
@@ -154,11 +154,11 @@
 //!
 //! **Non-Clifford gate returns an error:**
 //! ```rust
-//! use cqlib_core::circuit::Circuit;
+//! use cqlib_core::circuit::{Circuit, Qubit};
 //! use cqlib_core::qis::{StabilizerState, QisError};
 //!
 //! let mut c = Circuit::new(1);
-//! c.t(0.into()).unwrap(); // T gate is not Clifford
+//! c.t(Qubit::new(0)).unwrap(); // T gate is not Clifford
 //! let result = StabilizerState::from_circuit(&c);
 //! assert!(matches!(result, Err(QisError::NonCliffordGate(_))));
 //! ```
@@ -1345,8 +1345,8 @@ impl StabilizerState {
     /// use cqlib_core::qis::StabilizerState;
     ///
     /// let mut c = Circuit::new(2);
-    /// c.h(0.into()).unwrap();
-    /// c.cx(0.into(), 1.into()).unwrap();
+    /// c.h(Qubit::new(0)).unwrap();
+    /// c.cx(Qubit::new(0), Qubit::new(1)).unwrap();
     /// let out = c.measure_bits([Qubit::new(1), Qubit::new(0)]).unwrap();
     ///
     /// // `from_circuit` ignores terminal measurements and keeps the Bell state.
@@ -1454,13 +1454,15 @@ impl StabilizerState {
     ///
     /// # Example
     /// ```rust
-    /// use cqlib_core::circuit::Circuit;
+    /// use cqlib_core::circuit::{Circuit, Qubit};
     /// use cqlib_core::qis::StabilizerState;
     ///
     /// let mut c = Circuit::new(2);
-    /// c.h(0.into()).unwrap();
-    /// c.cx(0.into(), 1.into()).unwrap();
-    /// let out = c.measure_bits([1.into(), 0.into()]).unwrap();
+    /// c.h(Qubit::new(0)).unwrap();
+    /// c.cx(Qubit::new(0), Qubit::new(1)).unwrap();
+    /// let out = c
+    ///     .measure_bits([Qubit::new(1), Qubit::new(0)])
+    ///     .unwrap();
     ///
     /// // The measurement above is an output declaration for state sampling.
     /// // It does not collapse the Bell state during `from_circuit`.
@@ -1490,14 +1492,14 @@ impl StabilizerState {
     ///
     /// # Example
     /// ```rust
-    /// use cqlib_core::circuit::{Circuit, ClassicalExpr, ClassicalType};
+    /// use cqlib_core::circuit::{Circuit, ClassicalExpr, ClassicalType, Qubit};
     /// use cqlib_core::qis::{RuntimeValue, StabilizerState};
     ///
     /// let mut c = Circuit::new(1);
-    /// c.x(0.into()).unwrap();
+    /// c.x(Qubit::new(0)).unwrap();
     ///
     /// // `measure` creates an immutable runtime value.
-    /// let measured = c.measure(0.into()).unwrap();
+    /// let measured = c.measure(Qubit::new(0)).unwrap();
     ///
     /// // `store` can copy or transform measured values into mutable variables.
     /// let flag = c.var(ClassicalType::Bool);

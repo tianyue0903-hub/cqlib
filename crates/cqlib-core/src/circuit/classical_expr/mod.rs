@@ -80,7 +80,8 @@
 //! | `try_not(expr)` | `Bool → Bool`, `Bit → Bit` | same type as input |
 //!
 //! Negation on `Bool` is logical negation; on `Bit` it is bitwise inversion.
-//! Use `try_not` when invalid input should return [`CircuitError`] instead of
+//! Use `try_not` when invalid input should return
+//! [`CircuitError`](crate::circuit::CircuitError) instead of
 //! panicking through the operator trait.
 //!
 //! ```rust
@@ -203,7 +204,7 @@
 //!
 //! # Simplification
 //!
-//! [`simplify`] performs bottom-up algebraic simplification without evaluating
+//! [`simplify()`] performs bottom-up algebraic simplification without evaluating
 //! runtime variable or value reads. It is **idempotent**: applying it twice
 //! yields the same expression.
 //!

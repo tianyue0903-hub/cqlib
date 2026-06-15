@@ -433,7 +433,12 @@ fn test_delay_is_skipped() {
     let mut circuit = Circuit::new(1);
     circuit.h(Qubit::new(0)).unwrap();
     circuit
-        .append(Instruction::Delay, [Qubit::new(0)], [], None)
+        .append(
+            Instruction::Delay,
+            [Qubit::new(0)],
+            [ParameterValue::Fixed(1.0)],
+            None,
+        )
         .unwrap();
     circuit.x(Qubit::new(0)).unwrap();
 
@@ -623,24 +628,24 @@ fn test_symbolic_circuit_gate_simultaneous_substitution() {
 }
 
 #[test]
-fn test_symbolic_circuit_gate_param_count_mismatch() {
+fn test_symbolic_circuit_gate_param_count_mismatch_is_rejected_on_append() {
     let theta = Parameter::symbol("theta");
     let mut inner = Circuit::new(1);
     inner.rx(Qubit::new(0), theta).unwrap();
     let gate = inner.to_gate("RxGate").unwrap();
 
     let mut circuit = Circuit::new(1);
-    circuit
+    let err = circuit
         .append(
             gate,
             [Qubit::new(0)],
             [ParameterValue::Fixed(1.0), ParameterValue::Fixed(2.0)],
             None,
         )
-        .unwrap();
+        .unwrap_err();
 
-    let err = circuit_to_symbolic_matrix(&circuit, None).unwrap_err();
     assert!(matches!(err, CircuitError::ParameterCountMismatch { .. }));
+    assert!(circuit.operations().is_empty());
 }
 
 #[test]
@@ -1279,20 +1284,19 @@ fn test_symbolic_rejects_duplicate_qubits_in_operation() {
 }
 
 #[test]
-fn test_symbolic_rejects_wrong_qubit_count_in_operation() {
+fn test_symbolic_wrong_qubit_count_is_rejected_on_append() {
     let mut circuit = Circuit::new(2);
-    circuit
+    let err = circuit
         .append(
             Instruction::Standard(StandardGate::CX),
             [Qubit::new(0)],
             [],
             None,
         )
-        .unwrap();
-
-    let err = circuit_to_symbolic_matrix(&circuit, None).unwrap_err();
+        .unwrap_err();
 
     assert!(matches!(err, CircuitError::QubitCountMismatch { .. }));
+    assert!(circuit.operations().is_empty());
 }
 
 #[test]

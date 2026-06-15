@@ -49,9 +49,9 @@ pub enum ParameterError {
 
 /// Errors that can occur during the numerical evaluation of symbolic parameters.
 ///
-/// This enum captures all failure modes when resolving a symbolic expression tree ([`ExprNode`](crate::circuit::parameter::expr_node::ExprNode))
-/// into a concrete floating-point value. These errors typically arise during the binding phase of a
-/// Parameterized Quantum Circuit (PQC).
+/// This enum captures failure modes when resolving a symbolic [`Parameter`](crate::circuit::Parameter)
+/// expression into a concrete floating-point value. These errors typically
+/// arise while binding a parameterized quantum circuit.
 #[derive(Debug, Error)]
 pub enum EvalError {
     /// Indicates that a symbolic variable required for evaluation was missing from the provided bindings.
@@ -121,10 +121,22 @@ pub enum CircuitError {
     ///
     /// For example, applying a 2-qubit CNOT gate to 3 qubits, or a 1-qubit Custom Unitary to 2 qubits.
     #[error("Qubit count mismatch: expected {expected}, got {actual}")]
-    QubitCountMismatch { expected: usize, actual: usize },
+    QubitCountMismatch {
+        /// Required qubit count.
+        expected: usize,
+        /// Supplied qubit count.
+        actual: usize,
+    },
 
+    /// Thrown when the number of parameters supplied to a fixed-arity
+    /// instruction does not match its definition.
     #[error("Parameter count mismatch: expected {expected}, got {actual}")]
-    ParameterCountMismatch { expected: usize, actual: usize },
+    ParameterCountMismatch {
+        /// Required parameter count.
+        expected: usize,
+        /// Supplied parameter count.
+        actual: usize,
+    },
 
     /// Wraps errors raised while simplifying or evaluating symbolic parameters.
     #[error("Invalid parameter: {0}")]
@@ -146,12 +158,16 @@ pub enum CircuitError {
     #[error("Failed to evaluate parameters: {0}")]
     ParamEvaluationFailed(#[from] EvalError),
 
+    /// Thrown when inversion is requested for a non-unitary operation or circuit.
     #[error("Operation is irreversible")]
     IrreversibleOperation,
 
+    /// Thrown when an instruction cannot be promoted to a controlled operation.
     #[error("Operation cannot be controlled: {0}")]
     InvalidControlOperation(String),
 
+    /// Thrown when a numeric result is requested from an operation whose
+    /// circuit-local symbolic parameters have not been resolved.
     #[error("Symbolic parameter cannot be evaluated in this context")]
     SymbolicParameterError,
 
@@ -169,9 +185,22 @@ pub enum CircuitError {
     #[error("Parameter index {0} out of range")]
     InvalidParameterIndex(u32),
 
+    /// Thrown when an operation index is outside the circuit operation list.
+    ///
+    /// `index` is the requested zero-based index and `len` is the operation
+    /// count at the time of the request.
+    #[error("Operation index {index} out of bounds for circuit with {len} operations")]
+    OperationIndexOutOfBounds {
+        /// Requested zero-based operation index.
+        index: usize,
+        /// Number of operations in the circuit.
+        len: usize,
+    },
+
     /// Thrown when a gate parameter has an invalid value (NaN or Infinity).
     ///
-    /// This occurs when evaluating gate matrices with non-finite parameter values.
+    /// This occurs when appending or evaluating a gate with a non-finite fixed
+    /// parameter. The tuple stores the parameter position and rejected value.
     #[error("Invalid parameter value at index {0}: {1}")]
     InvalidParameterValue(usize, f64),
 
@@ -191,34 +220,62 @@ pub enum CircuitError {
     #[error("Invalid control flow graph structure: {0}")]
     InvalidControlFlow(String),
 
+    /// Thrown when a classical handle was created by a different circuit.
     #[error("{kind} {index} belongs to another circuit")]
-    ForeignClassicalHandle { kind: &'static str, index: u32 },
-
-    #[error("classical value {index} is not available at {context}")]
-    UndefinedClassicalValue { index: u32, context: String },
-
-    #[error("classical value {index} has more than one definition: {first} and {second}")]
-    DuplicateClassicalValueDefinition {
+    ForeignClassicalHandle {
+        /// Human-readable handle kind.
+        kind: &'static str,
+        /// Circuit-local handle index.
         index: u32,
-        first: String,
-        second: String,
     },
 
-    #[error("classical value {index} escapes its defining control-flow region at {context}")]
-    ClassicalValueOutOfScope { index: u32, context: String },
-
-    #[error("{operation} must be the final operation in {context}")]
-    NonTerminalControlTransfer {
-        operation: &'static str,
+    /// Thrown when a classical value is read before it is available at a use site.
+    #[error("classical value {index} is not available at {context}")]
+    UndefinedClassicalValue {
+        /// Circuit-local value index.
+        index: u32,
+        /// Description of the invalid use site.
         context: String,
     },
 
+    /// Thrown when validation finds multiple producers for one immutable value.
+    #[error("classical value {index} has more than one definition: {first} and {second}")]
+    DuplicateClassicalValueDefinition {
+        /// Circuit-local value index.
+        index: u32,
+        /// Description of the first definition site.
+        first: String,
+        /// Description of the conflicting definition site.
+        second: String,
+    },
+
+    /// Thrown when a classical value is used outside its defining control-flow region.
+    #[error("classical value {index} escapes its defining control-flow region at {context}")]
+    ClassicalValueOutOfScope {
+        /// Circuit-local value index.
+        index: u32,
+        /// Description of the invalid use site.
+        context: String,
+    },
+
+    /// Thrown when `break` or `continue` is followed by another operation in the same body.
+    #[error("{operation} must be the final operation in {context}")]
+    NonTerminalControlTransfer {
+        /// Control-transfer operation name.
+        operation: &'static str,
+        /// Description of the containing body.
+        context: String,
+    },
+
+    /// Catch-all for an invalid operation that has no more specific error variant.
     #[error("Invalid Operation: {0}")]
     InvalidOperation(String),
 }
 
+/// Legacy compilation error placeholder.
 #[derive(Debug, Error)]
 pub enum CompileError {
+    /// Unclassified compilation failure.
     #[error("error")]
     Error,
 }

@@ -671,6 +671,17 @@ fn apply_gate_to_matrix_rejects_duplicate_bits() {
 }
 
 #[test]
+fn apply_gate_to_matrix_rejects_non_standard_layout() {
+    let mut matrix = Array2::eye(4).reversed_axes();
+    let gate = StandardGate::H.matrix(&[]).unwrap();
+
+    assert!(matches!(
+        apply_gate_to_matrix(&mut matrix, gate.as_ref(), &[0]),
+        Err(CircuitError::InvalidOperation(_))
+    ));
+}
+
+#[test]
 fn test_symbolic_parameter_returns_error() {
     let theta = Parameter::symbol("theta");
     let mut circuit = Circuit::new(1);
@@ -917,22 +928,22 @@ fn test_circuit_gate_reversed_bits() {
 }
 
 #[test]
-fn test_circuit_gate_param_count_mismatch() {
+fn test_circuit_gate_param_count_mismatch_is_rejected_on_append() {
     let theta = Parameter::symbol("theta");
     let mut inner = Circuit::new(1);
     inner.rx(Qubit::new(0), theta).unwrap();
     let gate = inner.to_gate("RxGate").unwrap();
 
     let mut circuit = Circuit::new(1);
-    circuit
+    let err = circuit
         .append(
             gate,
             [Qubit::new(0)],
             [ParameterValue::Fixed(1.0), ParameterValue::Fixed(2.0)],
             None,
         )
-        .unwrap();
+        .unwrap_err();
 
-    let err = circuit_to_matrix(&circuit, None).unwrap_err();
     assert!(matches!(err, CircuitError::ParameterCountMismatch { .. }));
+    assert!(circuit.operations().is_empty());
 }
