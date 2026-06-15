@@ -1,7 +1,27 @@
 use super::*;
 use crate::circuit::gate::{ClassicalDataOp, Instruction};
-use crate::circuit::{Circuit, ClassicalExpr, ClassicalType, ParameterValue, Qubit, StandardGate};
-use crate::ir::qasm3_loads;
+use crate::circuit::{
+    Circuit, ClassicalExpr, ClassicalType, Parameter, ParameterValue, Qubit, StandardGate,
+};
+use crate::ir::qasm3::load::Qasm3ParseError;
+use crate::ir::{qasm3_load, qasm3_loads};
+use std::error::Error;
+use std::fs;
+use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+fn unique_temp_path(test_name: &str) -> PathBuf {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    std::env::temp_dir().join(format!(
+        "cqlib_qasm3_dump_{}_{}_{}.qasm",
+        std::process::id(),
+        test_name,
+        nonce
+    ))
+}
 
 fn assert_round_trip_standard_gates(source: &str, expected: &[StandardGate]) {
     let circuit = qasm3_loads(source).unwrap();
@@ -50,6 +70,26 @@ u3(0.1,0.2,0.3) q[0];
             StandardGate::U,
         ],
     );
+}
+
+#[test]
+fn to_string_alias_matches_dumps() {
+    let mut circuit = Circuit::new(1);
+    circuit.h(Qubit::new(0)).unwrap();
+
+    assert_eq!(to_string(&circuit).unwrap(), dumps(&circuit).unwrap());
+}
+
+#[test]
+fn to_path_alias_writes_file() {
+    let mut circuit = Circuit::new(1);
+    circuit.x(Qubit::new(0)).unwrap();
+    let path = unique_temp_path("to_path");
+
+    to_path(&circuit, path.as_path()).unwrap();
+
+    assert_eq!(fs::read_to_string(&path).unwrap(), dumps(&circuit).unwrap());
+    fs::remove_file(path).unwrap();
 }
 
 #[test]
@@ -180,6 +220,57 @@ gphase(0.25);
 }
 
 #[test]
+fn dumps_circuit_global_phase_as_gphase_statement() {
+    let mut circuit = Circuit::new(1);
+    circuit.set_global_phase(Parameter::from(0.25));
+
+    let qasm = dumps(&circuit).unwrap();
+
+    assert_eq!(
+        qasm,
+        r#"OPENQASM 3.0;
+include "stdgates.inc";
+
+qubit q;
+
+gphase(0.25);
+"#
+    );
+    let loaded = qasm3_loads(&qasm).unwrap();
+    assert!((loaded.global_phase().evaluate(&None).unwrap() - 0.25).abs() < 1e-10);
+}
+
+#[test]
+fn dumps_symbolic_circuit_global_phase_as_gphase_statement() {
+    let mut circuit = Circuit::new(0);
+    circuit.set_global_phase(Parameter::symbol("theta"));
+
+    let qasm = dumps(&circuit).unwrap();
+
+    assert!(qasm.contains("gphase(theta);"), "got:\n{qasm}");
+}
+
+#[test]
+fn round_trips_loaded_top_level_gphase() {
+    let circuit = qasm3_loads(
+        r#"
+        OPENQASM 3;
+        include "stdgates.inc";
+        qubit q;
+        gphase(0.25);
+        x q;
+        "#,
+    )
+    .unwrap();
+
+    let qasm = dumps(&circuit).unwrap();
+    let loaded = qasm3_loads(&qasm).unwrap();
+
+    assert!(qasm.contains("gphase(0.25);"), "got:\n{qasm}");
+    assert!((loaded.global_phase().evaluate(&None).unwrap() - 0.25).abs() < 1e-10);
+}
+
+#[test]
 fn dumps_measurement_reset_and_barrier() {
     let q0 = Qubit::new(0);
     let q1 = Qubit::new(1);
@@ -271,5 +362,36 @@ fn rejects_delay() {
     assert!(matches!(
         err,
         Qasm3DumpError::UnsupportedInstruction(message) if message == "delay"
+    ));
+}
+
+#[test]
+fn load_preserves_io_error_source() {
+    let path = std::env::temp_dir()
+        .join(format!("cqlib_qasm3_missing_{}", std::process::id()))
+        .join("missing.qasm");
+
+    let err = qasm3_load(&path).unwrap_err();
+
+    assert!(err.source().is_some());
+    assert!(matches!(
+        err,
+        Qasm3ParseError::IoError(error) if error.kind() == std::io::ErrorKind::NotFound
+    ));
+}
+
+#[test]
+fn dump_preserves_io_error_source() {
+    let circuit = Circuit::new(0);
+    let path = std::env::temp_dir()
+        .join(format!("cqlib_qasm3_missing_{}", std::process::id()))
+        .join("out.qasm");
+
+    let err = dump(&circuit, &path).unwrap_err();
+
+    assert!(err.source().is_some());
+    assert!(matches!(
+        err,
+        Qasm3DumpError::IoError(error) if error.kind() == std::io::ErrorKind::NotFound
     ));
 }

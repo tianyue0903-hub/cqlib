@@ -3,6 +3,23 @@ use crate::circuit::Qubit;
 use crate::circuit::circuit_param::ParameterValue;
 use crate::circuit::parameter::Parameter;
 use crate::circuit::{Circuit, ClassicalExpr, ClassicalType};
+use std::error::Error;
+use std::fs;
+use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+fn unique_temp_path(test_name: &str) -> PathBuf {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    std::env::temp_dir().join(format!(
+        "cqlib_qcis_dump_{}_{}_{}.qcis",
+        std::process::id(),
+        test_name,
+        nonce
+    ))
+}
 
 #[test]
 fn test_dump_simple_gates() {
@@ -22,6 +39,53 @@ Z Q0
 H Q1
 "#;
     assert_eq!(qcis, expected);
+}
+
+#[test]
+fn test_dump_file_accepts_path_like_inputs() {
+    let mut c = Circuit::new(1);
+    c.h(Qubit::new(0)).unwrap();
+
+    let path = unique_temp_path("path");
+    dump(&c, path.as_path()).unwrap();
+    assert_eq!(fs::read_to_string(&path).unwrap(), "H Q0\n");
+    fs::remove_file(&path).unwrap();
+
+    let path = unique_temp_path("str");
+    dump(&c, path.to_str().unwrap()).unwrap();
+    assert_eq!(fs::read_to_string(&path).unwrap(), "H Q0\n");
+    fs::remove_file(&path).unwrap();
+}
+
+#[test]
+fn test_to_string_alias_matches_dumps() {
+    let mut c = Circuit::new(1);
+    c.h(Qubit::new(0)).unwrap();
+
+    assert_eq!(to_string(&c).unwrap(), dumps(&c).unwrap());
+}
+
+#[test]
+fn test_to_path_alias_writes_file() {
+    let mut c = Circuit::new(1);
+    c.x(Qubit::new(0)).unwrap();
+    let path = unique_temp_path("to_path");
+
+    to_path(&c, path.as_path()).unwrap();
+
+    assert_eq!(fs::read_to_string(&path).unwrap(), dumps(&c).unwrap());
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn test_dump_file_io_error_preserves_source() {
+    let circuit = Circuit::new(0);
+    let path = unique_temp_path("missing_parent").join("out.qcis");
+
+    let error = dump(&circuit, path).unwrap_err();
+
+    assert!(matches!(error, QcisDumpError::IoError(_)));
+    assert!(error.source().is_some());
 }
 
 #[test]

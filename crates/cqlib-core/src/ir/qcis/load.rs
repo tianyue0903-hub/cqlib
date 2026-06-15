@@ -50,14 +50,19 @@ use crate::circuit::circuit_param::ParameterValue;
 use crate::circuit::{Circuit, Parameter, Qubit};
 use regex::Regex;
 use std::collections::HashSet;
+use std::path::Path;
 use std::sync::LazyLock;
 use thiserror::Error;
 
 static QUBIT_PATTERN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^Q\d+$").unwrap());
 
 /// Errors that can occur during QCIS parsing.
-#[derive(Debug, Error, PartialEq)]
+#[derive(Debug, Error)]
 pub enum QcisParseError {
+    /// File system or I/O error (file not found, permission denied, etc.)
+    #[error("IO error: {0}")]
+    IoError(#[from] std::io::Error),
+
     /// Invalid qubit format (e.g., not "Q123" format)
     #[error("Invalid qubit format: '{0}' (expected format: Q<id>, e.g., Q0, Q1)")]
     InvalidQubitFormat(String),
@@ -101,6 +106,58 @@ pub enum QcisParseError {
     /// Empty line or no valid content
     #[error("Empty line or no valid content")]
     EmptyLine,
+}
+
+impl PartialEq for QcisParseError {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::IoError(lhs), Self::IoError(rhs)) => {
+                lhs.kind() == rhs.kind() && lhs.to_string() == rhs.to_string()
+            }
+            (Self::InvalidQubitFormat(lhs), Self::InvalidQubitFormat(rhs)) => lhs == rhs,
+            (Self::InvalidQubitId(lhs), Self::InvalidQubitId(rhs)) => lhs == rhs,
+            (
+                Self::QubitCountMismatch {
+                    gate: lhs_gate,
+                    expected: lhs_expected,
+                    actual: lhs_actual,
+                },
+                Self::QubitCountMismatch {
+                    gate: rhs_gate,
+                    expected: rhs_expected,
+                    actual: rhs_actual,
+                },
+            ) => lhs_gate == rhs_gate && lhs_expected == rhs_expected && lhs_actual == rhs_actual,
+            (
+                Self::ParameterCountMismatch {
+                    gate: lhs_gate,
+                    expected: lhs_expected,
+                    actual: lhs_actual,
+                },
+                Self::ParameterCountMismatch {
+                    gate: rhs_gate,
+                    expected: rhs_expected,
+                    actual: rhs_actual,
+                },
+            ) => lhs_gate == rhs_gate && lhs_expected == rhs_expected && lhs_actual == rhs_actual,
+            (Self::MissingParameter(lhs), Self::MissingParameter(rhs)) => lhs == rhs,
+            (
+                Self::InvalidParameter {
+                    gate: lhs_gate,
+                    param: lhs_param,
+                    reason: lhs_reason,
+                },
+                Self::InvalidParameter {
+                    gate: rhs_gate,
+                    param: rhs_param,
+                    reason: rhs_reason,
+                },
+            ) => lhs_gate == rhs_gate && lhs_param == rhs_param && lhs_reason == rhs_reason,
+            (Self::UnknownGate(lhs), Self::UnknownGate(rhs)) => lhs == rhs,
+            (Self::EmptyLine, Self::EmptyLine) => true,
+            _ => false,
+        }
+    }
 }
 
 /// Result type for QCIS parsing operations.
@@ -173,9 +230,17 @@ fn get_gate_spec(gate_name: &str) -> Option<GateSpec> {
     }
 }
 
-pub fn load(file: std::path::PathBuf) -> Circuit {
-    let content = std::fs::read_to_string(file).expect("Failed to read file");
-    loads(&content).expect("Failed to parse QCIS")
+pub fn load<P: AsRef<Path>>(path: P) -> Result<Circuit> {
+    let content = std::fs::read_to_string(path)?;
+    loads(&content)
+}
+
+/// Parse a QCIS file and convert it to a [`Circuit`].
+///
+/// Rust-style alias for [`load`]. The Python-style `load` name is retained for
+/// compatibility with the rest of the IR module API.
+pub fn from_path<P: AsRef<Path>>(path: P) -> Result<Circuit> {
+    load(path)
 }
 
 pub fn loads(qcis: &str) -> Result<Circuit> {
@@ -183,20 +248,20 @@ pub fn loads(qcis: &str) -> Result<Circuit> {
     // Maintain a set of existing qubit IDs to avoid repeated circuit.qubits() calls
     let mut existing_qubits: HashSet<u32> = HashSet::new();
 
-    for (line_num, line) in qcis.lines().enumerate() {
+    for line in qcis.lines() {
         if let Err(e) = process_line(line, &mut c, &mut existing_qubits) {
-            // Enhance error with line number information
-            return Err(format_error_with_line(e, line_num + 1, line));
+            return Err(e);
         }
     }
 
     Ok(c)
 }
 
-/// Format error with line number information.
-fn format_error_with_line(error: QcisParseError, line_num: usize, line: &str) -> QcisParseError {
-    eprintln!("Error at line {}: {}", line_num, line.trim());
-    error
+/// Parse a QCIS source string and convert it to a [`Circuit`].
+///
+/// Rust-style alias for [`loads`].
+pub fn from_str(qcis: &str) -> Result<Circuit> {
+    loads(qcis)
 }
 
 /// Parse a parameter string into a ParameterValue.

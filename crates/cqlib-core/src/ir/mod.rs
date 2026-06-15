@@ -23,6 +23,22 @@
 //! | OpenQASM 3.0 | OpenQASM 3 circuit language | [`qasm3::load`] | [`qasm3::dump`] |
 //! | QCIS | Telecom Quantum's intermediate format | [`qcis::load`] | [`qcis::dump`] |
 //!
+//! ## Error Types
+//!
+//! Each format keeps concrete error types so callers can match format-specific
+//! failures without downcasting:
+//!
+//! | Format | Load Error | Dump Error |
+//! |--------|------------|------------|
+//! | OpenQASM 2.0 | [`qasm2::load::QasmParseError`] | [`qasm2::dump::QasmDumpError`] |
+//! | OpenQASM 3.0 | [`qasm3::load::Qasm3ParseError`] | [`qasm3::dump::Qasm3DumpError`] |
+//! | QCIS | [`qcis::load::QcisParseError`] | [`qcis::dump::QcisDumpError`] |
+//!
+//! File-based entry points preserve the original I/O error through
+//! [`std::error::Error::source`]. The crate does not currently expose a shared
+//! `Format` trait or umbrella IR error enum; use the explicit per-format modules
+//! or crate-root aliases below.
+//!
 //! ## Quick Start
 //!
 //! ### Loading from OpenQASM

@@ -81,6 +81,7 @@ use crate::ir::qasm2::ast::{
 };
 use smallvec::{SmallVec, smallvec};
 use std::collections::{HashMap, HashSet};
+use std::io;
 use std::path::{Path, PathBuf};
 
 /// Trait for abstracting file system access during OpenQASM parsing.
@@ -97,16 +98,16 @@ pub trait QasmSourceResolver {
     ///
     /// # Returns
     /// * `Ok(String)` - The file contents
-    /// * `Err(String)` - Error message if resolution fails
-    fn resolve_source(&self, path: &Path) -> Result<String, String>;
+    /// * `Err(io::Error)` - I/O error if resolution fails
+    fn resolve_source(&self, path: &Path) -> Result<String, io::Error>;
 }
 
 /// Default resolver that uses the real file system.
 pub struct FileSystemResolver;
 
 impl QasmSourceResolver for FileSystemResolver {
-    fn resolve_source(&self, path: &Path) -> Result<String, String> {
-        std::fs::read_to_string(path).map_err(|e| e.to_string())
+    fn resolve_source(&self, path: &Path) -> Result<String, io::Error> {
+        std::fs::read_to_string(path)
     }
 }
 
@@ -114,10 +115,10 @@ impl QasmSourceResolver for FileSystemResolver {
 pub struct NullResolver;
 
 impl QasmSourceResolver for NullResolver {
-    fn resolve_source(&self, path: &Path) -> Result<String, String> {
-        Err(format!(
-            "Cannot include files in raw string mode (path: {:?})",
-            path
+    fn resolve_source(&self, path: &Path) -> Result<String, io::Error> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            format!("Cannot include files in raw string mode (path: {:?})", path),
         ))
     }
 }
@@ -167,10 +168,25 @@ pub fn load<P: AsRef<Path>>(path: P) -> Result<Circuit, QasmParseError> {
     parse_qasm_with_context(&content, base_path, resolver)
 }
 
+/// Parse an OpenQASM 2.0 file and convert it to a [`Circuit`].
+///
+/// Rust-style alias for [`load`]. The Python-style `load` name is retained for
+/// compatibility with the rest of the IR module API.
+pub fn from_path<P: AsRef<Path>>(path: P) -> Result<Circuit, QasmParseError> {
+    load(path)
+}
+
 /// Parse OpenQASM 2.0 string and convert to Circuit
 pub fn loads(source: &str) -> Result<Circuit, QasmParseError> {
     // Use NullResolver for string-based loading (no file includes allowed)
     parse_qasm_with_context(source, None, Box::new(NullResolver))
+}
+
+/// Parse an OpenQASM 2.0 source string and convert it to a [`Circuit`].
+///
+/// Rust-style alias for [`loads`].
+pub fn from_str(source: &str) -> Result<Circuit, QasmParseError> {
+    loads(source)
 }
 
 fn parse_qasm_with_context(
@@ -192,10 +208,10 @@ fn parse_qasm_with_context(
 ///
 /// Each variant represents a distinct error category that can occur
 /// when processing OpenQASM 2.0 source code.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug)]
 pub enum QasmParseError {
     /// File system or I/O error (file not found, permission denied, etc.)
-    IoError(String),
+    IoError(io::Error),
     /// Syntax error during parsing (invalid QASM syntax)
     ParseError(String),
     /// Semantic error during AST to Circuit conversion
@@ -266,7 +282,14 @@ impl std::fmt::Display for QasmParseError {
     }
 }
 
-impl std::error::Error for QasmParseError {}
+impl std::error::Error for QasmParseError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            QasmParseError::IoError(error) => Some(error),
+            _ => None,
+        }
+    }
+}
 
 impl From<CircuitError> for QasmParseError {
     fn from(value: CircuitError) -> Self {
@@ -649,7 +672,10 @@ impl AstToCircuit {
 
                     if !self.file_cache.contains_key(&target_path) {
                         let content_res = self.resolver.resolve_source(&target_path).map_err(|e| {
-                            QasmParseError::IoError(format!("Include {}: {}", filename, e))
+                            QasmParseError::IoError(io::Error::new(
+                                e.kind(),
+                                format!("Include {}: {}", filename, e),
+                            ))
                         });
 
                         let content = content_res?;

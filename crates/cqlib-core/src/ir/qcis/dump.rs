@@ -69,6 +69,7 @@ use crate::circuit::gate::standard_gate::StandardGate;
 use crate::circuit::gate::{ClassicalDataOp, Instruction};
 use crate::circuit::operation::Operation;
 use std::fmt::Write;
+use std::path::Path;
 
 const PI: f64 = std::f64::consts::PI;
 const PI_2: f64 = std::f64::consts::PI / 2.0;
@@ -143,10 +144,18 @@ impl From<std::io::Error> for QcisDumpError {
 ///
 /// Returns an error if the circuit contains gates that are not natively supported by QCIS.
 /// The circuit must be compiled to QCIS basis gates before dumping.
-pub fn dump(circuit: &Circuit, path: &std::path::PathBuf) -> Result<(), QcisDumpError> {
+pub fn dump<P: AsRef<Path>>(circuit: &Circuit, path: P) -> Result<(), QcisDumpError> {
     let content = dumps(circuit)?;
     std::fs::write(path, content)?;
     Ok(())
+}
+
+/// Write a circuit to a QCIS file.
+///
+/// Rust-style alias for [`dump`]. The Python-style `dump` name is retained for
+/// compatibility with the rest of the IR module API.
+pub fn to_path<P: AsRef<Path>>(circuit: &Circuit, path: P) -> Result<(), QcisDumpError> {
+    dump(circuit, path)
 }
 
 /// Convert a circuit to a QCIS string.
@@ -168,6 +177,13 @@ pub fn dumps(circuit: &Circuit) -> Result<String, QcisDumpError> {
     }
 
     Ok(output)
+}
+
+/// Serialize a circuit to a QCIS string.
+///
+/// Rust-style alias for [`dumps`].
+pub fn to_string(circuit: &Circuit) -> Result<String, QcisDumpError> {
+    dumps(circuit)
 }
 
 /// Convert a single operation to QCIS format.

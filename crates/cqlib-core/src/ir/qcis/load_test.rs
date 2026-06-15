@@ -1,6 +1,23 @@
 use super::*;
 use crate::ir::qcis_dumps;
+use std::error::Error;
 use std::f64::consts::PI;
+use std::fs;
+use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+fn unique_temp_path(test_name: &str) -> PathBuf {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    std::env::temp_dir().join(format!(
+        "cqlib_qcis_load_{}_{}_{}.qcis",
+        std::process::id(),
+        test_name,
+        nonce
+    ))
+}
 
 #[test]
 fn test_parse_simple_params() {
@@ -86,6 +103,74 @@ fn test_loads_qcis() {
         "RX Q0 1\nRY Q1 pi/2\nRZ Q2 1.2853981634\nRXY Q3 pi/2 3.14\nX Q0\nCZ Q0 Q1\n",
         qcis_dumps(&circuit).unwrap()
     );
+}
+
+#[test]
+fn test_from_str_alias_matches_loads() {
+    let source = "H Q0\nCZ Q0 Q1\n";
+
+    let loaded = loads(source).unwrap();
+    let aliased = from_str(source).unwrap();
+
+    assert_eq!(aliased.num_qubits(), loaded.num_qubits());
+    assert_eq!(qcis_dumps(&aliased).unwrap(), qcis_dumps(&loaded).unwrap());
+}
+
+#[test]
+fn test_load_file_accepts_path_like_inputs() {
+    let path = unique_temp_path("success");
+    fs::write(&path, "H Q0\n").unwrap();
+
+    let circuit = load(path.as_path()).unwrap();
+    assert_eq!(circuit.num_qubits(), 1);
+    assert_eq!("H Q0\n", qcis_dumps(&circuit).unwrap());
+
+    let circuit = load(path.to_str().unwrap()).unwrap();
+    assert_eq!(circuit.num_qubits(), 1);
+
+    fs::remove_file(&path).unwrap();
+}
+
+#[test]
+fn test_from_path_alias_reads_file() {
+    let path = unique_temp_path("from_path");
+    fs::write(&path, "X Q0\n").unwrap();
+
+    let circuit = from_path(path.as_path()).unwrap();
+
+    assert_eq!(circuit.num_qubits(), 1);
+    assert_eq!("X Q0\n", qcis_dumps(&circuit).unwrap());
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn test_load_file_returns_io_error() {
+    let path = unique_temp_path("missing");
+    let _ = fs::remove_file(&path);
+
+    let result = load(path.as_path());
+
+    assert!(matches!(
+        result,
+        Err(QcisParseError::IoError(error)) if error.kind() == std::io::ErrorKind::NotFound
+    ));
+
+    let error = load(path.as_path()).unwrap_err();
+    assert!(error.source().is_some());
+}
+
+#[test]
+fn test_load_file_returns_parse_error() {
+    let path = unique_temp_path("invalid");
+    fs::write(&path, "RX q0 1.0\n").unwrap();
+
+    let result = load(&path);
+
+    assert!(matches!(
+        result,
+        Err(QcisParseError::InvalidQubitFormat(token)) if token == "q0"
+    ));
+    fs::remove_file(&path).unwrap();
 }
 
 #[test]

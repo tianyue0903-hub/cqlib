@@ -18,6 +18,22 @@ use crate::circuit::{
     ClassicalType, Qubit,
 };
 use crate::ir::qasm2::dump::dumps;
+use std::fs;
+use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+fn unique_temp_path(test_name: &str) -> PathBuf {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    std::env::temp_dir().join(format!(
+        "cqlib_qasm2_load_{}_{}_{}.qasm",
+        std::process::id(),
+        test_name,
+        nonce
+    ))
+}
 
 fn assert_standard_gate(
     circuit: &Circuit,
@@ -87,6 +103,43 @@ fn assert_standard_gate(
             val
         );
     }
+}
+
+#[test]
+fn test_from_str_alias_matches_loads() {
+    let source = r#"
+        OPENQASM 2.0;
+        include "qelib1.inc";
+        qreg q[1];
+        h q[0];
+    "#;
+
+    let loaded = loads(source).unwrap();
+    let aliased = from_str(source).unwrap();
+
+    assert_eq!(aliased.num_qubits(), loaded.num_qubits());
+    assert_eq!(aliased.operations().len(), loaded.operations().len());
+}
+
+#[test]
+fn test_from_path_alias_reads_file() {
+    let path = unique_temp_path("from_path");
+    fs::write(
+        &path,
+        r#"
+        OPENQASM 2.0;
+        include "qelib1.inc";
+        qreg q[1];
+        x q[0];
+    "#,
+    )
+    .unwrap();
+
+    let circuit = from_path(path.as_path()).unwrap();
+
+    assert_eq!(circuit.num_qubits(), 1);
+    assert_eq!(circuit.operations().len(), 1);
+    fs::remove_file(path).unwrap();
 }
 
 fn assert_directive(
@@ -316,7 +369,7 @@ fn test_qelib1_gate_name_cannot_be_redefined() {
     )
     .unwrap_err();
 
-    assert_eq!(error, QasmParseError::ReservedGateName("h".to_string()));
+    assert!(matches!(error, QasmParseError::ReservedGateName(ref name) if name == "h"));
     assert_eq!(
         error.to_string(),
         "Gate name 'h' is reserved by qelib1.inc and cannot be redefined"
@@ -334,7 +387,7 @@ fn test_qelib1_gate_name_cannot_be_declared_opaque() {
     )
     .unwrap_err();
 
-    assert_eq!(error, QasmParseError::ReservedGateName("h".to_string()));
+    assert!(matches!(error, QasmParseError::ReservedGateName(ref name) if name == "h"));
 }
 
 #[test]
@@ -932,6 +985,7 @@ fn test_if_statement_undefined_symbol_fails() {
 fn test_memory_resolver_include() {
     // Test the source resolver abstraction using a mock memory resolver
     use std::collections::HashMap;
+    use std::io;
     use std::path::{Path, PathBuf};
 
     /// A mock resolver that serves files from memory
@@ -958,11 +1012,10 @@ fn test_memory_resolver_include() {
     }
 
     impl QasmSourceResolver for MemoryResolver {
-        fn resolve_source(&self, path: &Path) -> Result<String, String> {
-            self.files
-                .get(path)
-                .cloned()
-                .ok_or_else(|| format!("File not found: {:?}", path))
+        fn resolve_source(&self, path: &Path) -> Result<String, io::Error> {
+            self.files.get(path).cloned().ok_or_else(|| {
+                io::Error::new(io::ErrorKind::NotFound, format!("File not found: {path:?}"))
+            })
         }
     }
 
@@ -989,16 +1042,20 @@ fn test_memory_resolver_include() {
 
 #[test]
 fn test_qelib1_gate_name_cannot_be_redefined_in_external_include() {
+    use std::io;
     use std::path::Path;
 
     struct ReservedGateResolver;
 
     impl QasmSourceResolver for ReservedGateResolver {
-        fn resolve_source(&self, path: &Path) -> Result<String, String> {
+        fn resolve_source(&self, path: &Path) -> Result<String, io::Error> {
             if path == Path::new("reserved.inc") {
                 Ok("gate h a { rx(pi) a; }".to_string())
             } else {
-                Err(format!("File not found: {path:?}"))
+                Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("File not found: {path:?}"),
+                ))
             }
         }
     }
@@ -1014,7 +1071,14 @@ fn test_qelib1_gate_name_cannot_be_redefined_in_external_include() {
     )
     .unwrap_err();
 
-    assert_eq!(error, QasmParseError::ReservedGateName("h".to_string()));
+    assert!(matches!(error, QasmParseError::ReservedGateName(ref name) if name == "h"));
+}
+
+#[test]
+fn test_load_file_io_error_preserves_source() {
+    let error = load("definitely_missing_qasm2_file.qasm").unwrap_err();
+    assert!(matches!(error, QasmParseError::IoError(_)));
+    assert!(std::error::Error::source(&error).is_some());
 }
 
 #[test]
