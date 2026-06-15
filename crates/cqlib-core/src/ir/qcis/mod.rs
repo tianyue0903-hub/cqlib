@@ -35,6 +35,17 @@
 //! - **Parametrized gates**: RX, RY, RXY
 //! - **Multi-qubit**: Barrier, Measure
 //!
+//! ## Entry Points and Errors
+//!
+//! - [`load::load`] / [`load::from_path`] reads a QCIS file and returns
+//!   [`load::QcisParseError`] on failure.
+//! - [`load::loads`] / [`load::from_str`] reads QCIS source from a string and
+//!   returns [`load::QcisParseError`] on failure.
+//! - [`dump::dump`] / [`dump::to_path`] writes a circuit to a QCIS file and
+//!   returns [`dump::QcisDumpError`] on failure.
+//! - [`dump::dumps`] / [`dump::to_string`] serializes a circuit to a QCIS string
+//!   and returns [`dump::QcisDumpError`] on failure.
+//!
 //! ## Usage
 //!
 //! ### Loading QCIS
@@ -68,5 +79,5 @@
 pub mod dump;
 pub mod load;
 
-pub use dump::{dump, dumps};
-pub use load::{load, loads};
+pub use dump::{dump, dumps, to_path, to_string};
+pub use load::{from_path, from_str, load, loads};

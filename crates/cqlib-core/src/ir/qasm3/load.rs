@@ -25,6 +25,7 @@ use oq3_semantics::types::{ArrayDims, Type};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 
 const DEFAULT_MAX_RECURSION_DEPTH: usize = 100;
@@ -51,8 +52,7 @@ const DEFAULT_MAX_RECURSION_DEPTH: usize = 100;
 /// ```
 pub fn load<P: AsRef<Path>>(path: P) -> Result<Circuit, Qasm3ParseError> {
     let path = path.as_ref();
-    let source =
-        fs::read_to_string(path).map_err(|e| Qasm3ParseError::ParseError(e.to_string()))?;
+    let source = fs::read_to_string(path).map_err(Qasm3ParseError::IoError)?;
     let source = normalize_openqasm3_header(&source);
     let search_paths = path.parent().map(|parent| vec![parent.to_path_buf()]);
     let result =
@@ -63,6 +63,14 @@ pub fn load<P: AsRef<Path>>(path: P) -> Result<Circuit, Qasm3ParseError> {
         result.any_syntax_errors(),
         result.any_semantic_errors(),
     )
+}
+
+/// Parse an OpenQASM 3 file and lower it into a Cqlib [`Circuit`].
+///
+/// Rust-style alias for [`load`]. The Python-style `load` name is retained for
+/// compatibility with the rest of the IR module API.
+pub fn from_path<P: AsRef<Path>>(path: P) -> Result<Circuit, Qasm3ParseError> {
+    load(path)
 }
 
 /// Parses an OpenQASM 3 source string and lowers it into a Cqlib [`Circuit`].
@@ -97,6 +105,13 @@ pub fn loads(source: &str) -> Result<Circuit, Qasm3ParseError> {
     )
 }
 
+/// Parse an OpenQASM 3 source string and lower it into a Cqlib [`Circuit`].
+///
+/// Rust-style alias for [`loads`].
+pub fn from_str(source: &str) -> Result<Circuit, Qasm3ParseError> {
+    loads(source)
+}
+
 fn convert_parse_result(
     program: &asg::Program,
     symbols: &SymbolTable,
@@ -126,8 +141,10 @@ fn normalize_openqasm3_header(source: &str) -> String {
 /// `ParseError` and `SemanticError` come from the OpenQASM front-end. The
 /// other variants are produced by Cqlib's lowering layer when a valid ASG
 /// cannot be represented as a [`Circuit`] without losing semantics.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug)]
 pub enum Qasm3ParseError {
+    /// File system or I/O error while reading OpenQASM source.
+    IoError(io::Error),
     /// The OpenQASM parser reported syntax errors.
     ParseError(String),
     /// The OpenQASM semantic analyzer reported unresolved symbols, invalid
@@ -155,9 +172,60 @@ pub enum Qasm3ParseError {
     CircularGateDependency { gate: String, dependency: String },
 }
 
+impl PartialEq for Qasm3ParseError {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::IoError(lhs), Self::IoError(rhs)) => {
+                lhs.kind() == rhs.kind() && lhs.to_string() == rhs.to_string()
+            }
+            (Self::ParseError(lhs), Self::ParseError(rhs)) => lhs == rhs,
+            (Self::SemanticError(lhs), Self::SemanticError(rhs)) => lhs == rhs,
+            (Self::ConversionError(lhs), Self::ConversionError(rhs)) => lhs == rhs,
+            (Self::UnsupportedFeature(lhs), Self::UnsupportedFeature(rhs)) => lhs == rhs,
+            (Self::UndefinedSymbol(lhs), Self::UndefinedSymbol(rhs)) => lhs == rhs,
+            (Self::UndefinedGate(lhs), Self::UndefinedGate(rhs)) => lhs == rhs,
+            (Self::TypeError(lhs), Self::TypeError(rhs)) => lhs == rhs,
+            (Self::InvalidArgument(lhs), Self::InvalidArgument(rhs)) => lhs == rhs,
+            (
+                Self::MismatchedQubitCount {
+                    expected: lhs_expected,
+                    actual: lhs_actual,
+                },
+                Self::MismatchedQubitCount {
+                    expected: rhs_expected,
+                    actual: rhs_actual,
+                },
+            ) => lhs_expected == rhs_expected && lhs_actual == rhs_actual,
+            (
+                Self::MismatchedParameterCount {
+                    expected: lhs_expected,
+                    actual: lhs_actual,
+                },
+                Self::MismatchedParameterCount {
+                    expected: rhs_expected,
+                    actual: rhs_actual,
+                },
+            ) => lhs_expected == rhs_expected && lhs_actual == rhs_actual,
+            (Self::RecursionLimitExceeded(lhs), Self::RecursionLimitExceeded(rhs)) => lhs == rhs,
+            (
+                Self::CircularGateDependency {
+                    gate: lhs_gate,
+                    dependency: lhs_dependency,
+                },
+                Self::CircularGateDependency {
+                    gate: rhs_gate,
+                    dependency: rhs_dependency,
+                },
+            ) => lhs_gate == rhs_gate && lhs_dependency == rhs_dependency,
+            _ => false,
+        }
+    }
+}
+
 impl std::fmt::Display for Qasm3ParseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::IoError(error) => write!(f, "IO error: {error}"),
             Self::ParseError(s) => write!(f, "Parse error: {s}"),
             Self::SemanticError(s) => write!(f, "Semantic error: {s}"),
             Self::ConversionError(s) => write!(f, "Conversion error: {s}"),
@@ -187,7 +255,14 @@ impl std::fmt::Display for Qasm3ParseError {
     }
 }
 
-impl std::error::Error for Qasm3ParseError {}
+impl std::error::Error for Qasm3ParseError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::IoError(error) => Some(error),
+            _ => None,
+        }
+    }
+}
 
 impl From<crate::circuit::CircuitError> for Qasm3ParseError {
     fn from(value: crate::circuit::CircuitError) -> Self {

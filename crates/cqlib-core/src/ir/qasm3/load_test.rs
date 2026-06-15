@@ -14,6 +14,21 @@ use super::*;
 use crate::circuit::gate::{ClassicalDataOp, Instruction};
 use crate::circuit::{ClassicalControlOp, ClassicalType, Qubit, StandardGate};
 use std::fs;
+use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+fn unique_temp_path(test_name: &str) -> PathBuf {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    std::env::temp_dir().join(format!(
+        "cqlib_qasm3_load_{}_{}_{}.qasm",
+        std::process::id(),
+        test_name,
+        nonce
+    ))
+}
 
 fn assert_standard_gate(circuit: &Circuit, index: usize, gate: StandardGate, qubits: &[u32]) {
     let op = &circuit.operations()[index];
@@ -64,6 +79,22 @@ fn loads_bell_circuit() {
 }
 
 #[test]
+fn from_str_alias_matches_loads() {
+    let source = r#"
+        OPENQASM 3;
+        include "stdgates.inc";
+        qubit q;
+        h q;
+    "#;
+
+    let loaded = loads(source).unwrap();
+    let aliased = from_str(source).unwrap();
+
+    assert_eq!(aliased.num_qubits(), loaded.num_qubits());
+    assert_eq!(aliased.operations().len(), loaded.operations().len());
+}
+
+#[test]
 fn loads_openqasm_3_0_header_without_normalization() {
     let circuit = loads(
         r#"
@@ -99,6 +130,27 @@ fn load_file_reads_qasm3_source() {
     let circuit = load(&source_path).unwrap();
     assert_eq!(circuit.operations().len(), 1);
     assert_standard_gate(&circuit, 0, StandardGate::H, &[0]);
+}
+
+#[test]
+fn from_path_alias_reads_file() {
+    let source_path = unique_temp_path("from_path");
+    fs::write(
+        &source_path,
+        r#"
+        OPENQASM 3;
+        include "stdgates.inc";
+        qubit q;
+        x q;
+    "#,
+    )
+    .unwrap();
+
+    let circuit = from_path(source_path.as_path()).unwrap();
+
+    assert_eq!(circuit.operations().len(), 1);
+    assert_standard_gate(&circuit, 0, StandardGate::X, &[0]);
+    fs::remove_file(source_path).unwrap();
 }
 
 #[test]

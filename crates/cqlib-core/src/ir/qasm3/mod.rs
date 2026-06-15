@@ -20,10 +20,14 @@
 //!
 //! # Entry Points
 //!
-//! - [`load::load`] reads an OpenQASM 3 file.
-//! - [`load::loads`] reads OpenQASM 3 source from a string.
-//! - [`dump::dump`] writes a circuit to an OpenQASM 3 file.
-//! - [`dump::dumps`] serializes a circuit to an OpenQASM 3 string.
+//! - [`load::load`] / [`load::from_path`] reads an OpenQASM 3 file and returns
+//!   [`load::Qasm3ParseError`] on failure.
+//! - [`load::loads`] / [`load::from_str`] reads OpenQASM 3 source from a string
+//!   and returns [`load::Qasm3ParseError`] on failure.
+//! - [`dump::dump`] / [`dump::to_path`] writes a circuit to an OpenQASM 3 file
+//!   and returns [`dump::Qasm3DumpError`] on failure.
+//! - [`dump::dumps`] / [`dump::to_string`] serializes a circuit to an OpenQASM 3
+//!   string and returns [`dump::Qasm3DumpError`] on failure.
 //!
 //! The crate root also re-exports these as `qasm3_load`, `qasm3_loads`,
 //! `qasm3_dump`, and `qasm3_dumps`.
@@ -143,5 +147,5 @@
 pub mod dump;
 pub mod load;
 
-pub use dump::{dump, dumps};
-pub use load::{load, loads};
+pub use dump::{dump, dumps, to_path, to_string};
+pub use load::{from_path, from_str, load, loads};

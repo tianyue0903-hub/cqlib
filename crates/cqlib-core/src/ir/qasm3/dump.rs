@@ -31,9 +31,9 @@ use std::io::{self, Write as IoWrite};
 use std::path::Path;
 use std::sync::Arc;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug)]
 pub enum Qasm3DumpError {
-    IoError(String),
+    IoError(io::Error),
     FormatError(String),
     UnsupportedInstruction(String),
     UnsupportedClassicalData(String),
@@ -48,10 +48,52 @@ pub enum Qasm3DumpError {
     },
 }
 
+impl PartialEq for Qasm3DumpError {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::IoError(lhs), Self::IoError(rhs)) => {
+                lhs.kind() == rhs.kind() && lhs.to_string() == rhs.to_string()
+            }
+            (Self::FormatError(lhs), Self::FormatError(rhs)) => lhs == rhs,
+            (Self::UnsupportedInstruction(lhs), Self::UnsupportedInstruction(rhs)) => lhs == rhs,
+            (Self::UnsupportedClassicalData(lhs), Self::UnsupportedClassicalData(rhs)) => {
+                lhs == rhs
+            }
+            (Self::UnsupportedClassicalControl(lhs), Self::UnsupportedClassicalControl(rhs)) => {
+                lhs == rhs
+            }
+            (Self::MeasureInGateNotAllowed, Self::MeasureInGateNotAllowed) => true,
+            (
+                Self::ConflictingGateDefinition {
+                    name: lhs_name,
+                    existing_qubits: lhs_existing_qubits,
+                    existing_params: lhs_existing_params,
+                    conflicting_qubits: lhs_conflicting_qubits,
+                    conflicting_params: lhs_conflicting_params,
+                },
+                Self::ConflictingGateDefinition {
+                    name: rhs_name,
+                    existing_qubits: rhs_existing_qubits,
+                    existing_params: rhs_existing_params,
+                    conflicting_qubits: rhs_conflicting_qubits,
+                    conflicting_params: rhs_conflicting_params,
+                },
+            ) => {
+                lhs_name == rhs_name
+                    && lhs_existing_qubits == rhs_existing_qubits
+                    && lhs_existing_params == rhs_existing_params
+                    && lhs_conflicting_qubits == rhs_conflicting_qubits
+                    && lhs_conflicting_params == rhs_conflicting_params
+            }
+            _ => false,
+        }
+    }
+}
+
 impl std::fmt::Display for Qasm3DumpError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::IoError(s) => write!(f, "IO error: {s}"),
+            Self::IoError(error) => write!(f, "IO error: {error}"),
             Self::FormatError(s) => write!(f, "Format error: {s}"),
             Self::UnsupportedInstruction(s) => write!(f, "Unsupported OpenQASM 3 instruction: {s}"),
             Self::UnsupportedClassicalData(s) => {
@@ -77,8 +119,15 @@ impl std::fmt::Display for Qasm3DumpError {
     }
 }
 
-impl std::error::Error for Qasm3DumpError {}
-
+impl std::error::Error for Qasm3DumpError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::IoError(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+// 019ec904-7234-75b0-b459-9fe87d49cdbb
 impl From<std::fmt::Error> for Qasm3DumpError {
     fn from(value: std::fmt::Error) -> Self {
         Self::FormatError(value.to_string())
@@ -87,7 +136,7 @@ impl From<std::fmt::Error> for Qasm3DumpError {
 
 impl From<io::Error> for Qasm3DumpError {
     fn from(value: io::Error) -> Self {
-        Self::IoError(value.to_string())
+        Self::IoError(value)
     }
 }
 
@@ -96,6 +145,14 @@ pub fn dump<P: AsRef<Path>>(circuit: &Circuit, path: P) -> Result<(), Qasm3DumpE
     let mut file = File::create(path)?;
     file.write_all(qasm.as_bytes())?;
     Ok(())
+}
+
+/// Write a circuit to an OpenQASM 3 file.
+///
+/// Rust-style alias for [`dump`]. The Python-style `dump` name is retained for
+/// compatibility with the rest of the IR module API.
+pub fn to_path<P: AsRef<Path>>(circuit: &Circuit, path: P) -> Result<(), Qasm3DumpError> {
+    dump(circuit, path)
 }
 
 pub fn dumps(circuit: &Circuit) -> Result<String, Qasm3DumpError> {
@@ -134,6 +191,7 @@ pub fn dumps(circuit: &Circuit) -> Result<String, Qasm3DumpError> {
     }
     let classical_names = ClassicalNameMap::new(circuit, &mut output)?;
     writeln!(&mut output)?;
+    dump_global_phase(circuit, &mut output)?;
 
     let mut qubit_map = HashMap::new();
     for qubit in circuit.qubits() {
@@ -155,6 +213,22 @@ pub fn dumps(circuit: &Circuit) -> Result<String, Qasm3DumpError> {
         false,
     )?;
     Ok(output)
+}
+
+/// Serialize a circuit to an OpenQASM 3 string.
+///
+/// Rust-style alias for [`dumps`].
+pub fn to_string(circuit: &Circuit) -> Result<String, Qasm3DumpError> {
+    dumps(circuit)
+}
+
+fn dump_global_phase(circuit: &Circuit, output: &mut String) -> Result<(), Qasm3DumpError> {
+    let phase = circuit.global_phase();
+    if phase.is_zero() {
+        return Ok(());
+    }
+    writeln!(output, "gphase({});", phase.to_string().replace("π", "pi"))?;
+    Ok(())
 }
 
 #[derive(Debug, Default)]
