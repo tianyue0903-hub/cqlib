@@ -257,6 +257,9 @@ impl Ansatz for ZZFeatureMap {
     }
 
     fn num_parameters(&self) -> usize {
+        if self.reps == 0 {
+            return 0;
+        }
         self.num_qubits
     }
 
@@ -436,13 +439,28 @@ impl Ansatz for PauliFeatureMap {
             }
         }
 
-        // If Custom topology, validate all indices < num_qubits
+        // If Custom topology, validate all indices and reject ambiguous edges.
         if let EntanglementTopology::Custom(pairs) = &self.entanglement {
+            use std::collections::HashSet;
+            let mut seen: HashSet<(usize, usize)> = HashSet::new();
             for (i, j) in pairs {
                 if *i >= self.num_qubits || *j >= self.num_qubits {
                     return Err(CircuitError::InvalidOperation(format!(
                         "Custom entanglement topology contains out-of-bounds index: ({}, {}) for {} qubits",
                         i, j, self.num_qubits
+                    )));
+                }
+                if i == j {
+                    return Err(CircuitError::InvalidOperation(format!(
+                        "Custom entanglement topology contains self-loop ({}, {})",
+                        i, j
+                    )));
+                }
+                let edge = if i < j { (*i, *j) } else { (*j, *i) };
+                if !seen.insert(edge) {
+                    return Err(CircuitError::InvalidOperation(format!(
+                        "Custom entanglement topology contains duplicate edge ({}, {})",
+                        i, j
                     )));
                 }
             }
@@ -538,6 +556,9 @@ impl Ansatz for PauliFeatureMap {
     fn num_parameters(&self) -> usize {
         // The number of parameters equals the number of features (qubits)
         // Each qubit has one input feature parameter x_i
+        if self.reps == 0 {
+            return 0;
+        }
         self.num_qubits
     }
 

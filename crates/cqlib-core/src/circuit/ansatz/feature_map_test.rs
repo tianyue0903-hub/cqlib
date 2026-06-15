@@ -122,6 +122,18 @@ fn test_pauli_feature_map_zero_reps_empty_circuit() {
 
     // Zero reps should produce an empty circuit
     assert_eq!(ops.len(), 0);
+    assert_eq!(fm.num_parameters(), 0);
+    assert!(circuit.parameters().is_empty());
+}
+
+#[test]
+fn test_zz_feature_map_zero_reps_has_no_parameters() {
+    let fm = ZZFeatureMap::new(3).reps(0);
+    let circuit = fm.build_circuit("x").unwrap();
+
+    assert!(circuit.operations().is_empty());
+    assert_eq!(fm.num_parameters(), 0);
+    assert!(circuit.parameters().is_empty());
 }
 
 #[test]
@@ -426,6 +438,40 @@ fn test_pauli_feature_map_validation_custom_topology_out_of_bounds() {
     match result.unwrap_err() {
         CircuitError::InvalidOperation(msg) => {
             assert!(msg.contains("out-of-bounds"));
+        }
+        _ => panic!("Expected InvalidOperation error"),
+    }
+}
+
+#[test]
+fn test_pauli_feature_map_validation_custom_topology_self_loop() {
+    let fm = PauliFeatureMap::new(3)
+        .paulis(vec![(PauliString::from("ZZ"), "ZZ".to_string())])
+        .entanglement(EntanglementTopology::Custom(vec![(1, 1)]));
+
+    let result = fm.build_circuit("x");
+    assert!(result.is_err());
+
+    match result.unwrap_err() {
+        CircuitError::InvalidOperation(msg) => {
+            assert!(msg.contains("self-loop"));
+        }
+        _ => panic!("Expected InvalidOperation error"),
+    }
+}
+
+#[test]
+fn test_pauli_feature_map_validation_custom_topology_duplicate_edge() {
+    let fm = PauliFeatureMap::new(3)
+        .paulis(vec![(PauliString::from("ZZ"), "ZZ".to_string())])
+        .entanglement(EntanglementTopology::Custom(vec![(0, 1), (1, 0)]));
+
+    let result = fm.build_circuit("x");
+    assert!(result.is_err());
+
+    match result.unwrap_err() {
+        CircuitError::InvalidOperation(msg) => {
+            assert!(msg.contains("duplicate edge"));
         }
         _ => panic!("Expected InvalidOperation error"),
     }
