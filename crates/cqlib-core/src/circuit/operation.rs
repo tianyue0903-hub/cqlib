@@ -40,10 +40,12 @@ use ndarray::Array2;
 use num_complex::Complex64;
 use smallvec::{SmallVec, smallvec};
 
-/// A fully resolved operation in a quantum circuit.
+/// A circuit-local operation in the compact storage IR.
 ///
 /// An `Operation` combines a gate (instruction) with the specific qubits it acts upon and its
-/// parameters. It serves as the fundamental node in the circuit's execution list.
+/// parameters. Fixed parameters are stored inline, while symbolic parameters may be represented
+/// by indices into the owning [`Circuit`](crate::circuit::Circuit)'s parameter table. An
+/// `Operation` therefore cannot always be interpreted without its owning circuit.
 ///
 /// # Fields
 ///
@@ -69,20 +71,23 @@ pub struct Operation {
 impl Operation {
     /// Computes the numerical unitary matrix for this specific operation.
     ///
-    /// This method resolves any parameters associated with the operation and delegates
-    /// the matrix generation to the underlying [`Instruction`].
+    /// This method accepts only parameters already stored as fixed values and delegates
+    /// matrix generation to the underlying [`Instruction`]. It cannot resolve
+    /// circuit-local parameter indices without access to the owning circuit.
     ///
     /// # Returns
     ///
     /// * `Ok(Cow<Array2>)` - The unitary matrix. It may be borrowed (static) or owned (computed).
-    /// * `Err(CircuitError)` - If the operation is non-unitary (e.g., Measure, Barrier) or if
-    ///   symbolic parameters cannot be resolved (implementation pending).
+    /// * `Err(CircuitError)` - If the operation is non-unitary or contains an
+    ///   unresolved symbolic parameter.
     ///
-    /// # Current Limitations
+    /// # Errors
     ///
-    /// **Partial Implementation**: Currently, this method only supports `CircuitParam::Fixed` (concrete float values).
-    /// Attempting to call this on an operation with symbolic parameters (`CircuitParam::Index`) will
-    /// result in a panic ("not yet implemented").
+    /// Returns [`CircuitError::SymbolicParameterError`] when the operation
+    /// contains an indexed symbolic parameter. Resolve parameters through the
+    /// owning [`Circuit`](crate::circuit::Circuit) before requesting a numeric
+    /// matrix. Returns [`CircuitError::NoMatrixRepresentation`] for non-unitary
+    /// instructions such as measurement, reset, and barriers.
     pub fn matrix(&self) -> Result<Cow<'_, Array2<Complex64>>, CircuitError> {
         let mut ps: SmallVec<[f64; 4]> = smallvec![];
         for p in self.params.iter() {
@@ -101,6 +106,12 @@ impl Operation {
     }
 }
 
+/// A value-level operation independent of a circuit parameter table.
+///
+/// Unlike [`Operation`], symbolic parameters are stored directly as
+/// [`ParameterValue`] values rather than circuit-local table indices. This form
+/// is used before insertion into a circuit and when returning a resolved
+/// operation from [`Circuit::index`](crate::circuit::Circuit::index).
 #[derive(Debug, Clone)]
 pub struct ValueOperation {
     /// The abstract instruction definition (what to do).

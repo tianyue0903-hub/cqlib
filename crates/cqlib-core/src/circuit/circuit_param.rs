@@ -13,7 +13,24 @@
 //! # Circuit Parameters Module
 //!
 //! This module defines the types used to represent parameters within a circuit and its operations.
-//! It bridges the gap between high-level symbolic expressions ([`Parameter`]) and low-level storage ([`CircuitParam`]).
+//! It bridges the gap between high-level symbolic expressions ([`Parameter`]) and low-level
+//! storage ([`CircuitParam`]).
+//!
+//! ## Two Representations
+//!
+//! | Type | IR layer | Parameter form | Where used |
+//! |------|----------|---------------|------------|
+//! | [`ParameterValue`] | Construction (pre-insertion) | Symbolic or fixed | [`ValueOperation`](super::ValueOperation), gate builders |
+//! | [`CircuitParam`] | Storage (post-insertion) | Index into parameter table or fixed | [`Operation`](super::Operation), circuit internals |
+//!
+//! [`ParameterValue`] is the user-facing type accepted by gate convenience methods
+//! (`Circuit::rx`, `Circuit::u`, etc.) and value-level IR builders. Fixed `f64`
+//! values and symbolic [`Parameter`] objects are both accepted interchangeably.
+//!
+//! On insertion via [`Circuit::append`](super::circuit_impl::Circuit::append),
+//! symbolic parameters are interned into the circuit's parameter table and
+//! replaced with [`CircuitParam::Index`]. Fixed parameters are validated to be
+//! finite and stored directly as [`CircuitParam::Fixed`].
 
 use super::parameter::Parameter;
 
@@ -121,6 +138,13 @@ impl From<&ParameterValue> for Parameter {
 }
 
 impl From<&str> for ParameterValue {
+    /// Converts a string literal into a symbolic parameter.
+    ///
+    /// ```rust
+    /// use cqlib_core::circuit::circuit_param::ParameterValue;
+    ///
+    /// let theta: ParameterValue = "theta".into();
+    /// ```
     fn from(para: &str) -> Self {
         Parameter::symbol(para).into()
     }

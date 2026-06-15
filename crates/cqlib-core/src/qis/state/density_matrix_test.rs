@@ -10,7 +10,8 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
-use crate::circuit::{Circuit, StandardGate};
+use crate::circuit::{Circuit, Qubit, StandardGate};
+use crate::qis::QisError;
 use crate::qis::hamiltonian::Hamiltonian;
 use crate::qis::pauli::{Pauli, PauliString};
 use crate::qis::state::density_matrix::DensityMatrix;
@@ -69,8 +70,8 @@ fn test_rz_phase_correction() {
 #[test]
 fn test_from_circuit_bell_state() {
     let mut circuit = Circuit::new(2);
-    circuit.h(0.into()).unwrap();
-    circuit.cx(0.into(), 1.into()).unwrap();
+    circuit.h(Qubit::new(0)).unwrap();
+    circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
 
     let dm = DensityMatrix::from_circuit(&circuit).unwrap();
 
@@ -91,8 +92,8 @@ fn test_from_circuit_ignores_terminal_measurement_declarations() {
     use crate::device::Outcome;
 
     let mut circuit = Circuit::new(2);
-    circuit.h(0.into()).unwrap();
-    circuit.cx(0.into(), 1.into()).unwrap();
+    circuit.h(Qubit::new(0)).unwrap();
+    circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
     let out = circuit
         .measure_bits([Qubit::new(1), Qubit::new(0)])
         .unwrap();
@@ -108,8 +109,8 @@ fn test_from_circuit_ignores_terminal_measurement_declarations() {
 #[test]
 fn test_apply_circuit_bell_state() {
     let mut circuit = Circuit::new(2);
-    circuit.h(0.into()).unwrap();
-    circuit.cx(0.into(), 1.into()).unwrap();
+    circuit.h(Qubit::new(0)).unwrap();
+    circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
 
     let mut dm = DensityMatrix::new(2);
     dm.apply_circuit(&circuit).unwrap();
@@ -129,7 +130,7 @@ fn test_apply_circuit_bell_state() {
 fn test_apply_circuit_dimension_mismatch() {
     let mut dm = DensityMatrix::new(1);
     let mut circuit = Circuit::new(2);
-    circuit.h(0.into()).unwrap();
+    circuit.h(Qubit::new(0)).unwrap();
 
     assert!(dm.apply_circuit(&circuit).is_err());
 }
@@ -137,8 +138,8 @@ fn test_apply_circuit_dimension_mismatch() {
 #[test]
 fn test_apply_circuit_reset_directive() {
     let mut circuit = Circuit::new(1);
-    circuit.x(0.into()).unwrap();
-    circuit.reset(0.into()).unwrap();
+    circuit.x(Qubit::new(0)).unwrap();
+    circuit.reset(Qubit::new(0)).unwrap();
 
     let mut dm = DensityMatrix::new(1);
     dm.apply_circuit(&circuit).unwrap();
@@ -155,7 +156,7 @@ fn test_apply_circuit_classical_control_flow_error() {
     let mut circuit = Circuit::new(1);
     circuit
         .if_(ClassicalExpr::bool_literal(true), |body| {
-            body.x(0.into())?;
+            body.x(Qubit::new(0))?;
             Ok(())
         })
         .unwrap();
@@ -224,7 +225,7 @@ fn test_partial_trace_bell_state() {
     dm.apply_cx(0, 1).unwrap();
 
     // Tracing out qubit 1 should leave qubit 0 in a maximally mixed state: I/2.
-    let reduced_dm = dm.partial_trace(&[0]);
+    let reduced_dm = dm.partial_trace(&[0]).unwrap();
     assert_eq!(reduced_dm.num_qubits, 1);
 
     let probs = reduced_dm.probabilities();
@@ -239,10 +240,12 @@ fn test_partial_trace_bell_state() {
 }
 
 #[test]
-#[should_panic(expected = "Qubit index out of bounds in partial trace")]
 fn test_partial_trace_out_of_bounds() {
     let dm = DensityMatrix::new(2);
-    let _ = dm.partial_trace(&[2]);
+    assert!(matches!(
+        dm.partial_trace(&[2]),
+        Err(QisError::IndexOutOfBounds { index: 2, max: 1 })
+    ));
 }
 
 #[test]
@@ -251,10 +254,10 @@ fn test_partial_trace_duplicate_qubits() {
     dm.apply_h(0).unwrap();
     dm.apply_cx(0, 1).unwrap();
 
-    // Should behave same as &[0] due to deduplication
-    let reduced_dm = dm.partial_trace(&[0, 0]);
-    assert_eq!(reduced_dm.num_qubits, 1);
-    assert_relative_eq!(reduced_dm.probabilities()[0], 0.5);
+    assert!(matches!(
+        dm.partial_trace(&[0, 0]),
+        Err(QisError::InvalidParameterValue(_))
+    ));
 }
 
 #[test]
@@ -282,6 +285,31 @@ fn test_apply_kraus_bit_flip() {
     assert_relative_eq!(probs[0], 1.0 - p); // |0><0| probability
     assert_relative_eq!(probs[1], p); // |1><1| probability
     assert_relative_eq!(dm.trace().re, 1.0);
+}
+
+#[test]
+fn test_apply_kraus_rejects_invalid_inputs() {
+    let mut dm = DensityMatrix::new(1);
+    let valid = vec![
+        Complex64::new(1.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(1.0, 0.0),
+    ];
+    let wrong_len = vec![Complex64::new(1.0, 0.0)];
+
+    assert!(matches!(
+        dm.apply_kraus(&[], &[0]),
+        Err(QisError::InvalidParameterValue(_))
+    ));
+    assert!(matches!(
+        dm.apply_kraus(std::slice::from_ref(&valid), &[]),
+        Err(QisError::InvalidParameterValue(_))
+    ));
+    assert!(matches!(
+        dm.apply_kraus(&[wrong_len], &[0]),
+        Err(QisError::InvalidParameterValue(_))
+    ));
 }
 
 #[test]
@@ -798,7 +826,7 @@ fn test_sample_uses_measurement_qubit_order() {
     use crate::device::{Outcome, Status};
 
     let mut circuit = Circuit::new(2);
-    circuit.x(0.into()).unwrap();
+    circuit.x(Qubit::new(0)).unwrap();
     let out = circuit
         .measure_bits([Qubit::new(1), Qubit::new(0)])
         .unwrap();
@@ -825,9 +853,9 @@ fn test_probs_marginalizes_unmeasured_qubits() {
     use crate::device::Outcome;
 
     let mut circuit = Circuit::new(2);
-    circuit.h(0.into()).unwrap();
-    circuit.cx(0.into(), 1.into()).unwrap();
-    let out = circuit.measure(0.into()).unwrap();
+    circuit.h(Qubit::new(0)).unwrap();
+    circuit.cx(Qubit::new(0), Qubit::new(1)).unwrap();
+    let out = circuit.measure(Qubit::new(0)).unwrap();
 
     let dm = DensityMatrix::from_circuit(&circuit).unwrap();
     let probs = dm.probs(&out).unwrap();
@@ -843,7 +871,7 @@ fn test_sample_rejects_measurement_qubit_outside_state() {
 
     let dm = DensityMatrix::new(1);
     let mut circuit = Circuit::new(3);
-    let measurement = circuit.measure(2.into()).unwrap();
+    let measurement = circuit.measure(Qubit::new(2)).unwrap();
 
     assert!(matches!(
         dm.sample(&measurement, 1),

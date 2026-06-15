@@ -18,11 +18,17 @@ use std::fmt;
 /// Expression-based classical control-flow operation.
 #[derive(Debug, Clone)]
 pub enum ClassicalControlOp {
+    /// Conditional branch.
     If(IfOp),
+    /// Condition-controlled loop.
     While(WhileOp),
+    /// Unsigned range loop.
     For(ForOp),
+    /// Exact-value multi-way branch.
     Switch(SwitchOp),
+    /// Exit the nearest enclosing loop or switch.
     Break,
+    /// Advance the nearest enclosing loop.
     Continue,
 }
 

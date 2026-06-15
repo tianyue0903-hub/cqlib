@@ -991,6 +991,10 @@ impl PyCircuit {
     /// Returns:
     ///     A 2D NumPy array representing the unitary matrix of the circuit.
     ///
+    /// Raises:
+    ///     ValueError: If the circuit is non-unitary, contains unresolved
+    ///         parameters, or `qubits_order` is invalid.
+    ///
     /// # Example
     ///
     /// ```python
@@ -1009,7 +1013,9 @@ impl PyCircuit {
         let circuit = self.inner.clone();
         let order = qubits_order.clone();
         // Release GIL during potentially expensive matrix computation
-        let result = py.detach(move || circuit.to_matrix(order.as_deref()));
+        let result = py
+            .detach(move || circuit.to_matrix(order.as_deref()))
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
         Ok(result.to_pyarray(py))
     }
 

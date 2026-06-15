@@ -17,7 +17,6 @@ use crate::circuit::{
     ClassicalExpr, ClassicalType, Directive, Instruction, MCGate, Parameter, ParameterValue, Qubit,
     StandardGate, UnitaryGate, ValueInstruction, ValueOperation, circuit_to_matrix,
 };
-use crate::compile::CompilerError;
 use crate::compile::transform::Transformer;
 use crate::util::test_utils::generated_small_matrix_circuit;
 use ndarray::array;
@@ -781,8 +780,8 @@ fn duplicate_non_barrier_qubit_is_rejected_during_construction() {
 }
 
 #[test]
-fn invalid_arity_is_rejected() {
-    let circuit = Circuit::from_operations(
+fn invalid_arity_is_rejected_during_circuit_construction() {
+    let err = Circuit::from_operations(
         vec![Qubit::new(0)],
         vec![ValueOperation {
             instruction: ValueInstruction::from_instruction(Instruction::Standard(
@@ -795,16 +794,20 @@ fn invalid_arity_is_rejected() {
         None,
         None,
     )
-    .unwrap();
+    .unwrap_err();
 
-    let err = canonicalize_circuit(&circuit).unwrap_err();
-    assert!(matches!(err, CompilerError::InvalidInput(_)));
-    assert!(err.to_string().contains("qubit count mismatch"));
+    assert!(matches!(
+        err,
+        CircuitError::QubitCountMismatch {
+            expected: 2,
+            actual: 1
+        }
+    ));
 }
 
 #[test]
-fn parameter_count_mismatch_is_rejected() {
-    let circuit = Circuit::from_operations(
+fn parameter_count_mismatch_is_rejected_during_circuit_construction() {
+    let err = Circuit::from_operations(
         vec![Qubit::new(0)],
         vec![ValueOperation {
             instruction: ValueInstruction::from_instruction(Instruction::Standard(
@@ -817,11 +820,15 @@ fn parameter_count_mismatch_is_rejected() {
         None,
         None,
     )
-    .unwrap();
+    .unwrap_err();
 
-    let err = canonicalize_circuit(&circuit).unwrap_err();
-    assert!(matches!(err, CompilerError::InvalidInput(_)));
-    assert!(err.to_string().contains("parameter count mismatch"));
+    assert!(matches!(
+        err,
+        CircuitError::ParameterCountMismatch {
+            expected: 1,
+            actual: 0
+        }
+    ));
 }
 
 #[test]

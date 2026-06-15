@@ -12,9 +12,10 @@
 
 //! Symbolic matrix representations for quantum gates and circuits.
 //!
-//! This module provides a symbolic counterpart of [`super::circuit_to_matrix`].
+//! This module provides a symbolic counterpart of
+//! [`circuit_to_matrix()`](fn@crate::circuit::circuit_to_matrix).
 //! Instead of immediately evaluating gate parameters to concrete `f64` values,
-//! it keeps unresolved parameters as [`Parameter`] expression trees inside a
+//! it keeps unresolved parameters as [`Parameter`](crate::circuit::Parameter) expression trees inside a
 //! dense symbolic matrix.  The resulting matrix can later be evaluated under
 //! different parameter bindings without rebuilding the circuit-level unitary.
 //!
@@ -28,7 +29,8 @@
 //! - comparing small rewrite patterns and replacement circuits;
 //! - validating decomposition rules and peephole optimizations;
 //! - debugging matrix conventions, qubit ordering, and global phase behavior;
-//! - building reusable symbolic matrices for [`CircuitGate`] and circuit-backed
+//! - building reusable symbolic matrices for
+//!   [`CircuitGate`](crate::circuit::CircuitGate) and circuit-backed
 //!   [`UnitaryGate`](crate::circuit::gate::UnitaryGate) definitions.
 //!
 //! This module is **not** a large-scale symbolic simulator.  A full dense
@@ -40,7 +42,7 @@
 //! # Core types
 //!
 //! - [`SymbolicComplex`] stores one complex symbolic value as two independent
-//!   [`Parameter`] expressions: one for the real part and one for the imaginary
+//!   [`Parameter`](crate::circuit::Parameter) expressions: one for the real part and one for the imaginary
 //!   part.
 //! - [`SymbolicMatrix`] is a dense `Array2<SymbolicComplex>` with the same
 //!   storage layout and matrix convention as the numerical circuit-matrix API.
@@ -59,8 +61,9 @@
 //!   [`UnitaryGate`](crate::circuit::gate::UnitaryGate) definitions preserve
 //!   symbolic parameters through simultaneous substitution;
 //! - non-unitary operations such as measurement and reset return
-//!   [`CircuitError::NoMatrixRepresentation`];
-//! - control-flow operations return [`CircuitError::InvalidOperation`] because
+//!   [`CircuitError::NoMatrixRepresentation`](crate::circuit::CircuitError::NoMatrixRepresentation);
+//! - control-flow operations return
+//!   [`CircuitError::InvalidOperation`](crate::circuit::CircuitError::InvalidOperation) because
 //!   they do not have a single unconditional unitary matrix.
 //!
 //! # Qubit ordering
@@ -169,7 +172,7 @@
 //! ```
 //!
 //! This check is intentionally conservative.  It depends on the simplification
-//! power of [`Parameter::simplify`], so failure to prove equivalence does not
+//! power of [`Parameter::simplify`](crate::circuit::Parameter::simplify), so failure to prove equivalence does not
 //! necessarily mean the two circuits are mathematically inequivalent.
 //!
 //! # Gate-application fast paths
@@ -193,7 +196,7 @@
 //! # Parallelism and safety
 //!
 //! Matrix application and matrix evaluation use **rayon** once the matrix element
-//! count exceeds [`PARALLEL_THRESHOLD_OPS`].  Below that threshold, work stays on
+//! count exceeds `PARALLEL_THRESHOLD_OPS`. Below that threshold, work stays on
 //! the current thread to avoid scheduling overhead.
 //!
 //! Some hot paths use raw pointers internally to split mutable access across
@@ -205,7 +208,7 @@
 //! A dense unitary matrix for `n` qubits has dimension `2^n × 2^n`, so both
 //! memory use and matrix-element work scale as `O(4^n)`.  Symbolic entries are
 //! significantly more expensive than `Complex64` entries because each arithmetic
-//! operation can create new [`Parameter`] expression trees.
+//! operation can create new [`Parameter`](crate::circuit::Parameter) expression trees.
 //!
 //! Recommended usage:
 //!
@@ -234,14 +237,14 @@
 //! # Parallelism
 //!
 //! Gate application is parallelised with **rayon** when the matrix element
-//! count exceeds [`PARALLEL_THRESHOLD_OPS`] (2²⁰). Small circuits run on a
+//! count exceeds `PARALLEL_THRESHOLD_OPS` (2²⁰). Small circuits run on a
 //! single thread to avoid scheduling overhead.
 
 /// Minimum number of matrix elements that triggers parallel gate application
 /// via rayon. Below this threshold the work is done on the calling thread to
 /// avoid the overhead of thread-pool scheduling.
 ///
-/// Kept in sync with the numerical path in [`super::circuit_to_matrix`].
+/// Kept in sync with the numerical circuit-to-matrix path.
 pub(crate) const PARALLEL_THRESHOLD_OPS: usize = 1 << 20;
 
 pub mod equivalence;

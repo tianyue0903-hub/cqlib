@@ -48,7 +48,9 @@ pub enum Instruction {
     Standard(StandardGate),
     /// An extended gate, such as a multi-controlled gate or a user-defined unitary.
     McGate(Box<MCGate>),
+    /// User-defined unitary gate backed by a matrix or circuit definition.
     UnitaryGate(Box<UnitaryGate>),
+    /// Reusable gate defined by a frozen circuit body.
     CircuitGate(Box<CircuitGate>),
     /// A non-unitary operation, such as `Measure`, `Barrier`, or `Reset`.
     Directive(Directive),

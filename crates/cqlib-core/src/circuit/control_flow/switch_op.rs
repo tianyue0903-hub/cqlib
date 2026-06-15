@@ -23,14 +23,17 @@ pub struct SwitchCase {
 }
 
 impl SwitchCase {
+    /// Creates an exact-value case with its body.
     pub fn new(value: u128, body: ControlBody) -> Self {
         Self { value, body }
     }
 
+    /// Returns the exact value matched by this case.
     pub fn value(&self) -> u128 {
         self.value
     }
 
+    /// Returns the body executed when this case matches.
     pub fn body(&self) -> &ControlBody {
         &self.body
     }
@@ -83,26 +86,32 @@ impl SwitchOp {
         })
     }
 
+    /// Returns the unsigned expression being matched.
     pub fn target(&self) -> &ClassicalExpr {
         &self.target
     }
 
+    /// Returns exact-value cases in source order.
     pub fn cases(&self) -> &[SwitchCase] {
         &self.cases
     }
 
+    /// Returns the optional default body.
     pub fn default(&self) -> Option<&ControlBody> {
         self.default.as_ref()
     }
 
+    /// Returns mutable variables read by the target expression.
     pub fn classical_var_reads(&self) -> BTreeSet<ClassicalVar> {
         self.target.vars()
     }
 
+    /// Returns immutable values read by the target expression.
     pub fn classical_value_reads(&self) -> BTreeSet<ClassicalValue> {
         self.target.values()
     }
 
+    /// Returns qubits used by all case and default bodies.
     pub fn used_qubits(&self) -> BTreeSet<Qubit> {
         let mut qubits = BTreeSet::new();
         for case in self.cases.iter() {

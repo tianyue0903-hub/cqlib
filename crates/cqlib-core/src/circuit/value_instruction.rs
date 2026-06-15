@@ -51,8 +51,8 @@ use crate::circuit::operation::{Operation, ValueOperation};
 
 /// A value-level control-flow body.
 ///
-/// This is the construction-IR counterpart of [`ControlBody`](crate::circuit::ControlBody).
-/// Instead of storing indexed [`Operation`](crate::circuit::Operation) values, it stores
+/// This is the construction-IR counterpart of [`ControlBody`].
+/// Instead of storing indexed [`Operation`] values, it stores
 /// [`ValueOperation`] values whose parameters are [`ParameterValue`] objects that have not
 /// yet been interned into any circuit.
 ///
@@ -121,7 +121,7 @@ impl ValueSwitchCase {
 
 /// A value-level classical control-flow operation.
 ///
-/// This mirrors [`ClassicalControlOp`](crate::circuit::ClassicalControlOp) but every
+/// This mirrors [`ClassicalControlOp`] but every
 /// nested body is a [`ValueControlBody`] containing [`ValueOperation`] entries with
 /// [`ParameterValue`] parameters. There are no [`CircuitParam::Index`] values anywhere
 /// in this tree.
@@ -142,15 +142,20 @@ pub enum ValueClassicalControlOp {
     ///
     /// `condition` must have type [`ClassicalType::Bool`](crate::circuit::ClassicalType).
     If {
+        /// Boolean branch condition.
         condition: ClassicalExpr,
+        /// Body executed when the condition is true.
         then_body: ValueControlBody,
+        /// Optional body executed when the condition is false.
         else_body: Option<ValueControlBody>,
     },
     /// Repeat `body` while `condition` remains true.
     ///
     /// `condition` must have type [`ClassicalType::Bool`](crate::circuit::ClassicalType).
     While {
+        /// Boolean loop condition.
         condition: ClassicalExpr,
+        /// Body executed while the condition is true.
         body: ValueControlBody,
     },
     /// Iterate `body` over an unsigned half-open range `[start, stop)` with the given `step`.
@@ -158,18 +163,26 @@ pub enum ValueClassicalControlOp {
     /// `var` must have type [`ClassicalType::UInt`](crate::circuit::ClassicalType).
     /// `start`, `stop`, and `step` must match `var`'s width.
     For {
+        /// Mutable unsigned loop variable.
         var: ClassicalVar,
+        /// Inclusive initial value.
         start: ClassicalExpr,
+        /// Exclusive upper bound.
         stop: ClassicalExpr,
+        /// Non-zero iteration increment.
         step: ClassicalExpr,
+        /// Loop body.
         body: ValueControlBody,
     },
     /// Select one body by matching `target` against exact case values.
     ///
     /// `target` must have an unsigned integer type. Cases do not fall through.
     Switch {
+        /// Unsigned expression matched against case values.
         target: ClassicalExpr,
+        /// Exact-value cases in source order.
         cases: Vec<ValueSwitchCase>,
+        /// Optional default body.
         default: Option<ValueControlBody>,
     },
     /// Exit the nearest enclosing loop or switch body.
@@ -254,7 +267,7 @@ impl ValueClassicalControlOp {
 ///   `ClassicalControl`).
 /// - `ValueInstruction::ClassicalControl(vcc)` → `Instruction::ClassicalControl(cc)`,
 ///   where every nested [`ValueControlBody`] is recursively converted to a
-///   [`ControlBody`](crate::circuit::ControlBody) with interned parameters.
+///   [`ControlBody`] with interned parameters.
 #[derive(Debug, Clone)]
 pub enum ValueInstruction {
     /// A non-control-flow instruction. The wrapped [`Instruction`] must not be

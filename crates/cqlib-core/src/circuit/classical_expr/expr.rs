@@ -78,11 +78,17 @@ pub enum ClassicalBinaryOp {
 /// Comparison operators for classical expressions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ClassicalCompareOp {
+    /// Equality.
     Eq,
+    /// Inequality.
     Ne,
+    /// Strictly less than.
     Lt,
+    /// Less than or equal.
     Le,
+    /// Strictly greater than.
     Gt,
+    /// Greater than or equal.
     Ge,
 }
 
@@ -105,6 +111,10 @@ pub struct ClassicalExpr {
     node: Box<ClassicalExprNode>,
 }
 
+/// Typed node stored inside a [`ClassicalExpr`].
+///
+/// Its fields are private so callers cannot construct an expression whose
+/// declared type disagrees with its node kind.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ClassicalExprNode {
     ty: ClassicalType,
@@ -118,54 +128,93 @@ pub struct ClassicalExprNode {
 /// expression construction should continue to use the typed builders.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ClassicalExprKind {
+    /// Read a mutable circuit-local variable.
     Var(ClassicalVar),
+    /// Read an immutable circuit-local SSA value.
     Value(ClassicalValue),
+    /// Boolean literal.
     BoolLiteral(bool),
+    /// Single-bit literal.
     BitLiteral(bool),
+    /// Fixed-width unsigned integer literal.
     UIntLiteral {
+        /// Static integer width.
         width: NonZeroU32,
+        /// Literal value, constrained to the declared width.
         value: u128,
     },
+    /// Fixed-width ordered bit-vector literal.
     BitVecLiteral {
+        /// Static bit-vector width.
         width: NonZeroU32,
+        /// Packed little-endian literal value.
         value: u128,
     },
+    /// Unary operation.
     Unary {
+        /// Unary operator.
         op: ClassicalUnaryOp,
+        /// Operand expression.
         expr: ClassicalExpr,
     },
+    /// Binary boolean or bit operation.
     Binary {
+        /// Binary operator.
         op: ClassicalBinaryOp,
+        /// Left operand.
         lhs: ClassicalExpr,
+        /// Right operand.
         rhs: ClassicalExpr,
     },
+    /// Comparison producing a boolean result.
     Compare {
+        /// Comparison operator.
         op: ClassicalCompareOp,
+        /// Left operand.
         lhs: ClassicalExpr,
+        /// Right operand.
         rhs: ClassicalExpr,
     },
+    /// Explicit conversion between classical types.
     Cast {
+        /// Conversion operation.
         cast: ClassicalCast,
+        /// Source expression.
         expr: ClassicalExpr,
     },
+    /// Conditional expression analogous to a typed ternary operator.
     Select {
+        /// Boolean selection condition.
         condition: ClassicalExpr,
+        /// Value selected when the condition is true.
         then_expr: ClassicalExpr,
+        /// Value selected when the condition is false.
         else_expr: ClassicalExpr,
     },
+    /// Extract one bit from an integer or bit-vector expression.
     ExtractBit {
+        /// Source expression.
         value: ClassicalExpr,
+        /// Zero-based little-endian bit index.
         index: u32,
     },
+    /// Extract a contiguous bit range.
     ExtractBits {
+        /// Source expression.
         value: ClassicalExpr,
+        /// Zero-based little-endian starting offset.
         offset: u32,
+        /// Number of bits in the result.
         width: NonZeroU32,
     },
+    /// Concatenate bit-vector expressions in the documented builder order.
     Concat {
+        /// Expressions being concatenated.
         parts: Box<[ClassicalExpr]>,
     },
+    /// Pack individual `Bit` expressions into a bit vector.
     PackBits {
+        /// Bits in increasing little-endian bit-index order.
         bits: Box<[ClassicalExpr]>,
     },
 }

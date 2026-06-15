@@ -16,8 +16,8 @@
 //!
 //! - [`standard_gate_symbolic_matrix`] — per-gate symbolic unitary matrices,
 //! - [`circuit_to_symbolic_matrix`] — whole-circuit symbolic matrix with
-//!   parameter substitution for [`CircuitGate`] and circuit-backed
-//!   [`UnitaryGate`],
+//!   parameter substitution for [`CircuitGate`](crate::circuit::CircuitGate)
+//!   and circuit-backed [`UnitaryGate`](crate::circuit::UnitaryGate),
 //! - [`apply_gate_to_matrix`] and [`apply_gate_to_matrix_num`] — gate
 //!   application dispatchers that select the fast path (diagonal /
 //!   permutation / single-qubit / two-qubit / general) automatically,
@@ -91,7 +91,7 @@ impl NumericRun {
 ///
 /// Non-parametric gates (H, X, SWAP, CCX, …) delegate to the numerical
 /// [`StandardGate::matrix`] and convert the result via
-/// [`symbolic_matrix_from_numeric`]. Parametric gates (RX, RY, RZ, U, …)
+/// the internal numeric-to-symbolic conversion. Parametric gates (RX, RY, RZ, U, …)
 /// build their matrices symbolically so that parameters remain as
 /// [`Parameter`] expressions for deferred evaluation.
 ///
@@ -305,10 +305,12 @@ pub fn control_matrix(base: &SymbolicMatrix, num_ctrls: usize) -> SymbolicMatrix
 
 /// Computes the symbolic unitary matrix representation of a quantum circuit.
 ///
-/// This is the symbolic counterpart of [`super::circuit_to_matrix`]: instead
+/// This is the symbolic counterpart of
+/// [`circuit_to_matrix()`](fn@crate::circuit::circuit_to_matrix): instead
 /// of evaluating gate parameters to `f64` values immediately, it preserves
 /// them as [`Parameter`] expressions so that the resulting matrix can be
-/// evaluated later with different bindings via [`evaluate_symbolic_matrix`].
+/// evaluated later with different bindings via
+/// [`evaluate_symbolic_matrix()`](crate::circuit::symbolic_matrix::evaluate_symbolic_matrix).
 ///
 /// # Qubit ordering
 ///
@@ -316,8 +318,7 @@ pub fn control_matrix(base: &SymbolicMatrix, num_ctrls: usize) -> SymbolicMatrix
 /// position in the matrix:
 ///
 /// - `None` — qubits are sorted by index in ascending order (qubit 0 → bit 0).
-/// - `Some(order)` — the provided slice defines the bit assignment from
-///   most-significant to least-significant.
+/// - `Some(order)` — the first entry maps to the least-significant bit.
 ///
 /// The order must contain exactly the same set of qubit indices as the
 /// circuit, with no duplicates.
@@ -756,8 +757,8 @@ pub fn apply_gate_to_matrix(
 /// [v1'] = [u10 u11] [v1]
 /// ```
 ///
-/// Uses [`UnsafeSymbolicSlice`] and rayon parallelism when the matrix is
-/// large enough (see [`PARALLEL_THRESHOLD_OPS`]).
+/// Uses an internal disjoint-slice wrapper and rayon parallelism when the
+/// matrix exceeds the configured element threshold.
 pub fn apply_single_qubit_gate(matrix: &mut SymbolicMatrix, gate: &SymbolicMatrix, bit: usize) {
     let dim = matrix.nrows();
     let cols = matrix.ncols();
@@ -820,8 +821,8 @@ pub fn apply_single_qubit_gate(matrix: &mut SymbolicMatrix, gate: &SymbolicMatri
 /// mapping uses a bit-insertion scheme to compute the base row index
 /// from the compact iteration variable `i`.
 ///
-/// Uses [`UnsafeSymbolicSlice`] and rayon parallelism when the matrix is
-/// large enough (see [`PARALLEL_THRESHOLD_OPS`]).
+/// Uses an internal disjoint-slice wrapper and rayon parallelism when the
+/// matrix exceeds the configured element threshold.
 pub fn apply_two_qubit_gate(
     matrix: &mut SymbolicMatrix,
     gate: &SymbolicMatrix,
@@ -919,7 +920,7 @@ pub fn apply_two_qubit_gate(
 ///
 /// # Parallelism
 ///
-/// When the matrix element count exceeds [`PARALLEL_THRESHOLD_OPS`],
+/// When the matrix element count exceeds the configured parallel threshold,
 /// each worker thread receives its own scratch buffers (`row_ptrs` and
 /// `input`) via [`rayon::iter::ParallelIterator::for_each_init`].
 pub fn apply_general_gate(matrix: &mut SymbolicMatrix, gate: &SymbolicMatrix, bits: &[usize]) {

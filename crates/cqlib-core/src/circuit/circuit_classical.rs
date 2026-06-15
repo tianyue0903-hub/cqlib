@@ -10,6 +10,8 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
+#![allow(rustdoc::private_doc_tests)]
+
 //! Circuit builder support for runtime classical data and structured control flow.
 //!
 //! This module is the circuit-level API layer for dynamic circuits. It connects
@@ -71,7 +73,7 @@
 //!
 //! # Measurement value used directly by `if`
 //!
-//! ```rust,no_run
+//! ```rust
 //! use cqlib_core::circuit::{
 //!     Circuit, CircuitError, ClassicalExpr, Qubit,
 //! };

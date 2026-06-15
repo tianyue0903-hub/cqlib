@@ -415,7 +415,7 @@ fn qis_unsupported(message: impl Into<String>) -> QisError {
 #[cfg(test)]
 mod tests {
     use super::{ClassicalState, RuntimeValue};
-    use crate::circuit::{Circuit, CircuitError, ClassicalExpr, ClassicalType};
+    use crate::circuit::{Circuit, CircuitError, ClassicalExpr, ClassicalType, Qubit};
     use crate::qis::QisError;
 
     #[test]
@@ -448,7 +448,7 @@ mod tests {
     fn rejects_handles_owned_by_another_circuit() {
         let mut owner = Circuit::new(1);
         let owner_var = owner.var(ClassicalType::Bit);
-        let owner_value = owner.measure(0.into()).unwrap().value();
+        let owner_value = owner.measure(Qubit::new(0)).unwrap().value();
         let mut state = ClassicalState::for_circuit(&owner);
         state
             .set_value(owner_value, RuntimeValue::Bit(true))
@@ -459,7 +459,7 @@ mod tests {
 
         let mut other = Circuit::new(1);
         let other_var = other.var(ClassicalType::Bit);
-        let other_value = other.measure(0.into()).unwrap().value();
+        let other_value = other.measure(Qubit::new(0)).unwrap().value();
 
         assert_eq!(state.value(other_value), None);
         assert_eq!(state.var(other_var), None);

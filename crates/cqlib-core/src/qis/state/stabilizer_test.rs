@@ -191,43 +191,43 @@ fn test_from_circuit_rejects_non_clifford_gate_set() {
         (
             "T",
             Box::new(|c| {
-                c.t(0.into()).unwrap();
+                c.t(Qubit::new(0)).unwrap();
             }),
         ),
         (
             "TDG",
             Box::new(|c| {
-                c.tdg(0.into()).unwrap();
+                c.tdg(Qubit::new(0)).unwrap();
             }),
         ),
         (
             "RX",
             Box::new(|c| {
-                c.rx(0.into(), PI / 4.0).unwrap();
+                c.rx(Qubit::new(0), PI / 4.0).unwrap();
             }),
         ),
         (
             "RY",
             Box::new(|c| {
-                c.ry(0.into(), PI / 4.0).unwrap();
+                c.ry(Qubit::new(0), PI / 4.0).unwrap();
             }),
         ),
         (
             "RZ",
             Box::new(|c| {
-                c.rz(0.into(), PI / 4.0).unwrap();
+                c.rz(Qubit::new(0), PI / 4.0).unwrap();
             }),
         ),
         (
             "Phase",
             Box::new(|c| {
-                c.phase(0.into(), PI / 4.0).unwrap();
+                c.phase(Qubit::new(0), PI / 4.0).unwrap();
             }),
         ),
         (
             "U",
             Box::new(|c| {
-                c.u(0.into(), PI / 4.0, 0.0, 0.0).unwrap();
+                c.u(Qubit::new(0), PI / 4.0, 0.0, 0.0).unwrap();
             }),
         ),
         (
@@ -240,7 +240,7 @@ fn test_from_circuit_rejects_non_clifford_gate_set() {
                 let gate = UnitaryGate::new("S_like_custom", 1, 0)
                     .with_matrix(mat)
                     .unwrap();
-                c.unitary(gate, vec![0.into()]).unwrap();
+                c.unitary(gate, vec![Qubit::new(0)]).unwrap();
             }),
         ),
     ];
@@ -417,8 +417,8 @@ fn test_measure_statistics_approx_50_50() {
 fn test_from_circuit_bell_state() {
     use crate::circuit::circuit_impl::Circuit;
     let mut c = Circuit::new(2);
-    c.h(0.into()).unwrap();
-    c.cx(0.into(), 1.into()).unwrap();
+    c.h(Qubit::new(0)).unwrap();
+    c.cx(Qubit::new(0), Qubit::new(1)).unwrap();
     let stab = StabilizerState::from_circuit(&c).unwrap();
     let stab_strs: Vec<String> = stab
         .get_stabilizers()
@@ -441,7 +441,7 @@ fn test_from_circuit_bell_state() {
 fn test_from_circuit_rejects_non_clifford() {
     use crate::circuit::circuit_impl::Circuit;
     let mut c = Circuit::new(1);
-    c.t(0.into()).unwrap(); // T gate is not Clifford
+    c.t(Qubit::new(0)).unwrap(); // T gate is not Clifford
     let result = StabilizerState::from_circuit(&c);
     assert!(result.is_err(), "Expected error for T gate");
 }
@@ -751,7 +751,7 @@ fn test_y2p_squared_is_y() {
 fn test_non_clifford_error_variant() {
     use crate::circuit::circuit_impl::Circuit;
     let mut c = Circuit::new(1);
-    c.t(0.into()).unwrap();
+    c.t(Qubit::new(0)).unwrap();
     let result = StabilizerState::from_circuit(&c);
     assert!(
         matches!(result, Err(QisError::NonCliffordGate(_))),
@@ -1117,10 +1117,10 @@ fn test_apply_circuit_measure_bit_result() {
 
     // |1⟩: X then Measure should always record true.
     let mut c = Circuit::new(1);
-    c.x(0.into()).unwrap();
-    let measured = c.measure(0.into()).unwrap();
+    c.x(Qubit::new(0)).unwrap();
+    let measured = c.measure(Qubit::new(0)).unwrap();
 
-    let result = StabilizerState::apply_circuit(&c).unwrap();
+    let result = StabilizerState::run_circuit(&c).unwrap();
     assert_eq!(
         result.classical.value(measured.value()),
         Some(&RuntimeValue::Bit(true)),
@@ -1134,13 +1134,13 @@ fn test_apply_circuit_classical_result_rejects_other_circuit_handles() {
 
     let mut circuit = Circuit::new(1);
     let target = circuit.var(ClassicalType::Bit);
-    let measured = circuit.measure_into(0.into(), target).unwrap();
+    let measured = circuit.measure_into(Qubit::new(0), target).unwrap();
 
     let mut other = Circuit::new(1);
     let other_target = other.var(ClassicalType::Bit);
-    let other_measured = other.measure_into(0.into(), other_target).unwrap();
+    let other_measured = other.measure_into(Qubit::new(0), other_target).unwrap();
 
-    let result = StabilizerState::apply_circuit(&circuit).unwrap();
+    let result = StabilizerState::run_circuit(&circuit).unwrap();
     assert!(result.classical.value(measured.value()).is_some());
     assert!(result.classical.var(target).is_some());
     assert_eq!(result.classical.value(other_measured.value()), None);
@@ -1154,12 +1154,12 @@ fn test_apply_circuit_repeated_measurements_keep_distinct_values() {
     use crate::qis::RuntimeValue;
 
     let mut c = Circuit::new(1);
-    c.x(0.into()).unwrap();
-    let first = c.measure(0.into()).unwrap();
-    c.reset(0.into()).unwrap();
-    let second = c.measure(0.into()).unwrap();
+    c.x(Qubit::new(0)).unwrap();
+    let first = c.measure(Qubit::new(0)).unwrap();
+    c.reset(Qubit::new(0)).unwrap();
+    let second = c.measure(Qubit::new(0)).unwrap();
 
-    let result = StabilizerState::apply_circuit(&c).unwrap();
+    let result = StabilizerState::run_circuit(&c).unwrap();
     assert_eq!(
         result.classical.value(first.value()),
         Some(&RuntimeValue::Bit(true))
@@ -1178,12 +1178,12 @@ fn test_apply_circuit_bell_measurements_are_correlated_in_classical_state() {
     use crate::qis::RuntimeValue;
 
     let mut c = Circuit::new(2);
-    c.h(0.into()).unwrap();
-    c.cx(0.into(), 1.into()).unwrap();
-    let left = c.measure(0.into()).unwrap();
-    let right = c.measure(1.into()).unwrap();
+    c.h(Qubit::new(0)).unwrap();
+    c.cx(Qubit::new(0), Qubit::new(1)).unwrap();
+    let left = c.measure(Qubit::new(0)).unwrap();
+    let right = c.measure(Qubit::new(1)).unwrap();
 
-    let result = StabilizerState::apply_circuit(&c).unwrap();
+    let result = StabilizerState::run_circuit(&c).unwrap();
     let Some(RuntimeValue::Bit(left)) = result.classical.value(left.value()) else {
         panic!("expected first Bell measurement to produce a bit");
     };
@@ -1205,13 +1205,13 @@ fn test_apply_circuit_measurement_collapse_affects_later_gates() {
     use crate::qis::RuntimeValue;
 
     let mut c = Circuit::new(2);
-    c.h(0.into()).unwrap();
-    c.cx(0.into(), 1.into()).unwrap();
-    let first = c.measure(0.into()).unwrap();
-    c.x(1.into()).unwrap();
-    let second = c.measure(1.into()).unwrap();
+    c.h(Qubit::new(0)).unwrap();
+    c.cx(Qubit::new(0), Qubit::new(1)).unwrap();
+    let first = c.measure(Qubit::new(0)).unwrap();
+    c.x(Qubit::new(1)).unwrap();
+    let second = c.measure(Qubit::new(1)).unwrap();
 
-    let result = StabilizerState::apply_circuit(&c).unwrap();
+    let result = StabilizerState::run_circuit(&c).unwrap();
     let Some(RuntimeValue::Bit(first)) = result.classical.value(first.value()) else {
         panic!("expected first measurement to produce a bit");
     };
@@ -1232,13 +1232,13 @@ fn test_apply_circuit_measure_bits_result_order() {
     use crate::qis::RuntimeValue;
 
     let mut c = Circuit::new(3);
-    c.x(0.into()).unwrap();
-    c.x(2.into()).unwrap();
+    c.x(Qubit::new(0)).unwrap();
+    c.x(Qubit::new(2)).unwrap();
     let measured = c
         .measure_bits([Qubit::new(2), Qubit::new(1), Qubit::new(0)])
         .unwrap();
 
-    let result = StabilizerState::apply_circuit(&c).unwrap();
+    let result = StabilizerState::run_circuit(&c).unwrap();
     let Some(RuntimeValue::BitVec { width, bits }) = result.classical.value(measured.value())
     else {
         panic!("expected BitVec measurement result");
@@ -1258,14 +1258,14 @@ fn test_apply_circuit_measure_bits_into_keeps_result_and_var_copy() {
     use crate::qis::RuntimeValue;
 
     let mut c = Circuit::new(3);
-    c.x(0.into()).unwrap();
-    c.x(2.into()).unwrap();
+    c.x(Qubit::new(0)).unwrap();
+    c.x(Qubit::new(2)).unwrap();
     let target = c.var(ClassicalType::bit_vec(3).unwrap());
     let measured = c
         .measure_bits_into([Qubit::new(0), Qubit::new(1), Qubit::new(2)], target)
         .unwrap();
 
-    let result = StabilizerState::apply_circuit(&c).unwrap();
+    let result = StabilizerState::run_circuit(&c).unwrap();
     let Some(RuntimeValue::BitVec { width, bits }) = result.classical.value(measured.value())
     else {
         panic!("expected BitVec measurement result");
@@ -1291,11 +1291,11 @@ fn test_apply_circuit_measure_into_updates_classical_variable() {
     use crate::qis::RuntimeValue;
 
     let mut c = Circuit::new(1);
-    c.x(0.into()).unwrap();
+    c.x(Qubit::new(0)).unwrap();
     let var = c.var(ClassicalType::Bit);
-    let measured = c.measure_into(0.into(), var).unwrap();
+    let measured = c.measure_into(Qubit::new(0), var).unwrap();
 
-    let result = StabilizerState::apply_circuit(&c).unwrap();
+    let result = StabilizerState::run_circuit(&c).unwrap();
     assert_eq!(
         result.classical.value(measured.value()),
         Some(&RuntimeValue::Bit(true))
@@ -1310,13 +1310,13 @@ fn test_apply_circuit_store_expression_updates_classical_variable() {
     use crate::qis::RuntimeValue;
 
     let mut c = Circuit::new(1);
-    c.x(0.into()).unwrap();
-    let measured = c.measure(0.into()).unwrap();
+    c.x(Qubit::new(0)).unwrap();
+    let measured = c.measure(Qubit::new(0)).unwrap();
     let flag = c.var(ClassicalType::Bool);
     c.store(flag, ClassicalExpr::bit_to_bool(measured.expr()).unwrap())
         .unwrap();
 
-    let result = StabilizerState::apply_circuit(&c).unwrap();
+    let result = StabilizerState::run_circuit(&c).unwrap();
     assert_eq!(result.classical.var(flag), Some(&RuntimeValue::Bool(true)));
 }
 
@@ -1328,11 +1328,11 @@ fn test_apply_circuit_reset_directive() {
 
     // X then Reset: final state should be |0⟩.
     let mut c = Circuit::new(1);
-    c.x(0.into()).unwrap();
-    c.reset(0.into()).unwrap();
-    let measured = c.measure(0.into()).unwrap();
+    c.x(Qubit::new(0)).unwrap();
+    c.reset(Qubit::new(0)).unwrap();
+    let measured = c.measure(Qubit::new(0)).unwrap();
 
-    let result = StabilizerState::apply_circuit(&c).unwrap();
+    let result = StabilizerState::run_circuit(&c).unwrap();
     assert_eq!(
         result.classical.value(measured.value()),
         Some(&RuntimeValue::Bit(false)),
@@ -1348,8 +1348,8 @@ fn test_from_circuit_ignores_terminal_measurement_declarations() {
     use crate::device::Outcome;
 
     let mut c = Circuit::new(2);
-    c.h(0.into()).unwrap();
-    c.cx(0.into(), 1.into()).unwrap();
+    c.h(Qubit::new(0)).unwrap();
+    c.cx(Qubit::new(0), Qubit::new(1)).unwrap();
     let out = c.measure_bits([Qubit::new(1), Qubit::new(0)]).unwrap();
 
     let state = StabilizerState::from_circuit(&c).unwrap();
@@ -1366,7 +1366,7 @@ fn test_sample_uses_measurement_qubit_order() {
     use crate::device::{Outcome, Status};
 
     let mut c = Circuit::new(2);
-    c.x(0.into()).unwrap();
+    c.x(Qubit::new(0)).unwrap();
     let out = c.measure_bits([Qubit::new(1), Qubit::new(0)]).unwrap();
 
     let state = StabilizerState::from_circuit(&c).unwrap();
@@ -1392,9 +1392,9 @@ fn test_probs_marginalizes_unmeasured_qubits() {
     use crate::device::Outcome;
 
     let mut c = Circuit::new(2);
-    c.h(0.into()).unwrap();
-    c.cx(0.into(), 1.into()).unwrap();
-    let out = c.measure(0.into()).unwrap();
+    c.h(Qubit::new(0)).unwrap();
+    c.cx(Qubit::new(0), Qubit::new(1)).unwrap();
+    let out = c.measure(Qubit::new(0)).unwrap();
 
     let state = StabilizerState::from_circuit(&c).unwrap();
     let probs = state.probs(&out).unwrap();
@@ -1410,7 +1410,7 @@ fn test_sample_rejects_measurement_qubit_outside_state() {
 
     let state = StabilizerState::new(1);
     let mut circuit = Circuit::new(3);
-    let measurement = circuit.measure(2.into()).unwrap();
+    let measurement = circuit.measure(Qubit::new(2)).unwrap();
 
     assert!(matches!(
         state.sample(&measurement, 1),
@@ -1425,11 +1425,11 @@ fn test_apply_circuit_rejects_classical_control_flow() {
 
     let mut c = Circuit::new(1);
     c.if_(ClassicalExpr::bool_literal(true), |body| {
-        body.x(0.into())?;
+        body.x(Qubit::new(0))?;
         Ok(())
     })
     .unwrap();
 
-    let error = StabilizerState::apply_circuit(&c).unwrap_err();
+    let error = StabilizerState::run_circuit(&c).unwrap_err();
     assert!(matches!(error, QisError::UnsupportedOperation(_)));
 }

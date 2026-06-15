@@ -298,6 +298,11 @@ impl Circuit {
         Ok(circuit)
     }
 
+    /// Lowers and appends a self-contained value-level operation.
+    ///
+    /// # Errors
+    ///
+    /// Returns errors from value-instruction lowering or [`Circuit::append`].
     pub fn append_value_operation(
         &mut self,
         operation: ValueOperation,
@@ -337,6 +342,9 @@ impl Circuit {
         Ok(())
     }
 
+    /// Interns a parameter and records its symbols.
+    ///
+    /// Returns the stable table index and whether the parameter was newly inserted.
     pub fn add_parameter(&mut self, param: Parameter) -> (usize, bool) {
         let (index, is_new) = self.parameters.insert_full(param.clone());
         if is_new {
@@ -445,6 +453,7 @@ impl Circuit {
         &self.parameters
     }
 
+    /// Returns all symbolic variable names referenced by interned parameters.
     pub fn symbols(&self) -> &IndexSet<String> {
         &self.symbols
     }
@@ -461,6 +470,7 @@ impl Circuit {
         }
     }
 
+    /// Returns the compact storage representation of the global phase.
     pub fn global_phase_param(&self) -> &CircuitParam {
         &self.global_phase
     }
@@ -481,6 +491,7 @@ impl Circuit {
         }
     }
 
+    /// Returns storage-IR operations in execution order.
     pub fn operations(&self) -> &[Operation] {
         &self.data
     }
@@ -504,7 +515,7 @@ impl Circuit {
     /// Appends a generic instruction to the circuit.
     ///
     /// This is the low-level method used by all specific gate methods (e.g., `h`, `cx`).
-    /// It handles parameter interning and qubit validation.
+    /// It handles arity validation, parameter interning, and qubit validation.
     ///
     /// # Arguments
     ///
@@ -515,7 +526,14 @@ impl Circuit {
     ///
     /// # Errors
     ///
-    /// Returns [`CircuitError::QubitNotFound`] if any of the specified qubits are not present in the circuit.
+    /// Returns [`CircuitError::QubitCountMismatch`] or
+    /// [`CircuitError::ParameterCountMismatch`] when a fixed-arity instruction
+    /// receives the wrong number of operands. Returns [`CircuitError::DuplicateQubits`]
+    /// when the same qubit is supplied more than once and
+    /// [`CircuitError::QubitNotFound`] if a qubit is not present in the circuit.
+    /// Non-finite fixed parameters produce [`CircuitError::InvalidParameterValue`].
+    /// Classical data and control-flow instructions may additionally fail their
+    /// ownership, type, scope, or structural validation.
     pub fn append<Q, P>(
         &mut self,
         instruction: Instruction,
@@ -539,6 +557,23 @@ impl Circuit {
         }
 
         let qubits_sv: SmallVec<[Qubit; 3]> = qubits.into_iter().map(|q| q.into()).collect();
+        let params_sv: SmallVec<[ParameterValue; 1]> = params.into_iter().collect();
+
+        if let Some((expected_qubits, expected_params)) = instruction.gate_arity() {
+            if qubits_sv.len() != expected_qubits {
+                return Err(CircuitError::QubitCountMismatch {
+                    expected: expected_qubits,
+                    actual: qubits_sv.len(),
+                });
+            }
+            if params_sv.len() != expected_params {
+                return Err(CircuitError::ParameterCountMismatch {
+                    expected: expected_params,
+                    actual: params_sv.len(),
+                });
+            }
+        }
+
         let mut seen = HashSet::with_capacity(qubits_sv.len());
         for &qubit in &qubits_sv {
             if !seen.insert(qubit) {
@@ -556,7 +591,7 @@ impl Circuit {
         }
 
         let mut circuit_params = smallvec![];
-        for (param_index, p) in params.into_iter().enumerate() {
+        for (param_index, p) in params_sv.into_iter().enumerate() {
             match p {
                 ParameterValue::Param(param) => {
                     let (index, is_new) = self.parameters.insert_full(param.clone());
@@ -1164,7 +1199,7 @@ impl Circuit {
     ///
     /// This method automatically handles gate promotion. For example, applying `X` with 1 control
     /// becomes `CX`, and with 2 controls becomes `CCX`. For higher numbers of controls, it creates
-    /// an [`ExtendedGate::MCGate`].
+    /// an [`Instruction::McGate`].
     ///
     /// # Arguments
     ///
@@ -1651,10 +1686,37 @@ impl Circuit {
         param
     }
 
-    pub fn to_matrix(&self, qubits_order: Option<&[usize]>) -> Array2<Complex64> {
-        circuit_to_matrix(self, qubits_order).unwrap()
+    /// Computes the dense unitary matrix represented by this circuit.
+    ///
+    /// The first qubit in `qubits_order` is mapped to the least-significant
+    /// basis-state bit. When no order is supplied, qubits are sorted by their
+    /// numeric identifiers. The returned matrix includes the circuit's global
+    /// phase.
+    ///
+    /// The matrix dimension is `2^n` and its element count is `4^n` for `n`
+    /// qubits. This API is therefore intended only for small circuits.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the circuit contains a non-unitary operation,
+    /// unresolved symbolic parameter, invalid qubit order, unsupported gate
+    /// definition, or a matrix dimension that cannot be represented.
+    pub fn to_matrix(
+        &self,
+        qubits_order: Option<&[usize]>,
+    ) -> Result<Array2<Complex64>, CircuitError> {
+        circuit_to_matrix(self, qubits_order)
     }
 
+    /// Returns a new circuit with the supplied symbols replaced by numeric values.
+    ///
+    /// Parameters that remain symbolic are simplified and re-interned in the
+    /// returned circuit. The original circuit is not modified.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for unsupported classical control flow, failed symbolic
+    /// simplification, or an invalid stored parameter index.
     pub fn assign_parameters(
         &self,
         bindings: &Option<HashMap<&str, f64>>,
@@ -1935,7 +1997,8 @@ impl Circuit {
     /// Composes another circuit into this circuit.
     ///
     /// This method merges the operations from `other` circuit into `self`. Qubits from `other`
-    /// can either be mapped to existing qubits in `self` (via `qubits_map`) or appended as new qubits.
+    /// can either be mapped to existing qubits in `self` (via `qubits_map`) or merged by their
+    /// [`Qubit`] IDs.
     /// Circuit-local classical variables and values from `other` are appended to `self`'s
     /// classical tables, and all classical data/control references inside copied operations are
     /// remapped to those new local IDs.
@@ -1946,7 +2009,8 @@ impl Circuit {
     /// * `qubits_map` - An optional slice mapping qubits from `other` to qubits in `self`.
     ///   - If `Some(mapping)` is provided, each qubit in `other` (in their natural iteration order)
     ///     is mapped to the corresponding qubit in `mapping`.
-    ///   - If `None` is provided, all qubits from `other` are appended as new qubits to `self`.
+    ///   - If `None` is provided, qubits are mapped by ID. IDs not already present in `self` are
+    ///     appended, while matching IDs reuse the existing qubits.
     ///
     /// # Returns
     ///
@@ -2001,10 +2065,10 @@ impl Circuit {
             }
             map
         } else {
-            // No mapping: append other qubits as new qubits
+            // No explicit mapping: merge qubits by ID.
             let mut map = HashMap::with_capacity(other.qubits.len());
             for other_qubit in other.qubits.iter() {
-                // Add the qubit to self (it will be a new unique qubit)
+                // Existing IDs are reused; new IDs preserve `other`'s insertion order.
                 self.qubits.insert(*other_qubit);
                 map.insert(*other_qubit, *other_qubit);
             }
@@ -2091,7 +2155,11 @@ impl Circuit {
                     .ok_or(CircuitError::InvalidParameterIndex(idx_b))?;
                 // param_b needs to be merged into self's parameter set first
                 let (merged_b_idx, _) = self.parameters.insert_full(param_b);
-                let merged_b = self.parameters.get_index(merged_b_idx).cloned().unwrap();
+                let merged_b = self
+                    .parameters
+                    .get_index(merged_b_idx)
+                    .cloned()
+                    .ok_or(CircuitError::InvalidParameterIndex(merged_b_idx as u32))?;
                 let new_expr = param_a + merged_b;
                 let (new_idx, _) = self.parameters.insert_full(new_expr);
                 CircuitParam::Index(new_idx as u32)
@@ -2108,9 +2176,39 @@ impl Circuit {
         Ok(())
     }
 
-    pub fn index(&self, i: usize) -> ValueOperation {
-        storage_operation_to_value(self.data[i].clone(), &|param| self.parameter_value(param))
-            .expect("stored circuit operation must resolve against its own parameter table")
+    /// Returns an operation with its parameters resolved to value-level representations.
+    ///
+    /// Unlike [`Circuit::operations`], which exposes the compact storage IR,
+    /// this method converts indexed parameters back into [`ParameterValue`]s.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CircuitError::OperationIndexOutOfBounds`] when `i` is not a
+    /// valid operation index. Returns [`CircuitError::InvalidParameterIndex`]
+    /// if the stored operation references a missing entry in this circuit's
+    /// parameter table.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use cqlib_core::circuit::{Circuit, CircuitError};
+    ///
+    /// let circuit = Circuit::new(1);
+    /// assert!(matches!(
+    ///     circuit.index(0),
+    ///     Err(CircuitError::OperationIndexOutOfBounds { index: 0, len: 0 })
+    /// ));
+    /// ```
+    pub fn index(&self, i: usize) -> Result<ValueOperation, CircuitError> {
+        let operation =
+            self.data
+                .get(i)
+                .cloned()
+                .ok_or(CircuitError::OperationIndexOutOfBounds {
+                    index: i,
+                    len: self.data.len(),
+                })?;
+        storage_operation_to_value(operation, &|param| self.parameter_value(param))
     }
 }
 

@@ -102,7 +102,7 @@ fn interleave_bits(keep: &[usize], k_val: usize, trace: &[usize], t_val: usize) 
 #[derive(Debug, Clone)]
 pub struct DensityMatrix {
     /// Flattened matrix elements. Length is $4^N$.
-    pub data: Vec<Complex64>,
+    data: Vec<Complex64>,
     /// Number of qubits in the system ($N$).
     pub num_qubits: usize,
 }
@@ -125,6 +125,11 @@ impl std::ops::AddAssign for DensityMatrix {
 }
 
 impl DensityMatrix {
+    /// Returns the flattened row-major density matrix data.
+    pub fn data(&self) -> &[Complex64] {
+        &self.data
+    }
+
     /// Validates that a single qubit index is within bounds.
     #[inline]
     fn validate_qubit(&self, qubit: usize) -> Result<(), QisError> {
@@ -1200,7 +1205,30 @@ impl DensityMatrix {
     /// * `ops` - A slice of Kraus operators, where each operator is represented as a flattened vector of `Complex64`.
     /// * `qs` - The target qubit indices the channel acts upon.
     pub fn apply_kraus(&mut self, ops: &[Vec<Complex64>], qs: &[usize]) -> Result<(), QisError> {
+        if ops.is_empty() {
+            return Err(QisError::InvalidParameterValue(
+                "Kraus operator list must not be empty".to_string(),
+            ));
+        }
+        if qs.is_empty() {
+            return Err(QisError::InvalidParameterValue(
+                "Kraus channel must target at least one qubit".to_string(),
+            ));
+        }
         self.validate_qubits(qs)?;
+        let op_dim = 1usize << qs.len();
+        let expected_len = op_dim * op_dim;
+        for (idx, op) in ops.iter().enumerate() {
+            if op.len() != expected_len {
+                return Err(QisError::InvalidParameterValue(format!(
+                    "Kraus operator {} has length {}, expected {} for {} target qubits",
+                    idx,
+                    op.len(),
+                    expected_len,
+                    qs.len()
+                )));
+            }
+        }
         let source_data = self.data.clone();
 
         for val in self.data.iter_mut() {
@@ -1255,14 +1283,23 @@ impl DensityMatrix {
     ///
     /// # Returns
     /// A new `DensityMatrix` representing the subsystem, with `num_qubits = keep.len()`.
-    pub fn partial_trace(&self, keep: &[usize]) -> Self {
-        assert!(
-            keep.iter().all(|&q| q < self.num_qubits),
-            "Qubit index out of bounds in partial trace"
-        );
+    pub fn partial_trace(&self, keep: &[usize]) -> Result<Self, QisError> {
+        for (idx, &q) in keep.iter().enumerate() {
+            if q >= self.num_qubits {
+                return Err(QisError::IndexOutOfBounds {
+                    index: q,
+                    max: self.num_qubits.saturating_sub(1),
+                });
+            }
+            if keep[..idx].contains(&q) {
+                return Err(QisError::InvalidParameterValue(format!(
+                    "Duplicate qubit index {} in partial_trace",
+                    q
+                )));
+            }
+        }
         let mut s_keep = keep.to_vec();
         s_keep.sort_unstable();
-        s_keep.dedup();
         let all: HashSet<_> = (0..self.num_qubits).collect();
         let mut trace: Vec<_> = all
             .difference(&s_keep.iter().cloned().collect())
@@ -1281,7 +1318,33 @@ impl DensityMatrix {
             }
             *val = sum;
         });
-        res
+        Ok(res)
+    }
+
+    pub(crate) fn partial_transpose(&self, target_qubits: &[usize]) -> Result<Self, QisError> {
+        for &q in target_qubits {
+            self.validate_qubit(q)?;
+        }
+
+        let n = self.num_qubits;
+        let mut swap_mask = 0usize;
+        for &q in target_qubits {
+            swap_mask |= 1 << q;
+        }
+
+        let mut res = Self::zeros(n);
+        res.data.par_iter_mut().enumerate().for_each(|(idx, val)| {
+            let lower_swap_bits = idx & swap_mask;
+            let upper_swap_bits = (idx >> n) & swap_mask;
+
+            let mut src_idx = idx & !(swap_mask | (swap_mask << n));
+            src_idx |= upper_swap_bits;
+            src_idx |= lower_swap_bits << n;
+
+            *val = self.data[src_idx];
+        });
+
+        Ok(res)
     }
 
     /// Computes the expectation value of a Hamiltonian observable.

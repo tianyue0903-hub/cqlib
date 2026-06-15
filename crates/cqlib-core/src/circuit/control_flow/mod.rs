@@ -21,23 +21,22 @@
 //! 1. Runtime classical values and storage are defined by
 //!    [`crate::circuit::classical`]. Those types identify circuit-local
 //!    classical storage and value types.
-//! 2. Classical expressions are defined in this module by [`ClassicalExpr`].
+//! 2. Classical expressions are defined by
+//!    [`ClassicalExpr`](crate::circuit::ClassicalExpr).
 //!    Expressions are strongly typed and have no side effects. They only read
 //!    runtime classical variables, combine literals, cast explicitly, compare
 //!    values, select between values, or extract/pack bits.
 //! 3. Control-flow operations are defined in this module by
 //!    [`ClassicalControlOp`] and the concrete operation structs. They consume
-//!    [`ClassicalExpr`] values to decide which structured body executes.
+//!    [`ClassicalExpr`](crate::circuit::ClassicalExpr) values to decide which
+//!    structured body executes.
 //!
 //! This module is IR only. It does not allocate classical storage, execute a
-//! circuit, lower control flow to backend instructions, or replace the existing
-//! [`crate::circuit::gate::control_flow::ConditionView`] API. The legacy
-//! condition view and this expression-based IR can coexist while the dynamic
-//! circuit model is migrated in stages.
+//! circuit, or lower control flow to backend instructions.
 //!
 //! # Core Concepts
 //!
-//! [`ClassicalExpr`] represents a runtime classical computation. It has a
+//! [`ClassicalExpr`](crate::circuit::ClassicalExpr) represents a runtime classical computation. It has a
 //! static [`crate::circuit::ClassicalType`] and can report the classical
 //! variables and immutable values it reads. The expression layer does not write
 //! storage, measure qubits, branch, or loop.
@@ -61,9 +60,11 @@
 //! - [`ClassicalControlOp::Continue`] advances the nearest enclosing loop.
 //!
 //! Conditions for [`IfOp`] and [`WhileOp`] must have type `Bool`; measured
-//! `Bit` values must be explicitly cast with [`ClassicalExpr::bit_to_bool`].
+//! `Bit` values must be explicitly cast with
+//! [`ClassicalExpr::bit_to_bool`](crate::circuit::ClassicalExpr::bit_to_bool).
 //! Ordered comparisons are restricted to `UInt` expressions. Bit-vector to
-//! integer interpretation is explicit through [`ClassicalExpr::bit_vec_to_uint`],
+//! integer interpretation is explicit through
+//! [`ClassicalExpr::bit_vec_to_uint`](crate::circuit::ClassicalExpr::bit_vec_to_uint),
 //! preserving the rule that bit index `0` is the least-significant bit.
 //!
 //! # Resource Queries

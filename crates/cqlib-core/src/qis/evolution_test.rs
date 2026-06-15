@@ -554,7 +554,7 @@ fn test_trotter_matrix_equivalence_z() {
     let circuit = h
         .to_trotter_circuit(1.0, 1, TrotterMode::FirstOrder)
         .unwrap();
-    let matrix = circuit.to_matrix(None);
+    let matrix = circuit.to_matrix(None).unwrap();
 
     let c = |re: f64, im: f64| Complex64::new(re, im);
 
@@ -576,7 +576,7 @@ fn test_trotter_matrix_equivalence_xx() {
     let circuit = h
         .to_trotter_circuit(1.0, 1, TrotterMode::FirstOrder)
         .unwrap();
-    let matrix = circuit.to_matrix(None);
+    let matrix = circuit.to_matrix(None).unwrap();
 
     let c = |re: f64, im: f64| Complex64::new(re, im);
 

@@ -34,7 +34,7 @@ fn estimator_hmat(
 ) -> (f64, f64) {
     assert_eq!(shot_number, None);
     let hamiltonian = hamiltonian_arg.expect("ZNE estimator should receive a Hamiltonian");
-    let c_mat = circuit.to_matrix(None);
+    let c_mat = circuit.to_matrix(None).unwrap();
     let h_mat = hamiltonian_to_matrix(hamiltonian);
     let dim = c_mat.nrows();
 

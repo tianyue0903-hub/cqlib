@@ -51,6 +51,11 @@ use crate::circuit::classical_expr::expr::{
 /// The result has the same static type as the input and reads a subset of the
 /// input's runtime classical variables and values. Simplification is
 /// idempotent: applying it twice yields the same expression.
+///
+/// Rules that require constructing a `UInt` or `BitVec` zero/one literal are
+/// skipped when the type is wider than the current 128-bit literal
+/// representation. In that case the original, type-correct expression shape
+/// is preserved.
 pub fn simplify(expr: &ClassicalExpr) -> ClassicalExpr {
     simplify_node(expr)
 }
@@ -283,7 +288,7 @@ fn simplify_binary(
                 return Some(lhs.clone());
             }
             ClassicalBinaryOp::Xor => {
-                return Some(ty.zero_literal());
+                return ty.zero_literal().ok();
             }
         }
     }
@@ -297,10 +302,11 @@ fn simplify_binary(
         } = b.kind()
         {
             if a == x {
-                return Some(match op {
+                return match op {
                     ClassicalBinaryOp::And => ty.zero_literal(),
                     ClassicalBinaryOp::Or | ClassicalBinaryOp::Xor => ty.one_literal(),
-                });
+                }
+                .ok();
             }
         }
     }

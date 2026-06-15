@@ -43,26 +43,32 @@ impl IfOp {
         })
     }
 
+    /// Returns the boolean branch condition.
     pub fn condition(&self) -> &ClassicalExpr {
         &self.condition
     }
 
+    /// Returns the body executed when the condition is true.
     pub fn then_body(&self) -> &ControlBody {
         &self.then_body
     }
 
+    /// Returns the optional body executed when the condition is false.
     pub fn else_body(&self) -> Option<&ControlBody> {
         self.else_body.as_ref()
     }
 
+    /// Returns mutable variables read by the condition.
     pub fn classical_var_reads(&self) -> BTreeSet<ClassicalVar> {
         self.condition.vars()
     }
 
+    /// Returns immutable values read by the condition.
     pub fn classical_value_reads(&self) -> BTreeSet<ClassicalValue> {
         self.condition.values()
     }
 
+    /// Returns qubits used by either branch body.
     pub fn used_qubits(&self) -> BTreeSet<Qubit> {
         let mut qubits = self.then_body.used_qubits();
         if let Some(else_body) = &self.else_body {

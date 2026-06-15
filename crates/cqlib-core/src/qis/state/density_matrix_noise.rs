@@ -321,6 +321,22 @@ impl DensityMatrixNoise {
         qs: &[usize],
         params: &[f64],
     ) -> Result<(), QisError> {
+        if qs.len() != gate.num_qubits() {
+            return Err(QisError::InvalidParameterValue(format!(
+                "Gate {:?} requires {} qubits, got {}",
+                gate,
+                gate.num_qubits(),
+                qs.len()
+            )));
+        }
+        if params.len() != gate.num_params() {
+            return Err(QisError::InvalidParameterValue(format!(
+                "Gate {:?} requires {} parameters, got {}",
+                gate,
+                gate.num_params(),
+                params.len()
+            )));
+        }
         match gate {
             StandardGate::I => {}
             StandardGate::X => self.apply_x(qs[0])?,

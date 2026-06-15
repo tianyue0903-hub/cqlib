@@ -48,7 +48,8 @@
 //! The underlying [`PauliEvolution`] trait implements $e^{-i\theta/2 \cdot P}$.
 //! To realize $e^{-i c t P}$, the angle must be $\theta = 2 c t$.
 //!
-//! This convention is identical to the one used in [`QAOAAnsatz`]:
+//! This convention is identical to the one used in
+//! [`QAOAAnsatz`](crate::circuit::ansatz::QAOAAnsatz):
 //! ```text
 //! let angle = t_param * (2.0 * coeff.re);
 //! ```
