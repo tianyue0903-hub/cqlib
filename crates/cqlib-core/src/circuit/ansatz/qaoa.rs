@@ -67,6 +67,7 @@ impl QAOAAnsatz {
         // For example, 1.0 * (+iX) becomes i * X and is correctly rejected later,
         // while i * (-iX) becomes 1.0 * X and remains a valid Hermitian term.
         cost_operator.simplify();
+        validate_qaoa_hamiltonian_structure(&cost_operator, "Cost")?;
         let num_qubits = cost_operator.num_qubits;
 
         // Build the default X-mixer: H_B = \sum_{i=0}^{n-1} X_i
@@ -83,6 +84,8 @@ impl QAOAAnsatz {
                 ))
             })?;
         }
+        mixer_operator.simplify();
+        validate_qaoa_hamiltonian_structure(&mixer_operator, "Mixer")?;
 
         Ok(Self {
             cost_operator,
@@ -109,6 +112,7 @@ impl QAOAAnsatz {
             });
         }
         mixer_operator.simplify();
+        validate_qaoa_hamiltonian_structure(&mixer_operator, "Mixer")?;
         self.mixer_operator = mixer_operator;
         Ok(self)
     }
@@ -131,6 +135,9 @@ impl QAOAAnsatz {
 
 impl Ansatz for QAOAAnsatz {
     fn validate(&self) -> Result<(), CircuitError> {
+        validate_qaoa_hamiltonian(&self.cost_operator, "Cost")?;
+        validate_qaoa_hamiltonian(&self.mixer_operator, "Mixer")?;
+
         // Validate mixer operator has same number of qubits as cost operator
         if self.mixer_operator.num_qubits != self.cost_operator.num_qubits {
             return Err(CircuitError::QubitCountMismatch {
@@ -146,26 +153,6 @@ impl Ansatz for QAOAAnsatz {
                     expected: self.cost_operator.num_qubits,
                     actual: initial_circuit.num_qubits(),
                 });
-            }
-        }
-
-        // Validate cost operator has real coefficients (Hermitian requirement)
-        for (pauli_str, coeff) in &self.cost_operator.terms {
-            if coeff.im.abs() > 1e-10 {
-                return Err(CircuitError::InvalidOperation(format!(
-                    "Cost Hamiltonian coefficient for {} has non-zero imaginary part ({}). QAOA requires Hermitian Hamiltonian with real coefficients.",
-                    pauli_str, coeff.im
-                )));
-            }
-        }
-
-        // Validate mixer operator has real coefficients
-        for (pauli_str, coeff) in &self.mixer_operator.terms {
-            if coeff.im.abs() > 1e-10 {
-                return Err(CircuitError::InvalidOperation(format!(
-                    "Mixer Hamiltonian coefficient for {} has non-zero imaginary part ({}). QAOA requires Hermitian Hamiltonian with real coefficients.",
-                    pauli_str, coeff.im
-                )));
             }
         }
 
@@ -231,6 +218,50 @@ impl Ansatz for QAOAAnsatz {
     fn num_qubits(&self) -> usize {
         self.cost_operator.num_qubits
     }
+}
+
+fn validate_qaoa_hamiltonian(hamiltonian: &Hamiltonian, name: &str) -> Result<(), CircuitError> {
+    validate_qaoa_hamiltonian_structure(hamiltonian, name)?;
+
+    for (pauli_str, coeff) in &hamiltonian.terms {
+        if coeff.im.abs() > 1e-10 {
+            return Err(CircuitError::InvalidOperation(format!(
+                "{name} Hamiltonian coefficient for {} has non-zero imaginary part ({}). QAOA requires Hermitian Hamiltonian with real coefficients.",
+                pauli_str, coeff.im
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_qaoa_hamiltonian_structure(
+    hamiltonian: &Hamiltonian,
+    name: &str,
+) -> Result<(), CircuitError> {
+    if hamiltonian.num_qubits == 0 {
+        return Err(CircuitError::InvalidOperation(format!(
+            "{name} Hamiltonian requires at least one qubit"
+        )));
+    }
+
+    if hamiltonian.terms.is_empty() {
+        return Err(CircuitError::InvalidOperation(format!(
+            "{name} Hamiltonian contains no non-zero terms"
+        )));
+    }
+
+    if hamiltonian
+        .terms
+        .iter()
+        .all(|(pauli, _)| pauli.support().is_empty())
+    {
+        return Err(CircuitError::InvalidOperation(format!(
+            "{name} Hamiltonian contains only identity terms"
+        )));
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
