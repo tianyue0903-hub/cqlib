@@ -25,13 +25,21 @@
 //! By optimizing the parameters $(\gamma, \beta)$, QAOA approximates the ground
 //! state of the cost Hamiltonian.
 
+use super::hamiltonian_evolution::EvolutionStrategy;
 use super::traits::Ansatz;
 use crate::circuit::Parameter;
+use crate::circuit::bit::Qubit;
 use crate::circuit::circuit_impl::Circuit;
+use crate::circuit::circuit_param::ParameterValue;
 use crate::circuit::error::CircuitError;
-use crate::qis::evolution::PauliEvolution;
+use crate::qis::evolution::{
+    PauliEvolution, TrotterMode, multiply_angle_by_factor, trotter_first_order_core,
+    trotter_second_order_core,
+};
 use crate::qis::hamiltonian::Hamiltonian;
 use crate::qis::pauli::{Pauli, PauliString};
+use rand::SeedableRng;
+use rand::rngs::StdRng;
 
 /// The QAOA (Quantum Approximate Optimization Algorithm) Ansatz.
 ///
@@ -50,6 +58,7 @@ pub struct QAOAAnsatz {
     mixer_operator: Hamiltonian,
     reps: usize,
     initial_state: Option<Circuit>,
+    evolution_strategy: EvolutionStrategy,
 }
 
 impl QAOAAnsatz {
@@ -92,6 +101,7 @@ impl QAOAAnsatz {
             mixer_operator,
             reps: 1,
             initial_state: None,
+            evolution_strategy: EvolutionStrategy::Auto { steps: 1 },
         })
     }
 
@@ -131,12 +141,26 @@ impl QAOAAnsatz {
         self.initial_state = Some(circuit);
         Ok(self)
     }
+
+    /// Sets the Hamiltonian evolution strategy used for both cost and mixer layers.
+    ///
+    /// The default is `EvolutionStrategy::Auto { steps: 1 }`: commuting Hamiltonians
+    /// are decomposed exactly, while non-commuting Hamiltonians use first-order
+    /// Trotterization with one step. Use `EvolutionStrategy::Exact` to require
+    /// exact term-wise evolution, or `EvolutionStrategy::Trotter` to control the
+    /// product-formula mode and step count explicitly.
+    pub fn evolution_strategy(mut self, strategy: EvolutionStrategy) -> Self {
+        self.evolution_strategy = strategy;
+        self
+    }
 }
 
 impl Ansatz for QAOAAnsatz {
     fn validate(&self) -> Result<(), CircuitError> {
         validate_qaoa_hamiltonian(&self.cost_operator, "Cost")?;
         validate_qaoa_hamiltonian(&self.mixer_operator, "Mixer")?;
+        validate_qaoa_evolution_strategy(&self.evolution_strategy, &self.cost_operator, "Cost")?;
+        validate_qaoa_evolution_strategy(&self.evolution_strategy, &self.mixer_operator, "Mixer")?;
 
         // Validate mixer operator has same number of qubits as cost operator
         if self.mixer_operator.num_qubits != self.cost_operator.num_qubits {
@@ -191,19 +215,21 @@ impl Ansatz for QAOAAnsatz {
             let beta_param = Parameter::try_from(beta_name.as_str())
                 .map_err(|_| CircuitError::InvalidParameterValue(layer * 2 + 1, f64::NAN))?;
 
-            // Apply e^{-i \gamma H_C}
-            // For H_C = \sum c_k P_k, we evolve each term by angle = 2 * c_k * gamma
-            // We use the existing pauli_evolution logic: U = e^{-i \theta/2 P}, so \theta = 2 * c_k * gamma
-            for (pauli_str, coeff) in &self.cost_operator.terms {
-                let term_angle = gamma_param.clone() * (2.0 * coeff.re);
-                circuit.pauli_evolution(pauli_str, term_angle, &qubits)?;
-            }
+            append_hamiltonian_evolution(
+                &mut circuit,
+                &self.cost_operator,
+                ParameterValue::Param(gamma_param),
+                &self.evolution_strategy,
+                &qubits,
+            )?;
 
-            // Apply e^{-i \beta H_B}
-            for (pauli_str, coeff) in &self.mixer_operator.terms {
-                let term_angle = beta_param.clone() * (2.0 * coeff.re);
-                circuit.pauli_evolution(pauli_str, term_angle, &qubits)?;
-            }
+            append_hamiltonian_evolution(
+                &mut circuit,
+                &self.mixer_operator,
+                ParameterValue::Param(beta_param),
+                &self.evolution_strategy,
+                &qubits,
+            )?;
         }
 
         Ok(circuit)
@@ -220,6 +246,59 @@ impl Ansatz for QAOAAnsatz {
     }
 }
 
+fn append_hamiltonian_evolution(
+    circuit: &mut Circuit,
+    hamiltonian: &Hamiltonian,
+    time: ParameterValue,
+    strategy: &EvolutionStrategy,
+    qubits: &[Qubit],
+) -> Result<(), CircuitError> {
+    match strategy {
+        EvolutionStrategy::Exact => {
+            append_exact_hamiltonian_evolution(circuit, hamiltonian, time, qubits)
+        }
+        EvolutionStrategy::Auto { steps } => {
+            if hamiltonian.all_terms_commute() {
+                append_exact_hamiltonian_evolution(circuit, hamiltonian, time, qubits)
+            } else {
+                trotter_first_order_core(circuit, &hamiltonian.terms, time, *steps, qubits, None)
+            }
+        }
+        EvolutionStrategy::Trotter { mode, steps } => match mode {
+            TrotterMode::FirstOrder => {
+                trotter_first_order_core(circuit, &hamiltonian.terms, time, *steps, qubits, None)
+            }
+            TrotterMode::SecondOrder => {
+                trotter_second_order_core(circuit, &hamiltonian.terms, time, *steps, qubits)
+            }
+            TrotterMode::Randomized(seed) => {
+                let mut rng = StdRng::seed_from_u64(*seed);
+                trotter_first_order_core(
+                    circuit,
+                    &hamiltonian.terms,
+                    time,
+                    *steps,
+                    qubits,
+                    Some(&mut rng),
+                )
+            }
+        },
+    }
+}
+
+fn append_exact_hamiltonian_evolution(
+    circuit: &mut Circuit,
+    hamiltonian: &Hamiltonian,
+    time: ParameterValue,
+    qubits: &[Qubit],
+) -> Result<(), CircuitError> {
+    for (pauli_str, coeff) in &hamiltonian.terms {
+        let term_angle = multiply_angle_by_factor(time.clone(), 2.0 * coeff.re);
+        circuit.pauli_evolution(pauli_str, term_angle, qubits)?;
+    }
+    Ok(())
+}
+
 fn validate_qaoa_hamiltonian(hamiltonian: &Hamiltonian, name: &str) -> Result<(), CircuitError> {
     validate_qaoa_hamiltonian_structure(hamiltonian, name)?;
 
@@ -229,6 +308,38 @@ fn validate_qaoa_hamiltonian(hamiltonian: &Hamiltonian, name: &str) -> Result<()
                 "{name} Hamiltonian coefficient for {} has non-zero imaginary part ({}). QAOA requires Hermitian Hamiltonian with real coefficients.",
                 pauli_str, coeff.im
             )));
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_qaoa_evolution_strategy(
+    strategy: &EvolutionStrategy,
+    hamiltonian: &Hamiltonian,
+    name: &str,
+) -> Result<(), CircuitError> {
+    match strategy {
+        EvolutionStrategy::Exact => {
+            if !hamiltonian.all_terms_commute() {
+                return Err(CircuitError::InvalidOperation(format!(
+                    "EvolutionStrategy::Exact requires all {name} Hamiltonian terms to mutually commute"
+                )));
+            }
+        }
+        EvolutionStrategy::Auto { steps } => {
+            if *steps == 0 {
+                return Err(CircuitError::InvalidOperation(
+                    "EvolutionStrategy::Auto requires steps >= 1".to_string(),
+                ));
+            }
+        }
+        EvolutionStrategy::Trotter { steps, .. } => {
+            if *steps == 0 {
+                return Err(CircuitError::InvalidOperation(
+                    "EvolutionStrategy::Trotter requires steps >= 1".to_string(),
+                ));
+            }
         }
     }
 
