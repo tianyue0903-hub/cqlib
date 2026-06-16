@@ -10,95 +10,73 @@
 # copyright notice, and modified files need to carry a notice indicating
 # that they have been altered from the originals.
 
-"""
-测试 Circuit 矩阵表示
-
-测试范围：
-- 单量子比特门矩阵
-- 多量子比特门矩阵
-- 自定义qubit顺序
-- 验证幺正性
-"""
+"""Matrix conversion tests for the Python circuit API."""
 
 import numpy as np
-from cqlib.circuit import Circuit, circuit_to_matrix
+import pytest
+
+from cqlib import Circuit, Parameter
+from cqlib.circuit import CircuitError, circuit_to_matrix
 
 
-class TestCircuitToMatrix:
-    """测试电路矩阵"""
-
-    def test_hadamard_matrix(self):
-        """Hadamard门矩阵"""
-        c = Circuit(1)
-        c.h(0)
-
-        mat = c.to_matrix()
-        expected = np.array([[1, 1], [1, -1]], dtype=complex) / np.sqrt(2)
-        assert np.allclose(mat, expected)
-
-    def test_pauli_x_matrix(self):
-        """Pauli-X门矩阵"""
-        c = Circuit(1)
-        c.x(0)
-
-        mat = c.to_matrix()
-        expected = np.array([[0, 1], [1, 0]], dtype=complex)
-        assert np.allclose(mat, expected)
-
-    def test_identity_matrix(self):
-        """空电路矩阵是单位矩阵"""
-        c = Circuit(1)
-        mat = c.to_matrix()
-        expected = np.eye(2, dtype=complex)
-        assert np.allclose(mat, expected)
-
-    def test_cnot_matrix(self):
-        """CNOT门矩阵 - 注意qubit顺序可能是反转的"""
-        c = Circuit(2)
-        c.cx(0, 1)
-
-        mat = c.to_matrix()
-        # 实际的矩阵（基于当前实现的qubit顺序）
-        expected = np.array(
-            [[1, 0, 0, 0], [0, 0, 0, 1], [0, 0, 1, 0], [0, 1, 0, 0]], dtype=complex
-        )
-        assert np.allclose(mat, expected)
-
-    def test_bell_state_matrix(self):
-        """Bell态电路矩阵"""
-        c = Circuit(2)
-        c.h(0)
-        c.cx(0, 1)
-
-        mat = c.to_matrix()
-        # 验证幺正性
-        identity = mat @ mat.conj().T
-        assert np.allclose(identity, np.eye(4))
+def test_empty_circuit_matrix_is_scalar_identity():
+    circuit = Circuit(0)
+    assert np.allclose(circuit.to_matrix(), np.array([[1]], dtype=complex))
 
 
-class TestCircuitToMatrixCustomOrder:
-    """测试自定义qubit顺序"""
+def test_hadamard_matrix():
+    circuit = Circuit(1)
+    circuit.h(0)
 
-    def test_custom_qubit_order(self):
-        """自定义qubit顺序"""
-        c = Circuit(2)
-        c.cx(0, 1)
-
-        mat_default = c.to_matrix()
-        mat_swapped = c.to_matrix([1, 0])
-
-        # 两种顺序产生不同矩阵
-        assert not np.allclose(mat_default, mat_swapped)
+    assert np.allclose(
+        circuit.to_matrix(),
+        np.array([[1, 1], [1, -1]], dtype=complex) / np.sqrt(2),
+    )
 
 
-class TestCircuitToMatrixFunction:
-    """测试circuit_to_matrix函数"""
+def test_bell_circuit_matrix_is_unitary():
+    circuit = Circuit(2)
+    circuit.h(0)
+    circuit.cx(0, 1)
 
-    def test_circuit_to_matrix_single_qubit(self):
-        """单量子比特电路矩阵"""
-        c = Circuit(1)
-        c.h(0)
+    matrix = circuit.to_matrix()
 
-        mat = circuit_to_matrix(c)
-        expected = np.array([[1, 1], [1, -1]], dtype=complex) / np.sqrt(2)
-        assert np.allclose(mat, expected)
+    assert matrix.shape == (4, 4)
+    assert np.allclose(matrix @ matrix.conj().T, np.eye(4), atol=1e-10)
+
+
+def test_circuit_to_matrix_function_matches_method():
+    circuit = Circuit(1)
+    circuit.rx(0, 0.125)
+    circuit.rz(0, 0.25)
+
+    assert np.allclose(circuit_to_matrix(circuit), circuit.to_matrix())
+
+
+def test_custom_qubit_order_changes_matrix_layout():
+    circuit = Circuit([0, 2])
+    circuit.cx(0, 2)
+
+    normal_order = circuit.to_matrix()
+    reversed_order = circuit.to_matrix([2, 0])
+
+    assert normal_order.shape == (4, 4)
+    assert reversed_order.shape == (4, 4)
+    assert not np.allclose(normal_order, reversed_order)
+
+
+def test_unbound_parameter_matrix_conversion_raises():
+    theta = Parameter("theta")
+    circuit = Circuit(1)
+    circuit.rx(0, theta)
+
+    with pytest.raises(CircuitError):
+        circuit.to_matrix()
+
+
+def test_non_unitary_matrix_conversion_raises():
+    circuit = Circuit(1)
+    circuit.measure(0)
+
+    with pytest.raises(CircuitError):
+        circuit.to_matrix()

@@ -10,205 +10,101 @@
 # copyright notice, and modified files need to carry a notice indicating
 # that they have been altered from the originals.
 
-"""
-测试参数化单量子比特门操作
+"""Parametric gate tests for the Python circuit API."""
 
-测试范围：
-- 旋转门 (RX, RY, RZ)
-- Phase门
-- 通用U门
-- RXY门
-- 使用浮点数参数
-- 使用符号参数
-- 使用表达式参数
-"""
+import math
 
 import numpy as np
+import pytest
+
+from cqlib import Circuit, Parameter
+from cqlib.circuit import CircuitError, ParameterError
 
 
-class TestRotationGatesWithFloat:
-    """测试使用浮点数的旋转门"""
+@pytest.mark.parametrize(
+    ("method", "expected_name"),
+    [("rx", "RX"), ("ry", "RY"), ("rz", "RZ"), ("phase", "Phase")],
+)
+def test_single_parameter_rotation_methods(method, expected_name):
+    circuit = Circuit(1)
+    getattr(circuit, method)(0, math.pi / 4)
 
-    def test_rx_with_float(self, single_qubit_circuit):
-        """RX门使用浮点参数"""
-        c = single_qubit_circuit
-        c.rx(0, np.pi / 2)
-        assert len(c) == 1
-        assert c[0].name == "RX"
-        assert c[0].num_params == 1
-
-    def test_ry_with_float(self, single_qubit_circuit):
-        """RY门使用浮点参数"""
-        c = single_qubit_circuit
-        c.ry(0, np.pi / 4)
-        assert len(c) == 1
-        assert c[0].name == "RY"
-
-    def test_rz_with_float(self, single_qubit_circuit):
-        """RZ门使用浮点参数"""
-        c = single_qubit_circuit
-        c.rz(0, np.pi / 8)
-        assert len(c) == 1
-        assert c[0].name == "RZ"
-
-    def test_rx_zero_rotation(self, single_qubit_circuit):
-        """RX门零旋转"""
-        c = single_qubit_circuit
-        c.rx(0, 0.0)
-        assert len(c) == 1
-
-    def test_rx_full_rotation(self, single_qubit_circuit):
-        """RX门完整旋转（2π）"""
-        c = single_qubit_circuit
-        c.rx(0, 2 * np.pi)
-        assert len(c) == 1
-
-    def test_rx_negative_rotation(self, single_qubit_circuit):
-        """RX门负旋转"""
-        c = single_qubit_circuit
-        c.rx(0, -np.pi / 2)
-        assert len(c) == 1
+    assert circuit[0].instruction.instruction.name == expected_name
+    assert list(circuit[0].params) == [math.pi / 4]
 
 
-class TestRotationGatesWithParameter:
-    """测试使用符号参数的旋转门"""
+def test_rotation_gates_produce_unitary_matrices():
+    circuit = Circuit(1)
+    circuit.rx(0, 0.125)
+    circuit.ry(0, -0.25)
+    circuit.rz(0, 0.5)
 
-    def test_rx_with_parameter(self, single_qubit_circuit, theta_param):
-        """RX门使用符号参数"""
-        c = single_qubit_circuit
-        c.rx(0, theta_param)
-        assert len(c) == 1
-        # 验证电路追踪了参数
-        assert len(c.parameters) >= 1
-
-    def test_ry_with_parameter(self, single_qubit_circuit, theta_param):
-        """RY门使用符号参数"""
-        c = single_qubit_circuit
-        c.ry(0, theta_param)
-        assert len(c) == 1
-
-    def test_rz_with_parameter(self, single_qubit_circuit, theta_param):
-        """RZ门使用符号参数"""
-        c = single_qubit_circuit
-        c.rz(0, theta_param)
-        assert len(c) == 1
-
-    def test_multiple_parameters(self, single_qubit_circuit, theta_param, phi_param):
-        """同一电路使用多个符号参数"""
-        c = single_qubit_circuit
-        c.rx(0, theta_param)
-        c.ry(0, phi_param)
-        assert len(c) == 2
-        assert len(c.parameters) >= 2
+    matrix = circuit.to_matrix()
+    assert np.allclose(matrix @ matrix.conj().T, np.eye(2), atol=1e-10)
 
 
-class TestRotationGatesWithExpression:
-    """测试使用表达式参数的旋转门"""
+def test_symbolic_parameter_tracking_and_assignment():
+    theta = Parameter("theta")
+    circuit = Circuit(1)
+    circuit.rx(0, theta)
 
-    def test_rx_with_expression(self, single_qubit_circuit, theta_param):
-        """RX门使用表达式"""
-        c = single_qubit_circuit
-        c.rx(0, theta_param + 1.0)
-        assert len(c) == 1
+    assert list(circuit.parameters) == [theta]
 
-    def test_rx_with_scaled_parameter(self, single_qubit_circuit, theta_param):
-        """RX门使用缩放参数"""
-        c = single_qubit_circuit
-        c.rx(0, 2.0 * theta_param)
-        assert len(c) == 1
-
-    def test_rx_with_complex_expression(
-        self, single_qubit_circuit, theta_param, phi_param
-    ):
-        """RX门使用复杂表达式"""
-        c = single_qubit_circuit
-        c.rx(0, theta_param + phi_param)
-        assert len(c) == 1
+    assigned = circuit.assign_parameters({"theta": math.pi})
+    assert assigned[0].instruction.instruction.name == "RX"
+    assert list(assigned[0].params) == [math.pi]
+    assert list(circuit[0].params) == [theta]
+    assert assigned.parameters == []
 
 
-class TestPhaseGate:
-    """测试Phase门"""
+def test_partial_assignment_leaves_unbound_parameters():
+    theta = Parameter("theta")
+    phi = Parameter("phi")
+    circuit = Circuit(1)
+    circuit.rx(0, theta)
+    circuit.ry(0, phi)
 
-    def test_phase_with_float(self, single_qubit_circuit):
-        """Phase门使用浮点参数"""
-        c = single_qubit_circuit
-        c.phase(0, np.pi / 4)
-        assert len(c) == 1
-        assert c[0].name == "Phase"
-
-    def test_phase_with_parameter(self, single_qubit_circuit, theta_param):
-        """Phase门使用符号参数"""
-        c = single_qubit_circuit
-        c.phase(0, theta_param)
-        assert len(c) == 1
+    assigned = circuit.assign_parameters({"theta": 0.5})
+    assert list(assigned[0].params) == [0.5]
+    assert list(assigned[1].params) == [phi]
+    assert list(assigned.parameters) == [phi]
 
 
-class TestUGate:
-    """测试通用U门"""
+def test_parameter_expressions_are_assigned_recursively():
+    theta = Parameter("theta")
+    phi = Parameter("phi")
+    circuit = Circuit(1)
+    circuit.rz(0, 2 * theta + phi)
 
-    def test_u_with_floats(self, single_qubit_circuit):
-        """U门使用三个浮点参数"""
-        c = single_qubit_circuit
-        c.u(0, np.pi / 2, np.pi / 4, np.pi / 8)
-        assert len(c) == 1
-        assert c[0].name == "U"
-        assert c[0].num_params == 3
-
-    def test_u_with_parameters(self, single_qubit_circuit, theta_param, phi_param):
-        """U门使用符号参数"""
-        c = single_qubit_circuit
-        c.u(0, theta_param, phi_param, 0.0)
-        assert len(c) == 1
-
-    def test_u_with_mixed_params(self, single_qubit_circuit, theta_param):
-        """U门使用混合参数（符号和浮点）"""
-        c = single_qubit_circuit
-        c.u(0, theta_param, 0.5, 0.3)
-        assert len(c) == 1
+    assigned = circuit.assign_parameters({"theta": 0.25, "phi": 0.5})
+    assert np.isclose(assigned[0].params[0], 1.0)
 
 
-class TestRXYGate:
-    """测试RXY门"""
+def test_u_and_rxy_gates_accept_numeric_and_symbolic_parameters():
+    theta = Parameter("theta")
+    phi = Parameter("phi")
+    lam = Parameter("lam")
+    circuit = Circuit(2)
+    circuit.u(0, theta, 0.1, lam)
+    circuit.rxy(1, 0.2, phi)
 
-    def test_rxy_with_floats(self, single_qubit_circuit):
-        """RXY门使用两个浮点参数"""
-        c = single_qubit_circuit
-        c.rxy(0, np.pi / 2, np.pi / 4)
-        assert len(c) == 1
-        assert c[0].name == "RXY"
-        assert c[0].num_params == 2
-
-    def test_rxy_with_parameters(self, single_qubit_circuit, theta_param, phi_param):
-        """RXY门使用符号参数"""
-        c = single_qubit_circuit
-        c.rxy(0, theta_param, phi_param)
-        assert len(c) == 1
+    assert [op.instruction.instruction.name for op in circuit.operations] == ["U", "RXY"]
+    assert list(circuit[0].params) == [theta, 0.1, lam]
+    assert list(circuit[1].params) == [0.2, phi]
+    assert list(circuit.parameters) == [theta, lam, phi]
 
 
-class TestParameterTracking:
-    """测试电路参数追踪"""
+def test_unbound_symbolic_matrix_conversion_raises_parameter_error():
+    theta = Parameter("theta")
+    circuit = Circuit(1)
+    circuit.rx(0, theta)
 
-    def test_track_single_parameter(self, single_qubit_circuit, theta_param):
-        """追踪单个参数"""
-        c = single_qubit_circuit
-        c.rx(0, theta_param)
-        params = c.parameters
-        assert len(params) >= 1
+    with pytest.raises(CircuitError):
+        circuit.to_matrix()
 
-    def test_track_expression(self, single_qubit_circuit, theta_param):
-        """追踪表达式参数"""
-        c = single_qubit_circuit
-        c.rx(0, theta_param + 1.0)
-        params = c.parameters
-        # 表达式应该被追踪
-        assert len(params) >= 1
 
-    def test_parameters_list(self, single_qubit_circuit, theta_param, phi_param):
-        """获取参数列表"""
-        c = single_qubit_circuit
-        c.rx(0, theta_param)
-        c.ry(0, phi_param)
-        # 通过 parameters 属性获取参数列表
-        params = c.parameters
-        # 参数列表应该包含参数
-        assert len(params) >= 0  # 根据实际实现调整
+@pytest.mark.parametrize("bad_value", [float("nan"), float("inf"), -float("inf")])
+def test_non_finite_gate_parameters_are_rejected(bad_value):
+    circuit = Circuit(1)
+    with pytest.raises(ParameterError):
+        circuit.rx(0, bad_value)

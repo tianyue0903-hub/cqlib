@@ -10,185 +10,100 @@
 # copyright notice, and modified files need to carry a notice indicating
 # that they have been altered from the originals.
 
-"""
-测试单量子比特门操作
+"""Single-qubit gate tests for the Python circuit API."""
 
-测试范围：
-- Pauli门 (X, Y, Z, I)
-- Clifford门 (H, S, SDG, T, TDG)
-- 平方根门 (X2P, X2M, Y2P, Y2M)
-- XY门族 (XY, XY2P, XY2M)
-"""
-
+import numpy as np
 import pytest
 
-
-class TestPauliGates:
-    """测试Pauli门"""
-
-    def test_identity_gate(self, single_qubit_circuit):
-        """测试Identity门"""
-        c = single_qubit_circuit
-        c.i(0)
-        assert len(c) == 1
-        assert c[0].name == "I"
-
-    def test_pauli_x_gate(self, single_qubit_circuit):
-        """测试Pauli-X门"""
-        c = single_qubit_circuit
-        c.x(0)
-        assert len(c) == 1
-        assert c[0].name == "X"
-
-    def test_pauli_y_gate(self, single_qubit_circuit):
-        """测试Pauli-Y门"""
-        c = single_qubit_circuit
-        c.y(0)
-        assert len(c) == 1
-        assert c[0].name == "Y"
-
-    def test_pauli_z_gate(self, single_qubit_circuit):
-        """测试Pauli-Z门"""
-        c = single_qubit_circuit
-        c.z(0)
-        assert len(c) == 1
-        assert c[0].name == "Z"
-
-    def test_pauli_gates_sequence(self, single_qubit_circuit):
-        """测试Pauli门序列"""
-        c = single_qubit_circuit
-        c.x(0)
-        c.y(0)
-        c.z(0)
-        assert len(c) == 3
-        assert c[0].name == "X"
-        assert c[1].name == "Y"
-        assert c[2].name == "Z"
+from cqlib import Circuit, Parameter
+from cqlib.circuit import CircuitError
 
 
-class TestCliffordGates:
-    """测试Clifford门"""
+@pytest.mark.parametrize(
+    ("method", "expected_name"),
+    [
+        ("i", "I"),
+        ("x", "X"),
+        ("y", "Y"),
+        ("z", "Z"),
+        ("h", "H"),
+        ("s", "S"),
+        ("sdg", "SDG"),
+        ("t", "T"),
+        ("tdg", "TDG"),
+        ("x2p", "X2P"),
+        ("x2m", "X2M"),
+        ("y2p", "Y2P"),
+        ("y2m", "Y2M"),
+    ],
+)
+def test_single_qubit_gate_methods_append_expected_instruction(method, expected_name):
+    circuit = Circuit(1)
+    getattr(circuit, method)(0)
 
-    def test_hadamard_gate(self, single_qubit_circuit):
-        """测试Hadamard门"""
-        c = single_qubit_circuit
-        c.h(0)
-        assert len(c) == 1
-        assert c[0].name == "H"
-
-    def test_s_gate(self, single_qubit_circuit):
-        """测试S门"""
-        c = single_qubit_circuit
-        c.s(0)
-        assert len(c) == 1
-        assert c[0].name == "S"
-
-    def test_sdg_gate(self, single_qubit_circuit):
-        """测试S-dagger门"""
-        c = single_qubit_circuit
-        c.sdg(0)
-        assert len(c) == 1
-        assert c[0].name == "SDG"
-
-    def test_t_gate(self, single_qubit_circuit):
-        """测试T门"""
-        c = single_qubit_circuit
-        c.t(0)
-        assert len(c) == 1
-        assert c[0].name == "T"
-
-    def test_tdg_gate(self, single_qubit_circuit):
-        """测试T-dagger门"""
-        c = single_qubit_circuit
-        c.tdg(0)
-        assert len(c) == 1
-        assert c[0].name == "TDG"
+    assert len(circuit.operations) == 1
+    assert circuit[0].instruction.instruction.name == expected_name
+    assert [qubit.index for qubit in circuit[0].qubits] == [0]
 
 
-class TestSqrtGates:
-    """测试平方根门"""
+def test_single_qubit_gate_order_is_preserved():
+    circuit = Circuit(1)
+    circuit.h(0)
+    circuit.x(0)
+    circuit.z(0)
 
-    def test_x2p_gate(self, single_qubit_circuit):
-        """测试√X门（正相位）"""
-        c = single_qubit_circuit
-        c.x2p(0)
-        assert len(c) == 1
-        assert c[0].name == "X2P"
-
-    def test_x2m_gate(self, single_qubit_circuit):
-        """测试√X†门（负相位）"""
-        c = single_qubit_circuit
-        c.x2m(0)
-        assert len(c) == 1
-        assert c[0].name == "X2M"
-
-    def test_y2p_gate(self, single_qubit_circuit):
-        """测试√Y门（正相位）"""
-        c = single_qubit_circuit
-        c.y2p(0)
-        assert len(c) == 1
-        assert c[0].name == "Y2P"
-
-    def test_y2m_gate(self, single_qubit_circuit):
-        """测试√Y†门（负相位）"""
-        c = single_qubit_circuit
-        c.y2m(0)
-        assert len(c) == 1
-        assert c[0].name == "Y2M"
-
-    def test_sqrt_gates_are_inverse(self, single_qubit_circuit):
-        """测试√X和√X†是互逆的"""
-        c = single_qubit_circuit
-        c.x2p(0)
-        c.x2m(0)
-        assert len(c) == 2
+    assert [op.instruction.instruction.name for op in circuit.operations] == ["H", "X", "Z"]
 
 
-class TestXYGates:
-    """测试XY门族"""
+def test_hadamard_and_pauli_x_matrices():
+    hadamard = Circuit(1)
+    hadamard.h(0)
+    assert np.allclose(
+        hadamard.to_matrix(),
+        np.array([[1, 1], [1, -1]], dtype=complex) / np.sqrt(2),
+    )
 
-    def test_xy_gate(self, single_qubit_circuit):
-        """测试XY门"""
-        c = single_qubit_circuit
-        c.xy(0, 0.5)
-        assert len(c) == 1
-        assert c[0].name == "XY"
-
-    def test_xy2p_gate(self, single_qubit_circuit):
-        """测试√XY门（正相位）"""
-        c = single_qubit_circuit
-        c.xy2p(0, 0.5)
-        assert len(c) == 1
-        assert c[0].name == "XY2P"
-
-    def test_xy2m_gate(self, single_qubit_circuit):
-        """测试√XY†门（负相位）"""
-        c = single_qubit_circuit
-        c.xy2m(0, 0.5)
-        assert len(c) == 1
-        assert c[0].name == "XY2M"
-
-    def test_xy_gates_with_parameter(self, single_qubit_circuit, theta_param):
-        """测试XY门使用符号参数"""
-        c = single_qubit_circuit
-        c.xy(0, theta_param)
-        assert len(c) == 1
+    pauli_x = Circuit(1)
+    pauli_x.x(0)
+    assert np.allclose(pauli_x.to_matrix(), np.array([[0, 1], [1, 0]], dtype=complex))
 
 
-class TestSingleQubitGateErrors:
-    """测试单量子比特门的错误处理"""
+def test_square_root_gates_are_unitary():
+    for method in ("x2p", "x2m", "y2p", "y2m"):
+        circuit = Circuit(1)
+        getattr(circuit, method)(0)
+        matrix = circuit.to_matrix()
+        assert np.allclose(matrix @ matrix.conj().T, np.eye(2), atol=1e-10)
 
-    def test_gate_on_invalid_qubit(self, single_qubit_circuit):
-        """在无效qubit上应用门应报错"""
-        c = single_qubit_circuit
-        with pytest.raises(Exception):
-            c.h(5)  # qubit 5不存在
 
-    def test_gate_on_negative_qubit(self, single_qubit_circuit):
-        """在负索引qubit上应用门"""
-        c = single_qubit_circuit
-        # 根据实现，这可能报错或接受负索引
-        try:
-            c.h(-1)
-        except Exception:
-            pass  # 预期行为
+@pytest.mark.parametrize(
+    ("method", "expected_name", "params"),
+    [
+        ("xy", "XY", [0.1]),
+        ("xy2p", "XY2P", [0.3]),
+        ("xy2m", "XY2M", [0.4]),
+    ],
+)
+def test_xy_family_gates(method, expected_name, params):
+    circuit = Circuit(1)
+    getattr(circuit, method)(0, *params)
+
+    assert circuit[0].instruction.instruction.name == expected_name
+    assert list(circuit[0].params) == params
+
+
+def test_xy_gate_accepts_symbolic_parameters():
+    theta = Parameter("theta")
+    phi = Parameter("phi")
+    circuit = Circuit(1)
+    circuit.xy(0, theta)
+
+    assert circuit[0].instruction.instruction.name == "XY"
+    assert list(circuit[0].params) == [theta]
+    assert list(circuit.parameters) == [theta]
+
+
+def test_single_qubit_gate_rejects_unknown_qubit():
+    circuit = Circuit(1)
+    with pytest.raises(CircuitError):
+        circuit.h(3)

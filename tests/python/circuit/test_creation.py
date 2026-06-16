@@ -10,122 +10,81 @@
 # copyright notice, and modified files need to carry a notice indicating
 # that they have been altered from the originals.
 
-"""
-测试 Circuit 创建功能
-
-测试范围：
-- 通过qubit数量创建
-- 通过qubit索引列表创建
-- 通过Qubit对象列表创建
-- 空电路创建
-- 重复qubit的错误处理
-"""
+"""Creation and basic construction tests for the Python circuit API."""
 
 import pytest
-from cqlib.circuit import Circuit, Qubit
+
+from cqlib import Circuit, Parameter, Qubit
+from cqlib.circuit import CircuitError
 
 
-class TestCircuitCreationByNumQubits:
-    """测试通过qubit数量创建电路"""
+def test_empty_and_fixed_width_circuits():
+    empty = Circuit(0)
+    assert empty.num_qubits == 0
+    assert empty.width == 0
+    assert empty.qubits == []
+    assert len(empty.operations) == 0
 
-    def test_create_single_qubit(self):
-        """创建单qubit电路"""
-        c = Circuit(1)
-        assert c.num_qubits == 1
-        assert len(c.qubits) == 1
-        assert c.qubits[0].index == 0
-
-    def test_create_multiple_qubits(self):
-        """创建多qubit电路"""
-        c = Circuit(5)
-        assert c.num_qubits == 5
-        assert len(c.qubits) == 5
-        for i, q in enumerate(c.qubits):
-            assert q.index == i
-
-    def test_create_zero_qubits(self):
-        """创建0 qubit电路"""
-        c = Circuit(0)
-        assert c.num_qubits == 0
-        assert len(c.qubits) == 0
+    circuit = Circuit(3)
+    assert circuit.num_qubits == 3
+    assert circuit.width == 3
+    assert [qubit.index for qubit in circuit.qubits] == [0, 1, 2]
 
 
-class TestCircuitCreationByIndices:
-    """测试通过qubit索引列表创建电路"""
+def test_circuit_from_indices_and_qubits():
+    by_index = Circuit([2, 0, 5])
+    assert by_index.num_qubits == 3
+    assert [qubit.index for qubit in by_index.qubits] == [2, 0, 5]
 
-    def test_create_with_indices(self):
-        """使用索引列表创建"""
-        c = Circuit([0, 1, 2])
-        assert c.num_qubits == 3
-        for i, q in enumerate(c.qubits):
-            assert q.index == i
-
-    def test_create_with_non_contiguous_indices(self):
-        """使用非连续索引创建"""
-        c = Circuit([0, 2, 4, 6])
-        assert c.num_qubits == 4
-        indices = [q.index for q in c.qubits]
-        assert indices == [0, 2, 4, 6]
-
-    def test_create_with_unordered_indices(self):
-        """使用无序索引创建"""
-        c = Circuit([3, 1, 2, 0])
-        assert c.num_qubits == 4
-        indices = [q.index for q in c.qubits]
-        assert indices == [3, 1, 2, 0]
+    by_qubit = Circuit([Qubit(4), Qubit(1)])
+    assert by_qubit.num_qubits == 2
+    assert [qubit.index for qubit in by_qubit.qubits] == [4, 1]
 
 
-class TestCircuitCreationByQubitObjects:
-    """测试通过Qubit对象列表创建电路"""
+def test_circuit_rejects_duplicate_qubits():
+    with pytest.raises(CircuitError):
+        Circuit([0, 1, 1])
 
-    def test_create_with_qubit_objects(self):
-        """使用Qubit对象创建"""
-        qubits = [Qubit(0), Qubit(1), Qubit(2)]
-        c = Circuit(qubits)
-        assert c.num_qubits == 3
-
-    def test_create_with_mixed_qubits(self):
-        """使用混合索引的Qubit对象"""
-        qubits = [Qubit(5), Qubit(10), Qubit(15)]
-        c = Circuit(qubits)
-        assert c.num_qubits == 3
-        indices = [q.index for q in c.qubits]
-        assert indices == [5, 10, 15]
+    with pytest.raises(CircuitError):
+        Circuit([Qubit(0), Qubit(0)])
 
 
-class TestCircuitCreationErrors:
-    """测试电路创建的错误处理"""
+def test_add_qubits_preserves_existing_operations():
+    circuit = Circuit(1)
+    circuit.h(0)
+    circuit.add_qubits([2, 4])
 
-    def test_duplicate_qubit_indices(self):
-        """重复qubit索引应报错"""
-        with pytest.raises(Exception):
-            Circuit([0, 1, 1, 2])
-
-    def test_duplicate_qubit_objects(self):
-        """重复Qubit对象应报错"""
-        with pytest.raises(Exception):
-            Circuit([Qubit(0), Qubit(1), Qubit(0)])
+    assert circuit.num_qubits == 3
+    assert [qubit.index for qubit in circuit.qubits] == [0, 2, 4]
+    assert len(circuit.operations) == 1
+    assert circuit[0].instruction.instruction.name == "H"
 
 
-class TestCircuitProperties:
-    """测试电路基本属性"""
+def test_global_phase_accepts_numeric_and_symbolic_values():
+    circuit = Circuit(1)
+    assert circuit.global_phase.is_zero()
 
-    def test_circuit_width(self, single_qubit_circuit):
-        """测试电路宽度"""
-        c = single_qubit_circuit
-        assert c.num_qubits == 1
+    circuit.set_global_phase(0.25)
+    assert circuit.global_phase.evaluate({}) == 0.25
 
-    def test_circuit_qubits_immutable(self, two_qubit_circuit):
-        """测试qubits列表"""
-        c = two_qubit_circuit
-        qubits = c.qubits
-        assert len(qubits) == 2
-        # 验证Qubit对象
-        for q in qubits:
-            assert isinstance(q, Qubit)
+    theta = Parameter("theta")
+    circuit.set_global_phase(theta)
+    assert str(circuit.global_phase) == "theta"
+    assert list(circuit.parameters) == [theta]
 
-    def test_empty_circuit_operations(self, empty_circuit):
-        """空电路的操作列表为空"""
-        c = empty_circuit
-        assert len(c) == 0
-        assert list(c.operations) == []
+
+def test_from_operations_round_trip():
+    source = Circuit(2)
+    source.h(0)
+    source.cx(0, 1)
+
+    restored = Circuit.from_operations(source.qubits, source.operations)
+    assert restored.num_qubits == 2
+    assert [op.instruction.instruction.name for op in restored.operations] == ["H", "CX"]
+    assert [qubit.index for qubit in restored.operations[1].qubits] == [0, 1]
+
+
+def test_invalid_operation_qubit_is_reported():
+    circuit = Circuit(1)
+    with pytest.raises(CircuitError):
+        circuit.h(2)
