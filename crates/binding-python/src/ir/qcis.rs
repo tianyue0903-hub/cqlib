@@ -48,7 +48,8 @@
 //! ```
 
 use crate::circuit::PyCircuit;
-use cqlib_core::ir::{qcis_dump, qcis_dumps, qcis_loads};
+use cqlib_core::ir::qcis::load::QcisParseError;
+use cqlib_core::ir::{qcis_dump, qcis_dumps, qcis_load, qcis_loads};
 use pyo3::prelude::*;
 
 /// Parse QCIS source string into a Circuit.
@@ -108,11 +109,13 @@ pub fn py_qcis_loads(qcis: &str) -> PyResult<PyCircuit> {
 /// ```
 #[pyfunction(name = "load")]
 pub fn py_qcis_load(path: &str) -> PyResult<PyCircuit> {
-    let content = std::fs::read_to_string(path)?;
-    match qcis_loads(&content) {
+    match qcis_load(path) {
         Ok(c) => Ok(PyCircuit { inner: c }),
+        Err(QcisParseError::IoError(e)) => Err(PyErr::new::<pyo3::exceptions::PyIOError, _>(
+            format!("QCIS load error: {}", e),
+        )),
         Err(e) => Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-            "QCIS parse error: {}",
+            "QCIS load error: {}",
             e
         ))),
     }

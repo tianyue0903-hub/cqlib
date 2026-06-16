@@ -13,13 +13,14 @@
 //! Python bindings for Intermediate Representation (IR) module.
 //!
 //! This module provides Python bindings for parsing and serializing quantum circuit
-//! formats including OpenQASM 2.0 and QCIS.
+//! formats including OpenQASM 2.0, OpenQASM 3.0, and QCIS.
 //!
 //! # Supported Formats
 //!
 //! | Format | Load (Parse) | Dump (Serialize) |
 //! |--------|--------------|------------------|
 //! | OpenQASM 2.0 | `qasm2.load`, `qasm2.loads` | `qasm2.dump`, `qasm2.dumps` |
+//! | OpenQASM 3.0 | `qasm3.load`, `qasm3.loads` | `qasm3.dump`, `qasm3.dumps` |
 //! | QCIS | `qcis.load`, `qcis.loads` | `qcis.dump`, `qcis.dumps` |
 //!
 //! # Usage Example
@@ -44,9 +45,10 @@
 use pyo3::prelude::*;
 
 pub mod qasm2;
+pub mod qasm3;
 pub mod qcis;
 
-/// Register the ir submodule with qasm2 and qcis submodules.
+/// Register the ir submodule with qasm2, qasm3, and qcis submodules.
 pub fn register_ir_module(parent: &Bound<'_, PyModule>) -> PyResult<()> {
     let ir_module = PyModule::new(parent.py(), "ir")?;
 
@@ -57,6 +59,14 @@ pub fn register_ir_module(parent: &Bound<'_, PyModule>) -> PyResult<()> {
     qasm2_module.add_function(wrap_pyfunction!(qasm2::py_qasm2_dump, &qasm2_module)?)?;
     qasm2_module.add_function(wrap_pyfunction!(qasm2::py_qasm2_dumps, &qasm2_module)?)?;
     ir_module.add_submodule(&qasm2_module)?;
+
+    // Register qasm3 submodule under ir
+    let qasm3_module = PyModule::new(parent.py(), "qasm3")?;
+    qasm3_module.add_function(wrap_pyfunction!(qasm3::py_qasm3_load, &qasm3_module)?)?;
+    qasm3_module.add_function(wrap_pyfunction!(qasm3::py_qasm3_loads, &qasm3_module)?)?;
+    qasm3_module.add_function(wrap_pyfunction!(qasm3::py_qasm3_dump, &qasm3_module)?)?;
+    qasm3_module.add_function(wrap_pyfunction!(qasm3::py_qasm3_dumps, &qasm3_module)?)?;
+    ir_module.add_submodule(&qasm3_module)?;
 
     // Register qcis submodule under ir
     let qcis_module = PyModule::new(parent.py(), "qcis")?;

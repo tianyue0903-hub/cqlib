@@ -13,18 +13,20 @@
 """Intermediate Representation (IR) module for quantum circuit formats.
 
 This module provides functions to parse and serialize quantum circuits in
-various formats including OpenQASM 2.0 and QCIS.
+various formats including OpenQASM 2.0, OpenQASM 3.0, and QCIS.
 
 Supported Formats:
     - OpenQASM 2.0: IBM's quantum assembly language
+    - OpenQASM 3.0: OpenQASM circuit language
     - QCIS: Telecom Quantum's native circuit format
 
 Submodules:
     qasm2: OpenQASM 2.0 format support
+    qasm3: OpenQASM 3.0 format support
     qcis: QCIS format support
 
 Example:
-    >>> from cqlib.ir import qasm2, qcis
+    >>> from cqlib.ir import qasm2, qasm3, qcis
     >>> from cqlib import Circuit
     >>>
     >>> # Parse OpenQASM 2.0
@@ -36,6 +38,7 @@ Example:
 """
 
 from . import qasm2
+from . import qasm3
 from . import qcis
 
-__all__ = ["qasm2", "qcis"]
+__all__ = ["qasm2", "qasm3", "qcis"]
