@@ -16,7 +16,7 @@ use crate::circuit::{
     Circuit, ClassicalExpr, ClassicalType, Parameter, ParameterValue, Qubit, StandardGate,
 };
 use crate::ir::qasm3::load::Qasm3ParseError;
-use crate::ir::{qasm3_load, qasm3_loads};
+use crate::ir::{qasm3_load, qasm3_loads, qcis_loads};
 use std::error::Error;
 use std::fs;
 use std::path::PathBuf;
@@ -301,7 +301,6 @@ include "stdgates.inc";
 
 qubit[2] q;
 bit[2] c0;
-bit[2] v0;
 
 c0 = measure q;
 barrier q[0],q[1];
@@ -332,7 +331,6 @@ include "stdgates.inc";
 
 qubit q;
 bit c0;
-bit v0;
 
 c0 = measure q;
 "#
@@ -342,6 +340,42 @@ c0 = measure q;
         loaded.operations()[0].instruction,
         Instruction::ClassicalData(ClassicalDataOp::MeasureBit { .. })
     ));
+}
+
+#[test]
+fn dumps_unused_measurement_values_without_classical_declarations() {
+    let q0 = Qubit::new(0);
+    let q1 = Qubit::new(1);
+    let mut circuit = Circuit::new(2);
+    circuit.measure(q0).unwrap();
+    circuit.measure(q1).unwrap();
+
+    let qasm = dumps(&circuit).unwrap();
+
+    assert_eq!(
+        qasm,
+        r#"OPENQASM 3.0;
+include "stdgates.inc";
+
+qubit[2] q;
+
+measure q[0];
+measure q[1];
+"#
+    );
+    let loaded = qasm3_loads(&qasm).unwrap();
+    assert_eq!(loaded.operations().len(), 2);
+}
+
+#[test]
+fn qcis_measurements_dump_to_reloadable_qasm3() {
+    let circuit = qcis_loads("M Q0 Q1\n").unwrap();
+    let qasm = dumps(&circuit).unwrap();
+
+    assert!(!qasm.contains("bit v"), "got:\n{qasm}");
+    assert!(qasm.contains("measure q[0];"), "got:\n{qasm}");
+    assert!(qasm.contains("measure q[1];"), "got:\n{qasm}");
+    assert!(qasm3_loads(&qasm).is_ok(), "got:\n{qasm}");
 }
 
 #[test]
