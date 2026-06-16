@@ -111,6 +111,54 @@ fn loads_openqasm_3_0_header_without_normalization() {
 }
 
 #[test]
+fn loads_indexed_bit_measurement_assignment() {
+    let circuit = loads(
+        r#"
+        OPENQASM 3.0;
+        include "stdgates.inc";
+        qubit[2] q;
+        bit[2] v;
+        v[0] = measure q[0];
+        "#,
+    )
+    .unwrap();
+
+    assert_eq!(circuit.num_qubits(), 2);
+    assert_eq!(circuit.operations().len(), 2);
+    assert!(matches!(
+        circuit.operations()[0].instruction,
+        Instruction::ClassicalData(ClassicalDataOp::MeasureBit { .. })
+    ));
+    assert!(matches!(
+        circuit.operations()[1].instruction,
+        Instruction::ClassicalData(ClassicalDataOp::Store { target, .. })
+            if target.ty() == ClassicalType::bit_vec(2).unwrap()
+    ));
+}
+
+#[test]
+fn rejects_multi_qubit_measurement_into_indexed_bit() {
+    assert_err(
+        r#"
+        OPENQASM 3.0;
+        include "stdgates.inc";
+        qubit[2] q;
+        bit[2] v;
+        v[0] = measure q;
+        "#,
+        |err| {
+            matches!(
+                err,
+                Qasm3ParseError::MismatchedQubitCount {
+                    expected: 1,
+                    actual: 2
+                }
+            )
+        },
+    );
+}
+
+#[test]
 fn load_file_reads_qasm3_source() {
     let dir = std::env::temp_dir().join(format!("cqlib_qasm3_{}", std::process::id()));
     fs::create_dir_all(&dir).unwrap();
@@ -487,21 +535,28 @@ fn rejects_measurement_width_mismatch() {
 }
 
 #[test]
-fn rejects_indexed_measurement_assignment_target() {
-    assert_err(
+fn loads_indexed_measurement_assignment_from_scalar_qubit() {
+    let circuit = loads(
         r#"
         OPENQASM 3;
         qubit q;
         bit[2] c;
         c[0] = measure q;
         "#,
-        |err| {
-            matches!(
-                err,
-                Qasm3ParseError::SemanticError(_) | Qasm3ParseError::UnsupportedFeature(_)
-            )
-        },
-    );
+    )
+    .unwrap();
+
+    assert_eq!(circuit.num_qubits(), 1);
+    assert_eq!(circuit.operations().len(), 2);
+    assert!(matches!(
+        circuit.operations()[0].instruction,
+        Instruction::ClassicalData(ClassicalDataOp::MeasureBit { .. })
+    ));
+    assert!(matches!(
+        circuit.operations()[1].instruction,
+        Instruction::ClassicalData(ClassicalDataOp::Store { target, .. })
+            if target.ty() == ClassicalType::bit_vec(2).unwrap()
+    ));
 }
 
 #[test]

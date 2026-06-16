@@ -556,30 +556,120 @@ impl<'a> LoweringContext<'a> {
         assignment: &asg::Assignment,
         circuit: &mut Circuit,
     ) -> Result<(), Qasm3ParseError> {
-        let LValue::Identifier(target_id_result) = assignment.lvalue() else {
-            return Err(Qasm3ParseError::UnsupportedFeature(
-                "indexed assignment target".to_string(),
-            ));
-        };
-        let target_id = self.symbol_id(target_id_result)?;
-        let Some(target) = self.classical.get(&target_id).copied() else {
-            return Err(Qasm3ParseError::UndefinedSymbol(
-                self.symbol_name(&target_id),
-            ));
-        };
+        match assignment.lvalue() {
+            LValue::Identifier(target_id_result) => {
+                let target_id = self.symbol_id(target_id_result)?;
+                let Some(target) = self.classical.get(&target_id).copied() else {
+                    return Err(Qasm3ParseError::UndefinedSymbol(
+                        self.symbol_name(&target_id),
+                    ));
+                };
 
-        if let Expr::MeasureExpression(measure) = assignment.rvalue().expression() {
-            let qubits = self.expand_qubit_expr(measure.operand())?;
-            if qubits.len() == 1 {
-                circuit.measure_into(qubits[0], target)?;
-            } else {
-                circuit.measure_bits_into(qubits, target)?;
+                if let Expr::MeasureExpression(measure) = assignment.rvalue().expression() {
+                    let qubits = self.expand_qubit_expr(measure.operand())?;
+                    if qubits.len() == 1 {
+                        circuit.measure_into(qubits[0], target)?;
+                    } else {
+                        circuit.measure_bits_into(qubits, target)?;
+                    }
+                    return Ok(());
+                }
+
+                let value = self.lower_classical_expr(assignment.rvalue())?;
+                circuit.store(target, value)?;
+                Ok(())
             }
-            return Ok(());
+            LValue::IndexedIdentifier(indexed) => {
+                self.lower_indexed_assignment(indexed, assignment.rvalue(), circuit)
+            }
         }
+    }
 
-        let value = self.lower_classical_expr(assignment.rvalue())?;
-        circuit.store(target, value)?;
+    fn lower_indexed_assignment(
+        &mut self,
+        indexed: &asg::IndexedIdentifier,
+        rvalue: &TExpr,
+        circuit: &mut Circuit,
+    ) -> Result<(), Qasm3ParseError> {
+        let target = self.indexed_classical_target(indexed)?;
+        let bit = match rvalue.expression() {
+            Expr::MeasureExpression(measure) => {
+                let qubits = self.expand_qubit_expr(measure.operand())?;
+                if qubits.len() != 1 {
+                    return Err(Qasm3ParseError::MismatchedQubitCount {
+                        expected: 1,
+                        actual: qubits.len(),
+                    });
+                }
+                circuit.measure(qubits[0])?.expr()
+            }
+            _ => self.lower_classical_expr(rvalue)?,
+        };
+        self.store_indexed_classical_bit(target, bit, circuit)
+    }
+
+    fn indexed_classical_target(
+        &self,
+        indexed: &asg::IndexedIdentifier,
+    ) -> Result<(ClassicalVar, u32), Qasm3ParseError> {
+        let id = self.symbol_id(indexed.identifier())?;
+        let Some(var) = self.classical.get(&id).copied() else {
+            return Err(Qasm3ParseError::UndefinedSymbol(self.symbol_name(&id)));
+        };
+        if indexed.indexes().len() != 1 {
+            return Err(Qasm3ParseError::UnsupportedFeature(
+                "multi-dimensional classical assignment index".to_string(),
+            ));
+        }
+        let ClassicalType::BitVec(width) = var.ty() else {
+            return Err(Qasm3ParseError::TypeError(format!(
+                "indexed assignment target '{}' must be bit array, got {:?}",
+                self.symbol_name(&id),
+                var.ty()
+            )));
+        };
+        let index = self.single_index(&indexed.indexes()[0])?;
+        if index >= width.get() {
+            return Err(Qasm3ParseError::InvalidArgument(format!(
+                "classical index {index} out of bounds for '{}'",
+                self.symbol_name(&id)
+            )));
+        }
+        Ok((var, index))
+    }
+
+    fn store_indexed_classical_bit(
+        &self,
+        (target, index): (ClassicalVar, u32),
+        bit: ClassicalExpr,
+        circuit: &mut Circuit,
+    ) -> Result<(), Qasm3ParseError> {
+        if bit.ty() != ClassicalType::Bit {
+            return Err(Qasm3ParseError::TypeError(format!(
+                "indexed bit assignment expects Bit expression, got {:?}",
+                bit.ty()
+            )));
+        }
+        let width = match target.ty() {
+            ClassicalType::BitVec(width) => width.get(),
+            ty => {
+                return Err(Qasm3ParseError::TypeError(format!(
+                    "indexed assignment target must be BitVec, got {ty:?}"
+                )));
+            }
+        };
+        let current = target.expr();
+        let bits = (0..width)
+            .map(|bit_index| {
+                if bit_index == index {
+                    Ok(bit.clone())
+                } else {
+                    ClassicalExpr::extract_bit(current.clone(), bit_index)
+                }
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let updated = ClassicalExpr::pack_bits(bits)?;
+        circuit.store(target, updated)?;
         Ok(())
     }
 
