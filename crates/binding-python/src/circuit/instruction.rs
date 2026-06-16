@@ -172,6 +172,10 @@ impl PyInstruction {
         }
     }
 
+    fn __str__(&self) -> String {
+        format!("{}", self.inner)
+    }
+
     fn __repr__(&self) -> String {
         format!("Instruction({})", self.name())
     }
@@ -232,13 +236,12 @@ impl PyValueInstruction {
         }
     }
 
+    fn __str__(&self) -> String {
+        format!("{}", self.inner)
+    }
+
     fn __repr__(&self) -> String {
-        match &self.inner {
-            ValueInstruction::Instruction(inst) => format!("ValueInstruction({inst})"),
-            ValueInstruction::ClassicalControl(control) => {
-                format!("ValueInstruction({control:?})")
-            }
-        }
+        format!("ValueInstruction(\"{}\")", self.inner)
     }
 }
 

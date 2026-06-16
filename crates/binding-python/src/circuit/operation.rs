@@ -378,12 +378,12 @@ impl PyValueOperation {
         matrix_cow.to_pyarray(py).into_py_any(py)
     }
 
+    fn __str__(&self) -> String {
+        format!("{}", self.inner)
+    }
+
     fn __repr__(&self) -> String {
-        format!(
-            "ValueOperation(qubits={}, params={})",
-            self.inner.qubits.len(),
-            self.inner.params.len()
-        )
+        format!("ValueOperation(\"{}\")", self.inner)
     }
 }
 

@@ -10,17 +10,22 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
-//! Python bindings for qubit layout management.
+//! Python bindings for logical-to-physical qubit layout management.
 //!
-//! This module provides [`PyLayout`], a Python wrapper for mapping logical (virtual)
-//! qubits to physical qubits on a quantum device. Layouts are essential for circuit
-//! routing algorithms like SABRE that track how virtual qubits move across hardware.
+//! This module provides [`PyLayout`], a Python wrapper for mapping circuit
+//! logical qubits to physical qubits on a quantum device. Layouts are
+//! essential for circuit routing algorithms like SABRE that track how
+//! logical qubits move across hardware.
 //!
 //! # Concepts
 //!
-//! - **Logical qubits**: Virtual qubits used in the quantum circuit (Q0, Q1, ...)
-//! - **Physical qubits**: Actual hardware qubits on the device (P100, P101, ...)
-//! - **Ancilla qubits**: Automatically generated auxiliary qubits to fill unused physical qubits
+//! - **Logical qubits**: Virtual qubits used in the quantum circuit
+//!   (LogicalQubit(0), LogicalQubit(1), ...)
+//! - **Physical qubits**: Actual hardware qubits on the device
+//!   (PhysicalQubit(100), PhysicalQubit(101), ...)
+//! - **Vacant physical qubits**: Physical qubits not currently carrying a
+//!   logical qubit — available for routing or binding additional
+//!   logical qubits.
 //!
 //! # Example
 //!
@@ -34,34 +39,43 @@
 //! )
 //!
 //! # Query mappings
-//! physical = layout.get_physical(0)  # Qubit(100)
-//! virtual = layout.get_virtual(101)   # Qubit(1)
+//! physical = layout.get_physical(0)  # Physical qubit for logical 0
+//! logical = layout.get_logical(101)  # Logical qubit on physical 101
 //!
 //! # Perform SWAP operation (used in routing)
 //! layout.swap_physical(100, 101)
 //! ```
+//!
+//! # Notes
+//!
+//! - Layout does **not** allocate auxiliary qubits. Algorithm auxiliary
+//!   qubits are logical circuit resources and must be managed by the
+//!   compiler resource manager before [`PyLayout::bind`]ing them to
+//!   physical qubits.
+//! - Layout owns the set of physical qubits and tracks which are vacant.
 
 use crate::circuit::PyQubit;
 use crate::circuit::bit::{PyIntListOrQubitList, PyIntOrQubit};
 use cqlib_core::circuit::Qubit;
-use cqlib_core::device::Layout;
+use cqlib_core::device::{Layout, LogicalQubit, PhysicalQubit};
 use pyo3::exceptions::PyValueError;
-use pyo3::{PyResult, pyclass, pymethods};
+use pyo3::{Bound, PyAny, PyResult, pyclass, pymethods};
 use std::collections::HashMap;
 
-/// Maps logical (virtual) qubits to physical qubits on a quantum device.
+/// Maps circuit logical qubits to physical qubits on a quantum device.
 ///
-/// A layout represents the current assignment of virtual qubits to physical hardware.
-/// It maintains bidirectional mappings and is used by routing algorithms to track
-/// qubit placement and update mappings when SWAP gates are inserted.
+/// A layout owns the set of physical qubits available to a placement or
+/// routing step. Every logical qubit present in the layout has exactly one
+/// physical mapping. A physical qubit may be vacant.
 ///
-/// # Ancilla Qubits
+/// # Vacant Physical Qubits
 ///
-/// When the number of logical qubits is less than physical qubits, ancilla qubits
-/// are automatically created to fill the gap. These are auxiliary qubits used
-/// during circuit execution.
+/// Unlike ancilla qubits (which are logical circuit resources), vacant
+/// physical qubits are simply unused hardware positions. They become
+/// available when a logical qubit is explicitly [`bind`](PyLayout::bind)ed
+/// to them.
 ///
-/// # Example
+/// # Python Example
 ///
 /// ```python
 /// from cqlib.device import Layout
@@ -74,11 +88,11 @@ use std::collections::HashMap;
 ///     init_map=init_map
 /// )
 ///
-/// # Check ancilla count
-/// print(layout.num_ancilla)  # 1 (physical qubit 102)
+/// # Check vacant count
+/// print(layout.num_vacant_physical)  # 1 (physical qubit 102 is vacant)
 ///
 /// # Get all mappings
-/// print(layout.v2p_map)  # {Qubit(0): Qubit(100), Qubit(1): Qubit(101), ...}
+/// print(layout.l2p_map)  # {LogicalQubit(0): PhysicalQubit(100), ...}
 /// ```
 #[pyclass(name = "Layout", module = "cqlib.device")]
 #[derive(Clone, Debug)]
@@ -102,19 +116,27 @@ impl From<PyLayout> for Layout {
 impl PyLayout {
     /// Creates a new layout mapping logical qubits to physical qubits.
     ///
+    /// Entries in `init_map` are applied first. Remaining logical qubits
+    /// are mapped to remaining physical qubits in the order supplied by
+    /// `logical` and `physical`. Extra physical qubits remain vacant.
+    ///
     /// # Arguments
     ///
-    /// * `logical`: List of logical (virtual) qubit identifiers.
-    /// * `physical`: List of physical qubit identifiers available on the device.
-    /// * `init_map`: Optional initial mapping from logical to physical qubits.
-    ///     If not provided, logical qubits are mapped sequentially to physical qubits.
+    /// * `logical`: List of logical qubit identifiers (integers or Qubit
+    ///   objects).
+    /// * `physical`: List of physical qubit identifiers available on the
+    ///   device.
+    /// * `init_map`: Optional initial mapping from logical to physical
+    ///   qubits. If not provided, logical qubits are mapped sequentially
+    ///   to physical qubits.
     ///
     /// # Errors
     ///
     /// Raises `ValueError` if:
     /// - The number of logical qubits exceeds physical qubits
-    /// - `init_map` contains invalid virtual or physical qubits
-    /// - `init_map` maps multiple virtual qubits to the same physical qubit
+    /// - Duplicate logical or physical qubits are in the lists
+    /// - `init_map` references a qubit not in the lists
+    /// - `init_map` maps multiple logical qubits to the same physical qubit
     ///
     /// # Example
     ///
@@ -128,7 +150,7 @@ impl PyLayout {
     /// layout = Layout(
     ///     logical=[0, 1],
     ///     physical=[100, 101, 102],
-    ///     init_map={0: 101, 1: 100}  # Swap mapping
+    ///     init_map={0: 101, 1: 100}
     /// )
     /// ```
     #[new]
@@ -138,63 +160,101 @@ impl PyLayout {
         physical: PyIntListOrQubitList,
         init_map: Option<HashMap<PyQubit, PyQubit>>,
     ) -> PyResult<Self> {
-        let logical = <PyIntListOrQubitList as Into<Vec<Qubit>>>::into(logical)
+        let logical: Vec<LogicalQubit> = <PyIntListOrQubitList as Into<Vec<Qubit>>>::into(logical)
             .into_iter()
+            .map(LogicalQubit::from_qubit)
             .collect();
-        let physical = <PyIntListOrQubitList as Into<Vec<Qubit>>>::into(physical)
-            .into_iter()
-            .collect();
-        let init_map = init_map
-            .map(|m| {
-                m.into_iter()
-                    .map(|(v, p)| Ok((v.inner, p.inner)))
-                    .collect::<PyResult<HashMap<_, _>>>()
-            })
-            .transpose()?;
+        let physical: Vec<PhysicalQubit> =
+            <PyIntListOrQubitList as Into<Vec<Qubit>>>::into(physical)
+                .into_iter()
+                .map(PhysicalQubit::from_qubit)
+                .collect();
+        let init_map = init_map.map(|m| {
+            m.into_iter()
+                .map(|(l, p)| {
+                    (
+                        LogicalQubit::from_qubit(l.inner),
+                        PhysicalQubit::from_qubit(p.inner),
+                    )
+                })
+                .collect()
+        });
 
         let inner = Layout::new(logical, physical, init_map)
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
         Ok(Self { inner })
     }
 
-    /// Returns the number of logical qubits.
+    /// Creates a layout from `(logical, physical)` qubit ID pairs.
+    ///
+    /// Logical qubits are exactly the logical IDs that appear in
+    /// `pairs`. Physical qubits are `0..physical_count`; any physical
+    /// qubit not referenced by a pair remains vacant.
+    ///
+    /// # Arguments
+    ///
+    /// * `pairs`: List of `(logical_id, physical_id)` pairs.
+    /// * `physical_count`: Total number of physical qubits (0-indexed).
+    ///
+    /// # Errors
+    ///
+    /// Raises `ValueError` if a logical ID appears more than once, a
+    /// physical ID appears more than once, or any physical ID is outside
+    /// `0..physical_count`.
+    ///
+    /// # Example
+    ///
+    /// ```python
+    /// from cqlib.device import Layout
+    ///
+    /// layout = Layout.from_pairs([(0, 2), (1, 0)], physical_count=4)
+    /// # Logical 0 maps to physical 2, logical 1 maps to physical 0
+    /// # Physical qubits 1 and 3 are vacant
+    /// ```
+    #[staticmethod]
+    fn from_pairs(pairs: Vec<(u32, u32)>, physical_count: u32) -> PyResult<Self> {
+        let inner = Layout::from_pairs(&pairs, physical_count)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        Ok(Self { inner })
+    }
+
+    /// Returns the number of mapped logical qubits.
     #[getter]
     fn num_logical(&self) -> usize {
         self.inner.num_logical()
     }
 
-    /// Returns the number of ancilla qubits.
-    ///
-    /// Ancilla qubits are automatically generated to fill unused physical qubits
-    /// when `len(logical) < len(physical)`.
-    #[getter]
-    fn num_ancilla(&self) -> usize {
-        self.inner.num_ancilla()
-    }
-
-    /// Returns the number of physical qubits.
+    /// Returns the number of physical qubits available to the layout.
     #[getter]
     fn num_physical(&self) -> usize {
         self.inner.num_physical()
     }
 
-    /// Returns the physical qubit mapped to a virtual qubit.
+    /// Returns the number of physical qubits not currently carrying a
+    /// logical qubit.
+    #[getter]
+    fn num_vacant_physical(&self) -> usize {
+        self.inner.num_vacant_physical()
+    }
+
+    /// Returns the physical qubit mapped to a logical qubit.
     ///
     /// # Arguments
     ///
-    /// * `virtual_id`: The logical qubit identifier.
+    /// * `logical_id`: The logical qubit identifier.
     ///
     /// # Returns
     ///
-    /// `Qubit` if the logical qubit is mapped, `None` otherwise.
-    fn get_physical(&self, virtual_id: PyIntOrQubit) -> PyResult<Option<PyQubit>> {
+    /// The mapped physical qubit, or `None` if the logical qubit is not
+    /// bound.
+    fn get_physical(&self, logical_id: PyIntOrQubit) -> PyResult<Option<PyQubit>> {
         Ok(self
             .inner
-            .get_physical(virtual_id.into())
-            .map(PyQubit::from))
+            .get_physical(LogicalQubit::from_qubit(logical_id.into()))
+            .map(|pq| PyQubit { inner: pq.qubit() }))
     }
 
-    /// Returns the virtual qubit mapped to a physical qubit.
+    /// Returns the logical qubit carried by a physical qubit.
     ///
     /// # Arguments
     ///
@@ -202,64 +262,138 @@ impl PyLayout {
     ///
     /// # Returns
     ///
-    /// `Qubit` if a virtual qubit is mapped to this physical qubit, `None` otherwise
-    /// (e.g., if it's an unmapped ancilla).
-    fn get_virtual(&self, physical_id: PyIntOrQubit) -> PyResult<Option<PyQubit>> {
+    /// The logical qubit mapped to this physical qubit, or `None` if the
+    /// physical qubit is vacant.
+    fn get_logical(&self, physical_id: PyIntOrQubit) -> PyResult<Option<PyQubit>> {
         Ok(self
             .inner
-            .get_virtual(physical_id.into())
-            .map(PyQubit::from))
+            .get_logical(PhysicalQubit::from_qubit(physical_id.into()))
+            .map(|lq| PyQubit { inner: lq.qubit() }))
     }
 
-    /// Returns all logical qubits in the layout.
+    /// Returns all mapped logical qubits.
     #[getter]
     fn logical_qubits(&self) -> Vec<PyQubit> {
-        self.inner.logical_qubits().map(PyQubit::from).collect()
+        self.inner
+            .logical_qubits()
+            .map(|lq| PyQubit { inner: lq.qubit() })
+            .collect()
     }
 
-    /// Returns all ancilla qubits in the layout.
-    #[getter]
-    fn ancilla_qubits(&self) -> Vec<PyQubit> {
-        self.inner.ancilla_qubits().map(PyQubit::from).collect()
-    }
-
-    /// Returns all physical qubits in the layout.
+    /// Returns all physical qubits available to the layout.
     #[getter]
     fn physical_qubits(&self) -> Vec<PyQubit> {
-        self.inner.physical_qubits().map(PyQubit::from).collect()
-    }
-
-    /// Returns the virtual-to-physical qubit mapping.
-    ///
-    /// Returns a dictionary mapping each virtual qubit (including ancillas)
-    /// to its assigned physical qubit.
-    #[getter]
-    fn v2p_map(&self) -> HashMap<PyQubit, PyQubit> {
         self.inner
-            .v2p_map()
-            .iter()
-            .map(|(k, v)| (PyQubit::from(*k), PyQubit::from(*v)))
+            .physical_qubits()
+            .map(|pq| PyQubit { inner: pq.qubit() })
             .collect()
     }
 
-    /// Returns the physical-to-virtual qubit mapping.
+    /// Returns all vacant physical qubits.
     ///
-    /// Returns a dictionary mapping each physical qubit to its assigned
-    /// virtual qubit (if any). Unmapped physical qubits are not included.
+    /// Vacant physical qubits are physical positions not currently
+    /// carrying a logical qubit.
     #[getter]
-    fn p2v_map(&self) -> HashMap<PyQubit, PyQubit> {
+    fn vacant_physical_qubits(&self) -> Vec<PyQubit> {
         self.inner
-            .p2v_map()
-            .iter()
-            .map(|(k, v)| (PyQubit::from(*k), PyQubit::from(*v)))
+            .vacant_physical_qubits()
+            .map(|pq| PyQubit { inner: pq.qubit() })
             .collect()
     }
 
-    /// Swaps the virtual qubits mapped to two physical qubits.
+    /// Returns whether a physical qubit belongs to the layout and is
+    /// vacant.
     ///
-    /// This is the core operation used by routing algorithms (e.g., SABRE) when
-    /// inserting SWAP gates. After a SWAP gate is applied on the hardware,
-    /// the virtual qubits on those physical qubits are exchanged.
+    /// # Arguments
+    ///
+    /// * `physical_id`: The physical qubit to check.
+    fn is_physical_vacant(&self, physical_id: PyIntOrQubit) -> bool {
+        self.inner
+            .is_physical_vacant(PhysicalQubit::from_qubit(physical_id.into()))
+    }
+
+    /// Returns the logical-to-physical qubit mapping.
+    ///
+    /// Maps each logical qubit to its assigned physical qubit.
+    #[getter]
+    fn l2p_map(&self) -> HashMap<PyQubit, PyQubit> {
+        self.inner
+            .l2p_map()
+            .iter()
+            .map(|(l, p)| (PyQubit { inner: l.qubit() }, PyQubit { inner: p.qubit() }))
+            .collect()
+    }
+
+    /// Returns the physical-to-logical qubit mapping.
+    ///
+    /// Maps each physical qubit to its assigned logical qubit (if any).
+    /// Vacant physical qubits are not included.
+    #[getter]
+    fn p2l_map(&self) -> HashMap<PyQubit, PyQubit> {
+        self.inner
+            .p2l_map()
+            .iter()
+            .map(|(p, l)| (PyQubit { inner: p.qubit() }, PyQubit { inner: l.qubit() }))
+            .collect()
+    }
+
+    /// Binds an unmapped logical qubit to a vacant physical qubit.
+    ///
+    /// This operation may introduce a new logical qubit to the layout.
+    /// The caller must ensure the logical qubit is registered with the
+    /// compiler resource manager when required.
+    ///
+    /// # Arguments
+    ///
+    /// * `logical_id`: The logical qubit to bind.
+    /// * `physical_id`: The vacant physical qubit to bind it to.
+    ///
+    /// # Errors
+    ///
+    /// Raises `ValueError` if the physical qubit does not belong to the
+    /// layout, or if either qubit already participates in a mapping.
+    fn bind(&mut self, logical_id: PyIntOrQubit, physical_id: PyIntOrQubit) -> PyResult<()> {
+        self.inner
+            .bind(
+                LogicalQubit::from_qubit(logical_id.into()),
+                PhysicalQubit::from_qubit(physical_id.into()),
+            )
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    /// Removes the mapping for a logical qubit and returns the released
+    /// physical qubit.
+    ///
+    /// # Arguments
+    ///
+    /// * `logical_id`: The logical qubit to unbind.
+    ///
+    /// # Returns
+    ///
+    /// The physical qubit that was released.
+    ///
+    /// # Errors
+    ///
+    /// Raises `ValueError` if the logical qubit is not bound.
+    fn unbind(&mut self, logical_id: PyIntOrQubit) -> PyResult<PyQubit> {
+        let physical = self
+            .inner
+            .unbind(LogicalQubit::from_qubit(logical_id.into()))
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        Ok(PyQubit {
+            inner: physical.qubit(),
+        })
+    }
+
+    /// Swaps the logical qubits carried by two physical qubits.
+    ///
+    /// This is the core operation used by routing algorithms (e.g., SABRE)
+    /// when inserting SWAP gates. After a SWAP gate is applied on the
+    /// hardware, the logical qubits on those physical positions are
+    /// exchanged.
+    ///
+    /// Either physical qubit may be vacant. Swapping an occupied qubit
+    /// with a vacant qubit moves the logical qubit to the vacant position.
     ///
     /// # Arguments
     ///
@@ -268,7 +402,8 @@ impl PyLayout {
     ///
     /// # Errors
     ///
-    /// Raises `ValueError` if either physical qubit is not in the layout.
+    /// Raises `ValueError` if either physical qubit does not belong to
+    /// the layout.
     ///
     /// # Example
     ///
@@ -288,18 +423,31 @@ impl PyLayout {
     /// assert phys_before != phys_after
     /// ```
     fn swap_physical(&mut self, phys_a: PyIntOrQubit, phys_b: PyIntOrQubit) -> PyResult<()> {
-        let phys_a = phys_a.into();
-        let phys_b = phys_b.into();
         self.inner
-            .swap_physical(phys_a, phys_b)
+            .swap_physical(
+                PhysicalQubit::from_qubit(phys_a.into()),
+                PhysicalQubit::from_qubit(phys_b.into()),
+            )
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
+    fn __copy__(&self) -> Self {
+        self.clone()
+    }
+
+    fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> Self {
+        self.clone()
+    }
+
+    /// Returns a string representation for debugging.
+    ///
+    /// Example: `Layout(num_logical=2, num_vacant_physical=1,
+    /// num_physical=3)`
     fn __repr__(&self) -> String {
         format!(
-            "Layout(num_logical={}, num_ancilla={}, num_physical={})",
+            "Layout(num_logical={}, num_vacant_physical={}, num_physical={})",
             self.num_logical(),
-            self.num_ancilla(),
+            self.num_vacant_physical(),
             self.num_physical()
         )
     }

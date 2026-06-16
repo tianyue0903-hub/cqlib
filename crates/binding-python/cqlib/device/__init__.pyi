@@ -11,15 +11,44 @@
 # that they have been altered from the originals.
 
 """
-Python bindings for the quantum device module.
+Quantum device characterization for noise-aware compilation.
 
-This module provides Python access to quantum hardware characterization data,
-including device topology, qubit properties, noise models, and execution results.
+This subpackage provides:
+
+- **Device modeling**: :class:`Device`, :class:`Topology`, :class:`Layout`
+- **Qubit properties**: :class:`QubitProp`, :class:`InstructionProp`,
+  :class:`EdgeProp`
+- **Qubit identifiers**: :class:`LogicalQubit`, :class:`PhysicalQubit`
+- **Noise models**: :class:`NoiseModel`, :class:`SingleQubitNoise`,
+  :class:`TwoQubitNoise`, :class:`ReadoutError`, :class:`OperationKey`
+- **Execution results**: :class:`Outcome`, :class:`Status`,
+  :class:`ExecutionResult`
+
+Key Usage — device construction::
+
+    >>> from cqlib.device import Device, Topology, QubitProp
+    >>>
+    >>> # Quick line topology
+    >>> dev = Device.line("my_device", num_qubits=5)
+    >>>
+    >>> # Or explicit construction
+    >>> topo = Topology([0, 1, 2], [(0, 1, "CX"), (1, 2, "CX")])
+    >>> dev = Device("my_device", [0, 1, 2], topo)
+    >>> dev.default_t1 = 100.0
+    >>> dev.default_t2 = 50.0
+
+Key Usage — layout and routing::
+
+    >>> from cqlib.device import Layout
+    >>>
+    >>> layout = Layout([0, 1], [100, 101, 102])
+    >>> layout.swap_physical(100, 101)  # SWAP routing step
 """
 
 from .device_impl import InstructionProp, QubitProp, EdgeProp, Device
 from .topology import Topology
 from .layout import Layout
+from .qubit import LogicalQubit, PhysicalQubit
 from .noise import (
     SingleQubitNoise,
     TwoQubitNoise,
@@ -36,6 +65,8 @@ __all__ = [
     "EdgeProp",
     "Device",
     "Layout",
+    "LogicalQubit",
+    "PhysicalQubit",
     "SingleQubitNoise",
     "TwoQubitNoise",
     "ReadoutError",

@@ -49,6 +49,7 @@ use crate::circuit::error::CircuitError;
 use crate::circuit::gate::instruction::Instruction;
 use crate::circuit::operation::{Operation, ValueOperation};
 use alloc::collections::BTreeSet;
+use std::fmt;
 
 /// A value-level control-flow body.
 ///
@@ -284,6 +285,19 @@ impl ValueClassicalControlOp {
     }
 }
 
+impl fmt::Display for ValueClassicalControlOp {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::If { .. } => write!(f, "if"),
+            Self::While { .. } => write!(f, "while"),
+            Self::For { .. } => write!(f, "for"),
+            Self::Switch { .. } => write!(f, "switch"),
+            Self::Break => write!(f, "break"),
+            Self::Continue => write!(f, "continue"),
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // ValueInstruction
 // ---------------------------------------------------------------------------
@@ -377,6 +391,15 @@ impl From<Instruction> for ValueInstruction {
 impl From<ValueClassicalControlOp> for ValueInstruction {
     fn from(op: ValueClassicalControlOp) -> Self {
         Self::ClassicalControl(op)
+    }
+}
+
+impl fmt::Display for ValueInstruction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Instruction(inst) => write!(f, "{}", inst),
+            Self::ClassicalControl(vcc) => write!(f, "{}", vcc),
+        }
     }
 }
 

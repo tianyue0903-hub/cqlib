@@ -32,7 +32,7 @@
 //! device = Device("superconducting_qpu", [0, 1, 2], topology)
 //!
 //! # Set calibration timestamp
-//! device.calibration_time = datetime.now(timezone.utc)
+//! device.set_calibration_time(datetime.now(timezone.utc))
 //!
 //! # Set default coherence times
 //! device.default_t1 = 100.0
@@ -47,8 +47,9 @@
 use crate::circuit::bit::{PyIntListOrQubitList, PyIntOrQubit};
 use crate::circuit::{PyInstruction, PyQubit};
 use crate::device::topology::PyTopology;
+use chrono::{DateTime, TimeZone, Utc};
 use cqlib_core::circuit::Qubit;
-use cqlib_core::device::{Device, EdgeProp, InstructionProp, QubitProp};
+use cqlib_core::device::{Device, EdgeProp, InstructionProp, PhysicalQubit, QubitProp};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use time::OffsetDateTime;
@@ -124,6 +125,14 @@ impl PyInstructionProp {
     #[getter]
     fn length(&self) -> Option<f64> {
         self.inner.length()
+    }
+
+    fn __copy__(&self) -> Self {
+        self.clone()
+    }
+
+    fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> Self {
+        self.clone()
     }
 
     fn __repr__(&self) -> String {
@@ -218,8 +227,10 @@ impl PyQubitProp {
         self.inner.set_frequency(frequency);
     }
 
-    #[setter]
-    fn set_native_instruction(&mut self, prop: PyInstructionProp) {
+    /// Adds a native instruction property to this qubit.
+    ///
+    /// Appends to the existing list of native instructions.
+    fn add_native_instruction(&mut self, prop: PyInstructionProp) {
         self.inner.set_native_instruction(prop.inner);
     }
 
@@ -263,6 +274,14 @@ impl PyQubitProp {
             .collect()
     }
 
+    fn __copy__(&self) -> Self {
+        self.clone()
+    }
+
+    fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> Self {
+        self.clone()
+    }
+
     fn __repr__(&self) -> String {
         format!(
             "QubitProp(readout_error={}, t1={:?}, t2={:?}, frequency={:?}, native_instructions={})",
@@ -302,8 +321,10 @@ impl PyEdgeProp {
         }
     }
 
-    #[setter]
-    fn set_native_instruction(&mut self, prop: PyInstructionProp) {
+    /// Adds a native instruction property to this edge.
+    ///
+    /// Appends to the existing list of native instructions.
+    fn add_native_instruction(&mut self, prop: PyInstructionProp) {
         self.inner.set_native_instruction(prop.inner);
     }
 
@@ -315,6 +336,14 @@ impl PyEdgeProp {
             .cloned()
             .map(PyInstructionProp::from)
             .collect()
+    }
+
+    fn __copy__(&self) -> Self {
+        self.clone()
+    }
+
+    fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> Self {
+        self.clone()
     }
 
     fn __repr__(&self) -> String {
@@ -379,14 +408,13 @@ impl From<PyDevice> for Device {
 impl PyDevice {
     #[new]
     fn new(name: String, qubits: PyIntListOrQubitList, topology: PyTopology) -> PyResult<Self> {
-        let inner = Device::new(
-            name,
+        let qubits: std::collections::HashSet<PhysicalQubit> =
             <PyIntListOrQubitList as Into<Vec<Qubit>>>::into(qubits)
                 .into_iter()
-                .collect(),
-            topology.inner,
-        )
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+                .map(PhysicalQubit::from_qubit)
+                .collect();
+        let inner = Device::new(name, qubits, topology.inner)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
         Ok(Self { inner })
     }
 
@@ -421,24 +449,31 @@ impl PyDevice {
         self.inner.set_default_two_qubit_error(error)
     }
 
-    #[setter]
-    fn set_calibration_time(&mut self, datetime: chrono::DateTime<chrono::Utc>) {
-        let timestamp = datetime.timestamp();
-        let time = OffsetDateTime::from_unix_timestamp(timestamp)
-            .unwrap_or_else(|_| OffsetDateTime::now_utc());
+    /// Sets the calibration timestamp with nanosecond precision.
+    fn set_calibration_time(&mut self, datetime: DateTime<Utc>) -> PyResult<()> {
+        let secs = datetime.timestamp();
+        let subsec_nanos = datetime.timestamp_subsec_nanos();
+        let total_nanos = secs as i128 * 1_000_000_000 + subsec_nanos as i128;
+        let time = OffsetDateTime::from_unix_timestamp_nanos(total_nanos)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
         self.inner.set_calibration_time(time);
+        Ok(())
     }
 
+    /// Returns the calibration timestamp with nanosecond precision.
     #[getter]
-    fn calibration_time(&self) -> Option<chrono::DateTime<chrono::Utc>> {
-        self.inner.calibration_time().map(|t| {
-            chrono::DateTime::from_timestamp(t.unix_timestamp(), 0).unwrap_or_else(chrono::Utc::now)
+    fn calibration_time(&self) -> Option<DateTime<Utc>> {
+        self.inner.calibration_time().and_then(|t| {
+            let nanos = t.unix_timestamp_nanos();
+            let secs = (nanos / 1_000_000_000) as i64;
+            let nsecs = (nanos % 1_000_000_000) as u32;
+            Utc.timestamp_opt(secs, nsecs).single()
         })
     }
 
     fn add_qubit_properties(&mut self, qubit: PyIntOrQubit, props: PyQubitProp) -> PyResult<()> {
         self.inner
-            .add_qubit_properties(qubit.into(), props.inner)
+            .add_qubit_properties(PhysicalQubit::from_qubit(qubit.into()), props.inner)
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
@@ -449,7 +484,11 @@ impl PyDevice {
         props: PyEdgeProp,
     ) -> PyResult<()> {
         self.inner
-            .add_edge_properties(control.into(), target.into(), props.inner)
+            .add_edge_properties(
+                PhysicalQubit::from_qubit(control.into()),
+                PhysicalQubit::from_qubit(target.into()),
+                props.inner,
+            )
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
@@ -460,21 +499,30 @@ impl PyDevice {
 
     #[getter]
     fn qubits(&self) -> Vec<PyQubit> {
-        self.inner.qubits().map(PyQubit::from).collect()
+        self.inner
+            .qubits()
+            .map(|pq| PyQubit { inner: pq.qubit() })
+            .collect()
     }
 
     #[getter]
     fn invalid_qubits(&self) -> Vec<PyQubit> {
-        self.inner.invalid_qubits().map(PyQubit::from).collect()
+        self.inner
+            .invalid_qubits()
+            .map(|pq| PyQubit { inner: pq.qubit() })
+            .collect()
     }
 
     #[setter]
-    fn set_invalid_qubits(&mut self, qubits: PyIntListOrQubitList) {
+    fn set_invalid_qubits(&mut self, qubits: PyIntListOrQubitList) -> PyResult<()> {
         let qubits: std::collections::HashSet<_> =
             <PyIntListOrQubitList as Into<Vec<Qubit>>>::into(qubits)
                 .into_iter()
+                .map(PhysicalQubit::from_qubit)
                 .collect();
-        self.inner.set_invalid_qubits(qubits);
+        self.inner
+            .set_invalid_qubits(qubits)
+            .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
     #[getter]
@@ -497,7 +545,7 @@ impl PyDevice {
     fn qubit_properties(&self, qubit: PyIntOrQubit) -> PyResult<Option<PyQubitProp>> {
         Ok(self
             .inner
-            .qubit_properties(qubit.into())
+            .qubit_properties(PhysicalQubit::from_qubit(qubit.into()))
             .cloned()
             .map(PyQubitProp::from))
     }
@@ -509,21 +557,26 @@ impl PyDevice {
     ) -> PyResult<Option<PyEdgeProp>> {
         Ok(self
             .inner
-            .edge_properties(control.into(), target.into())
+            .edge_properties(
+                PhysicalQubit::from_qubit(control.into()),
+                PhysicalQubit::from_qubit(target.into()),
+            )
             .cloned()
             .map(PyEdgeProp::from))
     }
 
     fn get_t1(&self, qubit: PyIntOrQubit) -> PyResult<Option<f64>> {
-        Ok(self.inner.get_t1(qubit.into()))
+        Ok(self.inner.get_t1(PhysicalQubit::from_qubit(qubit.into())))
     }
 
     fn get_t2(&self, qubit: PyIntOrQubit) -> PyResult<Option<f64>> {
-        Ok(self.inner.get_t2(qubit.into()))
+        Ok(self.inner.get_t2(PhysicalQubit::from_qubit(qubit.into())))
     }
 
     fn get_readout_error(&self, qubit: PyIntOrQubit) -> PyResult<Option<f64>> {
-        Ok(self.inner.get_readout_error(qubit.into()))
+        Ok(self
+            .inner
+            .get_readout_error(PhysicalQubit::from_qubit(qubit.into())))
     }
 
     #[getter]
@@ -534,6 +587,271 @@ impl PyDevice {
     #[getter]
     fn default_two_qubit_error(&self) -> Option<f64> {
         self.inner.default_two_qubit_error()
+    }
+
+    // ---------------------------------------------------------------------
+    // Factory constructors -- create devices with common topologies
+    // ---------------------------------------------------------------------
+
+    /// Creates a device with qubits connected as a directed line.
+    ///
+    /// The device contains physical qubits `0..num_qubits`, all online.
+    /// Couplings are directed: `q[i] -> q[i+1]`.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - The device name.
+    /// * `num_qubits` - Number of qubits in the line.
+    ///
+    /// # Returns
+    ///
+    /// A new `Device` with a directed line topology.
+    ///
+    /// # Errors
+    ///
+    /// Raises `ValueError` if topology construction fails.
+    #[staticmethod]
+    pub fn line(name: String, num_qubits: u32) -> PyResult<Self> {
+        let inner =
+            Device::line(name, num_qubits).map_err(|e| PyValueError::new_err(e.to_string()))?;
+        Ok(Self { inner })
+    }
+
+    /// Creates a device with the supplied qubits connected as a directed
+    /// line.
+    ///
+    /// Couplings follow the supplied order: `qubits[i] -> qubits[i+1]`.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - The device name.
+    /// * `physical_qubits` - List of qubit IDs in line order.
+    ///
+    /// # Returns
+    ///
+    /// A new `Device` with a directed line topology following the given
+    /// qubit order.
+    #[staticmethod]
+    pub fn line_from_qubits(name: String, physical_qubits: PyIntListOrQubitList) -> PyResult<Self> {
+        let qubits = <PyIntListOrQubitList as Into<Vec<Qubit>>>::into(physical_qubits)
+            .into_iter()
+            .map(PhysicalQubit::from_qubit)
+            .collect::<Vec<_>>();
+        let inner = Device::line_from_qubits(name, qubits)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        Ok(Self { inner })
+    }
+
+    /// Creates a device with qubits connected as a bidirectional line.
+    ///
+    /// The device contains physical qubits `0..num_qubits`, all online.
+    /// Adjacent qubits are connected in both directions.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - The device name.
+    /// * `num_qubits` - Number of qubits.
+    #[staticmethod]
+    pub fn bidirectional_line(name: String, num_qubits: u32) -> PyResult<Self> {
+        let inner = Device::bidirectional_line(name, num_qubits)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        Ok(Self { inner })
+    }
+
+    /// Creates a device with qubits connected as a bidirectional ring.
+    ///
+    /// The device contains physical qubits `0..num_qubits`, all online.
+    /// For two or more qubits, each qubit is connected to its successor
+    /// (modulo `num_qubits`) in both directions.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - The device name.
+    /// * `num_qubits` - Number of qubits (minimum 2 for a non-trivial
+    ///   ring).
+    #[staticmethod]
+    pub fn ring(name: String, num_qubits: u32) -> PyResult<Self> {
+        let inner =
+            Device::ring(name, num_qubits).map_err(|e| PyValueError::new_err(e.to_string()))?;
+        Ok(Self { inner })
+    }
+
+    /// Creates a device with qubits connected as a bidirectional star.
+    ///
+    /// The device contains physical qubits `0..num_qubits`, all online.
+    /// Every non-center qubit is connected to the center qubit in both
+    /// directions.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - The device name.
+    /// * `num_qubits` - Total number of qubits.
+    /// * `center` - The center qubit ID (must be `< num_qubits`).
+    #[staticmethod]
+    pub fn star(name: String, num_qubits: u32, center: u32) -> PyResult<Self> {
+        let inner = Device::star(name, num_qubits, center)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        Ok(Self { inner })
+    }
+
+    /// Creates a device with qubits connected as a bidirectional grid.
+    ///
+    /// Qubit IDs are assigned in row-major order. Horizontal and vertical
+    /// nearest-neighbor couplings are added in both directions.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - The device name.
+    /// * `rows` - Number of rows in the grid.
+    /// * `cols` - Number of columns in the grid.
+    #[staticmethod]
+    pub fn grid(name: String, rows: u32, cols: u32) -> PyResult<Self> {
+        let inner =
+            Device::grid(name, rows, cols).map_err(|e| PyValueError::new_err(e.to_string()))?;
+        Ok(Self { inner })
+    }
+
+    /// Creates a device with explicit directed edges.
+    ///
+    /// The device contains physical qubits `0..num_qubits`, all online.
+    /// Each `(control, target)` pair in `edges` becomes one directed
+    /// coupling.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - The device name.
+    /// * `num_qubits` - Number of physical qubits.
+    /// * `edges` - List of `(control, target)` pairs defining directed
+    ///   couplings.
+    #[staticmethod]
+    pub fn from_edges(name: String, num_qubits: u32, edges: Vec<(u32, u32)>) -> PyResult<Self> {
+        let inner = Device::from_edges(name, num_qubits, &edges)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        Ok(Self { inner })
+    }
+
+    // ---------------------------------------------------------------------
+    // Per-qubit / per-edge error rate queries
+    // ---------------------------------------------------------------------
+
+    /// Returns the error rate for a given instruction on a single qubit.
+    ///
+    /// Falls back to the per-qubit native instruction error if available,
+    /// otherwise to the default single-qubit error rate.
+    ///
+    /// # Arguments
+    ///
+    /// * `qubit` - The qubit to query.
+    /// * `instruction` - The instruction whose error rate is requested.
+    ///
+    /// # Returns
+    ///
+    /// The error rate as `float`, or `None` if the qubit is unusable.
+    pub fn single_qubit_error(
+        &self,
+        qubit: PyIntOrQubit,
+        instruction: PyInstruction,
+    ) -> Option<f64> {
+        self.inner
+            .single_qubit_error(PhysicalQubit::from_qubit(qubit.into()), &instruction.inner)
+    }
+
+    /// Returns the error rate for a given instruction on a directed
+    /// coupling.
+    ///
+    /// Falls back to the per-edge native instruction error if available,
+    /// otherwise to the default two-qubit error rate.
+    ///
+    /// # Arguments
+    ///
+    /// * `control` - The source qubit of the coupling.
+    /// * `target` - The destination qubit of the coupling.
+    /// * `instruction` - The instruction whose error rate is requested.
+    ///
+    /// # Returns
+    ///
+    /// The error rate as `float`, or `None` if either qubit is unusable
+    /// or the coupling does not exist.
+    pub fn two_qubit_error(
+        &self,
+        control: PyIntOrQubit,
+        target: PyIntOrQubit,
+        instruction: PyInstruction,
+    ) -> Option<f64> {
+        self.inner.two_qubit_error(
+            PhysicalQubit::from_qubit(control.into()),
+            PhysicalQubit::from_qubit(target.into()),
+            &instruction.inner,
+        )
+    }
+    /// Returns the best available two-qubit error on a directed coupling.
+    ///
+    /// Scans all native instructions on the edge and returns the minimum
+    /// error rate. Useful for routing cost estimation.
+    ///
+    /// # Arguments
+    ///
+    /// * `control` - The source qubit.
+    /// * `target` - The destination qubit.
+    ///
+    /// # Returns
+    ///
+    /// The minimum error rate, or `None` if the coupling is unusable.
+    pub fn edge_error(&self, control: PyIntOrQubit, target: PyIntOrQubit) -> Option<f64> {
+        self.inner.edge_error(
+            PhysicalQubit::from_qubit(control.into()),
+            PhysicalQubit::from_qubit(target.into()),
+        )
+    }
+
+    // ---------------------------------------------------------------------
+    // Qubit usability queries
+    // ---------------------------------------------------------------------
+
+    /// Checks whether a physical qubit is registered and not marked
+    /// invalid.
+    ///
+    /// # Arguments
+    ///
+    /// * `qubit` - The qubit to check.
+    ///
+    /// # Returns
+    ///
+    /// `True` if the qubit is online and usable.
+    pub fn is_usable_qubit(&self, qubit: PyIntOrQubit) -> bool {
+        self.inner
+            .is_usable_qubit(PhysicalQubit::from_qubit(qubit.into()))
+    }
+
+    /// Returns a list of all usable physical qubits.
+    ///
+    /// Usable qubits are those registered with the device and not marked
+    /// as invalid (offline or faulty).
+    ///
+    /// # Returns
+    ///
+    /// A list of `Qubit` objects representing usable qubits.
+    #[getter]
+    pub fn usable_qubits(&self) -> Vec<PyQubit> {
+        self.inner
+            .usable_qubits()
+            .map(|pq| PyQubit { inner: pq.qubit() })
+            .collect()
+    }
+
+    /// Returns the number of usable (registered and not invalid) physical
+    /// qubits.
+    #[getter]
+    pub fn num_usable_qubits(&self) -> usize {
+        self.inner.num_usable_qubits()
+    }
+
+    fn __copy__(&self) -> Self {
+        self.clone()
+    }
+
+    fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> Self {
+        self.clone()
     }
 
     fn __repr__(&self) -> String {

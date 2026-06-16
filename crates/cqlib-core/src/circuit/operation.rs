@@ -39,6 +39,7 @@ use alloc::borrow::Cow;
 use ndarray::Array2;
 use num_complex::Complex64;
 use smallvec::{SmallVec, smallvec};
+use std::fmt;
 
 /// A circuit-local operation in the compact storage IR.
 ///
@@ -137,5 +138,28 @@ impl ValueOperation {
             params: params.into_iter().collect(),
             label: None,
         }
+    }
+}
+
+impl fmt::Display for ValueOperation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.instruction)?;
+        if !self.params.is_empty() {
+            write!(f, "(")?;
+            for (i, param) in self.params.iter().enumerate() {
+                if i > 0 {
+                    write!(f, ", ")?;
+                }
+                write!(f, "{}", crate::circuit::Parameter::from(param))?;
+            }
+            write!(f, ")")?;
+        }
+        for qubit in &self.qubits {
+            write!(f, " {}", qubit)?;
+        }
+        if let Some(ref label) = self.label {
+            write!(f, " [{}]", label)?;
+        }
+        Ok(())
     }
 }

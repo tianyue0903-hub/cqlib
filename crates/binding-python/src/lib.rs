@@ -13,7 +13,7 @@
 pub mod circuit;
 // TODO: Restore these modules in their own core API migration work.
 // pub mod compile;
-// pub mod device;
+pub mod device;
 pub mod ir;
 // pub mod qis;
 // pub mod visualization;
@@ -25,6 +25,7 @@ use pyo3::prelude::*;
 #[pyo3(name = "_native")]
 fn binding_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     circuit::register_circuit_module(m)?;
+    device::register_device_module(m)?;
     ir::register_ir_module(m)?;
 
     Ok(())
