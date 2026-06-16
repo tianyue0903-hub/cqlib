@@ -47,6 +47,17 @@ rule merge_rxx {
     }
 }
 
+rule merge_rxx_swapped {
+    match {
+        RXX(a) 0 1,
+        RXX(b) 1 0
+    }
+
+    rewrite {
+        RXX(a + b) 0 1
+    }
+}
+
 rule merge_ryy {
     match {
         RYY(a) 0 1,
@@ -58,10 +69,33 @@ rule merge_ryy {
     }
 }
 
+rule merge_ryy_swapped {
+    match {
+        RYY(a) 0 1,
+        RYY(b) 1 0
+    }
+
+    rewrite {
+        RYY(a + b) 0 1
+    }
+}
+
 rule merge_rzz {
     match {
         RZZ(a) 0 1,
         RZZ(b) 0 1
+    }
+
+    rewrite {
+        RZZ(a + b) 0 1
+    }
+}
+
+// RZZ(θ) is symmetric in wire order; merge adjacent RZZ on 0-1 then 1-0.
+rule merge_rzz_swapped {
+    match {
+        RZZ(a) 0 1,
+        RZZ(b) 1 0
     }
 
     rewrite {
