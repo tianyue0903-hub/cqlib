@@ -171,6 +171,14 @@ impl PyOutcome {
         hasher.finish()
     }
 
+    fn __copy__(&self) -> Self {
+        self.clone()
+    }
+
+    fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> Self {
+        self.clone()
+    }
+
     fn __repr__(&self) -> String {
         format!("Outcome(chunks={:?})", self.chunks())
     }
@@ -309,6 +317,14 @@ impl PyStatus {
     /// Returns True if the job completed successfully.
     fn is_success(&self) -> bool {
         self.inner.is_success()
+    }
+
+    fn __copy__(&self) -> Self {
+        self.clone()
+    }
+
+    fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> Self {
+        self.clone()
     }
 
     fn __repr__(&self) -> String {
@@ -522,6 +538,14 @@ impl PyExecutionResult {
             .probabilities()
             .as_ref()
             .map(|probs| probabilities_to_bitstring_map(probs, self.num_qubits()))
+    }
+
+    fn __copy__(&self) -> Self {
+        self.clone()
+    }
+
+    fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> Self {
+        self.clone()
     }
 
     fn __repr__(&self) -> String {

@@ -11,30 +11,44 @@
 # that they have been altered from the originals.
 
 """
-Python bindings for the quantum device module.
+Quantum device characterization for noise-aware compilation.
 
-This module provides Python access to quantum hardware characterization data,
-including device topology, qubit properties, noise models, and execution results.
+This subpackage provides:
 
-# Example
+- **Device modeling**: Device, Topology, Layout
+- **Qubit properties**: QubitProp, InstructionProp, EdgeProp
+- **Qubit identifiers**: LogicalQubit, PhysicalQubit
+- **Noise models**: NoiseModel, SingleQubitNoise, TwoQubitNoise, ReadoutError, OperationKey
+- **Execution results**: Outcome, Status, ExecutionResult
 
-```python
-from cqlib.device import Device, Topology, QubitProp
-from datetime import datetime, timezone
+Key Usage — device construction::
 
-# Create a device topology
-topology = Topology([0, 1, 2], [(0, 1, "CX"), (1, 2, "CX")])
+    >>> from cqlib.device import Device, Topology, QubitProp
+    >>>
+    >>> # Quick line topology
+    >>> dev = Device.line("my_device", num_qubits=5)
+    >>>
+    >>> # Explicit construction
+    >>> topo = Topology([0, 1, 2], [(0, 1, "CX"), (1, 2, "CX")])
+    >>> dev = Device("my_device", [0, 1, 2], topo)
+    >>> dev.default_t1 = 100.0
+    >>> dev.default_t2 = 50.0
 
-# Initialize a device with calibration data
-device = Device("superconducting_qpu", [0, 1, 2], topology)
-device.calibration_time = datetime.now(timezone.utc)
+Key Usage — layout and routing::
 
-# Set qubit properties
-prop = QubitProp(readout_error=0.01)
-prop.t1 = 50.0  # microseconds
-prop.t2 = 25.0
-device.add_qubit_properties(0, prop)
-```
+    >>> from cqlib.device import Layout, LogicalQubit, PhysicalQubit
+    >>>
+    >>> layout = Layout([0, 1], [100, 101, 102])
+    >>> layout.swap_physical(100, 101)
+
+Key Usage — noise model::
+
+    >>> from cqlib.device import NoiseModel, SingleQubitNoise, ReadoutError
+    >>> from cqlib.circuit import StandardGate
+    >>>
+    >>> model = NoiseModel()
+    >>> model.add_readout_error(0, ReadoutError(0.02, 0.01))
+    >>> model.add_single_qubit_error(StandardGate.H, 0, SingleQubitNoise.depolarizing(0.001))
 """
 
 from .._native import device as _device_module
@@ -45,6 +59,8 @@ QubitProp = _device_module.QubitProp
 EdgeProp = _device_module.EdgeProp
 Device = _device_module.Device
 Layout = _device_module.Layout
+LogicalQubit = _device_module.LogicalQubit
+PhysicalQubit = _device_module.PhysicalQubit
 SingleQubitNoise = _device_module.SingleQubitNoise
 TwoQubitNoise = _device_module.TwoQubitNoise
 ReadoutError = _device_module.ReadoutError
@@ -61,6 +77,8 @@ __all__ = [
     "EdgeProp",
     "Device",
     "Layout",
+    "LogicalQubit",
+    "PhysicalQubit",
     "SingleQubitNoise",
     "TwoQubitNoise",
     "ReadoutError",

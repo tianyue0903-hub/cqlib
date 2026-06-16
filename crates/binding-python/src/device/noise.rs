@@ -50,12 +50,13 @@
 
 use crate::circuit::PyStandardGate;
 use crate::circuit::bit::PyIntOrQubit;
-use crate::qis::pauli::PyPauli;
+// TODO: Re-enable when qis module migration is complete.
+// use crate::qis::pauli::PyPauli;
 use cqlib_core::circuit::Parameter;
 use cqlib_core::device::{NoiseModel, OperationKey, ReadoutError, SingleQubitNoise, TwoQubitNoise};
 use num_complex::Complex64;
 use numpy::{PyArray2, ToPyArray};
-use pyo3::exceptions::PyValueError;
+use pyo3::exceptions::{PyNotImplementedError, PyValueError};
 use pyo3::prelude::*;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -232,6 +233,14 @@ impl PySingleQubitNoise {
             .collect()
     }
 
+    fn __copy__(&self) -> Self {
+        *self
+    }
+
+    fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> Self {
+        *self
+    }
+
     fn __repr__(&self) -> String {
         match self.inner {
             SingleQubitNoise::BitFlip(p) => format!("SingleQubitNoise.bit_flip({})", p),
@@ -330,22 +339,23 @@ impl PyTwoQubitNoise {
 
     /// Creates correlated Pauli noise.
     ///
-    /// With probability p, applies the specified Pauli operators to both qubits.
+    /// .. note::
+    ///     **Not yet available** — pending ``cqlib.qis.Pauli`` module migration.
     ///
     /// # Arguments
     ///
-    /// * `op_q0` - Pauli operator for first qubit (from `cqlib.qis.Pauli`)
+    /// * `op_q0` - Pauli operator for first qubit
     /// * `op_q1` - Pauli operator for second qubit
     /// * `p` - Correlation probability in range [0.0, 1.0]
     #[staticmethod]
-    fn correlated_pauli(op_q0: PyPauli, op_q1: PyPauli, p: f64) -> PyResult<Self> {
-        Ok(Self {
-            inner: TwoQubitNoise::CorrelatedPauli {
-                op_q0: op_q0.inner,
-                op_q1: op_q1.inner,
-                p,
-            },
-        })
+    fn correlated_pauli(
+        _op_q0: &Bound<'_, PyAny>,
+        _op_q1: &Bound<'_, PyAny>,
+        _p: f64,
+    ) -> PyResult<Self> {
+        Err(PyNotImplementedError::new_err(
+            "correlated_pauli is not yet available — pending cqlib.qis.Pauli module migration",
+        ))
     }
 
     /// Validates that noise parameters are physically valid.
@@ -375,6 +385,14 @@ impl PyTwoQubitNoise {
             TwoQubitNoise::Independent { .. } => "independent",
             TwoQubitNoise::CorrelatedPauli { .. } => "correlated_pauli",
         }
+    }
+
+    fn __copy__(&self) -> Self {
+        *self
+    }
+
+    fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> Self {
+        *self
     }
 
     fn __repr__(&self) -> String {
@@ -474,6 +492,14 @@ impl PyReadoutError {
     /// Returns `True` if both probabilities are in [0.0, 1.0].
     fn is_valid(&self) -> bool {
         self.inner.is_valid()
+    }
+
+    fn __copy__(&self) -> Self {
+        *self
+    }
+
+    fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> Self {
+        *self
     }
 
     fn __repr__(&self) -> String {
@@ -619,6 +645,14 @@ impl PyOperationKey {
         let mut hasher = DefaultHasher::new();
         self.inner.hash(&mut hasher);
         hasher.finish()
+    }
+
+    fn __copy__(&self) -> Self {
+        self.clone()
+    }
+
+    fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> Self {
+        self.clone()
     }
 
     fn __repr__(&self) -> String {
@@ -777,6 +811,14 @@ impl PyNoiseModel {
             .get_two_qubit_errors(&key.inner)
             .cloned()
             .map(|v| v.into_iter().map(PyTwoQubitNoise::from).collect())
+    }
+
+    fn __copy__(&self) -> Self {
+        self.clone()
+    }
+
+    fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> Self {
+        self.clone()
     }
 
     fn __repr__(&self) -> String {

@@ -19,7 +19,8 @@
 //!
 //! - [`device_impl`]: Device definitions and hardware properties ([`PyDevice`], [`PyQubitProp`], etc.)
 //! - [`topology`]: Qubit connectivity graphs ([`PyTopology`])
-//! - [`layout`]: Virtual-to-physical qubit mappings ([`PyLayout`])
+//! - [`layout`]: Logical-to-physical qubit mappings ([`PyLayout`])
+//! - [`qubit`]: Strongly typed qubit identifiers ([`PyLogicalQubit`], [`PyPhysicalQubit`])
 //! - [`noise`]: Noise models for quantum operations ([`PyNoiseModel`], [`PySingleQubitNoise`], etc.)
 //! - [`result`]: Execution results and measurement outcomes ([`PyExecutionResult`], [`PyOutcome`])
 //!
@@ -33,7 +34,7 @@
 //!
 //! # Initialize a device with calibration data
 //! device = Device("superconducting_qpu", [0, 1, 2], topology)
-//! device.calibration_time = datetime.now(timezone.utc)
+//! device.set_calibration_time(datetime.now(timezone.utc))
 //!
 //! # Set qubit properties
 //! prop = QubitProp(readout_error=0.01)
@@ -47,17 +48,20 @@ use pyo3::prelude::*;
 pub mod device_impl;
 pub mod layout;
 pub mod noise;
+pub mod qubit;
 pub mod result;
 pub mod topology;
 
 /// Registers all device-related classes with the Python module.
 ///
 /// This function adds the following classes to the `cqlib.device` submodule:
+/// - [`PyLogicalQubit`]: Logical qubit identifier for circuit wires
+/// - [`PyPhysicalQubit`]: Physical qubit identifier for hardware positions
 /// - [`PyInstructionProp`]: Gate calibration data (error rates, duration)
 /// - [`PyQubitProp`]: Single-qubit properties (T1, T2, readout error)
 /// - [`PyEdgeProp`]: Coupling edge properties
 /// - [`PyDevice`]: Complete device characterization
-/// - [`PyLayout`]: Virtual-to-physical qubit mapping
+/// - [`PyLayout`]: Logical-to-physical qubit mapping
 /// - [`PyTopology`]: Qubit connectivity graph
 /// - [`PySingleQubitNoise`]: Single-qubit noise channels
 /// - [`PyTwoQubitNoise`]: Two-qubit noise channels
@@ -86,6 +90,10 @@ pub mod topology;
 /// ```
 pub fn register_device_module(parent: &Bound<'_, PyModule>) -> PyResult<()> {
     let device_module = PyModule::new(parent.py(), "device")?;
+
+    // Strongly typed qubit identifiers
+    device_module.add_class::<qubit::PyLogicalQubit>()?;
+    device_module.add_class::<qubit::PyPhysicalQubit>()?;
 
     // Hardware characterization classes
     device_module.add_class::<device_impl::PyInstructionProp>()?;

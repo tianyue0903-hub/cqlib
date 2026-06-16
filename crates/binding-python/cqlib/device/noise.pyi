@@ -12,7 +12,6 @@
 
 import numpy as np
 from cqlib.circuit import StandardGate, Qubit
-from cqlib.qis import Pauli
 
 class SingleQubitNoise:
     """
@@ -123,6 +122,9 @@ class SingleQubitNoise:
         """
         ...
 
+    def __copy__(self) -> "SingleQubitNoise": ...
+    def __deepcopy__(self, memo: dict) -> "SingleQubitNoise": ...
+
 class TwoQubitNoise:
     """
     Two-qubit quantum noise channel.
@@ -170,19 +172,6 @@ class TwoQubitNoise:
         """
         ...
 
-    @staticmethod
-    def correlated_pauli(op_q0: Pauli, op_q1: Pauli, p: float) -> "TwoQubitNoise":
-        """
-        Creates correlated Pauli noise.
-        With probability p, applies the specified Pauli operators to both qubits.
-
-        Args:
-            op_q0: Pauli operator for first qubit (from `cqlib.qis.Pauli`)
-            op_q1: Pauli operator for second qubit
-            p: Correlation probability in range [0.0, 1.0]
-        """
-        ...
-
     def is_valid(self) -> bool:
         """Validates that noise parameters are physically valid."""
         ...
@@ -200,6 +189,9 @@ class TwoQubitNoise:
     def kind(self) -> str:
         """Returns the noise channel type."""
         ...
+
+    def __copy__(self) -> "TwoQubitNoise": ...
+    def __deepcopy__(self, memo: dict) -> "TwoQubitNoise": ...
 
 class ReadoutError:
     """
@@ -237,6 +229,9 @@ class ReadoutError:
     def is_valid(self) -> bool:
         """Returns `True` if both probabilities are in [0.0, 1.0]."""
         ...
+
+    def __copy__(self) -> "ReadoutError": ...
+    def __deepcopy__(self, memo: dict) -> "ReadoutError": ...
 
 class OperationKey:
     """
@@ -292,11 +287,20 @@ class OperationKey:
 
     @property
     def gate(self) -> StandardGate:
-        """Returns the gate type."""
+        """Returns the gate type.
+
+        .. note::
+
+           ``OperationKey`` only stores the gate type, not parameters.
+           Parametric gates (e.g., ``RX``, ``RY``, ``U``) will have
+           their parameters filled with zeros.
+        """
         ...
 
     def __hash__(self) -> int: ...
     def __eq__(self, value: object) -> bool: ...
+    def __copy__(self) -> "OperationKey": ...
+    def __deepcopy__(self, memo: dict) -> "OperationKey": ...
 
 class NoiseModel:
     """
@@ -381,3 +385,6 @@ class NoiseModel:
     def get_two_qubit_errors(self, key: OperationKey) -> list[TwoQubitNoise] | None:
         """Returns all two-qubit noise channels for an operation."""
         ...
+
+    def __copy__(self) -> "NoiseModel": ...
+    def __deepcopy__(self, memo: dict) -> "NoiseModel": ...
