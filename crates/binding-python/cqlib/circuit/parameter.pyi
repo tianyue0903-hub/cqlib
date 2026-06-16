@@ -10,184 +10,183 @@
 # copyright notice, and modified files need to carry a notice indicating
 # that they have been altered from the originals.
 
-from typing import Optional
+"""Symbolic and numeric circuit parameters.
+
+:class:`Parameter` is the expression type used for gate angles in
+parameterized quantum circuits.  Strings are parsed as mathematical
+expressions; numeric values become immutable constants.  Arithmetic
+builds new immutable expressions, and evaluation errors are reported
+via :class:`~.circuit.ParameterError`.
+
+Quick start::
+
+    from cqlib import Parameter
+
+    theta = Parameter("theta")
+    expr = 2 * theta + Parameter.pi() / 2  # 2*θ + π/2
+    result = expr.evaluate({"theta": 1.0})  # → 2.5708...
+    d = expr.derivative("theta")            # → 2
+"""
 
 class Parameter:
-    """A symbolic parameter used in parameterized quantum circuits (PQC).
+    """Immutable symbolic or numeric expression used as a circuit parameter.
 
-    This class intelligently detects the input type:
-    - If a number is passed, creates a numeric parameter (e.g., `Parameter(3.14)` creates 3.14)
-    - If a string that looks like a pure number is passed, creates a numeric parameter
-    - Otherwise, creates a symbolic parameter (e.g., `Parameter("theta")`)
+    Supports Python subclassing for custom parameter types.
+
+    A plain identifier such as ``"theta"`` is parsed as a symbol. Invalid
+    expression syntax raises :class:`~.circuit.ParameterError` instead of
+    silently creating a symbol with the invalid text.
+
+    Supports :class:`float` and :class:`int` input for numeric constants::
+
+        Parameter(3.14)      # numeric constant
+        Parameter("theta")   # symbolic variable
+        Parameter("x + 1")   # expression
     """
 
     def __init__(self, value: int | float | str) -> None:
         """Create a new parameter.
 
         Args:
-            value: The value (number or string symbol name).
+            value: A number (creates constant) or expression string (parsed).
 
-        Examples:
-            >>> Parameter(3.14)       # Creates numeric parameter 3.14
-            >>> Parameter("3.14")     # Also creates numeric parameter 3.14
-            >>> Parameter("theta")    # Creates symbolic parameter 'theta'
-            >>> Parameter("x + 1")   # Creates expression
+        Raises:
+            ParameterError: If the string is not a valid expression.
+            TypeError: If the value is not a number or string.
         """
         ...
 
     @staticmethod
-    def from_expression(expr: str) -> "Parameter":
+    def from_expression(expr: str) -> Parameter:
         """Parse a mathematical expression string into a Parameter.
 
-        Args:
-            expr: The expression string to parse (e.g., "theta + 1", "pi/2", "sin(x)").
-
-        Returns:
-            A new Parameter representing the parsed expression.
+        Supported syntax: numbers, constants (``pi``, ``e``), variables,
+        operators (``+``, ``-``, ``*``, ``/``), functions (``sin``, ``cos``,
+        ``exp``, ``sqrt``, ``ln``, etc.), and parentheses.
         """
         ...
 
     @staticmethod
-    def pi() -> "Parameter":
-        """Returns a new parameter representing the mathematical constant Pi (π)."""
+    def pi() -> Parameter:
+        """The mathematical constant π."""
         ...
 
     @staticmethod
-    def e() -> "Parameter":
-        """Returns a new parameter representing the mathematical constant Euler's number (e)."""
+    def e() -> Parameter:
+        """Euler's number e."""
         ...
 
-    def evaluate(self, bindings: Optional[dict[str, float]] = None) -> float:
-        """Evaluates the parameter expression given a set of variable bindings."""
+    def evaluate(self, bindings: dict[str, float] | None = None) -> float:
+        """Evaluate the expression with concrete variable bindings.
+
+        Args:
+            bindings: Mapping from symbol names to numeric values.
+
+        Raises:
+            ParameterError: If evaluation fails (e.g. unbound symbol).
+        """
         ...
 
-    def simplify(self, max_iterations: Optional[int] = None) -> "Parameter":
-        """Applies algebraic and trigonometric simplification rules."""
+    def simplify(self) -> Parameter:
+        """Return a domain-safe algebraically simplified copy."""
         ...
 
-    def derivative(self, var: str) -> "Parameter":
-        """Calculate the derivative of the expression with respect to the specified variable."""
+    def derivative(self, var: str) -> Parameter:
+        """Compute the symbolic derivative with respect to a variable."""
         ...
 
     @property
     def symbols(self) -> list[str]:
-        """Retrieves all unique symbols (variables) used in this parameter expression."""
+        """All unique symbols in sorted order."""
+        ...
+
+    def canonicalized(self) -> Parameter:
+        """Return the canonical storage form used by circuit parameter interning."""
+        ...
+
+    def is_exact_zero(self) -> bool:
+        """True if this expression is exactly the numeric constant zero."""
+        ...
+
+    def is_constant(self) -> bool:
+        """True if this parameter has no free variables."""
+        ...
+
+    def is_zero(self) -> bool:
+        """True if this parameter evaluates to zero (False if unbound symbols)."""
+        ...
+
+    def is_one(self) -> bool:
+        """True if this parameter evaluates to one (False if unbound symbols)."""
+        ...
+
+    def as_symbol(self) -> str | None:
+        """Return the symbol name when this expression is exactly one symbol."""
+        ...
+
+    def substitute(self, bindings: dict[str, Parameter]) -> Parameter:
+        """Substitute multiple symbols and simplify the resulting expression."""
+        ...
+
+    def provably_equal(self, other: Parameter, tolerance: float = 1e-12) -> bool:
+        """Conservative equality check within a numeric tolerance."""
+        ...
+
+    def provably_equal_modulo(self, other: Parameter, modulus: Parameter, tolerance: float = 1e-12) -> bool:
+        """Conservative equality check modulo *modulus* within tolerance."""
+        ...
+
+    def pow(self, val: Parameter | float) -> Parameter:
+        """Return ``self ** val``.
+
+        Args:
+            val: Exponent (:class:`Parameter` or :class:`float`).
+        """
+        ...
+
+    def replace(self, symbol: str, param: Parameter) -> Parameter:
+        """Replace all occurrences of a symbol with another expression.
+
+        Example::
+
+            expr = Parameter("x") + Parameter(2)
+            y = Parameter("y")
+            result = expr.replace("x", y * 3)  # (y*3) + 2
+        """
         ...
 
     # Arithmetic operators
-    def __add__(self, other: "Parameter" | float) -> "Parameter": ...
-    def __sub__(self, other: "Parameter" | float) -> "Parameter": ...
-    def __mul__(self, other: "Parameter" | float) -> "Parameter": ...
-    def __truediv__(self, other: "Parameter" | float) -> "Parameter": ...
-    def __pow__(self, other: "Parameter" | float) -> "Parameter": ...
-    def __neg__(self) -> "Parameter": ...
+    def __add__(self, other: Parameter | float) -> Parameter: ...
+    def __radd__(self, other: float) -> Parameter: ...
+    def __sub__(self, other: Parameter | float) -> Parameter: ...
+    def __rsub__(self, other: float) -> Parameter: ...
+    def __mul__(self, other: Parameter | float) -> Parameter: ...
+    def __rmul__(self, other: float) -> Parameter: ...
+    def __truediv__(self, other: Parameter | float) -> Parameter: ...
+    def __rtruediv__(self, other: float) -> Parameter: ...
+    def __pow__(self, other: Parameter | float) -> Parameter: ...
+    def __neg__(self) -> Parameter: ...
     def __eq__(self, other: object) -> bool: ...
-
-    # Reverse arithmetic operators
-    def __radd__(self, other: float) -> "Parameter": ...
-    def __rsub__(self, other: float) -> "Parameter": ...
-    def __rmul__(self, other: float) -> "Parameter": ...
-    def __rtruediv__(self, other: float) -> "Parameter": ...
+    def __hash__(self) -> int: ...
 
     # Mathematical functions
-    def sin(self) -> "Parameter": ...
-    def cos(self) -> "Parameter": ...
-    def tan(self) -> "Parameter": ...
-    def asin(self) -> "Parameter": ...
-    def acos(self) -> "Parameter": ...
-    def atan(self) -> "Parameter": ...
-    def exp(self) -> "Parameter": ...
-    def ln(self) -> "Parameter": ...
-    def log(self, base: Optional["Parameter"] = None) -> "Parameter": ...
-    def sqrt(self) -> "Parameter": ...
-    def abs(self) -> "Parameter": ...
-    def sinh(self) -> "Parameter":
-        """Returns the hyperbolic sine sinh(x)."""
-        ...
-    def cosh(self) -> "Parameter":
-        """Returns the hyperbolic cosine cosh(x)."""
-        ...
-    def tanh(self) -> "Parameter":
-        """Returns the hyperbolic tangent tanh(x)."""
-        ...
-    def floor(self) -> "Parameter":
-        """Returns the floor of the expression."""
-        ...
-    def ceil(self) -> "Parameter":
-        """Returns the ceiling of the expression."""
-        ...
-    def round(self) -> "Parameter":
-        """Returns the rounded value of the expression."""
-        ...
-    def is_constant(self) -> bool:
-        """Returns True if this parameter is a constant (has no free variables).
-
-        Example:
-            >>> Parameter(3.14).is_constant()
-            True
-            >>> Parameter("x").is_constant()
-            False
-        """
-        ...
-    def is_zero(self) -> bool:
-        """Returns True if this parameter evaluates to zero.
-
-        Returns False if the parameter cannot be evaluated (contains unbound symbols).
-
-        Example:
-            >>> Parameter(0.0).is_zero()
-            True
-            >>> Parameter(1.0).is_zero()
-            False
-        """
-        ...
-    def is_one(self) -> bool:
-        """Returns True if this parameter evaluates to one.
-
-        Returns False if the parameter cannot be evaluated (contains unbound symbols).
-
-        Example:
-            >>> Parameter(1.0).is_one()
-            True
-            >>> Parameter(2.0).is_one()
-            False
-        """
-        ...
-    def pow(self, val: "Parameter" | float) -> "Parameter":
-        """Returns the power of this parameter raised to the given exponent.
-
-        Args:
-            val: The exponent (can be a float or Parameter).
-
-        Returns:
-            A new parameter representing `self^val`.
-
-        Example:
-            >>> x = Parameter("x")
-            >>> y = Parameter("y")
-            >>> result = x.pow(y)  # x^y
-            >>> result = x.pow(2)  # x^2
-        """
-        ...
-
-    def replace(self, symbol: str, param: "Parameter") -> "Parameter":
-        """Replaces all occurrences of a symbol with another parameter expression.
-
-        Args:
-            symbol: The name of the symbol to replace.
-            param: The parameter expression to substitute.
-
-        Returns:
-            A new parameter with the substitution applied.
-
-        Example:
-            >>> x = Parameter("x")
-            >>> expr = x + Parameter(2.0)
-            >>> y = Parameter("y")
-            >>> replacement = y * Parameter(3.0)
-            >>> new_expr = expr.replace("x", replacement)  # (y * 3) + 2
-        """
-        ...
+    def sin(self) -> Parameter: ...
+    def cos(self) -> Parameter: ...
+    def tan(self) -> Parameter: ...
+    def asin(self) -> Parameter: ...
+    def acos(self) -> Parameter: ...
+    def atan(self) -> Parameter: ...
+    def exp(self) -> Parameter: ...
+    def ln(self) -> Parameter: ...
+    def log(self, base: Parameter | None = None) -> Parameter: ...
+    def sqrt(self) -> Parameter: ...
+    def abs(self) -> Parameter: ...
+    def sinh(self) -> Parameter: ...
+    def cosh(self) -> Parameter: ...
+    def tanh(self) -> Parameter: ...
+    def floor(self) -> Parameter: ...
+    def ceil(self) -> Parameter: ...
+    def round(self) -> Parameter: ...
 
     def __str__(self) -> str: ...
     def __repr__(self) -> str: ...

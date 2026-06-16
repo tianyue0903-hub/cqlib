@@ -10,6 +10,8 @@
 # copyright notice, and modified files need to carry a notice indicating
 # that they have been altered from the originals.
 
-from .circuit import Circuit, Parameter, Qubit
+"""Runtime export for the native :class:`Directive` type."""
 
-__all__ = ["Circuit", "Parameter", "Qubit"]
+from ..._native.circuit.gate import Directive
+
+__all__ = ["Directive"]

@@ -10,11 +10,28 @@
 # copyright notice, and modified files need to carry a notice indicating
 # that they have been altered from the originals.
 
+"""Gate definitions and factory constants.
+
+This submodule provides the gate type classes and pre-built singleton
+constants for all standard quantum gates.
+
+Classes
+-------
+- :class:`StandardGate` — native gate instruction set
+- :class:`UnitaryGate` — user-defined unitary gate
+- :class:`MCGate` — multi-controlled standard gate
+- :class:`CircuitGate` — composite gate from a frozen circuit
+- :class:`Directive` — non-unitary operations (barrier, measure, reset)
+- :class:`FrozenCircuit` — immutable circuit definition for gates
+
+Pre-built gate constants are available as class attributes on
+:class:`StandardGate` (e.g. ``StandardGate.H``, ``StandardGate.CX``).
+"""
+
 from .standard import StandardGate
 from .unitary import UnitaryGate
-from .mc_gate import McGate
-from .circuit_gate import CircuitGate
-from .control_flow import ConditionView, ControlFlow, IfElseGate, WhileLoopGate
+from .mc_gate import MCGate
+from .circuit_gate import CircuitGate, FrozenCircuit
 from .directive import Directive
 
 # --- Single Qubit Gates ---
@@ -68,12 +85,9 @@ Y2M: StandardGate
 __all__ = [
     "StandardGate",
     "UnitaryGate",
-    "McGate",
+    "MCGate",
     "CircuitGate",
-    "ConditionView",
-    "ControlFlow",
-    "IfElseGate",
-    "WhileLoopGate",
+    "FrozenCircuit",
     "Directive",
     # Single Qubit
     "I",

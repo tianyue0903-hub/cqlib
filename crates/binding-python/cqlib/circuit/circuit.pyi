@@ -1,680 +1,567 @@
-# This code is part of Cqlib.
-#
-# (C) Copyright China Telecom Quantum Group 2026
-#
-# This code is licensed under the Apache License, Version 2.0. You may
-# obtain a copy of this license in the LICENSE.txt file in the root directory
-# of this source tree or at http://www.apache.org/licenses/LICENSE-2.0.
-#
-# Any modifications or derivative works of this code must retain this
-# copyright notice, and modified files need to carry a notice indicating
-# that they have been altered from the originals.
+"""Quantum circuit container and builder.
 
-from typing import Optional, Union, Tuple, List
+.. autoclass:: Circuit
+    :noindex:
+
+Type aliases for gate arguments
+-------------------------------
+
+.. data:: QubitLike
+    :annotation: = int | Qubit
+
+    Single-qubit gate argument (integer index or Qubit object).
+
+.. data:: QubitInput
+    :annotation: = int | list[int] | list[Qubit]
+
+    Circuit constructor argument: a qubit count, a list of indices, or Qubits.
+
+.. data:: QubitList
+    :annotation: = list[int] | list[Qubit]
+
+    Multi-qubit operation argument: list of indices or Qubit objects.
+
+.. data:: ParamLike
+    :annotation: = float | Parameter
+
+    Gate parameter argument: a concrete float or symbolic Parameter.
+"""
+
 import numpy as np
+from collections.abc import Callable
+from numpy.typing import NDArray
 from .bit import Qubit
+from .classical import CircuitId, ClassicalType, ClassicalVar, Measurement
+from .classical_expr import ClassicalExpr
+from .control_flow import ClassicalControlOp
+from .gates import CircuitGate, MCGate, StandardGate, UnitaryGate
+from .operation import ValueOperation
 from .parameter import Parameter
-from .operation import Operation
-from .gates.standard import StandardGate
-from .gates.unitary import UnitaryGate
-from .gates.circuit_gate import CircuitGate
-from .gates.mc_gate import McGate
-from .gates.control_flow import ConditionView, ControlFlow
-from .gates.directive import Directive
-from ..qis import PauliString
+from .symbolic_matrix import SymbolicMatrix
 
-# Type alias for qubit list in control flow operations
-# Supports list[int] or list[Qubit]
-QubitList = List[Union[int, Qubit]]
+QubitLike = int | Qubit
+QubitInput = int | list[int] | list[Qubit]
+QubitList = list[int] | list[Qubit]
+ParamLike = float | Parameter
 
-# Type alias for parameters in control flow operations
-ParamList = List[Union[float, Parameter]]
+class _SwitchBuilder:
+    """Temporary case collector passed only to :meth:`Circuit.switch` callbacks.
 
-# Type alias for control flow operation tuples
-# Format: (gate, qubits) or (gate, qubits, params)
-# - gate: The gate to apply (StandardGate, McGate, UnitaryGate, Directive, or ControlFlow)
-# - qubits: List of qubit indices (list[int]) or list of Qubit objects
-# - params: Optional list of parameters (float or Parameter objects)
-OpTuple2 = Tuple[Union[StandardGate, McGate, UnitaryGate, Directive, ControlFlow], QubitList]
-OpTuple3 = Tuple[Union[StandardGate, McGate, UnitaryGate, Directive, ControlFlow], QubitList, ParamList]
-OpTuple = Union[OpTuple2, OpTuple3]
+    This object is valid **only** inside the callback handed to
+    :meth:`Circuit.switch`.  Methods that refer to scoped circuit
+    operations (:meth:`value`, :meth:`default`) operate on a temporary
+    transaction within the parent circuit: all operations discarded if
+    the callback raises an exception.
 
-class Circuit:
-    """A quantum circuit representation serving as the core IR for quantum programs.
-
-    The Circuit struct is designed to be a high-performance, memory-efficient container
-    for quantum operations. It supports both static circuits (fixed angles) and
-    parameterized circuits (symbolic angles).
-
-    ## Flexible Qubit Arguments
-
-    Most methods accept flexible qubit arguments:
-    - Single qubit: `int` (qubit index) or `Qubit` object
-    - Multiple qubits: `list[int]` or `list[Qubit]`
-
-    Note: For list arguments, mixing types (e.g., `[0, Qubit(1)]`) is NOT supported.
-    Use either all integers or all Qubit objects.
-
-    Example:
-        >>> circuit = Circuit(3)
-        >>> circuit.h(0)  # int
-        >>> circuit.h(Qubit(1))  # Qubit object
-        >>> circuit.cx(0, Qubit(2))  # mixed for separate args
-        >>> circuit.barrier([0, 1])  # list of ints
-        >>> circuit.barrier([Qubit(0), Qubit(1)])  # list of Qubits
+    Do not hold a reference to this object beyond the callback lifetime.
     """
 
-    def __init__(self, qubits: int | list[int] | list[Qubit]) -> None:
-        """Creates a new quantum circuit.
+    def value(self, value: int, body: Callable[[Circuit], None]) -> None:
+        """Register one exact-integer switch case.
 
         Args:
-            qubits: Number of qubits (int), list of indices (list[int]),
-                   or list of Qubit objects.
-                   Note: Mixed list is NOT supported.
+            value: The unsigned integer value to match.
+            body: A callback that receives the scoped circuit and builds
+                the case's operations.  Built atomically — a callback
+                exception rolls back this case.
         """
         ...
 
+    def default(self, body: Callable[[Circuit], None]) -> None:
+        """Register the optional default (fallback) case.
+
+        Must be called at most once per switch.  If not called, the
+        switch has no fallback (may trap on unhandled values).
+
+        Args:
+            body: A callback that receives the scoped circuit and builds
+                the default branch.  Operates atomically with the same
+                rollback semantics as :meth:`value`.
+        """
+        ...
+
+class Circuit:
+    """Mutable quantum circuit with gate, parameter, and dynamic-control support.
+
+    ``Circuit`` is the primary interface for building quantum programs.  It
+    accepts flexible qubit arguments — integers or :class:`Qubit` objects::
+
+        c = Circuit(2)        # 2-qubit circuit
+        c.h(0)                # Hadamard on qubit 0
+        c.cx(0, 1)            # CNOT with control=0, target=1
+        c.rx(0, 0.5)          # RX(0.5) on qubit 0
+
+    Parameterized circuits use :class:`Parameter` for gate angles::
+
+        from cqlib import Parameter
+        theta = Parameter("theta")
+        c = Circuit(1)
+        c.rx(0, theta)
+        bound = c.assign_parameters({"theta": 3.14})
+
+    Dynamic circuits use :meth:`var`, :meth:`measure`, and
+    :meth:`append_control` for mid-circuit classical logic.
+
+    ``Circuit`` supports Python subclassing::
+
+        class VQECircuit(Circuit):
+            def ansatz(self, params):
+                for i, p in enumerate(params):
+                    self.ry(i, p)
+                for i in range(self.num_qubits - 1):
+                    self.cx(i, i + 1)
+
+    Methods returning ``Circuit`` (e.g. :meth:`inverse`, :meth:`decompose`,
+    :meth:`assign_parameters`) preserve the subclass type.
+    """
+
+    def __init__(self, qubits: QubitInput) -> None:
+        """Create a circuit.
+
+        Args:
+            qubits: An integer count (``Circuit(3)`` creates qubits 0,1,2),
+                a list of integer indices (``Circuit([0, 2, 4])``), or a list
+                of :class:`Qubit` objects.
+
+        Raises:
+            CircuitError: If the qubit specification is invalid.
+        """
+        ...
+    @staticmethod
+    def from_operations(qubits: list[Qubit], operations: list[ValueOperation], classical_vars: list[ClassicalType] | None = ..., classical_values: list[ClassicalType] | None = ...) -> Circuit:
+        """Build a circuit from self-contained construction-IR operations.
+
+        This is the low-level entry point for programmatic circuit construction
+        and deserialization.
+        """
+        ...
+    @property
+    def id(self) -> CircuitId:
+        """The :class:`CircuitId` owning this circuit's classical handles."""
+        ...
     @property
     def num_qubits(self) -> int:
-        """Returns the number of qubits in the circuit."""
+        """Number of qubits in the circuit."""
         ...
-
     @property
     def width(self) -> int:
-        """Returns the width (number of qubits) of the circuit.
-
-        This is an alias for `num_qubits`.
-        """
+        """Alias for :attr:`num_qubits`."""
         ...
-
     @property
     def qubits(self) -> list[Qubit]:
-        """Returns a list of all qubits in the circuit."""
+        """Qubits in insertion order."""
         ...
-
     @property
     def parameters(self) -> list[Parameter]:
-        """Returns a list of all symbolic parameters used in the circuit."""
+        """Interned parameters in insertion order."""
         ...
-
     @property
     def symbols(self) -> list[str]:
-        """Returns a list of all symbolic variable names used in the circuit."""
+        """Names of all free symbolic parameters in the circuit."""
         ...
-
     @property
     def global_phase(self) -> Parameter:
-        """Returns the global phase of the circuit as a Parameter.
-
-        The global phase represents a scalar factor e^(i*theta).
-        While unobservable in isolated systems, it is critical for
-        controlled operations and sub-circuit composition.
-        """
+        """The circuit's global phase as a :class:`Parameter`."""
         ...
-
-    def set_global_phase(self, phase: float | Parameter) -> None:
-        """Sets the global phase of the circuit.
-
-        Args:
-            phase: The phase value (can be float or Parameter).
-        """
-        ...
-
     @property
-    def operations(self) -> "OperationIterator":
-        """Returns an iterator over all operations in the circuit."""
+    def classical_vars(self) -> list[ClassicalType]:
+        """Types of allocated classical variables."""
         ...
+    @property
+    def classical_values(self) -> list[ClassicalType]:
+        """Types of immutable classical values (from measurements)."""
+        ...
+    @property
+    def operations(self) -> list[ValueOperation]:
+        """All operations in insertion order."""
+        ...
+    def set_global_phase(self, phase: ParamLike) -> None:
+        """Replace the circuit global phase."""
+        ...
+    def add_qubits(self, qubits: QubitList) -> None:
+        """Add qubits while preserving existing circuit data."""
+        ...
+    def append(self, operation: ValueOperation) -> None:
+        """Append any self-contained construction-IR operation."""
+        ...
+    def append_control(self, control: ClassicalControlOp) -> None:
+        """Append a classical control-flow operation.
 
-    def circuit_gate(
-        self,
-        instruction: CircuitGate,
-        qubits: list[int] | list[Qubit],
-        params: Optional[list[float | Parameter]] = None,
-    ) -> None:
-        """Appends a circuit gate to the circuit.
-
-        Args:
-            instruction: The circuit gate to append.
-            qubits: List of qubit indices (list[int]) or list of Qubit objects.
-                Note: Mixed list (e.g., [0, Qubit(1)]) is NOT supported.
-            params: Optional parameters for the circuit gate.
+        Build the control op with :class:`ClassicalControlOp` static methods
+        (``if_``, ``while_``, ``for_uint``, ``switch``, etc.) and use this
+        method to add it to the circuit.
         """
         ...
+    def if_(self, condition: ClassicalExpr, body: Callable[[Circuit], None]) -> None:
+        """Append an ``if`` whose body is built by ``body``.
 
-    def multi_control_gate(
-        self,
-        instruction: McGate,
-        qubits: list[int] | list[Qubit],
-        params: Optional[list[float | Parameter]] = None,
-    ) -> None:
-        """Appends a multi-controlled gate (McGate) to the circuit.
-
-        Args:
-            instruction: The multi-controlled gate to append.
-            qubits: List of qubit indices (list[int]) or list of Qubit objects.
-                Note: Mixed list (e.g., [0, Qubit(1)]) is NOT supported.
-            params: Optional parameters for the gate.
+        The callback receives this circuit in a temporary branch scope. Its
+        operations and classical values are committed atomically. A callback
+        exception or circuit validation error rolls back the complete body.
         """
         ...
+    def if_else(self, condition: ClassicalExpr, then_body: Callable[[Circuit], None], else_body: Callable[[Circuit], None]) -> None:
+        """Append an ``if``/``else`` built by two atomic callbacks."""
+        ...
+    def while_(self, condition: ClassicalExpr, body: Callable[[Circuit], None]) -> None:
+        """Append a runtime ``while`` loop built by an atomic callback."""
+        ...
+    def for_uint(self, var: ClassicalVar, start: ClassicalExpr, stop: ClassicalExpr, step: ClassicalExpr, body: Callable[[Circuit, ClassicalExpr], None]) -> None:
+        """Append a half-open unsigned runtime loop.
 
+        ``body`` receives the scoped circuit and an expression reading ``var``.
+        ``start``, ``stop``, and ``step`` must have the same UInt type as ``var``.
+        """
+        ...
+    def switch(self, target: ClassicalExpr, build: Callable[[_SwitchBuilder], None]) -> None:
+        """Append an exact-value UInt switch built atomically by ``build``."""
+        ...
+    def break_loop(self) -> None:
+        """Exit the nearest enclosing loop or switch callback body."""
+        ...
+    def continue_loop(self) -> None:
+        """Continue the nearest enclosing loop callback body."""
+        ...
+    def operation(self, index: int) -> ValueOperation:
+        """Return one operation by index with circuit-local parameters resolved."""
+        ...
+    def append_gate(self, gate: StandardGate, qubits: QubitList, label: str | None = ...) -> None:
+        """Append a standard gate with any bound parameters already applied.
+
+        Args:
+            gate: A :class:`StandardGate` (call it with parameters to bind them).
+            qubits: Target qubits, in the order the gate expects.
+            label: Optional diagnostic label attached to the operation.
+        """
+        ...
+    def append_mc_gate(self, gate: MCGate, qubits: QubitList, label: str | None = ...) -> None:
+        """Append a multi-controlled gate.
+
+        Args:
+            gate: A :class:`MCGate` (controls followed by its base gate's targets).
+            qubits: Control qubits then target qubits, matching ``gate.num_ctrl_qubits``.
+            label: Optional diagnostic label attached to the operation.
+        """
+        ...
+    def append_unitary_gate(self, gate: UnitaryGate, qubits: QubitList, params: list[ParamLike] | None = ...) -> None:
+        """Append a user-defined unitary gate.
+
+        Args:
+            gate: A :class:`UnitaryGate` (numeric, symbolic, or circuit-backed).
+            qubits: Target qubits in the order the gate's matrix acts on.
+            params: Concrete parameters for a parametric unitary; ``None`` keeps symbols.
+        """
+        ...
+    def append_circuit_gate(self, gate: CircuitGate, qubits: QubitList, params: list[ParamLike] | None = ...) -> None:
+        """Append a sub-circuit wrapped as a gate.
+
+        Args:
+            gate: A :class:`CircuitGate` built from a :class:`FrozenCircuit`.
+            qubits: Target qubits mapped positionally onto the sub-circuit's qubits.
+            params: Parameter bindings for the sub-circuit's free symbols.
+        """
+        ...
+    def i(self, qubit: QubitLike) -> None:
+        """Append an identity (no-op) gate."""
+        ...
+    def h(self, qubit: QubitLike) -> None:
+        """Append a Hadamard gate."""
+        ...
+    def x(self, qubit: QubitLike) -> None:
+        """Append a Pauli-X (NOT) gate."""
+        ...
+    def y(self, qubit: QubitLike) -> None:
+        """Append a Pauli-Y gate."""
+        ...
+    def z(self, qubit: QubitLike) -> None:
+        """Append a Pauli-Z gate."""
+        ...
+    def x2p(self, qubit: QubitLike) -> None:
+        """Append an X^{+1/2} gate (rotation about X by +pi/2)."""
+        ...
+    def x2m(self, qubit: QubitLike) -> None:
+        """Append an X^{-1/2} gate (rotation about X by -pi/2)."""
+        ...
+    def y2p(self, qubit: QubitLike) -> None:
+        """Append a Y^{+1/2} gate (rotation about Y by +pi/2)."""
+        ...
+    def y2m(self, qubit: QubitLike) -> None:
+        """Append a Y^{-1/2} gate (rotation about Y by -pi/2)."""
+        ...
+    def xy(self, qubit: QubitLike, theta: ParamLike) -> None:
+        """Append an XY interaction gate parameterized by ``theta``.
+
+        Args:
+            qubit: Target qubit.
+            theta: Interaction angle (float or :class:`Parameter`).
+        """
+        ...
+    def xy2p(self, qubit: QubitLike, theta: ParamLike) -> None:
+        """Append a +half-pi XY gate (XY interaction at +pi/2).
+
+        Args:
+            qubit: Target qubit.
+            theta: Additional interaction angle (float or :class:`Parameter`).
+        """
+        ...
+    def xy2m(self, qubit: QubitLike, theta: ParamLike) -> None:
+        """Append a -half-pi XY gate (XY interaction at -pi/2).
+
+        Args:
+            qubit: Target qubit.
+            theta: Additional interaction angle (float or :class:`Parameter`).
+        """
+        ...
+    def s(self, qubit: QubitLike) -> None:
+        """Append an S gate (phase gate, |1> -> i|1>)."""
+        ...
+    def sdg(self, qubit: QubitLike) -> None:
+        """Append an S-dagger gate (inverse of S)."""
+        ...
+    def t(self, qubit: QubitLike) -> None:
+        """Append a T gate (pi/4 phase gate)."""
+        ...
+    def tdg(self, qubit: QubitLike) -> None:
+        """Append a T-dagger gate (inverse of T)."""
+        ...
+    def rx(self, qubit: QubitLike, theta: ParamLike) -> None:
+        """Append an RX rotation gate.
+
+        Args:
+            qubit: Target qubit.
+            theta: Rotation angle (float or :class:`Parameter`).
+        """
+        ...
+    def ry(self, qubit: QubitLike, theta: ParamLike) -> None:
+        """Append an RY rotation gate.
+
+        Args:
+            qubit: Target qubit.
+            theta: Rotation angle (float or :class:`Parameter`).
+        """
+        ...
+    def rz(self, qubit: QubitLike, theta: ParamLike) -> None:
+        """Append an RZ rotation gate.
+
+        Args:
+            qubit: Target qubit.
+            theta: Rotation angle (float or :class:`Parameter`).
+        """
+        ...
+    def phase(self, qubit: QubitLike, lambda_: ParamLike) -> None:
+        """Append a phase gate P(lambda) (|1> -> e^{i*lambda}|1>).
+
+        Args:
+            qubit: Target qubit.
+            lambda_: Phase angle (float or :class:`Parameter`).
+        """
+        ...
+    def u(self, qubit: QubitLike, theta: ParamLike, phi: ParamLike, lambda_: ParamLike) -> None:
+        """Append a general single-qubit unitary U(theta, phi, lambda).
+
+        Args:
+            qubit: Target qubit.
+            theta: Rotation angle about the Bloch axis.
+            phi: Azimuthal phase angle.
+            lambda_: Terminal phase angle.
+        """
+        ...
+    def cx(self, control: QubitLike, target: QubitLike) -> None:
+        """Append a controlled-X (CNOT) gate."""
+        ...
+    def cy(self, control: QubitLike, target: QubitLike) -> None:
+        """Append a controlled-Y gate."""
+        ...
+    def cz(self, control: QubitLike, target: QubitLike) -> None:
+        """Append a controlled-Z gate."""
+        ...
+    def swap(self, a: QubitLike, b: QubitLike) -> None:
+        """Append a SWAP gate exchanging the states of two qubits."""
+        ...
+    def ccx(self, control1: QubitLike, control2: QubitLike, target: QubitLike) -> None:
+        """Append a doubly-controlled-X (Toffoli) gate."""
+        ...
+    def rxx(self, a: QubitLike, b: QubitLike, theta: ParamLike) -> None:
+        """Append an RXX(theta) gate (rotation about XX).
+
+        Args:
+            a: First qubit.
+            b: Second qubit.
+            theta: Rotation angle (float or :class:`Parameter`).
+        """
+        ...
+    def ryy(self, a: QubitLike, b: QubitLike, theta: ParamLike) -> None:
+        """Append an RYY(theta) gate (rotation about YY).
+
+        Args:
+            a: First qubit.
+            b: Second qubit.
+            theta: Rotation angle (float or :class:`Parameter`).
+        """
+        ...
+    def rzz(self, a: QubitLike, b: QubitLike, theta: ParamLike) -> None:
+        """Append an RZZ(theta) gate (rotation about ZZ).
+
+        Args:
+            a: First qubit.
+            b: Second qubit.
+            theta: Rotation angle (float or :class:`Parameter`).
+        """
+        ...
+    def rzx(self, a: QubitLike, b: QubitLike, theta: ParamLike) -> None:
+        """Append an RZX(theta) gate (rotation about ZX).
+
+        Args:
+            a: First qubit (Z operand).
+            b: Second qubit (X operand).
+            theta: Rotation angle (float or :class:`Parameter`).
+        """
+        ...
+    def crx(self, control: QubitLike, target: QubitLike, theta: ParamLike) -> None:
+        """Append a controlled-RX(theta) gate.
+
+        Args:
+            control: Control qubit.
+            target: Target qubit.
+            theta: Rotation angle (float or :class:`Parameter`).
+        """
+        ...
+    def cry(self, control: QubitLike, target: QubitLike, theta: ParamLike) -> None:
+        """Append a controlled-RY(theta) gate.
+
+        Args:
+            control: Control qubit.
+            target: Target qubit.
+            theta: Rotation angle (float or :class:`Parameter`).
+        """
+        ...
+    def crz(self, control: QubitLike, target: QubitLike, theta: ParamLike) -> None:
+        """Append a controlled-RZ(theta) gate.
+
+        Args:
+            control: Control qubit.
+            target: Target qubit.
+            theta: Rotation angle (float or :class:`Parameter`).
+        """
+        ...
+    def fsim(self, a: QubitLike, b: QubitLike, theta: ParamLike, phi: ParamLike) -> None:
+        """Append an fSim(theta, phi) gate.
+
+        Args:
+            a: First qubit.
+            b: Second qubit.
+            theta: Swap angle (float or :class:`Parameter`).
+            phi: Controlled-phase angle (float or :class:`Parameter`).
+        """
+        ...
+    def rxy(self, qubit: QubitLike, theta: ParamLike, phi: ParamLike) -> None:
+        """Append an RXY(theta, phi) gate whose rotation axis is set by ``phi``.
+
+        Args:
+            qubit: Target qubit.
+            theta: Rotation amount (float or :class:`Parameter`).
+            phi: Rotation-axis angle in the XY plane (float or :class:`Parameter`).
+        """
+        ...
+    def barrier(self, qubits: QubitList) -> None:
+        """Insert a barrier preventing gate reordering across the listed qubits.
+
+        Args:
+            qubits: Qubits the barrier spans.
+        """
+        ...
+    def reset(self, qubit: QubitLike) -> None:
+        """Append a reset directive, forcing the qubit to |0>.
+
+        Args:
+            qubit: Qubit to reset.
+        """
+        ...
+    def delay(self, qubit: QubitLike, duration: ParamLike) -> None:
+        """Append a delay (idle) of the given duration on a qubit.
+
+        Args:
+            qubit: Qubit held idle.
+            duration: Idle duration (float or :class:`Parameter`).
+        """
+        ...
+    def var(self, ty: ClassicalType) -> ClassicalVar:
+        """Allocate a mutable classical variable of the given type."""
+        ...
+    def store(self, target: ClassicalVar, value: ClassicalExpr) -> None:
+        """Store a classical expression into a variable."""
+        ...
+    def measure(self, qubit: QubitLike) -> Measurement:
+        """Measure a single qubit and return a :class:`Measurement` receipt."""
+        ...
+    def measure_bits(self, qubits: QubitList) -> Measurement:
+        """Measure multiple qubits and return a :class:`Measurement` receipt."""
+        ...
+    def measure_into(self, qubit: QubitLike, target: ClassicalVar) -> Measurement:
+        """Measure a qubit and store the result into an existing variable."""
+        ...
+    def measure_bits_into(self, qubits: QubitList, target: ClassicalVar) -> Measurement:
+        """Measure multiple qubits and store results into an existing variable."""
+        ...
+    def inverse(self) -> Circuit:
+        """Return the inverse circuit (every operation reversed).
+
+        Raises:
+            CircuitError: If any operation is not invertible.
+        """
+        ...
+    def decompose(self) -> Circuit:
+        """Recursively expand circuit-defined gates."""
+        ...
     def to_gate(self, name: str) -> CircuitGate:
-        """Converts the circuit to a gate.
+        """Convert this circuit into a reusable :class:`CircuitGate`."""
+        ...
+    def assign_parameters(self, bindings: dict[str, float] | None = ...) -> Circuit:
+        """Return a new circuit with symbolic parameters numerically bound.
 
         Args:
-            name: A name for the new gate.
+            bindings: Mapping from parameter name to numeric value.
 
         Returns:
-            A new CircuitGate object wrapping this circuit.
-        """
-        ...
-
-    def i(self, qubit: int | Qubit) -> None:
-        """Appends an Identity (I) gate."""
-        ...
-
-    def h(self, qubit: int | Qubit) -> None:
-        """Appends a Hadamard (H) gate."""
-        ...
-
-    def x(self, qubit: int | Qubit) -> None:
-        """Appends a Pauli-X (NOT) gate."""
-        ...
-
-    def y(self, qubit: int | Qubit) -> None:
-        """Appends a Pauli-Y gate."""
-        ...
-
-    def z(self, qubit: int | Qubit) -> None:
-        """Appends a Pauli-Z gate."""
-        ...
-
-    def s(self, qubit: int | Qubit) -> None:
-        """Appends an S (Phase) gate."""
-        ...
-
-    def sdg(self, qubit: int | Qubit) -> None:
-        """Appends an S-dagger (S†) gate."""
-        ...
-
-    def t(self, qubit: int | Qubit) -> None:
-        """Appends a T gate."""
-        ...
-
-    def tdg(self, qubit: int | Qubit) -> None:
-        """Appends a T-dagger (T†) gate."""
-        ...
-
-    def x2p(self, qubit: int | Qubit) -> None:
-        """Appends a √X (SX) gate."""
-        ...
-
-    def x2m(self, qubit: int | Qubit) -> None:
-        """Appends a √X† (SXdg) gate."""
-        ...
-
-    def y2p(self, qubit: int | Qubit) -> None:
-        """Appends a √Y gate."""
-        ...
-
-    def y2m(self, qubit: int | Qubit) -> None:
-        """Appends a √Y† gate."""
-        ...
-
-    def rx(self, qubit: int | Qubit, theta: float | Parameter) -> None:
-        """Appends a rotation around the X-axis by angle theta."""
-        ...
-
-    def ry(self, qubit: int | Qubit, theta: float | Parameter) -> None:
-        """Appends a rotation around the Y-axis by angle theta."""
-        ...
-
-    def rz(self, qubit: int | Qubit, theta: float | Parameter) -> None:
-        """Appends a rotation around the Z-axis by angle theta."""
-        ...
-
-    def phase(self, qubit: int | Qubit, lambda_: float | Parameter) -> None:
-        """Appends a Phase gate (P gate)."""
-        ...
-
-    def xy(self, qubit: int | Qubit, theta: float | Parameter) -> None:
-        """Appends an XY gate."""
-        ...
-
-    def xy2p(self, qubit: int | Qubit, theta: float | Parameter) -> None:
-        """Appends a √XY gate (positive phase)."""
-        ...
-
-    def xy2m(self, qubit: int | Qubit, theta: float | Parameter) -> None:
-        """Appends a √XY† gate (negative phase)."""
-        ...
-
-    def u(
-        self,
-        qubit: int | Qubit,
-        theta: float | Parameter,
-        phi: float | Parameter,
-        lambda_: float | Parameter,
-    ) -> None:
-        """Appends a generic single-qubit rotation gate U(theta, phi, lambda)."""
-        ...
-
-    def rxy(
-        self, qubit: int | Qubit, theta: float | Parameter, phi: float | Parameter
-    ) -> None:
-        """Appends a rotation in the XY plane."""
-        ...
-
-    def cx(self, control: int | Qubit, target: int | Qubit) -> None:
-        """Appends a Controlled-NOT (CNOT) gate."""
-        ...
-
-    def cy(self, control: int | Qubit, target: int | Qubit) -> None:
-        """Appends a Controlled-Y gate."""
-        ...
-
-    def cz(self, control: int | Qubit, target: int | Qubit) -> None:
-        """Appends a Controlled-Z gate."""
-        ...
-
-    def swap(self, a: int | Qubit, b: int | Qubit) -> None:
-        """Appends a SWAP gate."""
-        ...
-
-    def rxx(self, a: int | Qubit, b: int | Qubit, theta: float | Parameter) -> None:
-        """Appends an Ising XX coupling gate."""
-        ...
-
-    def ryy(self, a: int | Qubit, b: int | Qubit, theta: float | Parameter) -> None:
-        """Appends an Ising YY coupling gate."""
-        ...
-
-    def rzz(self, a: int | Qubit, b: int | Qubit, theta: float | Parameter) -> None:
-        """Appends an Ising ZZ coupling gate."""
-        ...
-
-    def rzx(self, a: int | Qubit, b: int | Qubit, theta: float | Parameter) -> None:
-        """Appends an Ising ZX coupling gate."""
-        ...
-
-    def fsim(
-        self,
-        a: int | Qubit,
-        b: int | Qubit,
-        theta: float | Parameter,
-        phi: float | Parameter,
-    ) -> None:
-        """Appends a Fermionic Simulation gate (fSim)."""
-        ...
-
-    def crx(
-        self, control: int | Qubit, target: int | Qubit, theta: float | Parameter
-    ) -> None:
-        """Appends a Controlled-RX gate."""
-        ...
-
-    def cry(
-        self, control: int | Qubit, target: int | Qubit, theta: float | Parameter
-    ) -> None:
-        """Appends a Controlled-RY gate."""
-        ...
-
-    def crz(
-        self, control: int | Qubit, target: int | Qubit, theta: float | Parameter
-    ) -> None:
-        """Appends a Controlled-RZ gate."""
-        ...
-
-    def ccx(
-        self, control1: int | Qubit, control2: int | Qubit, target: int | Qubit
-    ) -> None:
-        """Appends a Toffoli gate (CCX)."""
-        ...
-
-    def multi_control(
-        self,
-        instruction: StandardGate,
-        controls: list[int] | list[Qubit],
-        targets: list[int] | list[Qubit],
-        params: Optional[list[float | Parameter]] = None,
-    ) -> None:
-        """Appends a multi-controlled version of a standard gate.
-
-        Args:
-            instruction: The standard gate to apply.
-            controls: List of control qubit indices (list[int]) or list of Qubit objects.
-                Note: Mixed list is NOT supported.
-            targets: List of target qubit indices (list[int]) or list of Qubit objects.
-                Note: Mixed list is NOT supported.
-            params: Optional parameters for the gate.
-        """
-        ...
-
-    def unitary(self, gate: UnitaryGate, qubits: list[int] | list[Qubit]) -> None:
-        """Appends a custom unitary gate to the circuit.
-
-        Args:
-            gate: The custom unitary gate definition.
-            qubits: List of qubit indices (list[int]) or list of Qubit objects.
-                Note: Mixed list (e.g., [0, Qubit(1)]) is NOT supported.
+            A new :class:`Circuit` with all symbols resolved.
 
         Raises:
-            ValueError: If the number of qubits does not match the gate's num_qubits.
-
-        Example:
-            >>> circuit = Circuit(2)
-            >>> gate = UnitaryGate("my_gate", 2).with_matrix([[1,0,0,0],[0,1,0,0],[0,0,0,1],[0,0,1,0]])
-            >>> circuit.unitary(gate, [0, 1])  # Using list of ints
-            >>> circuit.unitary(gate, [Qubit(0), Qubit(1)])  # Using list of Qubits
+            ParameterError: If any binding value is non-finite (NaN, Inf).
         """
         ...
-
-    def measure(self, qubit: int | Qubit) -> None:
-        """Measures a qubit."""
+    def compose(self, other: Circuit, qubits: QubitList | None = ...) -> None:
+        """Append another circuit, optionally remapping its qubits."""
         ...
-
-    def reset(self, qubit: int | Qubit) -> None:
-        """Resets a qubit to the |0⟩ state."""
-        ...
-
-    def barrier(self, qubits: list[int] | list[Qubit]) -> None:
-        """Inserts a barrier.
+    def to_matrix(self, qubits_order: list[int] | None = ...) -> NDArray[np.complex128]:
+        """Compute the dense numeric unitary matrix.
 
         Args:
-            qubits: List of qubit indices (list[int]) or list of Qubit objects.
-                Note: Mixed list (e.g., [0, Qubit(1)]) is NOT supported.
-
-        Example:
-            >>> circuit = Circuit(3)
-            >>> circuit.barrier([0, 1])  # Using list of ints
-            >>> circuit.barrier([Qubit(0), Qubit(1), Qubit(2)])  # Using list of Qubits
-        """
-        ...
-
-    def delay(self, qubit: int | Qubit, param: float | Parameter) -> None:
-        """Applies a Delay instruction to the specified qubit.
-
-        Args:
-            qubit: Qubit index (int) or Qubit object.
-            param: The duration of the delay (can be float or Parameter).
-        """
-        ...
-
-    def inverse(self) -> "Circuit":
-        """Creates the inverse (adjoint) of the circuit."""
-        ...
-
-    def decompose(self) -> "Circuit":
-        """Decomposes the circuit into a new circuit with simpler operations."""
-        ...
-
-    def assign_parameters(
-        self, bindings: Optional[dict[str, float]] = None
-    ) -> "Circuit":
-        """Assign values to symbolic parameters and return a new circuit.
-
-        Args:
-            bindings: A dictionary mapping parameter names to float values.
-                If None, all symbolic parameters remain symbolic.
+            qubits_order: Optional custom qubit ordering (default: natural order).
 
         Returns:
-            A new Circuit with parameters assigned. The original circuit is not modified.
+            A 2D NumPy array (dtype=complex128) of shape (2ⁿ, 2ⁿ).
 
-        Example:
-            >>> circuit = Circuit(1)
-            >>> theta = Parameter("theta")
-            >>> circuit.rx(0, theta)
-            >>> assigned = circuit.assign_parameters({"theta": 3.14159})
-            >>> # assigned is a new circuit with theta = 3.14159
+        Raises:
+            CircuitError: If the circuit contains non-unitary operations.
         """
         ...
-
-    def to_matrix(self, qubits_order: Optional[list[int]] = None) -> np.ndarray:
-        """Convert the circuit to its unitary matrix representation.
+    def to_symbolic_matrix(self, qubits_order: list[int] | None = ...) -> SymbolicMatrix:
+        """Compute a dense unitary matrix preserving symbolic parameters.
 
         Args:
-            qubits_order: Optional list specifying the order of qubits in the output matrix.
-                If None, uses the natural qubit order (0, 1, 2, ...).
+            qubits_order: Optional custom qubit ordering.
 
         Returns:
-            A 2D numpy array representing the unitary matrix of the circuit.
+            A :class:`SymbolicMatrix` with :class:`Parameter` entries.
+        """
+        ...
+    def validate(self) -> None:
+        """Validate classical ownership, dominance, and control-flow invariants.
 
         Raises:
-            ValueError: If the circuit contains unbound symbolic parameters or
-                if qubits_order contains invalid qubit indices.
-
-        Example:
-            >>> circuit = Circuit(1)
-            >>> circuit.h(0)
-            >>> matrix = circuit.to_matrix()
-            >>> matrix.shape
-            (2, 2)
+            CircuitError: If validation fails.
         """
         ...
-
-    def pauli_evolution(
-        self,
-        pauli: PauliString,
-        angle: float,
-        qubits: list[int] | list[Qubit],
-    ) -> None:
-        """Applies a Pauli evolution gate exp(-i * angle/2 * PauliString) to the circuit.
-
-        This method synthesizes a unitary evolution of a Pauli operator and
-        appends the corresponding operations to the circuit.
-
-        Algorithm:
-            The rotation e^(-iθ/2 · P) is implemented as follows:
-            1. Phase Validation: The PauliString's internal phase must be ±1.
-            2. Basis Transformation: Convert non-Z Paulis to Z basis.
-            3. CNOT Chain: Accumulate parity along the chain to the last qubit.
-            4. Core Rotation: Apply RZ(θ) on the last qubit.
-            5. Reverse CNOT Ladder: Uncompute parity.
-            6. Inverse Transformation: Restore the original basis.
-
-        Args:
-            pauli: The Pauli string representing the generator of evolution.
-            angle: The evolution angle.
-            qubits: The target qubits on which the Pauli operator acts.
-
-        Raises:
-            ValueError: If the number of qubits doesn't match the Pauli string length,
-                or if the Pauli string phase is invalid (not ±1).
-
-        Examples:
-            >>> from cqlib import Circuit
-            >>> from cqlib.qis import PauliString
-            >>> circuit = Circuit(3)
-            >>> pauli = PauliString.from_str("XZI")
-            >>> circuit.pauli_evolution(pauli, 3.14159/2, [0, 1, 2])
-        """
-        ...
-
-    def __len__(self) -> int:
-        """Returns the number of operations in the circuit."""
-        ...
-
-    def __getitem__(self, idx: int | slice) -> Operation | list[Operation]:
-        """Accesses operations by index (supports negative indexing and slicing).
-
-        Args:
-            idx: Integer index or slice.
-
-        Returns:
-            Operation at the given index, or a list of operations for a slice.
-
-        Raises:
-            IndexError: If the index is out of range.
-        """
-        ...
-
-    def add_qubits(self, qubits: list[int]) -> None:
-        """Adds additional qubits to the circuit.
-
-        Args:
-            qubits: List of qubit indices to add.
-
-        Example:
-            >>> circuit = Circuit(2)  # Qubits 0, 1
-            >>> circuit.add_qubits([2, 3])  # Now has qubits 0, 1, 2, 3
-        """
-        ...
-
-    def add_parameter(self, param: Parameter) -> tuple[int, bool]:
-        """Adds a parameter to the circuit.
-
-        Args:
-            param: A Parameter object to add to the circuit.
-
-        Returns:
-            A tuple of (index, is_new) where:
-                - index: The parameter's index in the circuit's parameter table
-                - is_new: True if the parameter was newly added, False if it already existed
-
-        Example:
-            >>> from cqlib import Circuit, Parameter
-            >>> circuit = Circuit(1)
-            >>> theta = Parameter.symbol("theta")
-            >>> index, is_new = circuit.add_parameter(theta)
-        """
-        ...
-
-    def compose(
-        self,
-        other: "Circuit",
-        qubits_map: Optional[list[int]] = None,
-    ) -> None:
-        """Composes another circuit into this circuit.
-
-        This method merges the operations from `other` circuit into `self`.
-        Qubits from `other` can either be mapped to existing qubits in `self`
-        (via `qubits_map`) or appended as new qubits.
-
-        Args:
-            other: The circuit to compose into this circuit.
-            qubits_map: An optional list mapping qubits from `other` to qubits in `self`.
-                - If `qubits_map` is provided, each qubit in `other` (in their natural
-                  iteration order) is mapped to the corresponding qubit in `qubits_map`.
-                - If `qubits_map` is None, all qubits from `other` are appended as new
-                  qubits to `self`.
-
-        Raises:
-            ValueError: If the mapping is invalid (wrong length or non-existent qubits).
-
-        Example:
-            >>> from cqlib import Circuit
-            >>> # Create first circuit
-            >>> qc1 = Circuit(2)
-            >>> qc1.h(0)
-            >>> # Create second circuit
-            >>> qc2 = Circuit(2)
-            >>> qc2.x(0)
-            >>> # Compose qc2 into qc1 (append as new qubits)
-            >>> qc1.compose(qc2)
-            >>> # Or compose with mapping: map qc2's qubits 0,1 to qc1's qubits 1,0
-            >>> qc1.compose(qc2, [1, 0])
-        """
-        ...
-
-    def if_else(
-        self,
-        condition: ConditionView,
-        true_body: list[OpTuple],
-        false_body: Optional[list[OpTuple]] = None,
-    ) -> None:
-        """Appends a conditional (if-else) operation to the circuit.
-
-        Executes different quantum operations based on a classical condition
-        (typically from a previous measurement).
-
-        Args:
-            condition: The classical condition to evaluate.
-            true_body: List of operation tuples for the true branch.
-                Each tuple can be either:
-                - (gate, qubits): 2-tuple without parameters
-                - (gate, qubits, params): 3-tuple with parameters
-
-                Where:
-                - gate: The gate to apply (StandardGate, McGate, UnitaryGate, Directive, or ControlFlow)
-                - qubits: List of qubit indices (list[int]) or list of Qubit objects
-                - params: List of parameters (float or Parameter objects)
-            false_body: Optional list of operation tuples for the false branch.
-                Same format as true_body.
-
-        Example:
-            >>> from cqlib import Circuit, StandardGate
-            >>> from cqlib.circuit import ConditionView, Qubit
-            >>> circuit = Circuit(2)
-            >>> circuit.x(0)
-            >>> circuit.measure(0)
-            >>> condition = ConditionView(Qubit(0), 1)
-            >>> # If qubit 0 is 1, apply X to qubit 1; otherwise apply Z
-            >>> circuit.if_else(
-            ...     condition,
-            ...     [(StandardGate.X, [1])],           # true body: 2-tuple
-            ...     [(StandardGate.Z, [1])]            # false body: 2-tuple
-            ... )
-            >>>
-            >>> # With parameters (3-tuple)
-            >>> import numpy as np
-            >>> theta = Parameter("theta")
-            >>> circuit.if_else(
-            ...     condition,
-            ...     [(StandardGate.RX, [1], [np.pi/2])],     # true body: 3-tuple with fixed param
-            ...     [(StandardGate.RY, [1], [theta])]        # false body: 3-tuple with symbolic param
-            ... )
-        """
-        ...
-
-    def while_loop(
-        self,
-        condition: ConditionView,
-        body: list[OpTuple],
-    ) -> None:
-        """Appends a while loop operation to the circuit.
-
-        Executes quantum operations repeatedly while a condition is true.
-
-        Args:
-            condition: The classical condition to evaluate.
-            body: List of operation tuples for the loop body.
-                Each tuple can be either:
-                - (gate, qubits): 2-tuple without parameters
-                - (gate, qubits, params): 3-tuple with parameters
-
-                Where:
-                - gate: The gate to apply (StandardGate, McGate, UnitaryGate, Directive, or ControlFlow)
-                - qubits: List of qubit indices (list[int]) or list of Qubit objects
-                - params: List of parameters (float or Parameter objects)
-
-        Example:
-            >>> from cqlib import Circuit, StandardGate
-            >>> from cqlib.circuit import ConditionView, Qubit
-            >>> circuit = Circuit(2)
-            >>> circuit.x(0)
-            >>> circuit.measure(0)
-            >>> condition = ConditionView(Qubit(0), 1)
-            >>> # While qubit 0 equals 1, apply H to qubit 1 (2-tuple format)
-            >>> circuit.while_loop(condition, [(StandardGate.H, [1])])
-            >>>
-            >>> # Multiple operations with parameters (3-tuple format)
-            >>> import numpy as np
-            >>> theta = Parameter("theta")
-            >>> circuit.while_loop(
-            ...     condition,
-            ...     [
-            ...         (StandardGate.RX, [1], [np.pi/4]),   # 3-tuple with fixed param
-            ...         (StandardGate.RY, [1], [theta]),     # 3-tuple with symbolic param
-            ...         (StandardGate.H, [1]),               # 2-tuple without params
-            ...     ]
-            ... )
-        """
-        ...
-
-class OperationIterator:
-    """An iterator over the operations in a quantum circuit."""
-
-    def __iter__(self) -> "OperationIterator": ...
-    def __next__(self) -> Operation: ...
-    def __len__(self) -> int:
-        """Returns the number of remaining operations."""
-        ...
+    def __len__(self) -> int: ...
+    def __getitem__(self, index: int) -> ValueOperation: ...
+    def __repr__(self) -> str: ...

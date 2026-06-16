@@ -10,15 +10,24 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
-use cqlib_core::circuit::gate::instruction::Instruction;
+//! Python wrappers for storage and construction instruction sum types.
+//!
+//! [`PyInstruction`] represents a circuit-local storage instruction.
+//! [`PyValueInstruction`] is the construction form and owns recursive
+//! value-level classical control flow without circuit parameter-table indices.
+
+use crate::circuit::error::CircuitError as PyCircuitError;
+use crate::circuit::{
+    PyCircuitGate, PyClassicalControlOp, PyDirective, PyMcGate, PyStandardGate, PyUnitaryGate,
+};
+use cqlib_core::circuit::{Instruction, ValueInstruction};
 use pyo3::prelude::*;
 
-use crate::circuit::{PyControlFlow, PyDirective, PyMcGate, PyStandardGate, PyUnitaryGate};
-
+/// Python wrapper around the core storage-IR instruction enum.
 #[pyclass(name = "Instruction", module = "cqlib.circuit")]
 #[derive(Debug, Clone)]
 pub struct PyInstruction {
-    pub inner: Instruction,
+    pub(crate) inner: Instruction,
 }
 
 impl From<Instruction> for PyInstruction {
@@ -35,183 +44,130 @@ impl From<PyInstruction> for Instruction {
 
 #[pymethods]
 impl PyInstruction {
-    /// Creates an instruction from a standard gate.
-    ///
-    /// Args:
-    ///     gate: The standard gate.
     #[staticmethod]
-    fn from_standard_gate(gate: PyStandardGate) -> Self {
-        PyInstruction {
+    fn from_standard_gate(gate: PyStandardGate) -> PyResult<Self> {
+        if !gate.params.is_empty() {
+            return Err(PyCircuitError::new_err(
+                "Instruction does not own parameters; use ValueOperation.from_standard_gate()",
+            ));
+        }
+        Ok(Self {
             inner: Instruction::Standard(gate.inner),
-        }
+        })
     }
 
-    /// Creates an instruction from a multi-controlled gate.
-    ///
-    /// Args:
-    ///     gate: The multi-controlled gate.
     #[staticmethod]
-    fn from_mc_gate(gate: PyMcGate) -> Self {
-        PyInstruction {
-            inner: Instruction::McGate(Box::new(gate.inner)),
+    fn from_mc_gate(gate: PyMcGate) -> PyResult<Self> {
+        if !gate.params.is_empty() {
+            return Err(PyCircuitError::new_err(
+                "Instruction does not own parameters; use ValueOperation.from_mc_gate()",
+            ));
         }
+        Ok(Self {
+            inner: Instruction::McGate(Box::new(gate.inner)),
+        })
     }
 
-    /// Creates an instruction from a unitary gate.
-    ///
-    /// Args:
-    ///     gate: The unitary gate.
     #[staticmethod]
     fn from_unitary_gate(gate: PyUnitaryGate) -> Self {
-        PyInstruction {
+        Self {
             inner: Instruction::UnitaryGate(Box::new(gate.into())),
         }
     }
 
-    /// Creates a directive instruction (barrier, measure, reset).
-    ///
-    /// Args:
-    ///     directive: The directive.
+    /// Creates a storage instruction from a circuit-defined gate.
+    #[staticmethod]
+    fn from_circuit_gate(gate: PyCircuitGate) -> Self {
+        Self {
+            inner: Instruction::CircuitGate(Box::new(gate.inner)),
+        }
+    }
+
     #[staticmethod]
     fn from_directive(directive: PyDirective) -> Self {
-        PyInstruction {
+        Self {
             inner: Instruction::Directive(directive.inner),
         }
     }
 
-    /// Creates a delay instruction.
     #[staticmethod]
-    fn from_delay() -> Self {
-        PyInstruction {
+    fn delay() -> Self {
+        Self {
             inner: Instruction::Delay,
         }
     }
 
-    /// Creates a control flow instruction.
-    ///
-    /// Args:
-    ///     control_flow: The control flow operation.
-    #[staticmethod]
-    fn from_control_flow(control_flow: PyControlFlow) -> Self {
-        PyInstruction {
-            inner: Instruction::ControlFlowGate(control_flow.inner),
-        }
-    }
-
-    /// Returns the name of the instruction.
     #[getter]
     fn name(&self) -> String {
-        match &self.inner {
-            Instruction::Standard(g) => format!("{}", g),
-            Instruction::McGate(g) => format!("{}", g),
-            Instruction::UnitaryGate(g) => g.label().to_string(),
-            Instruction::CircuitGate(g) => g.name.to_string(),
-            Instruction::Directive(d) => format!("{}", d),
-            Instruction::ControlFlowGate(g) => format!("{}", g),
-            Instruction::Delay => "Delay".to_string(),
-        }
+        self.inner.to_string()
     }
 
-    /// Returns the type of the instruction as a string.
     #[getter]
-    fn instruction_type(&self) -> String {
+    fn instruction_type(&self) -> &'static str {
         match &self.inner {
-            Instruction::Standard(_) => "standard".to_string(),
-            Instruction::McGate(_) => "mcgate".to_string(),
-            Instruction::UnitaryGate(_) => "unitary".to_string(),
-            Instruction::CircuitGate(_) => "circuit".to_string(),
-            Instruction::Directive(_) => "directive".to_string(),
-            Instruction::Delay => "delay".to_string(),
-            Instruction::ControlFlowGate(_) => "control_flow".to_string(),
+            Instruction::Standard(_) => "standard",
+            Instruction::McGate(_) => "mcgate",
+            Instruction::UnitaryGate(_) => "unitary",
+            Instruction::CircuitGate(_) => "circuit",
+            Instruction::Directive(_) => "directive",
+            Instruction::ClassicalData(_) => "classical_data",
+            Instruction::ClassicalControl(_) => "classical_control",
+            Instruction::Delay => "delay",
         }
     }
 
-    /// Returns true if the instruction is a standard gate.
     #[getter]
     fn is_standard(&self) -> bool {
         matches!(self.inner, Instruction::Standard(_))
     }
 
-    /// Returns true if the instruction is a multi-controlled gate.
     #[getter]
     fn is_mcgate(&self) -> bool {
         matches!(self.inner, Instruction::McGate(_))
     }
 
-    /// Returns true if the instruction is a unitary gate.
     #[getter]
     fn is_unitary(&self) -> bool {
         matches!(self.inner, Instruction::UnitaryGate(_))
     }
 
-    /// Returns true if the instruction is a circuit gate.
     #[getter]
-    fn is_circuit(&self) -> bool {
+    fn is_circuit_gate(&self) -> bool {
         matches!(self.inner, Instruction::CircuitGate(_))
     }
 
-    /// Returns true if the instruction is a directive (measure, barrier, reset).
     #[getter]
     fn is_directive(&self) -> bool {
         matches!(self.inner, Instruction::Directive(_))
     }
 
-    /// Returns the standard gate if this is a standard instruction, None otherwise.
     #[getter]
-    fn standard_gate(&self) -> Option<PyStandardGate> {
-        match &self.inner {
-            Instruction::Standard(g) => Some(PyStandardGate::from(*g, vec![])),
-            _ => None,
-        }
+    fn is_classical_control(&self) -> bool {
+        matches!(self.inner, Instruction::ClassicalControl(_))
     }
 
-    /// Returns the multi-controlled gate if this is an mc instruction, None otherwise.
     #[getter]
-    fn mc_gate(&self) -> Option<PyMcGate> {
-        match &self.inner {
-            Instruction::McGate(g) => Some(PyMcGate::new(
-                g.num_ctrl_qubits() as u8,
-                PyStandardGate::from(*g.base_gate(), vec![]),
-            )),
-            _ => None,
-        }
+    fn is_classical_data(&self) -> bool {
+        matches!(self.inner, Instruction::ClassicalData(_))
     }
 
-    /// Returns the unitary gate if this is a unitary instruction, None otherwise.
-    #[getter]
-    fn unitary_gate(&self) -> Option<PyUnitaryGate> {
-        match &self.inner {
-            Instruction::UnitaryGate(g) => Some(PyUnitaryGate::from(g.as_ref().clone())),
-            _ => None,
-        }
-    }
-
-    /// Returns true if this is a delay instruction.
     #[getter]
     fn is_delay(&self) -> bool {
         matches!(self.inner, Instruction::Delay)
     }
 
-    /// Returns true if this is a control flow instruction.
     #[getter]
-    fn is_control_flow(&self) -> bool {
-        matches!(self.inner, Instruction::ControlFlowGate(_))
-    }
-
-    /// Returns the directive if this is a directive instruction, None otherwise.
-    #[getter]
-    fn directive(&self) -> Option<PyDirective> {
+    fn standard_gate(&self) -> Option<PyStandardGate> {
         match &self.inner {
-            Instruction::Directive(d) => Some(PyDirective::from(*d)),
+            Instruction::Standard(gate) => Some(PyStandardGate::from(*gate, vec![])),
             _ => None,
         }
     }
 
-    /// Returns the control flow if this is a control flow instruction, None otherwise.
     #[getter]
-    fn control_flow(&self) -> Option<PyControlFlow> {
+    fn directive(&self) -> Option<PyDirective> {
         match &self.inner {
-            Instruction::ControlFlowGate(cf) => Some(PyControlFlow::from(cf.clone())),
+            Instruction::Directive(directive) => Some(PyDirective::from(*directive)),
             _ => None,
         }
     }
@@ -219,8 +175,81 @@ impl PyInstruction {
     fn __repr__(&self) -> String {
         format!("Instruction({})", self.name())
     }
+}
 
-    fn __str__(&self) -> String {
-        self.name()
+/// Python wrapper around the self-contained construction-IR instruction enum.
+#[pyclass(name = "ValueInstruction", module = "cqlib.circuit")]
+#[derive(Debug, Clone)]
+pub struct PyValueInstruction {
+    pub(crate) inner: ValueInstruction,
+}
+
+impl From<ValueInstruction> for PyValueInstruction {
+    fn from(inner: ValueInstruction) -> Self {
+        Self { inner }
+    }
+}
+
+#[pymethods]
+impl PyValueInstruction {
+    #[staticmethod]
+    fn from_instruction(instruction: PyInstruction) -> Self {
+        Self {
+            inner: ValueInstruction::from_instruction(instruction.inner),
+        }
+    }
+
+    #[staticmethod]
+    fn from_classical_control(control: PyClassicalControlOp) -> Self {
+        Self {
+            inner: ValueInstruction::ClassicalControl(control.inner),
+        }
+    }
+
+    #[getter]
+    fn is_classical_control(&self) -> bool {
+        self.inner.is_classical_control()
+    }
+
+    #[getter]
+    fn is_instruction(&self) -> bool {
+        self.inner.is_instruction()
+    }
+
+    #[getter]
+    fn instruction(&self) -> Option<PyInstruction> {
+        self.inner
+            .as_instruction()
+            .cloned()
+            .map(PyInstruction::from)
+    }
+
+    #[getter]
+    fn classical_control(&self) -> Option<PyClassicalControlOp> {
+        match &self.inner {
+            ValueInstruction::ClassicalControl(control) => Some(control.clone().into()),
+            ValueInstruction::Instruction(_) => None,
+        }
+    }
+
+    fn __repr__(&self) -> String {
+        match &self.inner {
+            ValueInstruction::Instruction(inst) => format!("ValueInstruction({inst})"),
+            ValueInstruction::ClassicalControl(control) => {
+                format!("ValueInstruction({control:?})")
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cqlib_core::circuit::{Parameter, StandardGate};
+
+    #[test]
+    fn storage_instruction_rejects_bound_gate_parameters() {
+        let gate = PyStandardGate::from(StandardGate::RX, vec![Parameter::symbol("theta")]);
+        assert!(PyInstruction::from_standard_gate(gate).is_err());
     }
 }

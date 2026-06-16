@@ -1,224 +1,147 @@
-# This code is part of Cqlib.
-#
-# (C) Copyright China Telecom Quantum Group 2026
-#
-# This code is licensed under the Apache License, Version 2.0. You may
-# obtain a copy of this license in the LICENSE.txt file in the root directory
-# of this source tree or at http://www.apache.org/licenses/LICENSE-2.0.
-#
-# Any modifications or derivative works of this code must retain this
-# copyright notice, and modified files need to carry a notice indicating
-# that they have been altered from the originals.
+"""Instruction and operation types.
 
-from typing import Optional
-from typing_extensions import final
+:class:`Instruction` and :class:`ValueInstruction` are the two sum types that
+represent *what* an operation does (standard gate, custom unitary, directive,
+or classical control).  :class:`ValueOperation` pairs an instruction with
+qubits and parameters to form a complete circuit operation.
+"""
+
+from typing import Any
 import numpy as np
-import numpy.typing as npt
+from numpy.typing import NDArray
 from .bit import Qubit
-from .gates.standard import StandardGate
-from .gates.mc_gate import McGate
-from .gates.unitary import UnitaryGate
-from .gates.control_flow import ControlFlow
-from .gates.directive import Directive
-from .gates.delay import Delay
+from .control_flow import ClassicalControlOp
+from .gates import CircuitGate, Directive, MCGate, StandardGate, UnitaryGate
+from .parameter import Parameter
 
-@final
 class Instruction:
-    """A unified representation of any operation in a quantum circuit.
+    """Storage-IR instruction — a gate or directive without parameters.
 
-    This class acts as a sum type for all possible instructions including:
-    - Standard gates (e.g., H, CX)
-    - Multi-controlled gates (MCGate)
-    - Unitary gates
-    - Circuit gates (sub-circuits)
-    - Directives (Measure, Barrier, Reset)
+    Instructions define the operation type but do not own parameters.
+    For parameterised operations, use :class:`ValueOperation` factories.
     """
-
     @staticmethod
-    def from_standard_gate(gate: StandardGate) -> "Instruction":
-        """Creates an instruction from a standard gate.
-
-        Args:
-            gate: The standard gate.
-        """
+    def from_standard_gate(gate: StandardGate) -> Instruction:
+        """Create from a :class:`StandardGate` (no bound parameters)."""
         ...
-
     @staticmethod
-    def from_mc_gate(gate: McGate) -> "Instruction":
-        """Creates an instruction from a multi-controlled gate.
-
-        Args:
-            gate: The multi-controlled gate.
-        """
+    def from_mc_gate(gate: MCGate) -> Instruction:
+        """Create from a :class:`MCGate` (no bound parameters)."""
         ...
-
     @staticmethod
-    def from_unitary_gate(gate: UnitaryGate) -> "Instruction":
-        """Creates an instruction from a unitary gate.
-
-        Args:
-            gate: The unitary gate.
-        """
+    def from_unitary_gate(gate: UnitaryGate) -> Instruction:
+        """Create from a :class:`UnitaryGate`."""
         ...
-
     @staticmethod
-    def from_directive(directive: Directive) -> "Instruction":
-        """Creates a directive instruction (barrier, measure, reset).
-
-        Args:
-            directive: The directive.
-        """
+    def from_circuit_gate(gate: CircuitGate) -> Instruction:
+        """Create from a :class:`CircuitGate`."""
         ...
-
     @staticmethod
-    def from_delay(delay: "Delay") -> "Instruction":
-        """Creates a delay instruction.
-
-        Args:
-            delay: The delay operation.
-        """
+    def from_directive(directive: Directive) -> Instruction:
+        """Create from a :class:`Directive` (barrier, measure, reset)."""
         ...
-
     @staticmethod
-    def from_control_flow(control_flow: ControlFlow) -> "Instruction":
-        """Creates a control flow instruction.
-
-        Args:
-            control_flow: The control flow operation.
-        """
+    def delay() -> Instruction:
+        """Create a delay instruction."""
         ...
-
+    @property
+    def name(self) -> str:
+        """Human-readable name (e.g. ``"h"``, ``"cx"``, ``"measure"``)."""
+        ...
     @property
     def instruction_type(self) -> str:
-        """Returns the type of instruction: 'standard', 'mcgate', 'unitary', 'circuit', or 'directive'."""
+        """One of ``"standard"``, ``"mcgate"``, ``"unitary"``, ``"circuit"``,
+        ``"directive"``, ``"classical_data"``, ``"classical_control"``, ``"delay"``."""
         ...
-
     @property
-    def is_standard(self) -> bool:
-        """Returns True if this is a standard gate instruction."""
-        ...
-
+    def is_standard(self) -> bool: ...
     @property
-    def is_mcgate(self) -> bool:
-        """Returns True if this is a multi-controlled gate instruction."""
-        ...
-
+    def is_mcgate(self) -> bool: ...
     @property
-    def is_unitary(self) -> bool:
-        """Returns True if this is a unitary gate instruction."""
-        ...
-
+    def is_unitary(self) -> bool: ...
     @property
-    def is_circuit(self) -> bool:
-        """Returns True if this is a circuit gate instruction."""
-        ...
-
+    def is_circuit_gate(self) -> bool: ...
     @property
-    def is_directive(self) -> bool:
-        """Returns True if this is a directive (measure, barrier, reset)."""
-        ...
-
+    def is_directive(self) -> bool: ...
     @property
-    def is_delay(self) -> bool:
-        """Returns True if this is a delay instruction."""
-        ...
-
+    def is_classical_control(self) -> bool: ...
     @property
-    def is_control_flow(self) -> bool:
-        """Returns True if this is a control flow instruction (if_else, while_loop)."""
-        ...
-
+    def is_classical_data(self) -> bool: ...
     @property
-    def standard_gate(self) -> Optional[StandardGate]:
-        """Returns the standard gate if this is a standard instruction, None otherwise."""
-        ...
-
+    def is_delay(self) -> bool: ...
     @property
-    def mc_gate(self) -> Optional[McGate]:
-        """Returns the multi-controlled gate if this is an mc instruction, None otherwise."""
+    def standard_gate(self) -> StandardGate | None:
+        """The :class:`StandardGate` if this is a standard-gate instruction."""
         ...
-
     @property
-    def unitary_gate(self) -> Optional[UnitaryGate]:
-        """Returns the unitary gate if this is a unitary instruction, None otherwise."""
+    def directive(self) -> Directive | None:
+        """The :class:`Directive` if this is a directive instruction."""
         ...
+    def __repr__(self) -> str: ...
 
-    @property
-    def directive(self) -> Optional[Directive]:
-        """Returns the directive if this is a directive instruction, None otherwise."""
-        ...
+class ValueInstruction:
+    """Construction-IR instruction — self-contained, may include classical control.
 
-    @property
-    def control_flow(self) -> Optional[ControlFlow]:
-        """Returns the control flow if this is a control flow instruction, None otherwise."""
-        ...
-
-    @property
-    def name(self) -> str:
-        """Returns the name of the instruction."""
-        ...
-
-@final
-class Operation:
-    """A fully resolved operation in a quantum circuit.
-
-    An Operation combines a gate (instruction) with the specific qubits it acts upon and its
-    parameters. It serves as the fundamental node in the circuit's execution list.
-
-    Attributes:
-        instruction: The type of operation (gate or directive).
-        qubits: The ordered list of qubits involved in this operation.
-        params: The parameters for the operation (float values or symbolic indices).
-        label: An optional human-readable label for this operation.
+    Either wraps an :class:`Instruction` or a :class:`ClassicalControlOp`.
     """
-
-    @property
-    def instruction(self) -> Instruction:
-        """Returns the instruction (gate type) of this operation."""
+    @staticmethod
+    def from_instruction(instruction: Instruction) -> ValueInstruction:
+        """Wrap a storage :class:`Instruction`."""
         ...
-
-    @property
-    def qubits(self) -> list[Qubit]:
-        """Returns the qubits this operation acts on."""
+    @staticmethod
+    def from_classical_control(control: ClassicalControlOp) -> ValueInstruction:
+        """Wrap a :class:`ClassicalControlOp`."""
         ...
-
     @property
-    def num_qubits(self) -> int:
-        """Returns the number of qubits this operation acts on."""
-        ...
-
+    def is_classical_control(self) -> bool: ...
     @property
-    def params(self) -> list[float | tuple[str, int]]:
-        """Returns the parameters of this operation.
-
-        Parameters can be either:
-        - Fixed float values
-        - Tuples ("param", index) for symbolic parameters
-        """
-        ...
-
+    def is_instruction(self) -> bool: ...
     @property
-    def num_params(self) -> int:
-        """Returns the number of parameters."""
+    def instruction(self) -> Instruction | None:
+        """The inner :class:`Instruction` when this is a plain instruction."""
         ...
-
     @property
-    def label(self) -> Optional[str]:
-        """Returns the label of this operation, if any."""
+    def classical_control(self) -> ClassicalControlOp | None:
+        """The inner :class:`ClassicalControlOp` when this is classical control."""
         ...
+    def __repr__(self) -> str: ...
 
+class ValueOperation:
+    """Self-contained construction-IR operation (instruction + qubits + params).
+
+    This is the public construction boundary.  Use the static factories to
+    create operations from gates with their bound parameters preserved.
+    """
+    def __init__(self, instruction: ValueInstruction, qubits: list[Qubit], params: list[float | Parameter] | None = ..., label: str | None = ...) -> None: ...
+    @staticmethod
+    def from_instruction(instruction: Instruction, qubits: list[Qubit], params: list[float | Parameter] | None = ..., label: str | None = ...) -> ValueOperation:
+        """Create from a storage :class:`Instruction` with explicit parameters."""
+        ...
+    @staticmethod
+    def from_standard_gate(gate: StandardGate, qubits: list[Qubit], label: str | None = ...) -> ValueOperation:
+        """Create while preserving parameters bound to a :class:`StandardGate`."""
+        ...
+    @staticmethod
+    def from_mc_gate(gate: MCGate, qubits: list[Qubit], label: str | None = ...) -> ValueOperation:
+        """Create while preserving parameters bound to an :class:`MCGate`."""
+        ...
+    @staticmethod
+    def from_classical_control(control: ClassicalControlOp) -> ValueOperation:
+        """Create from a :class:`ClassicalControlOp`."""
+        ...
     @property
-    def name(self) -> str:
-        """Returns the name of the instruction."""
-        ...
-
-    def matrix(self) -> npt.NDArray[np.complex128]:
-        """Returns the unitary matrix representation of this operation.
-
-        Returns:
-            A 2D numpy array (dtype=complex128) representing the unitary matrix.
+    def instruction(self) -> ValueInstruction: ...
+    @property
+    def qubits(self) -> list[Qubit]: ...
+    @property
+    def params(self) -> list[float | Parameter]: ...
+    @property
+    def label(self) -> str | None: ...
+    def matrix(self) -> NDArray[np.complex128]:
+        """Compute the unitary matrix (fixed-parameter operations only).
 
         Raises:
-            RuntimeError: If the operation is non-unitary (e.g., Measure, Barrier).
+            ValueError: For classical control or symbolic parameters without context.
         """
         ...
+    def __repr__(self) -> str: ...

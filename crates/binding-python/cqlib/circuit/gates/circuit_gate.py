@@ -10,6 +10,8 @@
 # copyright notice, and modified files need to carry a notice indicating
 # that they have been altered from the originals.
 
-from .circuit import Circuit, Parameter, Qubit
+"""Runtime exports for native circuit-defined gate types."""
 
-__all__ = ["Circuit", "Parameter", "Qubit"]
+from ..._native.circuit.gate import CircuitGate, FrozenCircuit
+
+__all__ = ["CircuitGate", "FrozenCircuit"]

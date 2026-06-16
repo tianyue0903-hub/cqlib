@@ -10,35 +10,30 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
-//! Python Bindings for Standard Quantum Gates
+//! Python binding for the native standard-gate instruction set.
 //!
-//! This module provides Python bindings for the [`StandardGate`] enum from cqlib-core.
-//! It exposes standard quantum gates as class attributes and supports parameter binding
-//! via callable semantics.
-//!
-//! # Key Components
-//!
-//! - [`PyStandardGate`]: The main class wrapping `StandardGate` with Python-friendly interfaces.
-//! - Static attributes: Gate constants like `StandardGate.H`, `StandardGate.CX`, etc.
+//! Gate definitions are exposed as class attributes such as `StandardGate.H`.
+//! Calling a parametric definition binds immutable [`Parameter`] expressions to
+//! that gate instance.
 
+use crate::circuit::error::{CircuitError as PyCircuitError, ParameterError as PyParameterError};
+use crate::circuit::gate::PyMcGate;
 use crate::circuit::parameter::PyParameter;
+use cqlib_core::circuit::CircuitError as CoreCircuitError;
 use cqlib_core::circuit::Parameter;
-use cqlib_core::circuit::gate::{Instruction, StandardGate};
+use cqlib_core::circuit::error::ParameterError;
+use cqlib_core::circuit::gate::{MCGate, StandardGate};
 use num_complex::Complex64;
 use numpy::{PyArray2, ToPyArray};
-use pyo3::exceptions::{PyTypeError, PyValueError};
+use pyo3::exceptions::{PyRuntimeError, PyTypeError};
 use pyo3::prelude::*;
 use pyo3::types::PyTuple;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::RwLock;
 
-/// Python wrapper for `StandardGate` enum.
-///
-/// Represents a standard quantum gate with optional parameters.
-/// Can be instantiated via static attributes (e.g., `StandardGate.H`)
-/// or by calling a parametric gate with values (e.g., `StandardGate.RX(3.14)`).
-#[pyclass(name = "StandardGate", module = "cqlib.circuit.gate")]
+/// Native standard gate with optional bound symbolic parameters.
+#[pyclass(name = "StandardGate", module = "cqlib.circuit.gates")]
 #[derive(Debug)]
 pub struct PyStandardGate {
     pub inner: StandardGate,
@@ -63,7 +58,7 @@ impl PyStandardGate {
     /// Use static attributes like `StandardGate.H` or `StandardGate.RX(theta)`.
     #[new]
     fn new() -> PyResult<Self> {
-        Err(PyValueError::new_err(
+        Err(PyTypeError::new_err(
             "StandardGate cannot be instantiated directly. Use static attributes like StandardGate.H or StandardGate.RX",
         ))
     }
@@ -87,22 +82,25 @@ impl PyStandardGate {
         // If gate requires no parameters (e.g., H, X), calling it returns a clone
         if expected_params == 0 {
             if !args.is_empty() {
-                return Err(PyValueError::new_err(format!(
-                    "Gate {} expects 0 parameters, got {}",
-                    self.inner,
-                    args.len()
-                )));
+                return Err(PyCircuitError::new_err(
+                    CoreCircuitError::ParameterCountMismatch {
+                        expected: 0,
+                        actual: args.len(),
+                    }
+                    .to_string(),
+                ));
             }
             return Ok(self.clone());
         }
 
         if args.len() != expected_params {
-            return Err(PyValueError::new_err(format!(
-                "Gate {} expects {} parameters, got {}",
-                self.inner,
-                expected_params,
-                args.len()
-            )));
+            return Err(PyCircuitError::new_err(
+                CoreCircuitError::ParameterCountMismatch {
+                    expected: expected_params,
+                    actual: args.len(),
+                }
+                .to_string(),
+            ));
         }
 
         let mut new_params = Vec::with_capacity(expected_params);
@@ -110,6 +108,14 @@ impl PyStandardGate {
             if let Ok(py_param) = arg.extract::<PyParameter>() {
                 new_params.push(py_param.inner);
             } else if let Ok(val) = arg.extract::<f64>() {
+                if !val.is_finite() {
+                    return Err(PyParameterError::new_err(
+                        ParameterError::DomainError(format!(
+                            "numeric parameter must be finite, got {val}"
+                        ))
+                        .to_string(),
+                    ));
+                }
                 new_params.push(Parameter::from(val));
             } else {
                 return Err(PyTypeError::new_err(format!(
@@ -234,33 +240,30 @@ impl PyStandardGate {
         // Priority: use provided params, then try to evaluate internal params
         if let Some(p) = params {
             if p.len() != self.inner.num_params() {
-                return Err(PyValueError::new_err(format!(
-                    "Gate {:?} expects {} parameters, got {}",
-                    self.inner,
-                    self.inner.num_params(),
-                    p.len()
-                )));
+                return Err(PyCircuitError::new_err(
+                    CoreCircuitError::ParameterCountMismatch {
+                        expected: self.inner.num_params(),
+                        actual: p.len(),
+                    }
+                    .to_string(),
+                ));
             }
             eval_params = p;
         } else if !self.params.is_empty() {
             // Try to evaluate internal params (must be constant)
             let mut calculated = Vec::with_capacity(self.params.len());
-            for p in &self.params {
-                match p.evaluate(&None) {
-                    Ok(val) => calculated.push(val),
-                    Err(_) => {
-                        return Err(PyValueError::new_err(
-                            "Cannot compute matrix: gate has symbolic parameters.\
-                            Please provide concrete values via the 'params' argument.",
-                        ));
-                    }
-                }
+            for parameter in &self.params {
+                calculated.push(
+                    parameter
+                        .evaluate(&None)
+                        .map_err(|error| PyParameterError::new_err(error.to_string()))?,
+                );
             }
             eval_params = calculated;
         } else if self.inner.num_params() == 0 {
             eval_params = vec![];
         } else {
-            return Err(PyValueError::new_err(format!(
+            return Err(PyCircuitError::new_err(format!(
                 "Gate {:?} expects {} parameters, but none were provided.",
                 self.inner,
                 self.inner.num_params()
@@ -272,42 +275,15 @@ impl PyStandardGate {
         let mat_cow = self
             .inner
             .matrix(&eval_params)
-            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+            .map_err(|error| PyCircuitError::new_err(error.to_string()))?;
         Ok(mat_cow.to_pyarray(py))
     }
 
-    /// Returns a controlled version of this gate.
-    ///
-    /// # Arguments
-    ///
-    /// * `num_ctrls` - Number of control qubits.
-    ///
-    /// # Returns
-    ///
-    /// A new gate with control qubits applied.
-    fn control(&self, num_ctrls: usize) -> PyResult<Self> {
-        let inst: Instruction = self.inner.into();
-
-        // Try to generate controlled gate
-        match inst.control(num_ctrls) {
-            Some(Instruction::Standard(std_gate)) => {
-                // If result is still StandardGate (e.g., X.control(1) -> CX), happy case
-                Ok(PyStandardGate {
-                    inner: std_gate,
-                    params: self.params.clone(),
-                    hash: RwLock::new(None),
-                })
-            }
-            Some(_) => {
-                // If result becomes ExtendedGate (e.g., H.control(1)), not supported in simplified version
-                Err(PyValueError::new_err(
-                    "Controlled version of this gate results in a non-standard gate, which is not supported in this simplified version.",
-                ))
-            }
-            None => Err(PyValueError::new_err(format!(
-                "Cannot control gate {:?}",
-                self.inner
-            ))),
+    /// Returns a multi-controlled form of this standard gate.
+    fn control(&self, num_controls: u8) -> PyMcGate {
+        PyMcGate {
+            inner: MCGate::new(num_controls, self.inner),
+            params: self.params.clone(),
         }
     }
 
@@ -317,24 +293,51 @@ impl PyStandardGate {
     ///
     /// A new gate representing the inverse operation.
     fn inverse(&self) -> PyResult<Self> {
-        // Use stored params, or defaults if none (0.0 is sufficient for deterministic types)
-        let params_to_use = if !self.params.is_empty() {
-            self.params.clone()
-        } else {
-            vec![Parameter::from(0.0); 3]
-        };
+        if self.params.len() != self.inner.num_params() {
+            return Err(PyCircuitError::new_err(format!(
+                "Gate {} requires {} bound parameters before inversion",
+                self.inner,
+                self.inner.num_params()
+            )));
+        }
 
-        match self.inner.inverse(&params_to_use) {
+        match self.inner.inverse(&self.params) {
             Some((inv_gate, inv_params)) => Ok(PyStandardGate {
                 inner: inv_gate,
                 params: inv_params.into_vec(),
                 hash: RwLock::new(None),
             }),
-            None => Err(PyValueError::new_err(format!(
+            None => Err(PyRuntimeError::new_err(format!(
                 "Gate {:?} is not invertible",
                 self.inner
             ))),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PyStandardGate;
+    use cqlib_core::circuit::{Parameter, StandardGate};
+
+    #[test]
+    fn control_preserves_bound_parameters() {
+        let theta = Parameter::symbol("theta");
+        let gate = PyStandardGate::from(StandardGate::RX, vec![theta.clone()]);
+        let controlled = gate.control(2);
+
+        assert_eq!(controlled.inner.num_ctrl_qubits(), 2);
+        assert_eq!(controlled.params, vec![theta]);
+    }
+
+    #[test]
+    fn inverse_uses_exact_bound_parameter_count() {
+        let theta = Parameter::symbol("theta");
+        let gate = PyStandardGate::from(StandardGate::RX, vec![theta.clone()]);
+        let inverse = gate.inverse().unwrap();
+
+        assert_eq!(inverse.inner, StandardGate::RX);
+        assert_eq!(inverse.params, vec![-theta]);
     }
 }
 

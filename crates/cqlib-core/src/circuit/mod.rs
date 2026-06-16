@@ -168,6 +168,8 @@ pub mod value_instruction;
 pub use bit::{Qubit, QubitError};
 pub use cfg::CircuitCFG;
 pub use circuit_classical::SwitchBuilder;
+#[doc(hidden)]
+pub use circuit_classical::{ControlBodyTransaction, ExternalControlScope};
 pub use circuit_impl::Circuit;
 pub use circuit_param::{CircuitParam, ParameterValue};
 pub use circuit_to_matrix::circuit_to_matrix;

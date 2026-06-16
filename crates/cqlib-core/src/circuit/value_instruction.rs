@@ -48,6 +48,7 @@ use crate::circuit::control_flow::ControlBody;
 use crate::circuit::error::CircuitError;
 use crate::circuit::gate::instruction::Instruction;
 use crate::circuit::operation::{Operation, ValueOperation};
+use alloc::collections::BTreeSet;
 
 /// A value-level control-flow body.
 ///
@@ -91,6 +92,18 @@ impl ValueControlBody {
     /// Returns the body operations.
     pub fn operations(&self) -> &[ValueOperation] {
         self.operations.as_slice()
+    }
+
+    /// Returns every qubit used directly or by nested control-flow operations.
+    pub fn used_qubits(&self) -> BTreeSet<crate::circuit::Qubit> {
+        let mut qubits = BTreeSet::new();
+        for operation in &self.operations {
+            qubits.extend(operation.qubits.iter().copied());
+            if let ValueInstruction::ClassicalControl(control) = &operation.instruction {
+                qubits.extend(control.used_qubits());
+            }
+        }
+        qubits
     }
 }
 
@@ -192,6 +205,36 @@ pub enum ValueClassicalControlOp {
 }
 
 impl ValueClassicalControlOp {
+    /// Returns every qubit used by the operation's nested control-flow bodies.
+    pub fn used_qubits(&self) -> BTreeSet<crate::circuit::Qubit> {
+        let mut qubits = BTreeSet::new();
+        match self {
+            Self::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                qubits.extend(then_body.used_qubits());
+                if let Some(else_body) = else_body {
+                    qubits.extend(else_body.used_qubits());
+                }
+            }
+            Self::While { body, .. } | Self::For { body, .. } => {
+                qubits.extend(body.used_qubits());
+            }
+            Self::Switch { cases, default, .. } => {
+                for case in cases {
+                    qubits.extend(case.body.used_qubits());
+                }
+                if let Some(default) = default {
+                    qubits.extend(default.used_qubits());
+                }
+            }
+            Self::Break | Self::Continue => {}
+        }
+        qubits
+    }
+
     /// Returns the classical variables read by the controlling expressions.
     pub fn classical_var_reads(&self) -> Vec<ClassicalVar> {
         match self {

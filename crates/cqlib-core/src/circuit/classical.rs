@@ -19,6 +19,7 @@
 //! mutable runtime storage location. Control-flow expressions may read both,
 //! while store operations may only write variables.
 
+use std::fmt;
 use std::num::{NonZeroU32, NonZeroU64};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -31,6 +32,13 @@ static NEXT_CIRCUIT_ID: AtomicU64 = AtomicU64::new(1);
 /// Process-local identity for classical handles owned by a circuit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct CircuitId(NonZeroU64);
+
+impl fmt::Display for CircuitId {
+    /// Formats the process-local identity as `CircuitId(<id>)`.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "CircuitId({})", self.0)
+    }
+}
 
 impl CircuitId {
     /// Allocates a new process-local circuit identity.

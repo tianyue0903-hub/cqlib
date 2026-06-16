@@ -15,10 +15,10 @@
 //! This module provides a function to convert a quantum circuit to its unitary matrix representation.
 
 use crate::circuit::PyCircuit;
+use crate::circuit::error::CircuitError as PyCircuitError;
 use cqlib_core::circuit::circuit_to_matrix;
 use num_complex::Complex64;
 use numpy::{IntoPyArray, PyArray2};
-use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 
 /// Converts a quantum circuit to its unitary matrix representation.
@@ -37,7 +37,7 @@ use pyo3::prelude::*;
 ///
 /// # Raises
 ///
-/// RuntimeError if the circuit contains non-unitary operations (e.g., Measure, Reset).
+/// CircuitError if the circuit contains non-unitary operations (e.g., Measure, Reset).
 ///
 /// # Examples
 ///
@@ -65,5 +65,5 @@ pub fn py_circuit_to_matrix<'py>(
     let result = py.detach(move || circuit_to_matrix(&circuit_inner, order.as_deref()));
     result
         .map(|arr| arr.into_pyarray(py))
-        .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        .map_err(|e| PyCircuitError::new_err(e.to_string()))
 }
