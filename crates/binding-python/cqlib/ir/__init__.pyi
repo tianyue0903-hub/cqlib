@@ -13,10 +13,11 @@
 """Type hints for IR module.
 
 This module provides type hints for parsing and serializing quantum circuits
-in various formats including OpenQASM 2.0 and QCIS.
+in various formats including OpenQASM 2.0, OpenQASM 3.0, and QCIS.
 """
 
 from . import qasm2 as qasm2
+from . import qasm3 as qasm3
 from . import qcis as qcis
 
-__all__ = ["qasm2", "qcis"]
+__all__ = ["qasm2", "qasm3", "qcis"]
