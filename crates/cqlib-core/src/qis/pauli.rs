@@ -555,6 +555,45 @@ impl PauliString {
         }
     }
 
+    /// Returns the Pauli operator at the specified qubit index, or an error if out of bounds.
+    ///
+    /// # Arguments
+    ///
+    /// * idx - The qubit index.
+    ///
+    /// # Returns
+    ///
+    /// The Pauli operator at the specified index, or [QisError::IndexOutOfBounds].
+    pub fn try_get_pauli(&self, idx: usize) -> Result<Pauli, QisError> {
+        if idx >= self.num_qubits {
+            return Err(QisError::IndexOutOfBounds {
+                index: idx,
+                max: self.num_qubits.saturating_sub(1),
+            });
+        }
+        Ok(self.get_pauli(idx))
+    }
+
+    /// Sets the Pauli operator at the specified qubit index, or returns an error if out of bounds.
+    ///
+    /// # Arguments
+    ///
+    /// * idx - The qubit index.
+    /// * pauli - The Pauli operator to set.
+    ///
+    /// # Returns
+    ///
+    /// Ok(()) on success, or [QisError::IndexOutOfBounds] if the index is out of bounds.
+    pub fn try_set_pauli(&mut self, idx: usize, pauli: Pauli) -> Result<(), QisError> {
+        if idx >= self.num_qubits {
+            return Err(QisError::IndexOutOfBounds {
+                index: idx,
+                max: self.num_qubits.saturating_sub(1),
+            });
+        }
+        self.set_pauli(idx, pauli);
+        Ok(())
+    }
     /// Checks if this Pauli string commutes with another.
     ///
     /// Two Pauli strings commute if their symplectic inner product is 0 (mod 2).

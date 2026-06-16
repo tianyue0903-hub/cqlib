@@ -745,3 +745,48 @@ fn pauli_from_str_invalid() {
     assert!("XY".parse::<Pauli>().is_err());
     assert!("II".parse::<Pauli>().is_err());
 }
+
+#[test]
+fn try_get_pauli_rejects_out_of_bounds_index() {
+    let ps = PauliString::new(2);
+    assert!(ps.try_get_pauli(0).is_ok());
+    assert!(ps.try_get_pauli(1).is_ok());
+    assert!(ps.try_get_pauli(2).is_err());
+    assert!(ps.try_get_pauli(100).is_err());
+}
+
+#[test]
+fn try_get_pauli_zero_qubits() {
+    let ps = PauliString::new(0);
+    assert!(ps.try_get_pauli(0).is_err());
+}
+
+#[test]
+fn try_set_pauli_rejects_out_of_bounds_index() {
+    let mut ps = PauliString::new(2);
+    assert!(ps.try_set_pauli(0, Pauli::X).is_ok());
+    assert!(ps.try_set_pauli(1, Pauli::Z).is_ok());
+    assert!(ps.try_set_pauli(2, Pauli::X).is_err());
+    assert!(ps.try_set_pauli(100, Pauli::I).is_err());
+}
+
+#[test]
+fn try_set_pauli_preserves_state_on_error() {
+    let mut ps = PauliString::new(2);
+    ps.try_set_pauli(0, Pauli::X).unwrap();
+    let result = ps.try_set_pauli(5, Pauli::Z);
+    assert!(result.is_err());
+    assert_eq!(ps.try_get_pauli(0).unwrap(), Pauli::X);
+    assert_eq!(ps.try_get_pauli(1).unwrap(), Pauli::I);
+}
+
+#[test]
+fn try_get_pauli_returns_correct_operator() {
+    let mut ps = PauliString::new(3);
+    ps.try_set_pauli(0, Pauli::X).unwrap();
+    ps.try_set_pauli(1, Pauli::Y).unwrap();
+    ps.try_set_pauli(2, Pauli::Z).unwrap();
+    assert_eq!(ps.try_get_pauli(0).unwrap(), Pauli::X);
+    assert_eq!(ps.try_get_pauli(1).unwrap(), Pauli::Y);
+    assert_eq!(ps.try_get_pauli(2).unwrap(), Pauli::Z);
+}
