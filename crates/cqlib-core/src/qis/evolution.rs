@@ -493,8 +493,8 @@ impl Hamiltonian {
     ///
     /// // Create H = 0.5 * ZZ + 0.3 * XX
     /// let mut h = Hamiltonian::new(2);
-    /// h.add_term("ZZ".into(), 0.5.into()).unwrap();
-    /// h.add_term("XX".into(), 0.3.into()).unwrap();
+    /// h.add_term("ZZ".parse::<PauliString>().unwrap(), 0.5.into()).unwrap();
+    /// h.add_term("XX".parse::<PauliString>().unwrap(), 0.3.into()).unwrap();
     ///
     /// // Generate Trotter circuit for t=1.0 with 10 steps
     /// let circuit = h.to_trotter_circuit(1.0, 10, TrotterMode::FirstOrder).unwrap();
@@ -605,20 +605,21 @@ impl Hamiltonian {
     /// # Examples
     ///
     /// ```rust
+    /// use cqlib_core::qis::PauliString;
     /// use cqlib_core::qis::Hamiltonian;
     /// use cqlib_core::qis::evolution::TrotterMode;
     ///
     /// // Commuting Hamiltonian: ZZ and ZI share eigenstates — exact evolution
     /// let mut h = Hamiltonian::new(2);
-    /// h.add_term("ZZ".into(), 0.5.into()).unwrap();
-    /// h.add_term("ZI".into(), 0.3.into()).unwrap();
+    /// h.add_term("ZZ".parse::<PauliString>().unwrap(), 0.5.into()).unwrap();
+    /// h.add_term("ZI".parse::<PauliString>().unwrap(), 0.3.into()).unwrap();
     /// // steps/mode are irrelevant here — exact path is taken automatically
     /// let circuit = h.to_evolution_circuit(1.0, 1, TrotterMode::FirstOrder).unwrap();
     ///
     /// // Non-commuting: uses Trotter
     /// let mut h2 = Hamiltonian::new(1);
-    /// h2.add_term("X".into(), 1.0.into()).unwrap();
-    /// h2.add_term("Z".into(), 1.0.into()).unwrap();
+    /// h2.add_term("X".parse::<PauliString>().unwrap(), 1.0.into()).unwrap();
+    /// h2.add_term("Z".parse::<PauliString>().unwrap(), 1.0.into()).unwrap();
     /// let circuit2 = h2.to_evolution_circuit(0.5, 10, TrotterMode::SecondOrder).unwrap();
     /// ```
     pub fn to_evolution_circuit(

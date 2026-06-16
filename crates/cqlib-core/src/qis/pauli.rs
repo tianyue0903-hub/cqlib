@@ -1049,27 +1049,6 @@ impl FromStr for PauliString {
     }
 }
 
-impl From<&str> for PauliString {
-    /// Creates a PauliString from a string slice.
-    ///
-    /// Panics if the string is not a valid Pauli string representation.
-    /// For a fallible version, use `str::parse::<PauliString>()`.
-    ///
-    /// # Examples
-    /// ```
-    /// use cqlib_core::qis::pauli::PauliString;
-    ///
-    /// let ps: PauliString = "XYZ".into();
-    /// assert_eq!(ps.to_string(), "+XYZ");
-    ///
-    /// let ps: PauliString = "-iZII".into();
-    /// assert_eq!(ps.to_string(), "-iZII");
-    /// ```
-    fn from(s: &str) -> Self {
-        s.parse().expect("Invalid PauliString format")
-    }
-}
-
 #[cfg(test)]
 #[path = "./pauli_test.rs"]
 mod tests;

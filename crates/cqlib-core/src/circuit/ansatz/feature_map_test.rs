@@ -141,7 +141,7 @@ fn test_pauli_feature_map_default_z_only_structure() {
     // Use only Z Pauli string to test 1-local structure
     let fm = PauliFeatureMap::new(2)
         .reps(1)
-        .paulis(vec![(PauliString::from("Z"), "Z".to_string())])
+        .paulis(vec![("Z".parse::<PauliString>().unwrap(), "Z".to_string())])
         .entanglement(EntanglementTopology::Linear);
 
     let circuit = fm.build_circuit("x").unwrap();
@@ -168,7 +168,10 @@ fn test_pauli_feature_map_default_zz_structure() {
     // Use only ZZ Pauli string to test 2-local structure
     let fm = PauliFeatureMap::new(2)
         .reps(1)
-        .paulis(vec![(PauliString::from("ZZ"), "ZZ".to_string())])
+        .paulis(vec![(
+            "ZZ".parse::<PauliString>().unwrap(),
+            "ZZ".to_string(),
+        )])
         .entanglement(EntanglementTopology::Linear);
 
     let circuit = fm.build_circuit("x").unwrap();
@@ -228,7 +231,10 @@ fn test_pauli_feature_map_3qubits_linear_entanglement() {
     // 3 qubits with ZZ and linear entanglement (pairs: 0-1, 1-2)
     let fm = PauliFeatureMap::new(3)
         .reps(1)
-        .paulis(vec![(PauliString::from("ZZ"), "ZZ".to_string())])
+        .paulis(vec![(
+            "ZZ".parse::<PauliString>().unwrap(),
+            "ZZ".to_string(),
+        )])
         .entanglement(EntanglementTopology::Linear);
 
     let circuit = fm.build_circuit("x").unwrap();
@@ -262,7 +268,10 @@ fn test_pauli_feature_map_3qubits_circular_entanglement() {
     // 3 qubits with ZZ and circular entanglement (pairs: 0-1, 1-2, 2-0)
     let fm = PauliFeatureMap::new(3)
         .reps(1)
-        .paulis(vec![(PauliString::from("ZZ"), "ZZ".to_string())])
+        .paulis(vec![(
+            "ZZ".parse::<PauliString>().unwrap(),
+            "ZZ".to_string(),
+        )])
         .entanglement(EntanglementTopology::Circular);
 
     let circuit = fm.build_circuit("x").unwrap();
@@ -299,7 +308,10 @@ fn test_pauli_feature_map_custom_topology() {
     // Custom topology with specific pairs
     let fm = PauliFeatureMap::new(4)
         .reps(1)
-        .paulis(vec![(PauliString::from("ZZ"), "ZZ".to_string())])
+        .paulis(vec![(
+            "ZZ".parse::<PauliString>().unwrap(),
+            "ZZ".to_string(),
+        )])
         .entanglement(EntanglementTopology::Custom(vec![(0, 2), (1, 3)]));
 
     let circuit = fm.build_circuit("x").unwrap();
@@ -330,7 +342,7 @@ fn test_pauli_feature_map_x_pauli_structure() {
     // X Pauli requires basis change: H -> RZ -> H
     let fm = PauliFeatureMap::new(2)
         .reps(1)
-        .paulis(vec![(PauliString::from("X"), "X".to_string())])
+        .paulis(vec![("X".parse::<PauliString>().unwrap(), "X".to_string())])
         .entanglement(EntanglementTopology::Linear);
 
     let circuit = fm.build_circuit("x").unwrap();
@@ -360,7 +372,7 @@ fn test_pauli_feature_map_y_pauli_structure() {
     // Y Pauli requires basis change: SDG -> H -> RZ -> H -> S
     let fm = PauliFeatureMap::new(2)
         .reps(1)
-        .paulis(vec![(PauliString::from("Y"), "Y".to_string())])
+        .paulis(vec![("Y".parse::<PauliString>().unwrap(), "Y".to_string())])
         .entanglement(EntanglementTopology::Linear);
 
     let circuit = fm.build_circuit("x").unwrap();
@@ -380,7 +392,10 @@ fn test_pauli_feature_map_xy_pauli_structure() {
     // XY two-qubit Pauli string
     let fm = PauliFeatureMap::new(2)
         .reps(1)
-        .paulis(vec![(PauliString::from("XY"), "XY".to_string())])
+        .paulis(vec![(
+            "XY".parse::<PauliString>().unwrap(),
+            "XY".to_string(),
+        )])
         .entanglement(EntanglementTopology::Linear);
 
     let circuit = fm.build_circuit("x").unwrap();
@@ -413,7 +428,10 @@ fn test_pauli_feature_map_validation_zero_qubits() {
 #[test]
 fn test_pauli_feature_map_validation_pauli_too_long() {
     // Pauli string longer than num_qubits
-    let fm = PauliFeatureMap::new(1).paulis(vec![(PauliString::from("ZZ"), "ZZ".to_string())]);
+    let fm = PauliFeatureMap::new(1).paulis(vec![(
+        "ZZ".parse::<PauliString>().unwrap(),
+        "ZZ".to_string(),
+    )]);
 
     let result = fm.build_circuit("x");
     assert!(result.is_err());
@@ -429,7 +447,10 @@ fn test_pauli_feature_map_validation_pauli_too_long() {
 #[test]
 fn test_pauli_feature_map_validation_custom_topology_out_of_bounds() {
     let fm = PauliFeatureMap::new(2)
-        .paulis(vec![(PauliString::from("ZZ"), "ZZ".to_string())])
+        .paulis(vec![(
+            "ZZ".parse::<PauliString>().unwrap(),
+            "ZZ".to_string(),
+        )])
         .entanglement(EntanglementTopology::Custom(vec![(0, 5)]));
 
     let result = fm.build_circuit("x");
@@ -446,7 +467,7 @@ fn test_pauli_feature_map_validation_custom_topology_out_of_bounds() {
 #[test]
 fn test_pauli_feature_map_validation_custom_topology_self_loop() {
     let fm = PauliFeatureMap::new(3)
-        .paulis(vec![(PauliString::from("ZZ"), "ZZ".to_string())])
+        .paulis(vec![("ZZ".parse::<PauliString>().unwrap(), "ZZ".to_string())])
         .entanglement(EntanglementTopology::Custom(vec![(1, 1)]));
 
     let result = fm.build_circuit("x");
@@ -463,7 +484,7 @@ fn test_pauli_feature_map_validation_custom_topology_self_loop() {
 #[test]
 fn test_pauli_feature_map_validation_custom_topology_duplicate_edge() {
     let fm = PauliFeatureMap::new(3)
-        .paulis(vec![(PauliString::from("ZZ"), "ZZ".to_string())])
+        .paulis(vec![("ZZ".parse::<PauliString>().unwrap(), "ZZ".to_string())])
         .entanglement(EntanglementTopology::Custom(vec![(0, 1), (1, 0)]));
 
     let result = fm.build_circuit("x");
@@ -482,7 +503,10 @@ fn test_pauli_feature_map_zzz_3local_structure() {
     // ZZZ (3-local) on 3 qubits with Full topology: only one C(3,3) tuple [0,1,2]
     let fm = PauliFeatureMap::new(3)
         .reps(1)
-        .paulis(vec![(PauliString::from("ZZZ"), "ZZZ".to_string())])
+        .paulis(vec![(
+            "ZZZ".parse::<PauliString>().unwrap(),
+            "ZZZ".to_string(),
+        )])
         .entanglement(EntanglementTopology::Full);
 
     let circuit = fm.build_circuit("x").unwrap();
@@ -512,7 +536,10 @@ fn test_pauli_feature_map_zzz_4qubits_full_topology() {
     // ZZZ (3-local) on 4 qubits: C(4,3) = 4 tuples
     let fm = PauliFeatureMap::new(4)
         .reps(1)
-        .paulis(vec![(PauliString::from("ZZZ"), "ZZZ".to_string())])
+        .paulis(vec![(
+            "ZZZ".parse::<PauliString>().unwrap(),
+            "ZZZ".to_string(),
+        )])
         .entanglement(EntanglementTopology::Full);
 
     let circuit = fm.build_circuit("x").unwrap();
@@ -528,7 +555,7 @@ fn test_pauli_feature_map_z_parameter_value() {
     // Verify that Z evolution uses the correct angle factor (2*x)
     let fm = PauliFeatureMap::new(1)
         .reps(1)
-        .paulis(vec![(PauliString::from("Z"), "Z".to_string())]);
+        .paulis(vec![("Z".parse::<PauliString>().unwrap(), "Z".to_string())]);
 
     let circuit = fm.build_circuit("x").unwrap();
     let ops = circuit.operations();
@@ -557,7 +584,10 @@ fn test_pauli_feature_map_full_entanglement_3qubits() {
     // Full entanglement on 3 qubits: pairs (0,1), (0,2), (1,2)
     let fm = PauliFeatureMap::new(3)
         .reps(1)
-        .paulis(vec![(PauliString::from("ZZ"), "ZZ".to_string())])
+        .paulis(vec![(
+            "ZZ".parse::<PauliString>().unwrap(),
+            "ZZ".to_string(),
+        )])
         .entanglement(EntanglementTopology::Full);
 
     let circuit = fm.build_circuit("x").unwrap();

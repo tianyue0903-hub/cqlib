@@ -232,7 +232,7 @@ pub fn zz_feature_map(
 ///
 /// * `num_qubits` - The number of qubits (= number of input features). Must be ≥ 1.
 /// * `reps` - The number of repetition layers.
-/// * `paulis` - Pauli string templates with labels. Use [`PauliString::from`] for construction.
+/// * `paulis` - Pauli string templates with labels. Use [`parse`] for construction.
 /// * `entanglement` - Connectivity pattern for multi-qubit interactions.
 ///
 /// # Returns
@@ -249,8 +249,8 @@ pub fn zz_feature_map(
 /// let fm = pauli_feature_map(
 ///     3, 2,
 ///     vec![
-///         (PauliString::from("Z"),  "Z".to_string()),
-///         (PauliString::from("ZZ"), "ZZ".to_string()),
+///         ("Z".parse::<PauliString>().unwrap(),  "Z".to_string()),
+///         ("ZZ".parse::<PauliString>().unwrap(), "ZZ".to_string()),
 ///     ],
 ///     EntanglementTopology::Full,
 /// );

@@ -72,8 +72,8 @@
 //!
 //! // Create a Hamiltonian H = 0.5 * ZZ + 0.3 * XX
 //! let mut h = Hamiltonian::new(2);
-//! h.add_term("ZZ".into(), 0.5.into()).unwrap();
-//! h.add_term("XX".into(), 0.3.into()).unwrap();
+//! h.add_term("ZZ".parse::<PauliString>().unwrap(), 0.5.into()).unwrap();
+//! h.add_term("XX".parse::<PauliString>().unwrap(), 0.3.into()).unwrap();
 //! ```
 
 pub mod entropy;

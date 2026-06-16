@@ -43,7 +43,7 @@
 //! sv.apply_cx(0, 1);
 //!
 //! // Create an observable H = ZZ
-//! let ps: PauliString = "ZZ".into();
+//! let ps: PauliString = "ZZ".parse().unwrap();
 //! let h = Hamiltonian::from_pauli(ps);
 //!
 //! // Compute expectation value

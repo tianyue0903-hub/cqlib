@@ -95,8 +95,8 @@ fn test_zz_feature_map_linear_topology() {
 #[test]
 fn test_pauli_feature_map_facade_z_zz() {
     let paulis = vec![
-        (PauliString::from("Z"), "Z".to_string()),
-        (PauliString::from("ZZ"), "ZZ".to_string()),
+        ("Z".parse::<PauliString>().unwrap(), "Z".to_string()),
+        ("ZZ".parse::<PauliString>().unwrap(), "ZZ".to_string()),
     ];
     let fm = pauli_feature_map(2, 1, paulis, EntanglementTopology::Full);
     let circuit = fm.build_circuit("x").unwrap();
@@ -115,7 +115,7 @@ fn test_pauli_feature_map_facade_z_zz() {
 #[test]
 fn test_pauli_feature_map_facade_zzz_3local() {
     // 3 qubits with ZZZ: all C(3,3)=1 triple → 1 evolution per rep
-    let paulis = vec![(PauliString::from("ZZZ"), "ZZZ".to_string())];
+    let paulis = vec![("ZZZ".parse::<PauliString>().unwrap(), "ZZZ".to_string())];
     let fm = pauli_feature_map(3, 1, paulis, EntanglementTopology::Full);
     let circuit = fm.build_circuit("x").unwrap();
 
