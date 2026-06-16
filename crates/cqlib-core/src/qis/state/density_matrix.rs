@@ -133,6 +133,11 @@ impl DensityMatrix {
     /// Validates that a single qubit index is within bounds.
     #[inline]
     fn validate_qubit(&self, qubit: usize) -> Result<(), QisError> {
+        if self.num_qubits == 0 {
+            return Err(QisError::InvalidParameterValue(
+                "no valid qubit indices in a zero-qubit system".to_string(),
+            ));
+        }
         if qubit >= self.num_qubits {
             return Err(QisError::IndexOutOfBounds {
                 index: qubit,
@@ -145,6 +150,11 @@ impl DensityMatrix {
     /// Validates that two qubit indices are within bounds.
     #[inline]
     fn validate_two_qubits(&self, q0: usize, q1: usize) -> Result<(), QisError> {
+        if self.num_qubits == 0 {
+            return Err(QisError::InvalidParameterValue(
+                "no valid qubit indices in a zero-qubit system".to_string(),
+            ));
+        }
         if q0 >= self.num_qubits {
             return Err(QisError::IndexOutOfBounds {
                 index: q0,
@@ -163,6 +173,11 @@ impl DensityMatrix {
     /// Validates that all qubit indices in a slice are within bounds.
     #[inline]
     fn validate_qubits(&self, qubits: &[usize]) -> Result<(), QisError> {
+        if self.num_qubits == 0 {
+            return Err(QisError::InvalidParameterValue(
+                "no valid qubit indices in a zero-qubit system".to_string(),
+            ));
+        }
         for &q in qubits {
             if q >= self.num_qubits {
                 return Err(QisError::IndexOutOfBounds {

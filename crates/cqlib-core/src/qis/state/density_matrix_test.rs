@@ -889,3 +889,14 @@ fn test_zero_qubit_initialization_and_measure_boundary() {
     assert!(dm.measure(0).is_err());
     dm.apply_gphase(std::f64::consts::PI);
 }
+
+#[test]
+fn test_zero_qubit_validate_error_message() {
+    let mut dm = DensityMatrix::new(0);
+    let err = dm.apply_x(0).unwrap_err();
+    assert!(
+        matches!(&err, QisError::InvalidParameterValue(msg) if msg.contains("zero-qubit")),
+        "Expected InvalidParameterValue with zero-qubit message, got {:?}",
+        err
+    );
+}
