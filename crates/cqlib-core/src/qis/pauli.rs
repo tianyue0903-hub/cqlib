@@ -41,7 +41,7 @@
 //! // ps now represents X ⊗ Z ⊗ I
 //! ```
 
-use crate::qis::error::PauliStringParseError;
+use crate::qis::error::{PauliStringParseError, QisError};
 use bitvec::prelude::*;
 use ndarray::{Array2, arr2};
 use num_complex::Complex64;
@@ -233,15 +233,39 @@ pub enum Pauli {
     I,
 }
 
-impl From<char> for Pauli {
-    fn from(s: char) -> Self {
-        match &s {
-            'X' => Pauli::X,
-            'Y' => Pauli::Y,
-            'Z' => Pauli::Z,
-            'I' => Pauli::I,
-            _ => panic!("Invalid Pauli character: {}", s),
+impl TryFrom<char> for Pauli {
+    type Error = QisError;
+
+    fn try_from(s: char) -> Result<Self, Self::Error> {
+        match s {
+            'I' => Ok(Pauli::I),
+            'X' => Ok(Pauli::X),
+            'Y' => Ok(Pauli::Y),
+            'Z' => Ok(Pauli::Z),
+            other => Err(QisError::InvalidParameterValue(format!(
+                "invalid Pauli character '{}'",
+                other
+            ))),
         }
+    }
+}
+
+impl FromStr for Pauli {
+    type Err = QisError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.is_empty() {
+            return Err(QisError::InvalidParameterValue(
+                "empty string cannot be converted to Pauli".to_string(),
+            ));
+        }
+        if s.len() > 1 {
+            return Err(QisError::InvalidParameterValue(format!(
+                "expected a single Pauli character, got \"{}\"",
+                s
+            )));
+        }
+        s.chars().next().unwrap().try_into()
     }
 }
 
