@@ -22,11 +22,13 @@ use oq3_semantics::asg::{
 use oq3_semantics::symbols::{SymbolId, SymbolIdResult, SymbolTable, SymbolType};
 use oq3_semantics::syntax_to_semantics;
 use oq3_semantics::types::{ArrayDims, Type};
+use regex::Regex;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 const DEFAULT_MAX_RECURSION_DEPTH: usize = 100;
 
@@ -54,6 +56,7 @@ pub fn load<P: AsRef<Path>>(path: P) -> Result<Circuit, Qasm3ParseError> {
     let path = path.as_ref();
     let source = fs::read_to_string(path).map_err(Qasm3ParseError::IoError)?;
     let source = normalize_openqasm3_header(&source);
+    let source = rewrite_scalar_bit_measurement_assignments(&source);
     let search_paths = path.parent().map(|parent| vec![parent.to_path_buf()]);
     let result =
         syntax_to_semantics::parse_source_string(source, path.to_str(), search_paths.as_deref());
@@ -95,6 +98,7 @@ pub fn from_path<P: AsRef<Path>>(path: P) -> Result<Circuit, Qasm3ParseError> {
 /// ```
 pub fn loads(source: &str) -> Result<Circuit, Qasm3ParseError> {
     let source = normalize_openqasm3_header(source);
+    let source = rewrite_scalar_bit_measurement_assignments(&source);
     let result =
         syntax_to_semantics::parse_source_string(source, Some("qasm3_source"), None::<&[PathBuf]>);
     convert_parse_result(
@@ -134,6 +138,151 @@ fn convert_parse_result(
 
 fn normalize_openqasm3_header(source: &str) -> String {
     source.replacen("OPENQASM 3;", "OPENQASM 3.0;", 1)
+}
+
+fn rewrite_scalar_bit_measurement_assignments(source: &str) -> String {
+    // `oq3_semantics` 0.7.0 rejects `bit b; b = measure q[0];` even though
+    // indexed assignment to a one-bit array is accepted. Keep this compatibility
+    // rewrite deliberately narrow so variables that are read later are not
+    // silently changed from scalar `bit` to `bit[1]`.
+    if source.contains("/*") || source.contains("*/") {
+        return source.to_string();
+    }
+
+    let Some(rewrites) = scalar_bit_measurement_rewrites(source) else {
+        return source.to_string();
+    };
+    if rewrites.is_empty() {
+        return source.to_string();
+    }
+
+    let mut lines = source
+        .lines()
+        .map(ToString::to_string)
+        .collect::<Vec<String>>();
+    for rewrite in rewrites {
+        lines[rewrite.declaration_line] = rewrite.declaration_replacement;
+        lines[rewrite.assignment_line] = rewrite.assignment_replacement;
+    }
+    let mut rewritten = lines.join("\n");
+    if source.ends_with('\n') {
+        rewritten.push('\n');
+    }
+    rewritten
+}
+
+#[derive(Debug)]
+struct ScalarBitMeasurementRewrite {
+    declaration_line: usize,
+    declaration_replacement: String,
+    assignment_line: usize,
+    assignment_replacement: String,
+}
+
+fn scalar_bit_measurement_rewrites(source: &str) -> Option<Vec<ScalarBitMeasurementRewrite>> {
+    let mut declarations = HashMap::<String, (usize, String)>::new();
+    let mut duplicate_declarations = HashSet::<String>::new();
+    let mut assignments = Vec::<(String, usize, String)>::new();
+
+    for (line_index, line) in source.lines().enumerate() {
+        let (code, comment) = split_line_comment(line);
+        if let Some(captures) = scalar_bit_declaration_regex().captures(code) {
+            let name = captures.name("name")?.as_str().to_string();
+            let replacement = format!(
+                "{}bit[1] {};{}{}",
+                captures.name("indent")?.as_str(),
+                name,
+                captures.name("tail").map_or("", |tail| tail.as_str()),
+                comment
+            );
+            if declarations
+                .insert(name.clone(), (line_index, replacement))
+                .is_some()
+            {
+                duplicate_declarations.insert(name);
+            }
+            continue;
+        }
+
+        if let Some(captures) = scalar_bit_measurement_assignment_regex().captures(code) {
+            let name = captures.name("name")?.as_str().to_string();
+            let replacement = format!(
+                "{}{}[0] = measure {}[{}];{}{}",
+                captures.name("indent")?.as_str(),
+                name,
+                captures.name("qubit")?.as_str(),
+                captures.name("index")?.as_str(),
+                captures.name("tail").map_or("", |tail| tail.as_str()),
+                comment
+            );
+            assignments.push((name, line_index, replacement));
+        }
+    }
+
+    let mut rewrites = Vec::new();
+    for (name, assignment_line, assignment_replacement) in assignments {
+        if duplicate_declarations.contains(&name) || identifier_occurrences(source, &name) != 2 {
+            continue;
+        }
+        let Some((declaration_line, declaration_replacement)) = declarations.get(&name) else {
+            continue;
+        };
+        rewrites.push(ScalarBitMeasurementRewrite {
+            declaration_line: *declaration_line,
+            declaration_replacement: declaration_replacement.clone(),
+            assignment_line,
+            assignment_replacement,
+        });
+    }
+
+    Some(rewrites)
+}
+
+fn strip_line_comment(line: &str) -> &str {
+    split_line_comment(line).0
+}
+
+fn split_line_comment(line: &str) -> (&str, &str) {
+    line.split_once("//")
+        .map_or((line, ""), |(before_comment, _comment)| {
+            (before_comment, &line[before_comment.len()..])
+        })
+}
+
+fn identifier_occurrences(source: &str, identifier: &str) -> usize {
+    identifier_regex()
+        .find_iter(
+            &source
+                .lines()
+                .map(strip_line_comment)
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )
+        .filter(|token| token.as_str() == identifier)
+        .count()
+}
+
+fn scalar_bit_declaration_regex() -> &'static Regex {
+    static REGEX: OnceLock<Regex> = OnceLock::new();
+    REGEX.get_or_init(|| {
+        Regex::new(r"^(?P<indent>\s*)bit\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*;(?P<tail>\s*)$")
+            .expect("valid scalar bit declaration regex")
+    })
+}
+
+fn scalar_bit_measurement_assignment_regex() -> &'static Regex {
+    static REGEX: OnceLock<Regex> = OnceLock::new();
+    REGEX.get_or_init(|| {
+        Regex::new(
+            r"^(?P<indent>\s*)(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*measure\s+(?P<qubit>[A-Za-z_][A-Za-z0-9_]*)\s*\[\s*(?P<index>\d+)\s*\]\s*;(?P<tail>\s*)$",
+        )
+        .expect("valid scalar bit measurement assignment regex")
+    })
+}
+
+fn identifier_regex() -> &'static Regex {
+    static REGEX: OnceLock<Regex> = OnceLock::new();
+    REGEX.get_or_init(|| Regex::new(r"[A-Za-z_][A-Za-z0-9_]*").expect("valid identifier regex"))
 }
 
 /// Error returned while parsing or lowering OpenQASM 3 into Cqlib.
@@ -556,30 +705,120 @@ impl<'a> LoweringContext<'a> {
         assignment: &asg::Assignment,
         circuit: &mut Circuit,
     ) -> Result<(), Qasm3ParseError> {
-        let LValue::Identifier(target_id_result) = assignment.lvalue() else {
-            return Err(Qasm3ParseError::UnsupportedFeature(
-                "indexed assignment target".to_string(),
-            ));
-        };
-        let target_id = self.symbol_id(target_id_result)?;
-        let Some(target) = self.classical.get(&target_id).copied() else {
-            return Err(Qasm3ParseError::UndefinedSymbol(
-                self.symbol_name(&target_id),
-            ));
-        };
+        match assignment.lvalue() {
+            LValue::Identifier(target_id_result) => {
+                let target_id = self.symbol_id(target_id_result)?;
+                let Some(target) = self.classical.get(&target_id).copied() else {
+                    return Err(Qasm3ParseError::UndefinedSymbol(
+                        self.symbol_name(&target_id),
+                    ));
+                };
 
-        if let Expr::MeasureExpression(measure) = assignment.rvalue().expression() {
-            let qubits = self.expand_qubit_expr(measure.operand())?;
-            if qubits.len() == 1 {
-                circuit.measure_into(qubits[0], target)?;
-            } else {
-                circuit.measure_bits_into(qubits, target)?;
+                if let Expr::MeasureExpression(measure) = assignment.rvalue().expression() {
+                    let qubits = self.expand_qubit_expr(measure.operand())?;
+                    if qubits.len() == 1 {
+                        circuit.measure_into(qubits[0], target)?;
+                    } else {
+                        circuit.measure_bits_into(qubits, target)?;
+                    }
+                    return Ok(());
+                }
+
+                let value = self.lower_classical_expr(assignment.rvalue())?;
+                circuit.store(target, value)?;
+                Ok(())
             }
-            return Ok(());
+            LValue::IndexedIdentifier(indexed) => {
+                self.lower_indexed_assignment(indexed, assignment.rvalue(), circuit)
+            }
         }
+    }
 
-        let value = self.lower_classical_expr(assignment.rvalue())?;
-        circuit.store(target, value)?;
+    fn lower_indexed_assignment(
+        &mut self,
+        indexed: &asg::IndexedIdentifier,
+        rvalue: &TExpr,
+        circuit: &mut Circuit,
+    ) -> Result<(), Qasm3ParseError> {
+        let target = self.indexed_classical_target(indexed)?;
+        let bit = match rvalue.expression() {
+            Expr::MeasureExpression(measure) => {
+                let qubits = self.expand_qubit_expr(measure.operand())?;
+                if qubits.len() != 1 {
+                    return Err(Qasm3ParseError::MismatchedQubitCount {
+                        expected: 1,
+                        actual: qubits.len(),
+                    });
+                }
+                circuit.measure(qubits[0])?.expr()
+            }
+            _ => self.lower_classical_expr(rvalue)?,
+        };
+        self.store_indexed_classical_bit(target, bit, circuit)
+    }
+
+    fn indexed_classical_target(
+        &self,
+        indexed: &asg::IndexedIdentifier,
+    ) -> Result<(ClassicalVar, u32), Qasm3ParseError> {
+        let id = self.symbol_id(indexed.identifier())?;
+        let Some(var) = self.classical.get(&id).copied() else {
+            return Err(Qasm3ParseError::UndefinedSymbol(self.symbol_name(&id)));
+        };
+        if indexed.indexes().len() != 1 {
+            return Err(Qasm3ParseError::UnsupportedFeature(
+                "multi-dimensional classical assignment index".to_string(),
+            ));
+        }
+        let ClassicalType::BitVec(width) = var.ty() else {
+            return Err(Qasm3ParseError::TypeError(format!(
+                "indexed assignment target '{}' must be bit array, got {:?}",
+                self.symbol_name(&id),
+                var.ty()
+            )));
+        };
+        let index = self.single_index(&indexed.indexes()[0])?;
+        if index >= width.get() {
+            return Err(Qasm3ParseError::InvalidArgument(format!(
+                "classical index {index} out of bounds for '{}'",
+                self.symbol_name(&id)
+            )));
+        }
+        Ok((var, index))
+    }
+
+    fn store_indexed_classical_bit(
+        &self,
+        (target, index): (ClassicalVar, u32),
+        bit: ClassicalExpr,
+        circuit: &mut Circuit,
+    ) -> Result<(), Qasm3ParseError> {
+        if bit.ty() != ClassicalType::Bit {
+            return Err(Qasm3ParseError::TypeError(format!(
+                "indexed bit assignment expects Bit expression, got {:?}",
+                bit.ty()
+            )));
+        }
+        let width = match target.ty() {
+            ClassicalType::BitVec(width) => width.get(),
+            ty => {
+                return Err(Qasm3ParseError::TypeError(format!(
+                    "indexed assignment target must be BitVec, got {ty:?}"
+                )));
+            }
+        };
+        let current = target.expr();
+        let bits = (0..width)
+            .map(|bit_index| {
+                if bit_index == index {
+                    Ok(bit.clone())
+                } else {
+                    ClassicalExpr::extract_bit(current.clone(), bit_index)
+                }
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let updated = ClassicalExpr::pack_bits(bits)?;
+        circuit.store(target, updated)?;
         Ok(())
     }
 

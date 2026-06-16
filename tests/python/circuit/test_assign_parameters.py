@@ -10,184 +10,95 @@
 # copyright notice, and modified files need to carry a notice indicating
 # that they have been altered from the originals.
 
-"""
-测试 Circuit 参数赋值功能
+"""Parameter assignment tests for the Python circuit API."""
 
-测试范围：
-- 参数绑定和赋值
-- 单参数赋值
-- 多参数赋值
-- 部分参数赋值
-- 表达式参数赋值
-"""
-
+import math
 import numpy as np
-from cqlib.circuit import Circuit, Parameter
+import pytest
+
+from cqlib import Circuit, Parameter
 
 
-class TestAssignSingleParameter:
-    """测试单参数赋值"""
+def test_assign_single_parameter():
+    theta = Parameter("theta")
+    circuit = Circuit(1)
+    circuit.rx(0, theta)
 
-    def test_assign_single_parameter(self):
-        """赋值单个参数"""
-        theta = Parameter("theta")
-        c = Circuit(1)
-        c.rx(0, theta)
+    assigned = circuit.assign_parameters({"theta": math.pi / 2})
 
-        # 赋值前应该有参数
-        assert len(c.parameters) >= 1
-
-        # 赋值参数
-        c_assigned = c.assign_parameters({"theta": np.pi / 2})
-        assert len(c_assigned) == 1
-
-    def test_assign_zero(self):
-        """赋值零"""
-        theta = Parameter("theta")
-        c = Circuit(1)
-        c.rx(0, theta)
-
-        c_assigned = c.assign_parameters({"theta": 0.0})
-        assert len(c_assigned) == 1
-
-    def test_assign_negative(self):
-        """赋值负值"""
-        theta = Parameter("theta")
-        c = Circuit(1)
-        c.rx(0, theta)
-
-        c_assigned = c.assign_parameters({"theta": -np.pi / 2})
-        assert len(c_assigned) == 1
+    assert list(assigned[0].params) == [math.pi / 2]
+    assert list(assigned.parameters) == []
+    assert list(circuit[0].params) == [theta]
 
 
-class TestAssignMultipleParameters:
-    """测试多参数赋值"""
+def test_assign_multiple_parameters():
+    theta = Parameter("theta")
+    phi = Parameter("phi")
+    circuit = Circuit(1)
+    circuit.rx(0, theta)
+    circuit.ry(0, phi)
 
-    def test_assign_multiple_parameters(self):
-        """赋值多个参数"""
-        theta = Parameter("theta")
-        phi = Parameter("phi")
-        c = Circuit(2)
-        c.rx(0, theta)
-        c.ry(1, phi)
+    assigned = circuit.assign_parameters({"theta": 0.25, "phi": 0.5})
 
-        c_assigned = c.assign_parameters({"theta": np.pi / 2, "phi": np.pi / 4})
-        assert len(c_assigned) == 2
-
-    def test_assign_all_parameters(self):
-        """赋值所有参数"""
-        theta = Parameter("theta")
-        phi = Parameter("phi")
-        lam = Parameter("lambda")
-
-        c = Circuit(1)
-        c.u(0, theta, phi, lam)
-
-        c_assigned = c.assign_parameters(
-            {"theta": np.pi / 2, "phi": np.pi / 4, "lambda": np.pi / 8}
-        )
-        assert len(c_assigned) == 1
+    assert [list(op.params) for op in assigned.operations] == [[0.25], [0.5]]
+    assert assigned.parameters == []
 
 
-class TestPartialParameterAssignment:
-    """测试部分参数赋值"""
+def test_partial_assignment_keeps_remaining_symbols():
+    theta = Parameter("theta")
+    phi = Parameter("phi")
+    circuit = Circuit(1)
+    circuit.rx(0, theta)
+    circuit.rz(0, theta + phi)
 
-    def test_partial_assignment(self):
-        """部分参数赋值"""
-        theta = Parameter("theta")
-        phi = Parameter("phi")
-        c = Circuit(2)
-        c.rx(0, theta)
-        c.ry(1, phi)
+    assigned = circuit.assign_parameters({"theta": 0.25})
 
-        # 只赋值theta
-        c_partial = c.assign_parameters({"theta": np.pi / 2})
-        assert len(c_partial) == 2
-        # phi应该仍然是符号参数
-
-    def test_empty_assignment(self):
-        """空赋值（不改变）"""
-        theta = Parameter("theta")
-        c = Circuit(1)
-        c.rx(0, theta)
-
-        c_same = c.assign_parameters({})
-        assert len(c_same) == 1
+    assert list(assigned[0].params) == [0.25]
+    assert str(assigned[1].params[0]) == "0.25 + phi"
+    assert [str(param) for param in assigned.parameters] == ["0.25 + phi"]
 
 
-class TestAssignExpressionParameters:
-    """测试表达式参数赋值"""
+def test_empty_assignment_returns_equivalent_circuit():
+    theta = Parameter("theta")
+    circuit = Circuit(1)
+    circuit.rx(0, theta)
 
-    def test_assign_expression_result(self):
-        """赋值表达式结果"""
-        theta = Parameter("theta")
-        c = Circuit(1)
-        c.rx(0, theta + 1.0)  # theta + 1
+    assigned = circuit.assign_parameters({})
 
-        c_assigned = c.assign_parameters({"theta": 0.5})
-        assert len(c_assigned) == 1
-
-    def test_assign_scaled_parameter(self):
-        """赋值缩放参数"""
-        theta = Parameter("theta")
-        c = Circuit(1)
-        c.rx(0, 2.0 * theta)  # 2 * theta
-
-        c_assigned = c.assign_parameters({"theta": np.pi / 4})
-        # 结果应该是 2 * pi/4 = pi/2
-        assert len(c_assigned) == 1
+    assert list(assigned[0].params) == [theta]
+    assert list(assigned.parameters) == [theta]
+    assert assigned is not circuit
 
 
-class TestParameterAssignmentErrors:
-    """测试参数赋值错误处理"""
+def test_expression_assignment_updates_matrix_result():
+    theta = Parameter("theta")
+    circuit = Circuit(1)
+    circuit.rx(0, 2 * theta)
 
-    def test_assign_unknown_parameter(self):
-        """赋值未知参数"""
-        theta = Parameter("theta")
-        c = Circuit(1)
-        c.rx(0, theta)
+    assigned = circuit.assign_parameters({"theta": math.pi / 4})
+    expected = Circuit(1)
+    expected.rx(0, math.pi / 2)
 
-        # 赋值不存在的参数应该被忽略或报错
-        try:
-            c.assign_parameters({"unknown": 1.0})
-        except Exception:
-            pass  # 预期行为
-
-    def test_assign_non_numeric(self):
-        """赋值非数值"""
-        theta = Parameter("theta")
-        c = Circuit(1)
-        c.rx(0, theta)
-
-        # 根据实现，这可能报错或尝试转换
-        try:
-            c.assign_parameters({"theta": "invalid"})
-        except Exception:
-            pass  # 预期行为
+    assert np.allclose(assigned.to_matrix(), expected.to_matrix())
 
 
-class TestAssignmentResultIndependence:
-    """测试赋值结果独立性"""
+def test_multiple_assignments_are_independent():
+    theta = Parameter("theta")
+    circuit = Circuit(1)
+    circuit.rx(0, theta)
 
-    def test_original_circuit_unchanged(self):
-        """原始电路不被修改"""
-        theta = Parameter("theta")
-        c = Circuit(1)
-        c.rx(0, theta)
+    first = circuit.assign_parameters({"theta": 0.1})
+    second = circuit.assign_parameters({"theta": 0.2})
 
-        c_assigned = c.assign_parameters({"theta": np.pi / 2})
+    assert list(first[0].params) == [0.1]
+    assert list(second[0].params) == [0.2]
+    assert list(circuit[0].params) == [theta]
 
-        # 原始电路应该仍然有符号参数
-        assert len(c.parameters) >= 1
-        assert len(c_assigned.parameters) >= 0  # 赋值后的电路
 
-    def test_multiple_assignments_independent(self):
-        """多次赋值相互独立"""
-        theta = Parameter("theta")
-        c = Circuit(1)
-        c.rx(0, theta)
+def test_assignment_rejects_non_numeric_values():
+    theta = Parameter("theta")
+    circuit = Circuit(1)
+    circuit.rx(0, theta)
 
-        c1 = c.assign_parameters({"theta": np.pi / 2})
-        c2 = c.assign_parameters({"theta": np.pi / 4})
-
-        assert len(c1) == len(c2) == 1
+    with pytest.raises(TypeError):
+        circuit.assign_parameters({"theta": object()})

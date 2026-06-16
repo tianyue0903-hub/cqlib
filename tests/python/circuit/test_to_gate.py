@@ -10,225 +10,79 @@
 # copyright notice, and modified files need to carry a notice indicating
 # that they have been altered from the originals.
 
-"""
-Tests for Circuit to Gate conversion.
+"""Circuit gate conversion tests for the Python circuit API."""
 
-Test coverage:
-- Circuit to gate conversion
-- Using circuit gates in other circuits
-- Parametric circuit to gate
-- Circuit gate decomposition
-"""
+import numpy as np
 
-from cqlib.circuit import Circuit, Parameter
-from cqlib.circuit.gates import CircuitGate
+from cqlib import Circuit, Parameter
+from cqlib.circuit import CircuitGate, FrozenCircuit
 
 
-class TestCircuitToGate:
-    """Test circuit to gate conversion"""
+def test_to_gate_creates_named_circuit_gate():
+    circuit = Circuit(2)
+    circuit.h(0)
+    circuit.cx(0, 1)
 
-    def test_to_gate_single_qubit(self):
-        """Single qubit circuit to gate"""
-        c = Circuit(1)
-        c.h(0)
-        c.x(0)
+    gate = circuit.to_gate("Bell")
 
-        gate = c.to_gate("HX")
-        assert gate is not None
-        assert isinstance(gate, CircuitGate)
-        assert gate.num_qubits == 1
-
-    def test_to_gate_multi_qubit(self):
-        """Multi-qubit circuit to gate"""
-        c = Circuit(2)
-        c.h(0)
-        c.cx(0, 1)
-
-        gate = c.to_gate("BellPrep")
-        assert gate is not None
-        assert isinstance(gate, CircuitGate)
-        assert gate.num_qubits == 2
-
-    def test_to_gate_with_parameters(self):
-        """Parametric circuit to gate"""
-        theta = Parameter("theta")
-        c = Circuit(1)
-        c.rx(0, theta)
-
-        gate = c.to_gate("RxGate")
-        assert gate is not None
-        assert isinstance(gate, CircuitGate)
-        assert gate.num_params == 1
-
-    def test_to_gate_empty_circuit(self):
-        """Empty circuit to gate"""
-        c = Circuit(2)
-        gate = c.to_gate("Empty")
-        assert gate is not None
-        assert gate.num_qubits == 2
-
-    def test_to_gate_three_qubit(self):
-        """Three qubit circuit to gate"""
-        c = Circuit(3)
-        c.h(0)
-        c.cx(0, 1)
-        c.cx(1, 2)
-
-        gate = c.to_gate("GHZ")
-        assert gate is not None
-        assert gate.num_qubits == 3
+    assert isinstance(gate, CircuitGate)
+    assert gate.name == "Bell"
+    assert gate.num_qubits == 2
+    assert gate.num_params == 0
+    assert gate.circuit.num_operations == 2
 
 
-class TestUseCircuitGate:
-    """Test using circuit gate in other circuits"""
+def test_append_circuit_gate_reuses_subcircuit():
+    subcircuit = Circuit(2)
+    subcircuit.h(0)
+    subcircuit.cx(0, 1)
+    gate = subcircuit.to_gate("Bell")
 
-    def test_use_circuit_gate(self):
-        """Use circuit gate in main circuit"""
-        sub_circuit = Circuit(2)
-        sub_circuit.h(0)
-        sub_circuit.cx(0, 1)
+    circuit = Circuit(4)
+    circuit.append_circuit_gate(gate, [0, 1])
+    circuit.append_circuit_gate(gate, [2, 3])
 
-        bell_gate = sub_circuit.to_gate("Bell")
-
-        main_circuit = Circuit(4)
-        main_circuit.circuit_gate(bell_gate, [0, 1])
-        main_circuit.circuit_gate(bell_gate, [2, 3])
-
-        assert len(main_circuit) == 2
-
-    def test_use_circuit_gate_different_qubits(self):
-        """Use circuit gate on different qubit subsets"""
-        sub_circuit = Circuit(2)
-        sub_circuit.h(0)
-        sub_circuit.cx(0, 1)
-
-        bell_gate = sub_circuit.to_gate("Bell")
-
-        main_circuit = Circuit(4)
-        main_circuit.circuit_gate(bell_gate, [1, 2])
-
-        assert len(main_circuit) == 1
-        # Verify the operation uses correct qubits
-        op = main_circuit[0]
-        assert op.qubits[0].index == 1
-        assert op.qubits[1].index == 2
-
-    def test_nested_circuit_gates(self):
-        """Nested circuit gates"""
-        inner = Circuit(1)
-        inner.h(0)
-        inner_gate = inner.to_gate("H")
-
-        middle = Circuit(1)
-        middle.circuit_gate(inner_gate, [0])
-        middle_gate = middle.to_gate("Middle")
-
-        outer = Circuit(1)
-        outer.circuit_gate(middle_gate, [0])
-
-        assert len(outer) == 1
+    assert [op.instruction.instruction.name for op in circuit.operations] == ["Bell", "Bell"]
+    assert [qubit.index for qubit in circuit[1].qubits] == [2, 3]
 
 
-class TestCircuitGateDecompose:
-    """Test circuit gate decomposition"""
+def test_circuit_gate_accepts_parameter_bindings():
+    theta = Parameter("theta")
+    subcircuit = Circuit(1)
+    subcircuit.rx(0, theta)
+    gate = subcircuit.to_gate("Rotate")
 
-    def test_decompose_circuit_gate(self):
-        """Decompose circuit gate into primitives"""
-        sub_circuit = Circuit(2)
-        sub_circuit.h(0)
-        sub_circuit.cx(0, 1)
+    circuit = Circuit(1)
+    circuit.append_circuit_gate(gate, [0], [0.5])
 
-        bell_gate = sub_circuit.to_gate("Bell")
-
-        main_circuit = Circuit(4)
-        main_circuit.circuit_gate(bell_gate, [0, 1])
-
-        decomposed = main_circuit.decompose()
-        # Decomposed circuit should have at least 2 operations (H + CX)
-        assert len(decomposed) >= 2
-
-    def test_decompose_preserves_order(self):
-        """Decomposition preserves operation order"""
-        sub_circuit = Circuit(2)
-        sub_circuit.x(0)
-        sub_circuit.h(0)
-        sub_circuit.cx(0, 1)
-
-        gate = sub_circuit.to_gate("Ordered")
-
-        main_circuit = Circuit(2)
-        main_circuit.circuit_gate(gate, [0, 1])
-
-        decomposed = main_circuit.decompose()
-        # Verify operations are in correct order
-        op_names = [op.name for op in decomposed]
-        assert op_names[0] == "X"
-        assert op_names[1] == "H"
-        assert op_names[2] == "CX"
+    decomposed = circuit.decompose()
+    assert decomposed[0].instruction.instruction.name == "RX"
+    assert list(decomposed[0].params) == [0.5]
 
 
-class TestCircuitGateInverse:
-    """Test circuit gate inverse"""
+def test_manual_frozen_circuit_gate_construction():
+    subcircuit = Circuit(1)
+    subcircuit.h(0)
+    frozen = FrozenCircuit(subcircuit.qubits, subcircuit.operations)
+    gate = CircuitGate("HadamardBlock", frozen)
 
-    def test_circuit_gate_inverse(self):
-        """Inverse of circuit gate"""
-        c = Circuit(2)
-        c.h(0)
-        c.cx(0, 1)
+    circuit = Circuit(1)
+    circuit.append_circuit_gate(gate, [0])
 
-        gate = c.to_gate("Bell")
-        inv_gate = gate.inverse()
-
-        assert inv_gate is not None
-        assert inv_gate.num_qubits == 2
-
-    def test_circuit_gate_self_inverse(self):
-        """Circuit gate composed of self-inverse gates"""
-        c = Circuit(1)
-        c.h(0)
-        c.h(0)  # H @ H = I
-
-        gate = c.to_gate("HH")
-        inv_gate = gate.inverse()
-        assert inv_gate is not None
+    assert circuit[0].instruction.instruction.name == "HadamardBlock"
+    assert np.allclose(circuit.decompose().to_matrix(), subcircuit.to_matrix())
 
 
-class TestCircuitGateProperties:
-    """Test CircuitGate properties"""
+def test_inverse_circuit_gate_can_be_appended():
+    subcircuit = Circuit(1)
+    subcircuit.rx(0, 0.25)
+    gate = subcircuit.to_gate("RxBlock")
+    inverse_gate = gate.inverse()
 
-    def test_circuit_gate_num_qubits(self):
-        """CircuitGate num_qubits property"""
-        c = Circuit(3)
-        c.h(0)
+    circuit = Circuit(1)
+    circuit.append_circuit_gate(gate, [0])
+    circuit.append_circuit_gate(inverse_gate, [0])
 
-        gate = c.to_gate("Test")
-        assert gate.num_qubits == 3
-
-    def test_circuit_gate_num_params(self):
-        """CircuitGate num_params property"""
-        # Non-parametric circuit
-        c1 = Circuit(1)
-        c1.x(0)
-        gate1 = c1.to_gate("X")
-        assert gate1.num_params == 0
-
-        # Parametric circuit
-        theta = Parameter("theta")
-        c2 = Circuit(1)
-        c2.rx(0, theta)
-        gate2 = c2.to_gate("Rx")
-        assert gate2.num_params == 1
-
-    def test_circuit_gate_symbols(self):
-        """CircuitGate symbols method"""
-        theta = Parameter("theta")
-        phi = Parameter("phi")
-        c = Circuit(1)
-        c.rx(0, theta)
-        c.rz(0, phi)
-
-        gate = c.to_gate("TwoParam")
-        symbols = gate.symbols()
-        assert len(symbols) == 2
-        assert "theta" in symbols
-        assert "phi" in symbols
+    assert inverse_gate.name == "RxBlock_dg"
+    assert inverse_gate.num_qubits == 1
+    assert np.allclose(circuit.decompose().to_matrix(), np.eye(2), atol=1e-10)
