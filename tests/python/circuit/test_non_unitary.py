@@ -4,175 +4,114 @@
 #
 # This code is licensed under the Apache License, Version 2.0. You may
 # obtain a copy of this license in the LICENSE.txt file in the root directory
-# of this source tree or at http://www.apache.org/licenses/LICENSE-2.0.
+# of this source tree or at http:#www.apache.org/licenses/LICENSE-2.0.
 #
 # Any modifications or derivative works of this code must retain this
 # copyright notice, and modified files need to carry a notice indicating
 # that they have been altered from the originals.
 
-"""
-测试非酉操作
+"""Directive and non-unitary operation tests for the Python circuit API."""
 
-测试范围：
-- 测量操作 (measure)
-- Barrier操作
-- Reset操作
-- Delay操作
-"""
-
+import numpy as np
 import pytest
 
-
-class TestMeasureOperation:
-    """测试测量操作"""
-
-    def test_measure_single_qubit(self, single_qubit_circuit):
-        """测量单个qubit"""
-        c = single_qubit_circuit
-        c.h(0)
-        c.measure(0)
-        assert len(c) == 2
-        assert c[1].name == "Measure"
-
-    def test_measure_multiple_qubits(self, two_qubit_circuit):
-        """测量多个qubit"""
-        c = two_qubit_circuit
-        c.h(0)
-        c.cx(0, 1)
-        c.measure(0)
-        c.measure(1)
-        assert len(c) == 4
-
-    def test_measure_after_gates(self, single_qubit_circuit):
-        """在一系列门之后测量"""
-        c = single_qubit_circuit
-        c.x(0)
-        c.y(0)
-        c.z(0)
-        c.measure(0)
-        assert len(c) == 4
-        assert c[3].name == "Measure"
-
-    def test_measure_makes_circuit_non_unitary(self, single_qubit_circuit):
-        """测量使电路非幺正"""
-        c = single_qubit_circuit
-        c.h(0)
-        c.measure(0)
-        # 包含测量的电路不能求逆
-        with pytest.raises(Exception):
-            c.inverse()
+from cqlib import Circuit, Parameter
+from cqlib.circuit import CircuitError, ClassicalExpr, ClassicalType, Directive
 
 
-class TestBarrierOperation:
-    """测试Barrier操作"""
+def test_measure_and_measure_bits_append_operations_and_values():
+    circuit = Circuit(2)
+    circuit.measure(0)
+    circuit.measure_bits([0, 1])
 
-    def test_barrier_single_qubit(self, single_qubit_circuit):
-        """在单个qubit上设置Barrier"""
-        c = single_qubit_circuit
-        c.h(0)
-        c.barrier([0])
-        assert len(c) == 2
-        assert c[1].name == "Barrier"
-
-    def test_barrier_multiple_qubits(self, two_qubit_circuit):
-        """在多个qubit上设置Barrier"""
-        c = two_qubit_circuit
-        c.h(0)
-        c.barrier([0, 1])
-        c.cx(0, 1)
-        assert len(c) == 3
-        assert c[1].name == "Barrier"
-
-    def test_barrier_persists_in_inverse(self, two_qubit_circuit):
-        """Barrier在逆电路中保留"""
-        c = two_qubit_circuit
-        c.h(0)
-        c.barrier([0, 1])
-        c.cx(0, 1)
-
-        c_inv = c.inverse()
-        assert len(c_inv) == 3
-        # Barrier应该在逆电路中
-        barrier_found = any(op.name == "Barrier" for op in c_inv)
-        assert barrier_found
-
-    def test_empty_barrier(self, two_qubit_circuit):
-        """空Barrier列表"""
-        c = two_qubit_circuit
-        c.barrier([])
-        # 根据实现，这可能添加一个空barrier或无操作
+    assert [op.instruction.instruction.name for op in circuit.operations] == [
+        "measure_bit",
+        "measure_bits",
+    ]
+    assert [qubit.index for qubit in circuit[0].qubits] == [0]
+    assert [qubit.index for qubit in circuit[1].qubits] == [0, 1]
+    assert [str(value) for value in circuit.classical_values] == [
+        "ClassicalType.bit()",
+        "ClassicalType.bit_vec(2)",
+    ]
 
 
-class TestResetOperation:
-    """测试Reset操作"""
+def test_measure_into_and_measure_bits_into_store_to_existing_variables():
+    circuit = Circuit(2)
+    bit_var = circuit.var(ClassicalType.bit())
+    bits_var = circuit.var(ClassicalType.bit_vec(2))
+    circuit.measure_into(0, bit_var)
+    circuit.measure_bits_into([0, 1], bits_var)
 
-    def test_reset_single_qubit(self, single_qubit_circuit):
-        """重置单个qubit"""
-        c = single_qubit_circuit
-        c.x(0)
-        c.reset(0)
-        assert len(c) == 2
-        assert c[1].name == "Reset"
-
-    def test_reset_after_measure(self, single_qubit_circuit):
-        """测量后重置"""
-        c = single_qubit_circuit
-        c.h(0)
-        c.measure(0)
-        c.reset(0)
-        assert len(c) == 3
-
-    def test_reset_makes_circuit_non_unitary(self, single_qubit_circuit):
-        """Reset使电路非幺正"""
-        c = single_qubit_circuit
-        c.reset(0)
-        # 包含Reset的电路不能求逆
-        with pytest.raises(Exception):
-            c.inverse()
+    assert [op.instruction.instruction.name for op in circuit.operations] == [
+        "measure_bit",
+        "store",
+        "measure_bits",
+        "store",
+    ]
+    assert [str(value) for value in circuit.classical_vars] == [
+        "ClassicalType.bit()",
+        "ClassicalType.bit_vec(2)",
+    ]
 
 
-class TestDelayOperation:
-    """测试Delay操作"""
+def test_store_appends_classical_store_instruction():
+    circuit = Circuit(1)
+    flag = circuit.var(ClassicalType.bool())
+    circuit.store(flag, ClassicalExpr.bool_literal(True))
 
-    def test_delay_with_float(self, single_qubit_circuit):
-        """使用浮点数延迟"""
-        c = single_qubit_circuit
-        c.delay(0, 100.0)
-        assert len(c) == 1
-
-    def test_delay_with_parameter(self, single_qubit_circuit, theta_param):
-        """使用符号参数延迟"""
-        c = single_qubit_circuit
-        c.delay(0, theta_param)
-        assert len(c) == 1
-
-    def test_delay_between_gates(self, single_qubit_circuit):
-        """在门之间插入延迟"""
-        c = single_qubit_circuit
-        c.x(0)
-        c.delay(0, 10.0)
-        c.y(0)
-        assert len(c) == 3
+    assert len(circuit.operations) == 1
+    assert circuit[0].instruction.instruction.name == "store"
+    assert [str(value) for value in circuit.classical_vars] == ["ClassicalType.bool()"]
 
 
-class TestNonUnitaryCombination:
-    """测试非酉操作组合"""
+def test_barrier_reset_and_delay_append_expected_directives():
+    tau = Parameter("tau")
+    circuit = Circuit(2)
+    circuit.barrier([0, 1])
+    circuit.reset(0)
+    circuit.delay(1, tau)
 
-    def test_measure_and_reset(self, single_qubit_circuit):
-        """测量后重置"""
-        c = single_qubit_circuit
-        c.h(0)
-        c.measure(0)
-        c.reset(0)
-        c.x(0)
-        assert len(c) == 4
+    assert [op.instruction.instruction.name for op in circuit.operations] == [
+        "Barrier",
+        "Reset",
+        "delay",
+    ]
+    assert list(circuit.parameters) == [tau]
 
-    def test_barrier_with_non_unitary(self, two_qubit_circuit):
-        """Barrier与非酉操作组合"""
-        c = two_qubit_circuit
-        c.h(0)
-        c.barrier([0, 1])
-        c.measure(0)
-        c.barrier([0, 1])
-        c.reset(1)
-        assert len(c) == 5
+
+def test_measure_and_reset_are_not_matrix_convertible():
+    measured = Circuit(1)
+    measured.measure(0)
+    with pytest.raises(CircuitError):
+        measured.to_matrix()
+
+    reset = Circuit(1)
+    reset.reset(0)
+    with pytest.raises(CircuitError):
+        reset.to_matrix()
+
+
+def test_barrier_does_not_change_matrix():
+    circuit = Circuit(2)
+    circuit.h(0)
+    circuit.barrier([0, 1])
+    circuit.cx(0, 1)
+
+    matrix = circuit.to_matrix()
+    assert matrix.shape == (4, 4)
+    assert np.allclose(matrix @ matrix.conj().T, np.eye(4), atol=1e-10)
+
+
+def test_directive_factories_and_inverse_behavior():
+    barrier = Directive.barrier()
+    measure = Directive.measure()
+    reset = Directive.reset()
+
+    assert barrier.is_barrier()
+    assert measure.is_measure()
+    assert reset.is_reset()
+    assert barrier.inverse().name() == "Barrier"
+
+    assert measure.inverse() is None
+    assert reset.inverse() is None

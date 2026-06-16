@@ -4,56 +4,109 @@
 #
 # This code is licensed under the Apache License, Version 2.0. You may
 # obtain a copy of this license in the LICENSE.txt file in the root directory
-# of this source tree or at http://www.apache.org/licenses/LICENSE-2.0.
+# of this source tree or at http:#www.apache.org/licenses/LICENSE-2.0.
 #
 # Any modifications or derivative works of this code must retain this
 # copyright notice, and modified files need to carry a notice indicating
 # that they have been altered from the originals.
 
-import numpy as np
+"""Value IR wrapper tests for the Python circuit API."""
 
+import numpy as np
+import pytest
+
+from cqlib import Circuit, Qubit
 from cqlib.circuit import (
-    Circuit,
     ClassicalControlOp,
+    ClassicalExpr,
+    Directive,
+    Instruction,
+    StandardGate,
     ValueControlBody,
+    ValueInstruction,
     ValueOperation,
 )
 
 
-def test_operations_are_self_contained_value_operations():
+def test_operation_exposes_value_ir_fields():
     circuit = Circuit(1)
-    circuit.rx(0, 0.25)
-
+    circuit.rx(0, 0.5)
     operation = circuit[0]
 
     assert isinstance(operation, ValueOperation)
-    assert operation.params == [0.25]
+    assert operation.instruction.instruction.name == "RX"
+    assert list(operation.params) == [0.5]
+    assert [qubit.index for qubit in operation.qubits] == [0]
 
 
-def test_dynamic_control_flow_round_trips_through_value_ir():
+def test_instruction_factory_methods_expose_names_and_kinds():
+    standard = Instruction.from_standard_gate(StandardGate.H())
+    directive = Instruction.from_directive(Directive.barrier())
+
+    assert standard.name == "H"
+    assert standard.is_standard
+    assert directive.name == "Barrier"
+    assert directive.is_directive
+
+
+def test_value_instruction_wraps_instruction_and_control_variants():
+    standard = ValueInstruction.from_instruction(Instruction.from_standard_gate(StandardGate.X()))
+    assert standard.is_instruction
+    assert standard.instruction.name == "X"
+
     body_circuit = Circuit(1)
-    body_circuit.x(0)
-
-    circuit = Circuit(1)
-    measured = circuit.measure(0)
+    body_circuit.h(0)
     control = ClassicalControlOp.if_(
-        measured.expr().to_bool(),
+        ClassicalExpr.bool_literal(True),
         ValueControlBody(body_circuit.operations),
     )
-    circuit.append_control(control)
+    controlled = ValueInstruction.from_classical_control(control)
 
-    circuit.validate()
-    assert len(circuit) == 2
-    assert circuit[1].instruction.is_classical_control
+    assert controlled.is_classical_control
+    assert controlled.classical_control.kind == "if"
 
 
-def test_matrix_is_exposed_as_a_circuit_method_only():
+def test_value_operation_factories_can_build_and_append_operations():
+    operation = ValueOperation.from_standard_gate(
+        StandardGate.RX(0.25),
+        [Qubit(0)],
+        label="rx-label",
+    )
+
     circuit = Circuit(1)
-    circuit.h(0)
+    circuit.append(operation)
 
-    assert np.allclose(circuit.to_matrix(), np.array([[1, 1], [1, -1]]) / np.sqrt(2))
+    assert operation.label == "rx-label"
+    assert list(operation.params) == [0.25]
+    assert circuit[0].instruction.instruction.name == "RX"
 
-    import cqlib.circuit as circuit_module
 
-    assert not hasattr(circuit_module, "circuit_to_matrix")
-    assert not hasattr(circuit_module, "ControlFlow")
+def test_value_operation_matrix_for_unitary_gate():
+    operation = ValueOperation.from_standard_gate(StandardGate.X(), [Qubit(0)])
+
+    assert np.allclose(operation.matrix(), np.array([[0, 1], [1, 0]], dtype=complex))
+
+
+def test_value_operation_matrix_rejects_directive_without_matrix():
+    instruction = Instruction.from_directive(Directive.barrier())
+    operation = ValueOperation.from_instruction(instruction, [Qubit(0)])
+
+    with pytest.raises(ValueError):
+        operation.matrix()
+
+
+def test_value_operation_from_classical_control():
+    body_circuit = Circuit(1)
+    body_circuit.z(0)
+    control = ClassicalControlOp.if_(
+        ClassicalExpr.bool_literal(True),
+        ValueControlBody(body_circuit.operations),
+    )
+    operation = ValueOperation.from_classical_control(control)
+
+    assert operation.instruction.is_classical_control
+    assert operation.instruction.classical_control.kind == "if"
+    assert [
+        op.instruction.instruction.name
+        for op in operation.instruction.classical_control.then_body.operations
+    ] == ["Z"]

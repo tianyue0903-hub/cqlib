@@ -4,122 +4,82 @@
 #
 # This code is licensed under the Apache License, Version 2.0. You may
 # obtain a copy of this license in the LICENSE.txt file in the root directory
-# of this source tree or at http://www.apache.org/licenses/LICENSE-2.0.
+# of this source tree or at http:#www.apache.org/licenses/LICENSE-2.0.
 #
 # Any modifications or derivative works of this code must retain this
 # copyright notice, and modified files need to carry a notice indicating
 # that they have been altered from the originals.
 
-"""
-测试 Circuit 逆运算
+"""Inverse operation tests for the Python circuit API."""
 
-测试范围：
-- 单量子比特门逆
-- 多量子比特门逆
-- 包含Barrier的逆
-- 非酉操作不可逆
-"""
-
+import numpy as np
 import pytest
-from cqlib.circuit import Circuit
+
+from cqlib import Circuit, Parameter
+from cqlib.circuit import CircuitError
 
 
-class TestCircuitInverseBasic:
-    """测试基础逆运算"""
+def test_unitary_circuit_inverse_multiplies_to_identity():
+    circuit = Circuit(2)
+    circuit.h(0)
+    circuit.cx(0, 1)
+    circuit.rz(1, 0.25)
 
-    def test_inverse_single_qubit_gates(self):
-        """单量子比特门逆"""
-        c = Circuit(1)
-        c.h(0)
-        c.x(0)
+    inverse = circuit.inverse()
+    product = inverse.to_matrix() @ circuit.to_matrix()
 
-        c_inv = c.inverse()
-        assert len(c_inv) == 2
-
-    def test_inverse_pauli_gates(self):
-        """Pauli门逆"""
-        c = Circuit(1)
-        c.x(0)
-        c.y(0)
-        c.z(0)
-
-        c_inv = c.inverse()
-        assert len(c_inv) == 3
-
-    def test_inverse_cnot(self):
-        """CNOT逆（自逆）"""
-        c = Circuit(2)
-        c.cx(0, 1)
-
-        c_inv = c.inverse()
-        assert len(c_inv) == 1
-
-    def test_inverse_bell_state(self):
-        """Bell态电路逆"""
-        c = Circuit(2)
-        c.h(0)
-        c.cx(0, 1)
-
-        c_inv = c.inverse()
-        assert len(c_inv) == 2
+    assert np.allclose(product, np.eye(4), atol=1e-10)
 
 
-class TestCircuitInverseWithBarrier:
-    """测试含Barrier的逆"""
+def test_inverse_reverses_operation_order():
+    circuit = Circuit(1)
+    circuit.rx(0, 0.1)
+    circuit.ry(0, 0.2)
+    circuit.rz(0, 0.3)
 
-    def test_barrier_persists_in_inverse(self):
-        """Barrier在逆中保留"""
-        c = Circuit(2)
-        c.h(0)
-        c.barrier([0, 1])
-        c.cx(0, 1)
+    inverse = circuit.inverse()
 
-        c_inv = c.inverse()
-        assert len(c_inv) == 3
-        # Barrier名称可能是 "Barrier" 或 "Directive(Barrier)"
-        barrier_found = any("Barrier" in op.name for op in c_inv)
-        assert barrier_found
+    assert [op.instruction.instruction.name for op in inverse.operations] == ["RZ", "RY", "RX"]
+    assert list(inverse[0].params) == [-0.3]
 
 
-class TestCircuitInverseNonUnitary:
-    """测试非酉操作不可逆"""
+def test_barrier_is_preserved_in_inverse():
+    circuit = Circuit(1)
+    circuit.h(0)
+    circuit.barrier([0])
+    circuit.x(0)
 
-    def test_measure_not_invertible(self):
-        """测量不可逆"""
-        c = Circuit(1)
-        c.h(0)
-        c.measure(0)
+    inverse = circuit.inverse()
 
-        with pytest.raises(Exception):
-            c.inverse()
-
-    def test_reset_not_invertible(self):
-        """Reset不可逆"""
-        c = Circuit(1)
-        c.reset(0)
-
-        with pytest.raises(Exception):
-            c.inverse()
+    assert [op.instruction.instruction.name for op in inverse.operations] == ["X", "Barrier", "H"]
 
 
-class TestCircuitInverseTwice:
-    """测试两次逆运算"""
+def test_non_unitary_operations_are_not_invertible():
+    measured = Circuit(1)
+    measured.measure(0)
+    with pytest.raises(CircuitError):
+        measured.inverse()
 
-    def test_inverse_twice(self):
-        """两次逆回到原电路"""
-        c = Circuit(2)
-        c.h(0)
-        c.cx(0, 1)
-
-        c_inv_inv = c.inverse().inverse()
-        assert len(c_inv_inv) == len(c)
+    reset = Circuit(1)
+    reset.reset(0)
+    with pytest.raises(CircuitError):
+        reset.inverse()
 
 
-class TestCircuitInverseEmpty:
-    """测试空电路逆"""
+def test_symbolic_inverse_keeps_symbolic_parameters():
+    theta = Parameter("theta")
+    circuit = Circuit(1)
+    circuit.rx(0, theta)
 
-    def test_empty_circuit_inverse(self):
-        """空电路逆"""
-        c = Circuit(1)
-        c_inv = c.inverse()
-        assert len(c_inv) == 0
+    inverse = circuit.inverse()
+
+    assert inverse[0].instruction.instruction.name == "RX"
+    assert str(inverse[0].params[0]) == "-theta"
+
+
+def test_empty_circuit_inverse_is_empty():
+    circuit = Circuit(0)
+    inverse = circuit.inverse()
+
+    assert inverse.num_qubits == 0
+    assert len(inverse.operations) == 0
