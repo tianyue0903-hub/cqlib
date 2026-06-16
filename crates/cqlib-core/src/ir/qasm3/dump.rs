@@ -189,7 +189,8 @@ pub fn dumps(circuit: &Circuit) -> Result<String, Qasm3DumpError> {
     } else {
         writeln!(&mut output, "qubit[{}] q;", circuit.num_qubits())?;
     }
-    let classical_names = ClassicalNameMap::new(circuit, &mut output)?;
+    let skipped_values = skipped_classical_value_declarations(circuit.operations())?;
+    let classical_names = ClassicalNameMap::new(circuit, &mut output, &skipped_values)?;
     writeln!(&mut output)?;
     dump_global_phase(circuit, &mut output)?;
 
@@ -238,7 +239,11 @@ struct ClassicalNameMap {
 }
 
 impl ClassicalNameMap {
-    fn new(circuit: &Circuit, output: &mut String) -> Result<Self, Qasm3DumpError> {
+    fn new(
+        circuit: &Circuit,
+        output: &mut String,
+        skipped_values: &HashSet<ClassicalValue>,
+    ) -> Result<Self, Qasm3DumpError> {
         let mut map = Self::default();
         for (index, ty) in circuit.classical_vars().iter().copied().enumerate() {
             let name = format!("c{index}");
@@ -247,10 +252,13 @@ impl ClassicalNameMap {
                 .insert(ClassicalVar::new(circuit.id(), index as u32, ty), name);
         }
         for (index, ty) in circuit.classical_values().iter().copied().enumerate() {
+            let value = ClassicalValue::new(circuit.id(), index as u32, ty);
+            if skipped_values.contains(&value) {
+                continue;
+            }
             let name = format!("v{index}");
             writeln!(output, "{} {name};", classical_decl_type(ty)?)?;
-            map.values
-                .insert(ClassicalValue::new(circuit.id(), index as u32, ty), name);
+            map.values.insert(value, name);
         }
         Ok(map)
     }
@@ -521,7 +529,7 @@ fn dump_operations(
                     return Err(Qasm3DumpError::MeasureInGateNotAllowed);
                 }
                 let next = operations.get(index + 1);
-                let (destination, consumes_store) =
+                let (mut destination, consumes_store) =
                     measurement_destination(&op.instruction, *result, next)?;
                 if consumes_store
                     && operations[index + 2..]
@@ -532,6 +540,13 @@ fn dump_operations(
                         "measurement value {} is read after being stored into a mutable variable",
                         result.index()
                     )));
+                }
+                if !consumes_store
+                    && !operations[index + 1..]
+                        .iter()
+                        .any(|operation| operation_reads_value(operation, *result))
+                {
+                    destination = MeasurementDestination::Discard(*result);
                 }
                 dump_measurement(op, *result, destination, output, qubit_map, classical_names)?;
                 if consumes_store {
@@ -585,8 +600,80 @@ fn is_zero_initializer(target: ClassicalVar, value: &ClassicalExpr) -> bool {
 #[derive(Debug, Clone, Copy)]
 enum MeasurementDestination {
     Value(ClassicalValue),
+    Discard(ClassicalValue),
     VarWhole(ClassicalVar),
     VarBit(ClassicalVar, u32),
+}
+
+fn skipped_classical_value_declarations(
+    operations: &[Operation],
+) -> Result<HashSet<ClassicalValue>, Qasm3DumpError> {
+    let mut skipped = HashSet::new();
+    collect_skipped_classical_values(operations, &mut skipped)?;
+    Ok(skipped)
+}
+
+fn collect_skipped_classical_values(
+    operations: &[Operation],
+    skipped: &mut HashSet<ClassicalValue>,
+) -> Result<(), Qasm3DumpError> {
+    let mut index = 0;
+    while index < operations.len() {
+        let op = &operations[index];
+        match &op.instruction {
+            Instruction::ClassicalData(ClassicalDataOp::MeasureBit { result })
+            | Instruction::ClassicalData(ClassicalDataOp::MeasureBits { result }) => {
+                let next = operations.get(index + 1);
+                let (_, consumes_store) = measurement_destination(&op.instruction, *result, next)?;
+                let remaining_start = index + 1 + usize::from(consumes_store);
+                let read_later = operations[remaining_start..]
+                    .iter()
+                    .any(|operation| operation_reads_value(operation, *result));
+                if !read_later {
+                    skipped.insert(*result);
+                }
+                if consumes_store {
+                    index += 1;
+                }
+            }
+            Instruction::ClassicalControl(control) => {
+                collect_skipped_classical_values_in_control(control, skipped)?;
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+    Ok(())
+}
+
+fn collect_skipped_classical_values_in_control(
+    control: &ClassicalControlOp,
+    skipped: &mut HashSet<ClassicalValue>,
+) -> Result<(), Qasm3DumpError> {
+    match control {
+        ClassicalControlOp::If(op) => {
+            collect_skipped_classical_values(op.then_body().operations(), skipped)?;
+            if let Some(body) = op.else_body() {
+                collect_skipped_classical_values(body.operations(), skipped)?;
+            }
+        }
+        ClassicalControlOp::Switch(op) => {
+            for case in op.cases() {
+                collect_skipped_classical_values(case.body().operations(), skipped)?;
+            }
+            if let Some(body) = op.default() {
+                collect_skipped_classical_values(body.operations(), skipped)?;
+            }
+        }
+        ClassicalControlOp::While(op) => {
+            collect_skipped_classical_values(op.body().operations(), skipped)?;
+        }
+        ClassicalControlOp::For(op) => {
+            collect_skipped_classical_values(op.body().operations(), skipped)?;
+        }
+        ClassicalControlOp::Break | ClassicalControlOp::Continue => {}
+    }
+    Ok(())
 }
 
 fn measurement_destination(
@@ -681,6 +768,7 @@ fn dump_measurement(
         MeasurementDestination::Value(value) => {
             (names.value(value)?.to_string(), value.ty().width())
         }
+        MeasurementDestination::Discard(value) => (String::new(), value.ty().width()),
         MeasurementDestination::VarWhole(var) => (names.var(var)?.to_string(), var.ty().width()),
         MeasurementDestination::VarBit(var, bit) => (format!("{}[{bit}]", names.var(var)?), 1),
     };
@@ -693,16 +781,45 @@ fn dump_measurement(
     }
 
     if width == 1 {
-        let source = if qubit_map.len() == 1 && qubits[0] == "q[0]" {
-            "q"
+        let source = measurement_source(&qubits[0], qubit_map.len());
+        if matches!(destination, MeasurementDestination::Discard(_)) {
+            writeln!(output, "measure {source};")?;
         } else {
-            &qubits[0]
-        };
-        writeln!(output, "{target} = measure {source};")?;
+            writeln!(output, "{target} = measure {source};")?;
+        }
+    } else if is_full_register_measurement(&qubits, qubit_map.len()) {
+        if matches!(destination, MeasurementDestination::Discard(_)) {
+            writeln!(output, "measure q;")?;
+        } else {
+            writeln!(output, "{target} = measure q;")?;
+        }
     } else {
-        writeln!(output, "{target} = measure q;")?;
+        for (index, qubit) in qubits.iter().enumerate() {
+            let source = measurement_source(qubit, qubit_map.len());
+            if matches!(destination, MeasurementDestination::Discard(_)) {
+                writeln!(output, "measure {source};")?;
+            } else {
+                writeln!(output, "{target}[{index}] = measure {source};")?;
+            }
+        }
     }
     Ok(())
+}
+
+fn measurement_source(qubit: &str, qubit_count: usize) -> &str {
+    if qubit_count == 1 && qubit == "q[0]" {
+        "q"
+    } else {
+        qubit
+    }
+}
+
+fn is_full_register_measurement(qubits: &[String], qubit_count: usize) -> bool {
+    qubits.len() == qubit_count
+        && qubits
+            .iter()
+            .enumerate()
+            .all(|(index, qubit)| qubit == &format!("q[{index}]"))
 }
 
 fn operation_reads_value(operation: &Operation, value: ClassicalValue) -> bool {
