@@ -485,3 +485,7 @@ const BUILTIN_RULE_SOURCES: &[(&str, RuleKind)] = &[
 #[cfg(test)]
 #[path = "./library_test.rs"]
 mod library_test;
+
+#[cfg(test)]
+#[path = "builtin_rules_contract_test.rs"]
+mod builtin_rules_contract_test;
