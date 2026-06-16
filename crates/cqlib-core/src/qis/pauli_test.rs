@@ -666,3 +666,34 @@ fn test_expectation_partial_probabilities() {
         exp
     );
 }
+
+#[test]
+fn phase_display_has_no_debug_quotes() {
+    for (phase, expected) in [
+        (Phase::Plus, "1"),
+        (Phase::I, "i"),
+        (Phase::Minus, "-1"),
+        (Phase::MinusI, "-i"),
+    ] {
+        let s = phase.to_string();
+        assert!(
+            !s.contains('\"'),
+            "Phase::Display for {:?} produced quoted output: {:?}",
+            phase,
+            s
+        );
+        assert_eq!(
+            s, expected,
+            "Phase::Display for {:?}: expected {:?}, got {:?}",
+            phase, expected, s
+        );
+    }
+}
+
+#[test]
+fn phase_display_matches_expected_symbols() {
+    assert_eq!(Phase::Plus.to_string(), "1");
+    assert_eq!(Phase::I.to_string(), "i");
+    assert_eq!(Phase::Minus.to_string(), "-1");
+    assert_eq!(Phase::MinusI.to_string(), "-i");
+}

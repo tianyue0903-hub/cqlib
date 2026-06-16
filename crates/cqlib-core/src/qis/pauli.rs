@@ -98,7 +98,7 @@ impl fmt::Display for Phase {
             Phase::Minus => "-1",
             Phase::MinusI => "-i",
         };
-        write!(f, "{:?}", s)
+        f.write_str(s)
     }
 }
 
