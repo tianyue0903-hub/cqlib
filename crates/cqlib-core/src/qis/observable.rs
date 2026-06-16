@@ -53,11 +53,13 @@
 
 use crate::qis::error::QisError;
 use crate::qis::hamiltonian::Hamiltonian;
-use crate::qis::pauli::PauliString;
+use crate::qis::pauli::{PauliString, Phase};
 use crate::qis::state::{DensityMatrix, Statevector};
 use num_complex::Complex64;
 use rayon::prelude::*;
 use std::collections::HashMap;
+
+const VARIANCE_TOLERANCE: f64 = 1e-10;
 
 /// Trait for quantum observables that can compute expectation values.
 ///
@@ -124,6 +126,60 @@ pub trait Observable {
     ///
     /// Used for dimension validation before computing expectation values.
     fn num_qubits(&self) -> usize;
+
+    /// Computes the variance of this observable for a statevector.
+    ///
+    /// Var(O) = <O^2> - <O>^2.  Returns an error when the observable is not
+    /// Hermitian, the qubit counts do not match, or a numerical issue arises.
+    ///
+    /// # Default Implementation
+    ///
+    /// Returns QisError::UnsupportedOperation. Observable types that support
+    /// variance calculation must override this method.
+    fn variance_statevector(&self, _sv: &Statevector) -> Result<f64, QisError> {
+        Err(QisError::UnsupportedOperation(
+            "variance_statevector not implemented for this observable type".into(),
+        ))
+    }
+}
+
+fn apply_pauli_string_to_statevector(
+    pauli_str: &PauliString,
+    sv: &Statevector,
+    coeff: Complex64,
+) -> Vec<Complex64> {
+    let x_mask = pauli_str.x_mask();
+    let z_mask = pauli_str.z_mask();
+    let y_phase = pauli_str.y_phase();
+    let global_phase = pauli_str.phase.to_complex();
+    let base_factor = coeff * global_phase * y_phase;
+    let sv_data = sv.data();
+
+    (0..sv_data.len())
+        .into_par_iter()
+        .map(|j| {
+            let source_j = j ^ x_mask;
+            let z_parity = (j & z_mask).count_ones();
+            let sign = if z_parity % 2 == 1 { -1.0 } else { 1.0 };
+            sv_data[source_j] * base_factor * sign
+        })
+        .collect()
+}
+
+fn finalize_variance(variance: f64) -> Result<f64, QisError> {
+    if variance < -VARIANCE_TOLERANCE {
+        // The current QisError model has no dedicated numerical error variant.
+        return Err(QisError::InvalidParameterValue(format!(
+            "variance computation produced a negative result beyond tolerance: {}",
+            variance
+        )));
+    }
+
+    if variance < 0.0 {
+        Ok(0.0)
+    } else {
+        Ok(variance)
+    }
 }
 
 impl Observable for Hamiltonian {
@@ -302,6 +358,37 @@ impl Observable for Hamiltonian {
     fn num_qubits(&self) -> usize {
         self.num_qubits
     }
+
+    fn variance_statevector(&self, sv: &Statevector) -> Result<f64, QisError> {
+        if sv.num_qubits != self.num_qubits {
+            return Err(QisError::QubitMismatch {
+                expected: self.num_qubits,
+                actual: sv.num_qubits,
+            });
+        }
+
+        let mut simplified = self.clone();
+        simplified.simplify();
+
+        for (_, coeff) in &mut simplified.terms {
+            if coeff.im.abs() > VARIANCE_TOLERANCE {
+                return Err(QisError::NotHermitian);
+            }
+            coeff.im = 0.0;
+        }
+
+        let expectation = simplified.expectation_statevector(sv)?;
+        let mut applied = vec![Complex64::new(0.0, 0.0); sv.data().len()];
+        for (pauli_str, coeff) in &simplified.terms {
+            let term_state = apply_pauli_string_to_statevector(pauli_str, sv, *coeff);
+            for (acc, term_amp) in applied.iter_mut().zip(term_state) {
+                *acc += term_amp;
+            }
+        }
+
+        let second_moment: f64 = applied.iter().map(|amp| amp.norm_sqr()).sum();
+        finalize_variance(second_moment - expectation * expectation)
+    }
 }
 
 impl Observable for PauliString {
@@ -432,6 +519,28 @@ impl Observable for PauliString {
 
     fn num_qubits(&self) -> usize {
         self.num_qubits
+    }
+
+    fn variance_statevector(&self, sv: &Statevector) -> Result<f64, QisError> {
+        if sv.num_qubits != self.num_qubits {
+            return Err(QisError::QubitMismatch {
+                expected: self.num_qubits,
+                actual: sv.num_qubits,
+            });
+        }
+
+        match self.phase {
+            Phase::Plus | Phase::Minus => {}
+            Phase::I | Phase::MinusI => return Err(QisError::NotHermitian),
+        }
+
+        let expectation = self.expectation_statevector(sv)?;
+        let second_moment: f64 =
+            apply_pauli_string_to_statevector(self, sv, Complex64::new(1.0, 0.0))
+                .iter()
+                .map(|amp| amp.norm_sqr())
+                .sum();
+        finalize_variance(second_moment - expectation * expectation)
     }
 }
 

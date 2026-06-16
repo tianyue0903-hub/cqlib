@@ -12,7 +12,8 @@
 
 use super::*;
 use crate::qis::hamiltonian::Hamiltonian;
-use crate::qis::pauli::{PauliString, Phase};
+use crate::qis::pauli::{Pauli, PauliString, Phase};
+use crate::qis::state::Statevector;
 use num_complex::Complex64;
 use std::collections::HashMap;
 
@@ -142,4 +143,162 @@ fn test_expectation_probs_with_global_phase() {
     let exp = h.expectation_probs(&[(m_z, probs)]).unwrap();
     // 2.0 * (-1.0) * (1.0) = -2.0
     assert!((exp - (-2.0)).abs() < 1e-10);
+}
+
+fn assert_close(actual: f64, expected: f64) {
+    assert!(
+        (actual - expected).abs() < 1e-10,
+        "expected {}, got {}",
+        expected,
+        actual
+    );
+}
+
+fn single_pauli(pauli: Pauli) -> PauliString {
+    let mut ps = PauliString::new(1);
+    ps.set_pauli(0, pauli);
+    ps
+}
+
+#[test]
+fn test_pauli_variance_z_on_zero_is_zero() {
+    let sv = Statevector::new(1);
+    let ps = single_pauli(Pauli::Z);
+    assert_close(ps.variance_statevector(&sv).unwrap(), 0.0);
+}
+
+#[test]
+fn test_pauli_variance_z_on_plus_is_one() {
+    let mut sv = Statevector::new(1);
+    sv.apply_h(0).unwrap();
+    let ps = single_pauli(Pauli::Z);
+    assert_close(ps.variance_statevector(&sv).unwrap(), 1.0);
+}
+
+#[test]
+fn test_pauli_variance_x_on_zero_is_one() {
+    let sv = Statevector::new(1);
+    let ps = single_pauli(Pauli::X);
+    assert_close(ps.variance_statevector(&sv).unwrap(), 1.0);
+}
+
+#[test]
+fn test_pauli_variance_y_on_zero_is_one() {
+    let sv = Statevector::new(1);
+    let ps = single_pauli(Pauli::Y);
+    assert_close(ps.variance_statevector(&sv).unwrap(), 1.0);
+}
+
+#[test]
+fn test_hamiltonian_variance_half_y_on_zero() {
+    let sv = Statevector::new(1);
+    let mut h = Hamiltonian::new(1);
+    h.add_term(single_pauli(Pauli::Y), Complex64::new(0.5, 0.0))
+        .unwrap();
+    assert_close(h.variance_statevector(&sv).unwrap(), 0.25);
+}
+
+#[test]
+fn test_hamiltonian_variance_two_z_on_plus_is_four() {
+    let mut sv = Statevector::new(1);
+    sv.apply_h(0).unwrap();
+    let mut h = Hamiltonian::new(1);
+    h.add_term(single_pauli(Pauli::Z), Complex64::new(2.0, 0.0))
+        .unwrap();
+    assert_close(h.variance_statevector(&sv).unwrap(), 4.0);
+}
+
+#[test]
+fn test_hamiltonian_variance_x_plus_z_matches_explicit_matrix() {
+    let sv = Statevector::new(1);
+    let mut h = Hamiltonian::new(1);
+    h.add_term(single_pauli(Pauli::X), Complex64::new(1.0, 0.0))
+        .unwrap();
+    h.add_term(single_pauli(Pauli::Z), Complex64::new(1.0, 0.0))
+        .unwrap();
+
+    // On |0>, (X + Z)|0> = |1> + |0>, so <O^2> = 2 and <O> = 1.
+    assert_close(h.variance_statevector(&sv).unwrap(), 1.0);
+}
+
+#[test]
+fn test_pauli_variance_bell_state_zz_is_zero() {
+    let mut sv = Statevector::new(2);
+    sv.apply_h(0).unwrap();
+    sv.apply_cx(0, 1).unwrap();
+
+    let mut zz = PauliString::new(2);
+    zz.set_pauli(0, Pauli::Z);
+    zz.set_pauli(1, Pauli::Z);
+    assert_close(zz.variance_statevector(&sv).unwrap(), 0.0);
+}
+
+#[test]
+fn test_pauli_variance_rejects_phase_i_x() {
+    let sv = Statevector::new(1);
+    let mut ps = single_pauli(Pauli::X);
+    ps.phase = Phase::I;
+    assert!(matches!(
+        ps.variance_statevector(&sv),
+        Err(QisError::NotHermitian)
+    ));
+}
+
+#[test]
+fn test_pauli_variance_rejects_i_y() {
+    let sv = Statevector::new(1);
+    let mut ps = single_pauli(Pauli::Y);
+    ps.phase = Phase::I;
+    assert!(matches!(
+        ps.variance_statevector(&sv),
+        Err(QisError::NotHermitian)
+    ));
+}
+
+#[test]
+fn test_hamiltonian_variance_simplifies_cancelled_imaginary_terms() {
+    let sv = Statevector::new(1);
+    let mut h = Hamiltonian::new(1);
+    h.add_term(single_pauli(Pauli::X), Complex64::new(0.0, 1.0))
+        .unwrap();
+    h.add_term(single_pauli(Pauli::X), Complex64::new(0.0, -1.0))
+        .unwrap();
+    assert_close(h.variance_statevector(&sv).unwrap(), 0.0);
+}
+
+#[test]
+fn test_hamiltonian_variance_rejects_remaining_imaginary_coefficient() {
+    let sv = Statevector::new(1);
+    let mut h = Hamiltonian::new(1);
+    h.add_term(single_pauli(Pauli::X), Complex64::new(1.0, 1e-3))
+        .unwrap();
+    assert!(matches!(
+        h.variance_statevector(&sv),
+        Err(QisError::NotHermitian)
+    ));
+}
+
+#[test]
+fn test_variance_statevector_qubit_mismatch() {
+    let sv = Statevector::new(2);
+    let ps = single_pauli(Pauli::Z);
+    assert!(matches!(
+        ps.variance_statevector(&sv),
+        Err(QisError::QubitMismatch {
+            expected: 1,
+            actual: 2
+        })
+    ));
+}
+
+#[test]
+fn test_empty_hamiltonian_variance_is_zero() {
+    let sv = Statevector::new(1);
+    let h = Hamiltonian::new(1);
+    assert_close(h.variance_statevector(&sv).unwrap(), 0.0);
+}
+
+#[test]
+fn test_variance_tiny_negative_roundoff_clamps_to_zero() {
+    assert_close(finalize_variance(-VARIANCE_TOLERANCE / 2.0).unwrap(), 0.0);
 }
