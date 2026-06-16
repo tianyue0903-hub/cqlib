@@ -22,11 +22,13 @@ use oq3_semantics::asg::{
 use oq3_semantics::symbols::{SymbolId, SymbolIdResult, SymbolTable, SymbolType};
 use oq3_semantics::syntax_to_semantics;
 use oq3_semantics::types::{ArrayDims, Type};
+use regex::Regex;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 const DEFAULT_MAX_RECURSION_DEPTH: usize = 100;
 
@@ -54,6 +56,7 @@ pub fn load<P: AsRef<Path>>(path: P) -> Result<Circuit, Qasm3ParseError> {
     let path = path.as_ref();
     let source = fs::read_to_string(path).map_err(Qasm3ParseError::IoError)?;
     let source = normalize_openqasm3_header(&source);
+    let source = rewrite_scalar_bit_measurement_assignments(&source);
     let search_paths = path.parent().map(|parent| vec![parent.to_path_buf()]);
     let result =
         syntax_to_semantics::parse_source_string(source, path.to_str(), search_paths.as_deref());
@@ -95,6 +98,7 @@ pub fn from_path<P: AsRef<Path>>(path: P) -> Result<Circuit, Qasm3ParseError> {
 /// ```
 pub fn loads(source: &str) -> Result<Circuit, Qasm3ParseError> {
     let source = normalize_openqasm3_header(source);
+    let source = rewrite_scalar_bit_measurement_assignments(&source);
     let result =
         syntax_to_semantics::parse_source_string(source, Some("qasm3_source"), None::<&[PathBuf]>);
     convert_parse_result(
@@ -134,6 +138,151 @@ fn convert_parse_result(
 
 fn normalize_openqasm3_header(source: &str) -> String {
     source.replacen("OPENQASM 3;", "OPENQASM 3.0;", 1)
+}
+
+fn rewrite_scalar_bit_measurement_assignments(source: &str) -> String {
+    // `oq3_semantics` 0.7.0 rejects `bit b; b = measure q[0];` even though
+    // indexed assignment to a one-bit array is accepted. Keep this compatibility
+    // rewrite deliberately narrow so variables that are read later are not
+    // silently changed from scalar `bit` to `bit[1]`.
+    if source.contains("/*") || source.contains("*/") {
+        return source.to_string();
+    }
+
+    let Some(rewrites) = scalar_bit_measurement_rewrites(source) else {
+        return source.to_string();
+    };
+    if rewrites.is_empty() {
+        return source.to_string();
+    }
+
+    let mut lines = source
+        .lines()
+        .map(ToString::to_string)
+        .collect::<Vec<String>>();
+    for rewrite in rewrites {
+        lines[rewrite.declaration_line] = rewrite.declaration_replacement;
+        lines[rewrite.assignment_line] = rewrite.assignment_replacement;
+    }
+    let mut rewritten = lines.join("\n");
+    if source.ends_with('\n') {
+        rewritten.push('\n');
+    }
+    rewritten
+}
+
+#[derive(Debug)]
+struct ScalarBitMeasurementRewrite {
+    declaration_line: usize,
+    declaration_replacement: String,
+    assignment_line: usize,
+    assignment_replacement: String,
+}
+
+fn scalar_bit_measurement_rewrites(source: &str) -> Option<Vec<ScalarBitMeasurementRewrite>> {
+    let mut declarations = HashMap::<String, (usize, String)>::new();
+    let mut duplicate_declarations = HashSet::<String>::new();
+    let mut assignments = Vec::<(String, usize, String)>::new();
+
+    for (line_index, line) in source.lines().enumerate() {
+        let (code, comment) = split_line_comment(line);
+        if let Some(captures) = scalar_bit_declaration_regex().captures(code) {
+            let name = captures.name("name")?.as_str().to_string();
+            let replacement = format!(
+                "{}bit[1] {};{}{}",
+                captures.name("indent")?.as_str(),
+                name,
+                captures.name("tail").map_or("", |tail| tail.as_str()),
+                comment
+            );
+            if declarations
+                .insert(name.clone(), (line_index, replacement))
+                .is_some()
+            {
+                duplicate_declarations.insert(name);
+            }
+            continue;
+        }
+
+        if let Some(captures) = scalar_bit_measurement_assignment_regex().captures(code) {
+            let name = captures.name("name")?.as_str().to_string();
+            let replacement = format!(
+                "{}{}[0] = measure {}[{}];{}{}",
+                captures.name("indent")?.as_str(),
+                name,
+                captures.name("qubit")?.as_str(),
+                captures.name("index")?.as_str(),
+                captures.name("tail").map_or("", |tail| tail.as_str()),
+                comment
+            );
+            assignments.push((name, line_index, replacement));
+        }
+    }
+
+    let mut rewrites = Vec::new();
+    for (name, assignment_line, assignment_replacement) in assignments {
+        if duplicate_declarations.contains(&name) || identifier_occurrences(source, &name) != 2 {
+            continue;
+        }
+        let Some((declaration_line, declaration_replacement)) = declarations.get(&name) else {
+            continue;
+        };
+        rewrites.push(ScalarBitMeasurementRewrite {
+            declaration_line: *declaration_line,
+            declaration_replacement: declaration_replacement.clone(),
+            assignment_line,
+            assignment_replacement,
+        });
+    }
+
+    Some(rewrites)
+}
+
+fn strip_line_comment(line: &str) -> &str {
+    split_line_comment(line).0
+}
+
+fn split_line_comment(line: &str) -> (&str, &str) {
+    line.split_once("//")
+        .map_or((line, ""), |(before_comment, _comment)| {
+            (before_comment, &line[before_comment.len()..])
+        })
+}
+
+fn identifier_occurrences(source: &str, identifier: &str) -> usize {
+    identifier_regex()
+        .find_iter(
+            &source
+                .lines()
+                .map(strip_line_comment)
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )
+        .filter(|token| token.as_str() == identifier)
+        .count()
+}
+
+fn scalar_bit_declaration_regex() -> &'static Regex {
+    static REGEX: OnceLock<Regex> = OnceLock::new();
+    REGEX.get_or_init(|| {
+        Regex::new(r"^(?P<indent>\s*)bit\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*;(?P<tail>\s*)$")
+            .expect("valid scalar bit declaration regex")
+    })
+}
+
+fn scalar_bit_measurement_assignment_regex() -> &'static Regex {
+    static REGEX: OnceLock<Regex> = OnceLock::new();
+    REGEX.get_or_init(|| {
+        Regex::new(
+            r"^(?P<indent>\s*)(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*measure\s+(?P<qubit>[A-Za-z_][A-Za-z0-9_]*)\s*\[\s*(?P<index>\d+)\s*\]\s*;(?P<tail>\s*)$",
+        )
+        .expect("valid scalar bit measurement assignment regex")
+    })
+}
+
+fn identifier_regex() -> &'static Regex {
+    static REGEX: OnceLock<Regex> = OnceLock::new();
+    REGEX.get_or_init(|| Regex::new(r"[A-Za-z_][A-Za-z0-9_]*").expect("valid identifier regex"))
 }
 
 /// Error returned while parsing or lowering OpenQASM 3 into Cqlib.

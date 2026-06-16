@@ -137,6 +137,49 @@ fn loads_indexed_bit_measurement_assignment() {
 }
 
 #[test]
+fn loads_scalar_bit_measurement_assignment_from_indexed_qubit_with_compat_rewrite() {
+    let circuit = loads(
+        r#"
+        OPENQASM 3.0;
+        include "stdgates.inc";
+        qubit[2] q;
+        bit v0; // scalar target accepted through conservative compatibility rewrite
+        v0 = measure q[0];
+        "#,
+    )
+    .unwrap();
+
+    assert_eq!(circuit.num_qubits(), 2);
+    assert_eq!(circuit.operations().len(), 2);
+    assert!(matches!(
+        circuit.operations()[0].instruction,
+        Instruction::ClassicalData(ClassicalDataOp::MeasureBit { .. })
+    ));
+    assert!(matches!(
+        circuit.operations()[1].instruction,
+        Instruction::ClassicalData(ClassicalDataOp::Store { target, .. })
+            if target.ty() == ClassicalType::bit_vec(1).unwrap()
+    ));
+}
+
+#[test]
+fn rejects_scalar_bit_measurement_assignment_when_target_is_read_later() {
+    assert_err(
+        r#"
+        OPENQASM 3.0;
+        include "stdgates.inc";
+        qubit[1] q;
+        bit v0;
+        v0 = measure q[0];
+        if (v0) {
+            x q[0];
+        }
+        "#,
+        |err| matches!(err, Qasm3ParseError::SemanticError(_)),
+    );
+}
+
+#[test]
 fn rejects_multi_qubit_measurement_into_indexed_bit() {
     assert_err(
         r#"
