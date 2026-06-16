@@ -49,6 +49,7 @@
 //! c1.h(Qubit(0))    # Qubit object
 //! ```
 
+use crate::circuit::error::QubitError as PyQubitError;
 use cqlib_core::circuit::Qubit;
 use pyo3::prelude::*;
 use std::collections::hash_map::DefaultHasher;
@@ -106,10 +107,37 @@ impl PyQubit {
     /// q1 = Qubit(1)
     /// ```
     #[new]
-    fn new(index: u32) -> Self {
-        PyQubit {
-            inner: Qubit::new(index),
+    fn new(index: &Bound<'_, PyAny>) -> PyResult<Self> {
+        if let Ok(index) = index.extract::<i128>() {
+            if index < 0 {
+                return Err(PyQubitError::new_err(
+                    cqlib_core::circuit::QubitError::NegativeIndex(index).to_string(),
+                ));
+            }
+            if index as u128 > u32::MAX as u128 {
+                return Err(PyQubitError::new_err(
+                    cqlib_core::circuit::QubitError::IndexTooLarge(index as u128).to_string(),
+                ));
+            }
+            return Ok(Self {
+                inner: Qubit::new(index as u32),
+            });
         }
+
+        if let Ok(index) = index.extract::<u128>() {
+            if index > u32::MAX as u128 {
+                return Err(PyQubitError::new_err(
+                    cqlib_core::circuit::QubitError::IndexTooLarge(index).to_string(),
+                ));
+            }
+            return Ok(Self {
+                inner: Qubit::new(index as u32),
+            });
+        }
+
+        Err(pyo3::exceptions::PyTypeError::new_err(
+            "qubit index must be an integer",
+        ))
     }
 
     /// Returns the qubit index.
@@ -208,9 +236,9 @@ impl From<PyQubit> for Qubit {
 #[derive(FromPyObject)]
 pub enum PyIntQubitList {
     /// Integer: create N sequential qubits (0 to N-1).
-    NumQubits(usize),
+    NumQubits(u32),
     /// List of integers: create qubits at specific indices.
-    IndexList(Vec<usize>),
+    IndexList(Vec<u32>),
     /// List of Qubit objects: use the provided qubits.
     QubitList(Vec<PyQubit>),
 }
@@ -219,12 +247,10 @@ impl From<PyIntQubitList> for Vec<PyQubit> {
     /// Converts to a vector of `PyQubit` objects.
     fn from(item: PyIntQubitList) -> Vec<PyQubit> {
         match item {
-            PyIntQubitList::NumQubits(n) => (0..n)
-                .map(|i| PyQubit::from(Qubit::new(i as u32)))
-                .collect(),
+            PyIntQubitList::NumQubits(n) => (0..n).map(|i| PyQubit::from(Qubit::new(i))).collect(),
             PyIntQubitList::IndexList(indices) => indices
                 .iter()
-                .map(|&i| PyQubit::from(Qubit::new(i as u32)))
+                .map(|&i| PyQubit::from(Qubit::new(i)))
                 .collect(),
             PyIntQubitList::QubitList(qubits) => qubits,
         }
@@ -235,10 +261,8 @@ impl From<PyIntQubitList> for Vec<Qubit> {
     /// Converts to a vector of core `Qubit` objects.
     fn from(item: PyIntQubitList) -> Vec<Qubit> {
         match item {
-            PyIntQubitList::NumQubits(n) => (0..n).map(|i| Qubit::new(i as u32)).collect(),
-            PyIntQubitList::IndexList(indices) => {
-                indices.iter().map(|&i| Qubit::new(i as u32)).collect()
-            }
+            PyIntQubitList::NumQubits(n) => (0..n).map(Qubit::new).collect(),
+            PyIntQubitList::IndexList(indices) => indices.iter().copied().map(Qubit::new).collect(),
             PyIntQubitList::QubitList(qubits) => qubits.into_iter().map(|q| q.inner).collect(),
         }
     }
@@ -258,7 +282,7 @@ impl From<PyIntQubitList> for Vec<Qubit> {
 #[derive(FromPyObject)]
 pub enum PyIntOrQubit {
     /// Integer qubit index (e.g., `0`).
-    Int(usize),
+    Int(u32),
     /// Qubit object.
     Qubit(PyQubit),
 }
@@ -267,7 +291,7 @@ impl From<PyIntOrQubit> for PyQubit {
     /// Converts to a `PyQubit`, creating one from the index if needed.
     fn from(item: PyIntOrQubit) -> PyQubit {
         match item {
-            PyIntOrQubit::Int(i) => PyQubit::from(Qubit::new(i as u32)),
+            PyIntOrQubit::Int(i) => PyQubit::from(Qubit::new(i)),
             PyIntOrQubit::Qubit(q) => q,
         }
     }
@@ -277,7 +301,7 @@ impl From<PyIntOrQubit> for Qubit {
     /// Converts to a core `Qubit`, creating one from the index if needed.
     fn from(item: PyIntOrQubit) -> Qubit {
         match item {
-            PyIntOrQubit::Int(i) => Qubit::new(i as u32),
+            PyIntOrQubit::Int(i) => Qubit::new(i),
             PyIntOrQubit::Qubit(q) => q.inner,
         }
     }
@@ -297,7 +321,7 @@ impl From<PyIntOrQubit> for Qubit {
 #[derive(FromPyObject)]
 pub enum PyIntListOrQubitList {
     /// List of integer indices (e.g., `[0, 1, 2]`).
-    IntList(Vec<usize>),
+    IntList(Vec<u32>),
     /// List of Qubit objects.
     QubitList(Vec<PyQubit>),
 }
@@ -308,7 +332,7 @@ impl From<PyIntListOrQubitList> for Vec<PyQubit> {
         match item {
             PyIntListOrQubitList::IntList(indices) => indices
                 .into_iter()
-                .map(|i| PyQubit::from(Qubit::new(i as u32)))
+                .map(|i| PyQubit::from(Qubit::new(i)))
                 .collect(),
             PyIntListOrQubitList::QubitList(qubits) => qubits,
         }
@@ -319,9 +343,7 @@ impl From<PyIntListOrQubitList> for Vec<Qubit> {
     /// Converts to a vector of core `Qubit` objects, creating from indices if needed.
     fn from(item: PyIntListOrQubitList) -> Vec<Qubit> {
         match item {
-            PyIntListOrQubitList::IntList(indices) => {
-                indices.into_iter().map(|i| Qubit::new(i as u32)).collect()
-            }
+            PyIntListOrQubitList::IntList(indices) => indices.into_iter().map(Qubit::new).collect(),
             PyIntListOrQubitList::QubitList(qubits) => {
                 qubits.into_iter().map(|q| q.inner).collect()
             }

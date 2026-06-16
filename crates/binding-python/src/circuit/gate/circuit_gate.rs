@@ -10,123 +10,165 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
-//! Python Bindings for Circuit-Based Gates
+//! Python bindings for frozen circuits and circuit-defined gates.
 //!
-//! This module provides Python bindings for [`CircuitGate`] from cqlib-core.
-//! It allows quantum circuits to be used as reusable gate components.
-//!
-//! # Key Components
-//!
-//! - [`PyCircuitGate`]: A composite gate defined by a quantum circuit.
+//! A [`PyFrozenCircuit`] is built from the self-contained construction IR and
+//! then consumed by [`PyCircuitGate`]. This mirrors the core ownership model
+//! without depending on the mutable Python circuit builder.
 
-use crate::circuit::PyCircuit;
-use cqlib_core::circuit::gate::circuit_gate::{CircuitGate, FrozenCircuit};
-use pyo3::exceptions::PyValueError;
+use crate::circuit::bit::PyQubit;
+use crate::circuit::classical::PyClassicalType;
+use crate::circuit::error::CircuitError as PyCircuitError;
+use crate::circuit::operation::PyValueOperation;
+use cqlib_core::circuit::Circuit;
+use cqlib_core::circuit::gate::{CircuitGate, FrozenCircuit};
 use pyo3::prelude::*;
 
-/// Python wrapper for `CircuitGate`.
-///
-/// Represents a composite gate defined by a quantum circuit.
-/// Allows hierarchical circuit construction and custom composite gates.
-#[pyclass(name = "CircuitGate", module = "cqlib.circuit.gate")]
+/// Immutable circuit definition suitable for use inside a gate.
+#[pyclass(name = "FrozenCircuit", module = "cqlib.circuit.gates")]
+#[derive(Clone, Debug)]
+pub struct PyFrozenCircuit {
+    pub(crate) inner: FrozenCircuit,
+}
+
+#[pymethods]
+impl PyFrozenCircuit {
+    /// Builds and validates a frozen circuit from construction-IR operations.
+    #[new]
+    #[pyo3(signature = (qubits, operations, classical_vars=None, classical_values=None))]
+    fn new(
+        qubits: Vec<PyQubit>,
+        operations: Vec<PyValueOperation>,
+        classical_vars: Option<Vec<PyClassicalType>>,
+        classical_values: Option<Vec<PyClassicalType>>,
+    ) -> PyResult<Self> {
+        let circuit = Circuit::from_operations(
+            qubits.into_iter().map(|qubit| qubit.inner).collect(),
+            operations.into_iter().map(|operation| operation.inner),
+            classical_vars.map(|types| types.into_iter().map(|ty| ty.inner).collect()),
+            classical_values.map(|types| types.into_iter().map(|ty| ty.inner).collect()),
+        )
+        .map_err(|error| PyCircuitError::new_err(error.to_string()))?;
+        Ok(Self {
+            inner: FrozenCircuit::new(circuit),
+        })
+    }
+
+    /// Returns the frozen circuit's qubits in storage order.
+    #[getter]
+    fn qubits(&self) -> Vec<PyQubit> {
+        self.inner
+            .circuit()
+            .qubits()
+            .into_iter()
+            .map(PyQubit::from)
+            .collect()
+    }
+
+    /// Returns the number of stored operations.
+    #[getter]
+    fn num_operations(&self) -> usize {
+        self.inner.circuit().operations().len()
+    }
+
+    /// Returns self-contained operations with circuit parameters resolved.
+    #[getter]
+    fn operations(&self) -> PyResult<Vec<PyValueOperation>> {
+        (0..self.inner.circuit().operations().len())
+            .map(|index| {
+                self.inner
+                    .circuit()
+                    .index(index)
+                    .map(PyValueOperation::from)
+                    .map_err(|error| PyCircuitError::new_err(error.to_string()))
+            })
+            .collect()
+    }
+
+    /// Returns symbolic parameter names in circuit insertion order.
+    #[getter]
+    fn symbols(&self) -> Vec<String> {
+        self.inner.circuit().symbols().iter().cloned().collect()
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "FrozenCircuit(qubits={}, operations={})",
+            self.inner.circuit().num_qubits(),
+            self.inner.circuit().operations().len()
+        )
+    }
+}
+
+/// Composite gate defined by an immutable circuit.
+#[pyclass(name = "CircuitGate", module = "cqlib.circuit.gates", subclass)]
 #[derive(Clone, Debug)]
 pub struct PyCircuitGate {
-    pub inner: CircuitGate,
+    pub(crate) inner: CircuitGate,
 }
 
 #[pymethods]
 impl PyCircuitGate {
-    /// Creates a new circuit-based gate.
-    ///
-    /// # Arguments
-    ///
-    /// * `name` - A descriptive name for the gate.
-    /// * `circuit` - The circuit to use as the gate definition.
-    ///
-    /// # Returns
-    ///
-    /// A new `CircuitGate`.
-    ///
-    /// # Examples
-    ///
-    /// ```python
-    /// from cqlib import Circuit, CircuitGate
-    ///
-    /// circuit = Circuit(2)
-    /// gate = CircuitGate("Bell", circuit)
-    /// ```
+    /// Creates a reusable gate from a frozen circuit definition.
     #[new]
-    fn new(name: String, circuit: PyCircuit) -> PyResult<Self> {
-        let frozen = FrozenCircuit::new(circuit.inner);
-        CircuitGate::new(name, frozen)
-            .map(|gate| Self { inner: gate })
-            .map_err(|e| PyValueError::new_err(e.to_string()))
+    fn new(name: String, circuit: PyFrozenCircuit) -> PyResult<Self> {
+        CircuitGate::new(name, circuit.inner)
+            .map(|inner| Self { inner })
+            .map_err(|error| PyCircuitError::new_err(error.to_string()))
     }
 
-    /// Returns the name of this circuit gate.
+    /// Returns the gate name.
     #[getter]
     fn name(&self) -> String {
         self.inner.name().to_string()
     }
 
-    /// Returns the number of qubits this gate acts on.
+    /// Returns the number of qubits used by the definition.
     #[getter]
     fn num_qubits(&self) -> usize {
         self.inner.num_qubits()
     }
 
-    /// Returns the number of parameters this gate accepts.
+    /// Returns the number of positional symbolic parameters.
     #[getter]
     fn num_params(&self) -> usize {
         self.inner.num_params()
     }
 
-    /// Returns the set of symbolic parameter names used in the circuit.
-    ///
-    /// # Returns
-    ///
-    /// A list of parameter names.
+    /// Returns symbolic parameter names in positional order.
+    #[getter]
     fn symbols(&self) -> Vec<String> {
         self.inner.symbols().into_iter().collect()
     }
 
-    /// Computes the inverse of this circuit gate.
-    ///
-    /// Creates a new `CircuitGate` with the circuit inverted and appends "_dg" to the name.
-    ///
-    /// # Returns
-    ///
-    /// A new gate representing the inverse operation.
+    /// Returns the immutable circuit definition.
+    #[getter]
+    fn circuit(&self) -> PyFrozenCircuit {
+        PyFrozenCircuit {
+            inner: self.inner.circuit().as_ref().clone(),
+        }
+    }
+
+    /// Returns the inverse circuit gate.
     fn inverse(&self) -> PyResult<Self> {
         self.inner
             .inverse()
-            .map(|gate| Self { inner: gate })
-            .map_err(|e| PyValueError::new_err(e.to_string()))
+            .map(|inner| Self { inner })
+            .map_err(|error| PyCircuitError::new_err(error.to_string()))
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "CircuitGate({:?}, qubits={}, params={})",
+            self.inner.name(),
+            self.inner.num_qubits(),
+            self.inner.num_params()
+        )
     }
 }
 
 impl From<CircuitGate> for PyCircuitGate {
-    fn from(gate: CircuitGate) -> Self {
-        Self { inner: gate }
-    }
-}
-
-impl From<&CircuitGate> for PyCircuitGate {
-    fn from(gate: &CircuitGate) -> Self {
-        Self {
-            inner: gate.clone(),
-        }
-    }
-}
-
-impl From<PyCircuitGate> for CircuitGate {
-    fn from(gate: PyCircuitGate) -> Self {
-        gate.inner
-    }
-}
-
-impl From<&PyCircuitGate> for CircuitGate {
-    fn from(gate: &PyCircuitGate) -> Self {
-        gate.inner.clone()
+    fn from(inner: CircuitGate) -> Self {
+        Self { inner }
     }
 }

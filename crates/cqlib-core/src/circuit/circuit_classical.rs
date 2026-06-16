@@ -419,6 +419,15 @@ pub(super) enum ControlScopeKind {
     Switch,
 }
 
+/// Scope kind used by foreign-language bindings while building callback bodies.
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExternalControlScope {
+    Branch,
+    Loop,
+    Switch,
+}
+
 /// Temporary builder for the ordered cases of a structured `switch` operation.
 pub struct SwitchBuilder<'a> {
     circuit: &'a mut Circuit,
@@ -465,6 +474,12 @@ pub(super) struct CircuitCheckpoint {
     classical_var_len: usize,
     classical_value_len: usize,
     control_scope_len: usize,
+}
+
+/// Opaque rollback token for callback-driven control-flow construction.
+#[doc(hidden)]
+pub struct ControlBodyTransaction {
+    checkpoint: CircuitCheckpoint,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -542,7 +557,8 @@ impl Circuit {
             .truncate(checkpoint.control_scope_len);
     }
 
-    pub(super) fn validate_classical_var(&self, var: ClassicalVar) -> Result<(), CircuitError> {
+    #[doc(hidden)]
+    pub fn validate_classical_var(&self, var: ClassicalVar) -> Result<(), CircuitError> {
         if var.circuit_id() != self.circuit_id {
             return Err(CircuitError::ForeignClassicalHandle {
                 kind: "classical variable",
@@ -589,7 +605,8 @@ impl Circuit {
         }
     }
 
-    pub(super) fn validate_classical_expr(&self, expr: &ClassicalExpr) -> Result<(), CircuitError> {
+    #[doc(hidden)]
+    pub fn validate_classical_expr(&self, expr: &ClassicalExpr) -> Result<(), CircuitError> {
         for var in expr.vars() {
             self.validate_classical_var(var)?;
         }
@@ -762,6 +779,54 @@ impl Circuit {
                 Err(error)
             }
         }
+    }
+
+    /// Starts an externally driven control-flow construction transaction.
+    #[doc(hidden)]
+    pub fn begin_control_body_transaction(&self) -> ControlBodyTransaction {
+        ControlBodyTransaction {
+            checkpoint: self.checkpoint(),
+        }
+    }
+
+    /// Enters one callback body within an external construction transaction.
+    #[doc(hidden)]
+    pub fn enter_external_control_body(
+        &mut self,
+        transaction: &ControlBodyTransaction,
+        scope: ExternalControlScope,
+    ) {
+        self.control_scope_stack
+            .truncate(transaction.checkpoint.control_scope_len);
+        match scope {
+            ExternalControlScope::Branch => {}
+            ExternalControlScope::Loop => self.control_scope_stack.push(ControlScopeKind::Loop),
+            ExternalControlScope::Switch => self.control_scope_stack.push(ControlScopeKind::Switch),
+        }
+    }
+
+    /// Captures operations appended by the current callback body.
+    #[doc(hidden)]
+    pub fn finish_external_control_body(
+        &mut self,
+        transaction: &ControlBodyTransaction,
+    ) -> ControlBody {
+        self.control_scope_stack
+            .truncate(transaction.checkpoint.control_scope_len);
+        ControlBody::new(self.data.split_off(transaction.checkpoint.data_len))
+    }
+
+    /// Commits state allocated while constructing callback bodies.
+    #[doc(hidden)]
+    pub fn commit_control_body_transaction(&mut self, transaction: ControlBodyTransaction) {
+        self.control_scope_stack
+            .truncate(transaction.checkpoint.control_scope_len);
+    }
+
+    /// Rolls back all state allocated while constructing callback bodies.
+    #[doc(hidden)]
+    pub fn rollback_control_body_transaction(&mut self, transaction: ControlBodyTransaction) {
+        self.rollback_to(transaction.checkpoint);
     }
 
     /// Stores a runtime classical expression into a mutable classical variable.

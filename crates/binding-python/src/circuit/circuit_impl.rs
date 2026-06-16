@@ -10,467 +10,673 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
-//! Python Bindings for Quantum Circuit
+//! Python binding for the mutable quantum circuit container.
 //!
-//! This module provides Python bindings for the quantum [`Circuit`] from cqlib-core.
-//!
-//! # Key Components
-//!
-//! - [`PyCircuit`]: The main class representing a quantum circuit in Python.
-//! - [`PyParamLike`]: Helper type for accepting either `float` or `Parameter` objects.
-//! - [`PyIntQubitList`]: Helper type for flexible qubit initialization.
-//!
-//! # Design Notes
-//!
-//! The Python bindings wrap the core Rust [`Circuit`] type, providing a ergonomic API
-//! for quantum circuit construction. All gate methods follow the pattern of accepting
-//! Python integers (which are converted to [`Qubit`] internally) and parameters that
-//! can be either fixed values (`float`) or symbolic (`Parameter`).
-//!
-//! # Example
-//!
-//! ```python
-//! from cqlib import Circuit, Parameter
-//!
-//! # Create a 2-qubit circuit
-//! circuit = Circuit(2)
-//!
-//! # Apply gates
-//! circuit.h(0)
-//! circuit.cx(0, 1)
-//!
-//! # Use symbolic parameters
-//! theta = Parameter.symbol("theta")
-//! circuit.rx(0, theta)
-//! ```
+//! The wrapper follows the two-layer core IR. Common gate and classical-data
+//! methods build a circuit directly, while PyValueOperation is the generic
+//! construction boundary for custom instructions and structured control flow.
 
-use super::bit::{PyIntListOrQubitList, PyIntOrQubit, PyIntQubitList, PyQubit};
-use super::gate::{
-    PyCircuitGate, PyConditionView, PyControlFlow, PyDirective, PyMcGate, PyStandardGate,
-    PyUnitaryGate,
+use crate::circuit::bit::{PyIntListOrQubitList, PyIntOrQubit, PyIntQubitList, PyQubit};
+use crate::circuit::error::{CircuitError as PyCircuitError, ParameterError as PyParameterError};
+use crate::circuit::{
+    PyCircuitGate, PyCircuitId, PyClassicalControlOp, PyClassicalExpr, PyClassicalType,
+    PyClassicalVar, PyMcGate, PyMeasurement, PyParameter, PyStandardGate, PySwitchBuilder,
+    PySymbolicMatrix, PyUnitaryGate, PyValueOperation,
 };
-use super::operation::PyOperation;
-use super::parameter::PyParameter;
-use crate::circuit::operation::PyOperationIter;
-use crate::qis::pauli::PyPauliString;
-use crate::visualization::py_draw_text;
-use cqlib_core::circuit::circuit_param::CircuitParam;
-use cqlib_core::circuit::circuit_param::ParameterValue;
+use cqlib_core::circuit::error::ParameterError;
 use cqlib_core::circuit::gate::Instruction;
-use cqlib_core::circuit::{Circuit, Operation, Qubit};
-use cqlib_core::qis::evolution::PauliEvolution;
+use cqlib_core::circuit::symbolic_matrix::circuit_to_symbolic_matrix;
+use cqlib_core::circuit::{
+    Circuit, CircuitError, ClassicalControlOp, ExternalControlScope, ForOp, IfOp, Parameter,
+    ParameterValue, SwitchOp, ValueInstruction, ValueOperation, WhileOp,
+};
 use num_complex::Complex64;
 use numpy::{PyArray2, ToPyArray};
-use pyo3::IntoPyObjectExt;
-use pyo3::exceptions::{PyIndexError, PyTypeError, PyValueError};
+use pyo3::exceptions::PyIndexError;
 use pyo3::prelude::*;
-use pyo3::types::*;
-use smallvec::SmallVec;
 use std::collections::HashMap;
 
-/// Parameter type that accepts either a fixed value or a symbolic parameter.
-///
-/// This enum enables Python methods to accept both:
-/// - `float` values: Fixed numeric parameters (e.g., `3.14159`)
-/// - `Parameter` objects: Symbolic parameters for variational algorithms
-///
-/// # Example
-///
-/// ```python
-/// from cqlib import Parameter
-///
-/// # Fixed parameter
-/// circuit.rx(0, 1.57)  # OK
-///
-/// # Symbolic parameter
-/// theta = Parameter.symbol("theta")
-/// circuit.rx(0, theta)  # OK
-/// ```
+/// Python gate parameter accepted as either a finite number or a Parameter.
 #[derive(FromPyObject)]
-pub enum PyParamLike {
-    /// A fixed numeric value.
+enum PyParamLike {
     Float(f64),
-    /// A symbolic parameter for parameterization.
-    Param(PyParameter),
+    Parameter(PyParameter),
 }
 
-impl From<PyParamLike> for ParameterValue {
-    fn from(val: PyParamLike) -> Self {
-        match val {
-            PyParamLike::Float(f) => ParameterValue::Fixed(f),
-            PyParamLike::Param(p) => ParameterValue::Param(p.into_inner()),
+impl PyParamLike {
+    /// Converts Python input without allowing non-finite fixed parameters.
+    fn into_value(self) -> PyResult<ParameterValue> {
+        match self {
+            Self::Float(value) if value.is_finite() => Ok(ParameterValue::Fixed(value)),
+            Self::Float(value) => Err(PyParameterError::new_err(
+                ParameterError::DomainError(format!(
+                    "numeric parameter must be finite, got {value}"
+                ))
+                .to_string(),
+            )),
+            Self::Parameter(parameter) => Ok(ParameterValue::Param(parameter.inner)),
         }
     }
 }
 
-/// Python wrapper for the quantum [`Circuit`].
-///
-/// This is the main class for constructing and manipulating quantum circuits in Python.
-/// It wraps the Rust [`cqlib_core::circuit::Circuit`] type, providing an ergonomic API
-/// for building quantum programs.
-///
-/// # Creating a Circuit
-///
-/// A circuit can be created in three ways:
-///
-/// 1. **By number of qubits**: `Circuit(5)` creates a circuit with qubits 0-4.
-/// 2. **By list of integers**: `Circuit([0, 2, 4])` creates a circuit with specific qubits.
-/// 3. **By list of Qubit objects**: `Circuit([Qubit(0), Qubit(1)])`.
-///
-/// # Example
-///
-/// ```python
-/// from cqlib import Circuit
-///
-/// # Create a 2-qubit circuit
-/// circuit = Circuit(2)
-///
-/// # Apply gates
-/// circuit.h(0)        # Hadamard on qubit 0
-/// circuit.cx(0, 1)    # CNOT from qubit 0 to 1
-/// circuit.measure(0)  # Measure qubit 0
-///
-/// print(circuit.num_qubits)  # 2
-/// ```
-#[pyclass(name = "Circuit", module = "cqlib.circuit")]
+/// Mutable quantum circuit with gate, parameter, and dynamic-control support.
+#[pyclass(name = "Circuit", module = "cqlib.circuit", subclass)]
 #[derive(Debug, Clone)]
 pub struct PyCircuit {
-    /// The underlying Rust Circuit instance.
-    pub inner: Circuit,
+    pub(crate) inner: Circuit,
 }
 
 impl From<Circuit> for PyCircuit {
-    fn from(circuit: Circuit) -> Self {
-        PyCircuit { inner: circuit }
+    fn from(inner: Circuit) -> Self {
+        Self { inner }
     }
 }
 
 #[pymethods]
 impl PyCircuit {
-    /// Creates a new quantum circuit.
-    ///
-    /// The circuit can be initialized in three ways:
-    /// 1. By number of qubits: `Circuit(5)` creates a circuit with qubits 0-4.
-    /// 2. By list of integers: `Circuit([0, 2, 4])` creates a circuit with specific qubits.
-    /// 3. By list of Qubit objects: `Circuit([Qubit(0), Qubit(1)])`.
-    ///
-    /// Args:
-    ///     qubits (Union[int, List[int], List[Qubit]]): The qubits to include in the circuit.
+    /// Creates a circuit from a qubit count, integer IDs, or Qubit objects.
     #[new]
     fn new(qubits: PyIntQubitList) -> PyResult<Self> {
-        let inner = Circuit::from_qubits(qubits.into())
-            .map_err(|e| PyValueError::new_err(e.to_string()))?;
-        Ok(PyCircuit { inner })
+        Circuit::from_qubits(qubits.into())
+            .map(Self::from)
+            .map_err(|error| PyCircuitError::new_err(error.to_string()))
     }
 
-    /// Returns the number of qubits in the circuit.
+    /// Builds a circuit from self-contained construction-IR operations.
+    #[staticmethod]
+    #[pyo3(signature = (qubits, operations, classical_vars=None, classical_values=None))]
+    fn from_operations(
+        qubits: Vec<PyQubit>,
+        operations: Vec<PyValueOperation>,
+        classical_vars: Option<Vec<PyClassicalType>>,
+        classical_values: Option<Vec<PyClassicalType>>,
+    ) -> PyResult<Self> {
+        Circuit::from_operations(
+            qubits.into_iter().map(|qubit| qubit.inner).collect(),
+            operations.into_iter().map(|operation| operation.inner),
+            classical_vars.map(|types| types.into_iter().map(|ty| ty.inner).collect()),
+            classical_values.map(|types| types.into_iter().map(|ty| ty.inner).collect()),
+        )
+        .map(Self::from)
+        .map_err(|error| PyCircuitError::new_err(error.to_string()))
+    }
+
+    /// Returns the identity owning this circuit's classical handles.
+    #[getter]
+    fn id(&self) -> PyCircuitId {
+        self.inner.id().into()
+    }
+
     #[getter]
     fn num_qubits(&self) -> usize {
         self.inner.num_qubits()
     }
 
-    /// Returns a tuple of all qubits in the circuit.
-    #[getter]
-    fn qubits<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
-        PyTuple::new(py, self.inner.qubits().iter().map(|&q| PyQubit::from(q)))
-    }
-
-    /// Returns a tuple of all symbolic parameters used in the circuit.
-    #[getter]
-    fn parameters<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
-        PyTuple::new(
-            py,
-            self.inner
-                .parameters()
-                .iter()
-                .map(|p| PyParameter::from(p.clone())),
-        )
-    }
-
-    /// Returns the width (number of qubits) of the circuit.
-    ///
-    /// This is an alias for `num_qubits`.
     #[getter]
     fn width(&self) -> usize {
         self.inner.width()
     }
 
-    /// Returns a tuple of all symbolic variable names used in the circuit.
+    /// Returns qubits in insertion order.
     #[getter]
-    fn symbols<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
-        PyTuple::new(py, self.inner.symbols().iter().map(|s| s.as_str()))
+    fn qubits(&self) -> Vec<PyQubit> {
+        self.inner.qubits().into_iter().map(PyQubit::from).collect()
     }
 
-    /// Returns the global phase of the circuit as a Parameter.
-    ///
-    /// The global phase represents a scalar factor e^(i*theta).
-    /// While unobservable in isolated systems, it is critical for
-    /// controlled operations and sub-circuit composition.
+    /// Returns interned parameters in insertion order.
+    #[getter]
+    fn parameters(&self) -> Vec<PyParameter> {
+        self.inner
+            .parameters()
+            .iter()
+            .cloned()
+            .map(PyParameter::from)
+            .collect()
+    }
+
+    #[getter]
+    fn symbols(&self) -> Vec<String> {
+        self.inner.symbols().iter().cloned().collect()
+    }
+
     #[getter]
     fn global_phase(&self) -> PyParameter {
-        PyParameter::from(self.inner.global_phase())
+        self.inner.global_phase().into()
     }
 
-    /// Sets the global phase of the circuit.
-    ///
-    /// Args:
-    ///     phase: The phase value (can be float or Parameter)
+    /// Replaces the circuit global phase.
     fn set_global_phase(&mut self, phase: PyParamLike) -> PyResult<()> {
-        use cqlib_core::circuit::parameter::Parameter;
-        let param: Parameter = match phase {
-            PyParamLike::Float(f) => Parameter::from(f),
-            PyParamLike::Param(p) => p.into_inner(),
+        let phase = match phase.into_value()? {
+            ParameterValue::Fixed(value) => Parameter::from(value),
+            ParameterValue::Param(parameter) => parameter,
         };
-        self.inner.set_global_phase(param);
+        self.inner.set_global_phase(phase);
         Ok(())
     }
 
-    /// Applies an Identity (I) gate to the specified qubit.
-    ///
-    /// Identity gate is a no-operation that leaves the qubit state unchanged.
-    /// Often used for alignment or waiting periods.
-    ///
-    /// Args:
-    ///     qubit: Qubit index (int) or Qubit object
+    #[getter]
+    fn classical_vars(&self) -> Vec<PyClassicalType> {
+        self.inner
+            .classical_vars()
+            .iter()
+            .copied()
+            .map(PyClassicalType::from)
+            .collect()
+    }
+
+    #[getter]
+    fn classical_values(&self) -> Vec<PyClassicalType> {
+        self.inner
+            .classical_values()
+            .iter()
+            .copied()
+            .map(PyClassicalType::from)
+            .collect()
+    }
+
+    /// Adds qubits while preserving existing circuit data.
+    fn add_qubits(&mut self, qubits: PyIntListOrQubitList) -> PyResult<()> {
+        self.inner
+            .add_qubits(qubits.into())
+            .map_err(|error| PyCircuitError::new_err(error.to_string()))
+    }
+
+    /// Appends any self-contained construction-IR operation.
+    fn append(&mut self, operation: PyValueOperation) -> PyResult<()> {
+        self.inner
+            .append_value_operation(operation.inner)
+            .map_err(|error| PyCircuitError::new_err(error.to_string()))
+    }
+
+    /// Appends a self-contained classical control-flow operation.
+    fn append_control(&mut self, control: PyClassicalControlOp) -> PyResult<()> {
+        let qubits = control.inner.used_qubits().into_iter().collect();
+        self.inner
+            .append_value_operation(ValueOperation {
+                instruction: ValueInstruction::ClassicalControl(control.inner),
+                qubits,
+                params: Default::default(),
+                label: None,
+            })
+            .map_err(|error| PyCircuitError::new_err(error.to_string()))
+    }
+
+    /// Builds and appends an if body through a Python callback.
+    fn if_<'py>(
+        mut slf: PyRefMut<'py, Self>,
+        condition: PyClassicalExpr,
+        body: &Bound<'py, PyAny>,
+    ) -> PyResult<()> {
+        slf.inner
+            .validate_classical_expr(&condition.inner)
+            .map_err(|error| PyCircuitError::new_err(error.to_string()))?;
+        let transaction = slf.inner.begin_control_body_transaction();
+        slf.inner
+            .enter_external_control_body(&transaction, ExternalControlScope::Branch);
+        let py = slf.py();
+        let circuit: Py<Self> = slf.into();
+
+        if let Err(error) = body.call1((circuit.bind(py),)) {
+            circuit
+                .bind(py)
+                .borrow_mut()
+                .inner
+                .rollback_control_body_transaction(transaction);
+            return Err(error);
+        }
+
+        let mut circuit = circuit.bind(py).borrow_mut();
+        let then_body = circuit.inner.finish_external_control_body(&transaction);
+        let op = match IfOp::new(condition.inner, then_body, None) {
+            Ok(op) => ClassicalControlOp::If(op),
+            Err(error) => {
+                circuit.inner.rollback_control_body_transaction(transaction);
+                return Err(PyCircuitError::new_err(error.to_string()));
+            }
+        };
+        if let Err(error) = circuit.inner.append_control(op) {
+            circuit.inner.rollback_control_body_transaction(transaction);
+            return Err(PyCircuitError::new_err(error.to_string()));
+        }
+        circuit.inner.commit_control_body_transaction(transaction);
+        Ok(())
+    }
+
+    /// Builds and appends if/else bodies through Python callbacks.
+    fn if_else<'py>(
+        mut slf: PyRefMut<'py, Self>,
+        condition: PyClassicalExpr,
+        then_body: &Bound<'py, PyAny>,
+        else_body: &Bound<'py, PyAny>,
+    ) -> PyResult<()> {
+        slf.inner
+            .validate_classical_expr(&condition.inner)
+            .map_err(|error| PyCircuitError::new_err(error.to_string()))?;
+        let transaction = slf.inner.begin_control_body_transaction();
+        slf.inner
+            .enter_external_control_body(&transaction, ExternalControlScope::Branch);
+        let py = slf.py();
+        let circuit: Py<Self> = slf.into();
+
+        if let Err(error) = then_body.call1((circuit.bind(py),)) {
+            circuit
+                .bind(py)
+                .borrow_mut()
+                .inner
+                .rollback_control_body_transaction(transaction);
+            return Err(error);
+        }
+        let then_body = {
+            let mut inner = circuit.bind(py).borrow_mut();
+            let body = inner.inner.finish_external_control_body(&transaction);
+            inner
+                .inner
+                .enter_external_control_body(&transaction, ExternalControlScope::Branch);
+            body
+        };
+        if let Err(error) = else_body.call1((circuit.bind(py),)) {
+            circuit
+                .bind(py)
+                .borrow_mut()
+                .inner
+                .rollback_control_body_transaction(transaction);
+            return Err(error);
+        }
+
+        let mut circuit = circuit.bind(py).borrow_mut();
+        let else_body = circuit.inner.finish_external_control_body(&transaction);
+        let op = match IfOp::new(condition.inner, then_body, Some(else_body)) {
+            Ok(op) => ClassicalControlOp::If(op),
+            Err(error) => {
+                circuit.inner.rollback_control_body_transaction(transaction);
+                return Err(PyCircuitError::new_err(error.to_string()));
+            }
+        };
+        if let Err(error) = circuit.inner.append_control(op) {
+            circuit.inner.rollback_control_body_transaction(transaction);
+            return Err(PyCircuitError::new_err(error.to_string()));
+        }
+        circuit.inner.commit_control_body_transaction(transaction);
+        Ok(())
+    }
+
+    /// Builds and appends a while body through a Python callback.
+    fn while_<'py>(
+        mut slf: PyRefMut<'py, Self>,
+        condition: PyClassicalExpr,
+        body: &Bound<'py, PyAny>,
+    ) -> PyResult<()> {
+        slf.inner
+            .validate_classical_expr(&condition.inner)
+            .map_err(|error| PyCircuitError::new_err(error.to_string()))?;
+        let transaction = slf.inner.begin_control_body_transaction();
+        slf.inner
+            .enter_external_control_body(&transaction, ExternalControlScope::Loop);
+        let py = slf.py();
+        let circuit: Py<Self> = slf.into();
+
+        if let Err(error) = body.call1((circuit.bind(py),)) {
+            circuit
+                .bind(py)
+                .borrow_mut()
+                .inner
+                .rollback_control_body_transaction(transaction);
+            return Err(error);
+        }
+
+        let mut circuit = circuit.bind(py).borrow_mut();
+        let body = circuit.inner.finish_external_control_body(&transaction);
+        let op = match WhileOp::new(condition.inner, body) {
+            Ok(op) => ClassicalControlOp::While(op),
+            Err(error) => {
+                circuit.inner.rollback_control_body_transaction(transaction);
+                return Err(PyCircuitError::new_err(error.to_string()));
+            }
+        };
+        if let Err(error) = circuit.inner.append_control(op) {
+            circuit.inner.rollback_control_body_transaction(transaction);
+            return Err(PyCircuitError::new_err(error.to_string()));
+        }
+        circuit.inner.commit_control_body_transaction(transaction);
+        Ok(())
+    }
+
+    /// Builds and appends an unsigned range loop through a Python callback.
+    fn for_uint<'py>(
+        mut slf: PyRefMut<'py, Self>,
+        var: PyClassicalVar,
+        start: PyClassicalExpr,
+        stop: PyClassicalExpr,
+        step: PyClassicalExpr,
+        body: &Bound<'py, PyAny>,
+    ) -> PyResult<()> {
+        slf.inner
+            .validate_classical_var(var.inner)
+            .and_then(|_| slf.inner.validate_classical_expr(&start.inner))
+            .and_then(|_| slf.inner.validate_classical_expr(&stop.inner))
+            .and_then(|_| slf.inner.validate_classical_expr(&step.inner))
+            .map_err(|error| PyCircuitError::new_err(error.to_string()))?;
+        let loop_expr = var.inner.expr();
+        let transaction = slf.inner.begin_control_body_transaction();
+        slf.inner
+            .enter_external_control_body(&transaction, ExternalControlScope::Loop);
+        let py = slf.py();
+        let circuit: Py<Self> = slf.into();
+
+        if let Err(error) = body.call1((circuit.bind(py), PyClassicalExpr::from(loop_expr))) {
+            circuit
+                .bind(py)
+                .borrow_mut()
+                .inner
+                .rollback_control_body_transaction(transaction);
+            return Err(error);
+        }
+
+        let mut circuit = circuit.bind(py).borrow_mut();
+        let body = circuit.inner.finish_external_control_body(&transaction);
+        let op = match ForOp::new(var.inner, start.inner, stop.inner, step.inner, body) {
+            Ok(op) => ClassicalControlOp::For(op),
+            Err(error) => {
+                circuit.inner.rollback_control_body_transaction(transaction);
+                return Err(PyCircuitError::new_err(error.to_string()));
+            }
+        };
+        if let Err(error) = circuit.inner.append_control(op) {
+            circuit.inner.rollback_control_body_transaction(transaction);
+            return Err(PyCircuitError::new_err(error.to_string()));
+        }
+        circuit.inner.commit_control_body_transaction(transaction);
+        Ok(())
+    }
+
+    /// Builds and appends a switch through a temporary Python case builder.
+    fn switch<'py>(
+        slf: PyRefMut<'py, Self>,
+        target: PyClassicalExpr,
+        build: &Bound<'py, PyAny>,
+    ) -> PyResult<()> {
+        slf.inner
+            .validate_classical_expr(&target.inner)
+            .map_err(|error| PyCircuitError::new_err(error.to_string()))?;
+        let transaction = slf.inner.begin_control_body_transaction();
+        let py = slf.py();
+        let circuit: Py<Self> = slf.into();
+        let builder = Py::new(py, PySwitchBuilder::new(circuit.clone_ref(py), transaction))?;
+
+        if let Err(error) = build.call1((builder.bind(py),)) {
+            let mut builder = builder.bind(py).borrow_mut();
+            builder.closed = true;
+            if let Some(transaction) = builder.transaction.take() {
+                builder
+                    .circuit
+                    .bind(py)
+                    .borrow_mut()
+                    .inner
+                    .rollback_control_body_transaction(transaction);
+            }
+            return Err(error);
+        }
+
+        let (transaction, cases, default) = {
+            let mut builder = builder.bind(py).borrow_mut();
+            builder.closed = true;
+            (
+                builder.transaction.take().ok_or_else(|| {
+                    PyCircuitError::new_err("switch builder transaction is unavailable")
+                })?,
+                std::mem::take(&mut builder.cases),
+                builder.default.take(),
+            )
+        };
+        let mut circuit = circuit.bind(py).borrow_mut();
+        let op = match SwitchOp::new(target.inner, cases, default) {
+            Ok(op) => ClassicalControlOp::Switch(op),
+            Err(error) => {
+                circuit.inner.rollback_control_body_transaction(transaction);
+                return Err(PyCircuitError::new_err(error.to_string()));
+            }
+        };
+        if let Err(error) = circuit.inner.append_control(op) {
+            circuit.inner.rollback_control_body_transaction(transaction);
+            return Err(PyCircuitError::new_err(error.to_string()));
+        }
+        circuit.inner.commit_control_body_transaction(transaction);
+        Ok(())
+    }
+
+    /// Appends a break to the nearest enclosing loop or switch callback body.
+    fn break_loop(&mut self) -> PyResult<()> {
+        self.inner
+            .break_loop()
+            .map_err(|error| PyCircuitError::new_err(error.to_string()))
+    }
+
+    /// Appends a continue to the nearest enclosing loop callback body.
+    fn continue_loop(&mut self) -> PyResult<()> {
+        self.inner
+            .continue_loop()
+            .map_err(|error| PyCircuitError::new_err(error.to_string()))
+    }
+
+    /// Returns one operation with circuit-local parameters resolved.
+    fn operation(&self, index: usize) -> PyResult<PyValueOperation> {
+        self.inner
+            .index(index)
+            .map(PyValueOperation::from)
+            .map_err(|error| match error {
+                CircuitError::InvalidOperation(message) => PyIndexError::new_err(message),
+                error => PyCircuitError::new_err(error.to_string()),
+            })
+    }
+
+    #[getter]
+    fn operations(&self) -> PyResult<Vec<PyValueOperation>> {
+        (0..self.inner.operations().len())
+            .map(|index| {
+                self.inner
+                    .index(index)
+                    .map(PyValueOperation::from)
+                    .map_err(|error| PyCircuitError::new_err(error.to_string()))
+            })
+            .collect()
+    }
+
+    /// Appends a standard gate using its bound parameters.
+    #[pyo3(signature = (gate, qubits, label=None))]
+    fn append_gate(
+        &mut self,
+        gate: PyStandardGate,
+        qubits: PyIntListOrQubitList,
+        label: Option<String>,
+    ) -> PyResult<()> {
+        self.inner
+            .append(
+                Instruction::Standard(gate.inner),
+                Vec::<cqlib_core::circuit::Qubit>::from(qubits),
+                gate.params.into_iter().map(ParameterValue::from),
+                label.as_deref(),
+            )
+            .map_err(|error| PyCircuitError::new_err(error.to_string()))
+    }
+
+    /// Appends a multi-controlled gate using its bound parameters.
+    #[pyo3(signature = (gate, qubits, label=None))]
+    fn append_mc_gate(
+        &mut self,
+        gate: PyMcGate,
+        qubits: PyIntListOrQubitList,
+        label: Option<String>,
+    ) -> PyResult<()> {
+        self.inner
+            .append(
+                Instruction::McGate(Box::new(gate.inner)),
+                Vec::<cqlib_core::circuit::Qubit>::from(qubits),
+                gate.params.into_iter().map(ParameterValue::from),
+                label.as_deref(),
+            )
+            .map_err(|error| PyCircuitError::new_err(error.to_string()))
+    }
+
+    /// Appends a custom unitary gate with positional parameter bindings.
+    #[pyo3(signature = (gate, qubits, params=None))]
+    fn append_unitary_gate(
+        &mut self,
+        gate: PyUnitaryGate,
+        qubits: PyIntListOrQubitList,
+        params: Option<Vec<PyParamLike>>,
+    ) -> PyResult<()> {
+        let params = params
+            .unwrap_or_default()
+            .into_iter()
+            .map(PyParamLike::into_value)
+            .collect::<PyResult<Vec<_>>>()?;
+        self.inner
+            .unitary_with_params(gate.into(), qubits.into(), params)
+            .map_err(|error| PyCircuitError::new_err(error.to_string()))
+    }
+
+    /// Appends a circuit-defined gate with positional parameter bindings.
+    #[pyo3(signature = (gate, qubits, params=None))]
+    fn append_circuit_gate(
+        &mut self,
+        gate: PyCircuitGate,
+        qubits: PyIntListOrQubitList,
+        params: Option<Vec<PyParamLike>>,
+    ) -> PyResult<()> {
+        let params = params
+            .unwrap_or_default()
+            .into_iter()
+            .map(PyParamLike::into_value)
+            .collect::<PyResult<Vec<_>>>()?;
+        self.inner
+            .circuit_gate(gate.inner, qubits.into(), params)
+            .map_err(|error| PyCircuitError::new_err(error.to_string()))
+    }
+
+    /// Appends an identity gate.
     fn i(&mut self, qubit: PyIntOrQubit) -> PyResult<()> {
         self.inner
             .i(qubit.into())
-            .map_err(|e| PyValueError::new_err(e.to_string()))
+            .map_err(|error| PyCircuitError::new_err(error.to_string()))
     }
 
-    /// Applies a Hadamard (H) gate to the specified qubit.
-    ///
-    /// Creates superposition: H|0⟩ = (|0⟩ + |1⟩) / √2
-    ///
-    /// Args:
-    ///     qubit: Qubit index (int) or Qubit object
+    /// Appends a Hadamard gate.
     fn h(&mut self, qubit: PyIntOrQubit) -> PyResult<()> {
         self.inner
             .h(qubit.into())
-            .map_err(|e| PyValueError::new_err(e.to_string()))
+            .map_err(|error| PyCircuitError::new_err(error.to_string()))
     }
 
-    /// Applies a Pauli-X (X) gate (bit flip) to the specified qubit.
-    ///
-    /// X|0⟩ = |1⟩, X|1⟩ = |0⟩
-    ///
-    /// Args:
-    ///     qubit: Qubit index (int) or Qubit object
     fn x(&mut self, qubit: PyIntOrQubit) -> PyResult<()> {
         self.inner
             .x(qubit.into())
-            .map_err(|e| PyValueError::new_err(e.to_string()))
+            .map_err(|error| PyCircuitError::new_err(error.to_string()))
     }
 
-    /// Applies a Pauli-Y (Y) gate to the specified qubit.
-    ///
-    /// Y|0⟩ = i|1⟩, Y|1⟩ = -i|0⟩ (bit and phase flip)
-    ///
-    /// Args:
-    ///     qubit: Qubit index (int) or Qubit object
     fn y(&mut self, qubit: PyIntOrQubit) -> PyResult<()> {
         self.inner
             .y(qubit.into())
-            .map_err(|e| PyValueError::new_err(e.to_string()))
+            .map_err(|error| PyCircuitError::new_err(error.to_string()))
     }
 
-    /// Applies a Pauli-Z (Z) gate (phase flip) to the specified qubit.
-    ///
-    /// Z|0⟩ = |0⟩, Z|1⟩ = -|1⟩
-    ///
-    /// Args:
-    ///     qubit: Qubit index (int) or Qubit object
     fn z(&mut self, qubit: PyIntOrQubit) -> PyResult<()> {
         self.inner
             .z(qubit.into())
-            .map_err(|e| PyValueError::new_err(e.to_string()))
+            .map_err(|error| PyCircuitError::new_err(error.to_string()))
     }
 
-    /// Applies an S (Phase) gate to the specified qubit.
-    ///
-    /// Applies a phase of i to the |1⟩ state (Z^½)
-    ///
-    /// Args:
-    ///     qubit: Qubit index (int) or Qubit object
-    fn s(&mut self, qubit: PyIntOrQubit) -> PyResult<()> {
-        self.inner
-            .s(qubit.into())
-            .map_err(|e| PyValueError::new_err(e.to_string()))
-    }
-
-    /// Applies an S-dagger (S†) gate to the specified qubit.
-    ///
-    /// Inverse of the S gate, applies a phase of -i
-    ///
-    /// Args:
-    ///     qubit: Qubit index (int) or Qubit object
-    fn sdg(&mut self, qubit: PyIntOrQubit) -> PyResult<()> {
-        self.inner
-            .sdg(qubit.into())
-            .map_err(|e| PyValueError::new_err(e.to_string()))
-    }
-
-    /// Applies a T gate to the specified qubit.
-    ///
-    /// Applies a phase of e^(iπ/4) to the |1⟩ state (Z^¼)
-    ///
-    /// Args:
-    ///     qubit: Qubit index (int) or Qubit object
-    fn t(&mut self, qubit: PyIntOrQubit) -> PyResult<()> {
-        self.inner
-            .t(qubit.into())
-            .map_err(|e| PyValueError::new_err(e.to_string()))
-    }
-
-    /// Applies a T-dagger (T†) gate to the specified qubit.
-    ///
-    /// Args:
-    ///     qubit: Qubit index (int) or Qubit object
-    fn tdg(&mut self, qubit: PyIntOrQubit) -> PyResult<()> {
-        self.inner
-            .tdg(qubit.into())
-            .map_err(|e| PyValueError::new_err(e.to_string()))
-    }
-
-    /// Applies an √X (SX) gate to the specified qubit.
-    ///
-    /// A 90-degree rotation around the X-axis. SX² = X
-    ///
-    /// Args:
-    ///     qubit: Qubit index (int) or Qubit object
     fn x2p(&mut self, qubit: PyIntOrQubit) -> PyResult<()> {
         self.inner
             .x2p(qubit.into())
-            .map_err(|e| PyValueError::new_err(e.to_string()))
+            .map_err(|error| PyCircuitError::new_err(error.to_string()))
     }
 
-    /// Applies an √X† (SXdg) gate to the specified qubit.
-    ///
-    /// Inverse of the SX gate
-    ///
-    /// Args:
-    ///     qubit: Qubit index (int) or Qubit object
     fn x2m(&mut self, qubit: PyIntOrQubit) -> PyResult<()> {
         self.inner
             .x2m(qubit.into())
-            .map_err(|e| PyValueError::new_err(e.to_string()))
+            .map_err(|error| PyCircuitError::new_err(error.to_string()))
     }
 
-    /// Applies an √Y gate to the specified qubit.
-    ///
-    /// Args:
-    ///     qubit: Qubit index (int) or Qubit object
     fn y2p(&mut self, qubit: PyIntOrQubit) -> PyResult<()> {
         self.inner
             .y2p(qubit.into())
-            .map_err(|e| PyValueError::new_err(e.to_string()))
+            .map_err(|error| PyCircuitError::new_err(error.to_string()))
     }
 
-    /// Applies an √Y† gate to the specified qubit.
-    ///
-    /// Args:
-    ///     qubit: Qubit index (int) or Qubit object
     fn y2m(&mut self, qubit: PyIntOrQubit) -> PyResult<()> {
         self.inner
             .y2m(qubit.into())
-            .map_err(|e| PyValueError::new_err(e.to_string()))
+            .map_err(|error| PyCircuitError::new_err(error.to_string()))
     }
 
-    /// Applies a rotation around the X-axis by angle theta.
-    ///
-    /// RX(θ) = e^(-iθX/2)
-    ///
-    /// Args:
-    ///     qubit: Qubit index (int) or Qubit object
-    ///     theta: Rotation angle (can be float or Parameter)
-    fn rx(&mut self, qubit: PyIntOrQubit, theta: PyParamLike) -> PyResult<()> {
-        self.inner
-            .rx(qubit.into(), theta)
-            .map_err(|e| PyValueError::new_err(e.to_string()))
-    }
-
-    /// Applies a rotation around the Y-axis by angle theta.
-    ///
-    /// RY(θ) = e^(-iθY/2)
-    ///
-    /// Args:
-    ///     qubit: Qubit index (int) or Qubit object
-    ///     theta: Rotation angle (can be float or Parameter)
-    fn ry(&mut self, qubit: PyIntOrQubit, theta: PyParamLike) -> PyResult<()> {
-        self.inner
-            .ry(qubit.into(), theta)
-            .map_err(|e| PyValueError::new_err(e.to_string()))
-    }
-
-    /// Applies a rotation around the Z-axis by angle theta.
-    ///
-    /// RZ(θ) = e^(-iθZ/2)
-    ///
-    /// Args:
-    ///     qubit: Qubit index (int) or Qubit object
-    ///     theta: Rotation angle (can be float or Parameter)
-    fn rz(&mut self, qubit: PyIntOrQubit, theta: PyParamLike) -> PyResult<()> {
-        self.inner
-            .rz(qubit.into(), theta)
-            .map_err(|e| PyValueError::new_err(e.to_string()))
-    }
-
-    /// Applies a Phase (P) gate to the specified qubit.
-    ///
-    /// Applies a phase of e^(iλ) to the |1⟩ state.
-    ///
-    /// Args:
-    ///     qubit: Qubit index (int) or Qubit object
-    ///     lambda: Phase angle (can be float or Parameter)
-    fn phase(&mut self, qubit: PyIntOrQubit, lambda: PyParamLike) -> PyResult<()> {
-        self.inner
-            .phase(qubit.into(), lambda)
-            .map_err(|e| PyValueError::new_err(e.to_string()))
-    }
-
-    /// Applies an XY gate to the specified qubit.
-    ///
-    /// Rotation in the XY plane between |01⟩ and |10⟩ subspace.
-    ///
-    /// Args:
-    ///     qubit: Qubit index (int) or Qubit object
-    ///     theta: Rotation angle (can be float or Parameter)
     fn xy(&mut self, qubit: PyIntOrQubit, theta: PyParamLike) -> PyResult<()> {
         self.inner
-            .xy(qubit.into(), theta)
-            .map_err(|e| PyValueError::new_err(e.to_string()))
+            .xy(qubit.into(), theta.into_value()?)
+            .map_err(|error| PyCircuitError::new_err(error.to_string()))
     }
 
-    /// Applies an √XY gate (positive phase) to the specified qubit.
-    ///
-    /// Args:
-    ///     qubit: Qubit index (int) or Qubit object
-    ///     theta: Rotation angle (can be float or Parameter)
     fn xy2p(&mut self, qubit: PyIntOrQubit, theta: PyParamLike) -> PyResult<()> {
         self.inner
-            .xy2p(qubit.into(), theta)
-            .map_err(|e| PyValueError::new_err(e.to_string()))
+            .xy2p(qubit.into(), theta.into_value()?)
+            .map_err(|error| PyCircuitError::new_err(error.to_string()))
     }
 
-    /// Applies an √XY† gate (negative phase) to the specified qubit.
-    ///
-    /// Args:
-    ///     qubit: Qubit index (int) or Qubit object
-    ///     theta: Rotation angle (can be float or Parameter)
     fn xy2m(&mut self, qubit: PyIntOrQubit, theta: PyParamLike) -> PyResult<()> {
         self.inner
-            .xy2m(qubit.into(), theta)
-            .map_err(|e| PyValueError::new_err(e.to_string()))
+            .xy2m(qubit.into(), theta.into_value()?)
+            .map_err(|error| PyCircuitError::new_err(error.to_string()))
     }
 
-    /// Applies a generic single-qubit rotation gate U(θ, φ, λ).
-    ///
-    /// The most general single-qubit unitary gate.
-    ///
-    /// Args:
-    ///     qubit: Qubit index (int) or Qubit object
-    ///     theta, phi, lambda: Rotation angles (can be float or Parameter)
-    #[pyo3(signature = (qubit, theta, phi, lambda))]
+    fn s(&mut self, qubit: PyIntOrQubit) -> PyResult<()> {
+        self.inner
+            .s(qubit.into())
+            .map_err(|error| PyCircuitError::new_err(error.to_string()))
+    }
+
+    fn sdg(&mut self, qubit: PyIntOrQubit) -> PyResult<()> {
+        self.inner
+            .sdg(qubit.into())
+            .map_err(|error| PyCircuitError::new_err(error.to_string()))
+    }
+
+    fn t(&mut self, qubit: PyIntOrQubit) -> PyResult<()> {
+        self.inner
+            .t(qubit.into())
+            .map_err(|error| PyCircuitError::new_err(error.to_string()))
+    }
+
+    fn tdg(&mut self, qubit: PyIntOrQubit) -> PyResult<()> {
+        self.inner
+            .tdg(qubit.into())
+            .map_err(|error| PyCircuitError::new_err(error.to_string()))
+    }
+
+    /// Appends an RX gate.
+    fn rx(&mut self, qubit: PyIntOrQubit, theta: PyParamLike) -> PyResult<()> {
+        self.inner
+            .rx(qubit.into(), theta.into_value()?)
+            .map_err(|error| PyCircuitError::new_err(error.to_string()))
+    }
+
+    fn ry(&mut self, qubit: PyIntOrQubit, theta: PyParamLike) -> PyResult<()> {
+        self.inner
+            .ry(qubit.into(), theta.into_value()?)
+            .map_err(|error| PyCircuitError::new_err(error.to_string()))
+    }
+
+    fn rz(&mut self, qubit: PyIntOrQubit, theta: PyParamLike) -> PyResult<()> {
+        self.inner
+            .rz(qubit.into(), theta.into_value()?)
+            .map_err(|error| PyCircuitError::new_err(error.to_string()))
+    }
+
+    fn phase(&mut self, qubit: PyIntOrQubit, lambda: PyParamLike) -> PyResult<()> {
+        self.inner
+            .phase(qubit.into(), lambda.into_value()?)
+            .map_err(|error| PyCircuitError::new_err(error.to_string()))
+    }
+
+    /// Appends a general single-qubit U gate.
     fn u(
         &mut self,
         qubit: PyIntOrQubit,
@@ -479,133 +685,107 @@ impl PyCircuit {
         lambda: PyParamLike,
     ) -> PyResult<()> {
         self.inner
-            .u(qubit.into(), theta, phi, lambda)
-            .map_err(|e| PyValueError::new_err(e.to_string()))
+            .u(
+                qubit.into(),
+                theta.into_value()?,
+                phi.into_value()?,
+                lambda.into_value()?,
+            )
+            .map_err(|error| PyCircuitError::new_err(error.to_string()))
     }
 
-    /// Applies a rotation in the XY plane.
-    ///
-    /// Args:
-    ///     qubit: Qubit index (int) or Qubit object
-    ///     theta, phi: Rotation angles (can be float or Parameter)
-    fn rxy(&mut self, qubit: PyIntOrQubit, theta: PyParamLike, phi: PyParamLike) -> PyResult<()> {
-        self.inner
-            .rxy(qubit.into(), theta, phi)
-            .map_err(|e| PyValueError::new_err(e.to_string()))
-    }
-
-    /// Applies a Controlled-NOT (CX/CNOT) gate.
-    ///
-    /// Flips the target qubit if and only if the control qubit is |1⟩.
-    ///
-    /// Args:
-    ///     control: Control qubit index (int) or Qubit object
-    ///     target: Target qubit index (int) or Qubit object
     fn cx(&mut self, control: PyIntOrQubit, target: PyIntOrQubit) -> PyResult<()> {
         self.inner
             .cx(control.into(), target.into())
-            .map_err(|e| PyValueError::new_err(e.to_string()))
+            .map_err(|error| PyCircuitError::new_err(error.to_string()))
     }
 
-    /// Applies a Controlled-Y (CY) gate.
-    ///
-    /// Args:
-    ///     control: Control qubit index (int) or Qubit object
-    ///     target: Target qubit index (int) or Qubit object
     fn cy(&mut self, control: PyIntOrQubit, target: PyIntOrQubit) -> PyResult<()> {
         self.inner
             .cy(control.into(), target.into())
-            .map_err(|e| PyValueError::new_err(e.to_string()))
+            .map_err(|error| PyCircuitError::new_err(error.to_string()))
     }
 
-    /// Applies a Controlled-Z (CZ) gate.
-    ///
-    /// Adds a phase of -1 only if both qubits are |1⟩.
-    ///
-    /// Args:
-    ///     control: Control qubit index (int) or Qubit object
-    ///     target: Target qubit index (int) or Qubit object
     fn cz(&mut self, control: PyIntOrQubit, target: PyIntOrQubit) -> PyResult<()> {
         self.inner
             .cz(control.into(), target.into())
-            .map_err(|e| PyValueError::new_err(e.to_string()))
+            .map_err(|error| PyCircuitError::new_err(error.to_string()))
     }
 
-    /// Applies a SWAP gate.
-    ///
-    /// Exchanges the states of two qubits.
-    ///
-    /// Args:
-    ///     a, b: Qubit indices (int) or Qubit objects
     fn swap(&mut self, a: PyIntOrQubit, b: PyIntOrQubit) -> PyResult<()> {
         self.inner
             .swap(a.into(), b.into())
-            .map_err(|e| PyValueError::new_err(e.to_string()))
+            .map_err(|error| PyCircuitError::new_err(error.to_string()))
     }
 
-    /// Applies an Ising XX coupling gate RXX(θ).
-    ///
-    /// RXX(θ) = e^(-iθ X⊗X / 2)
-    ///
-    /// Args:
-    ///     a, b: Qubit indices (int) or Qubit objects
-    ///     theta: Rotation angle (can be float or Parameter)
+    fn ccx(
+        &mut self,
+        control1: PyIntOrQubit,
+        control2: PyIntOrQubit,
+        target: PyIntOrQubit,
+    ) -> PyResult<()> {
+        self.inner
+            .ccx(control1.into(), control2.into(), target.into())
+            .map_err(|error| PyCircuitError::new_err(error.to_string()))
+    }
+
     fn rxx(&mut self, a: PyIntOrQubit, b: PyIntOrQubit, theta: PyParamLike) -> PyResult<()> {
         self.inner
-            .rxx(a.into(), b.into(), theta)
-            .map_err(|e| PyValueError::new_err(e.to_string()))
+            .rxx(a.into(), b.into(), theta.into_value()?)
+            .map_err(|error| PyCircuitError::new_err(error.to_string()))
     }
 
-    /// Applies an Ising YY coupling gate RYY(θ).
-    ///
-    /// RYY(θ) = e^(-iθ Y⊗Y / 2)
-    ///
-    /// Args:
-    ///     a, b: Qubit indices (int) or Qubit objects
-    ///     theta: Rotation angle (can be float or Parameter)
     fn ryy(&mut self, a: PyIntOrQubit, b: PyIntOrQubit, theta: PyParamLike) -> PyResult<()> {
         self.inner
-            .ryy(a.into(), b.into(), theta)
-            .map_err(|e| PyValueError::new_err(e.to_string()))
+            .ryy(a.into(), b.into(), theta.into_value()?)
+            .map_err(|error| PyCircuitError::new_err(error.to_string()))
     }
 
-    /// Applies an Ising ZZ coupling gate RZZ(θ).
-    ///
-    /// RZZ(θ) = e^(-iθ Z⊗Z / 2)
-    ///
-    /// Args:
-    ///     a, b: Qubit indices (int) or Qubit objects
-    ///     theta: Rotation angle (can be float or Parameter)
     fn rzz(&mut self, a: PyIntOrQubit, b: PyIntOrQubit, theta: PyParamLike) -> PyResult<()> {
         self.inner
-            .rzz(a.into(), b.into(), theta)
-            .map_err(|e| PyValueError::new_err(e.to_string()))
+            .rzz(a.into(), b.into(), theta.into_value()?)
+            .map_err(|error| PyCircuitError::new_err(error.to_string()))
     }
 
-    /// Applies an Ising ZX coupling gate RZX(θ).
-    ///
-    /// RZX(θ) = e^(-iθ Z⊗X / 2)
-    ///
-    /// Args:
-    ///     a, b: Qubit indices (int) or Qubit objects
-    ///     theta: Rotation angle (can be float or Parameter)
     fn rzx(&mut self, a: PyIntOrQubit, b: PyIntOrQubit, theta: PyParamLike) -> PyResult<()> {
         self.inner
-            .rzx(a.into(), b.into(), theta)
-            .map_err(|e| PyValueError::new_err(e.to_string()))
+            .rzx(a.into(), b.into(), theta.into_value()?)
+            .map_err(|error| PyCircuitError::new_err(error.to_string()))
     }
 
-    /// Applies a Fermionic Simulation gate (fSim).
-    ///
-    /// Useful in quantum chemistry simulations.
-    /// fSim(θ, φ) = [[1, 0, 0, 0],
-    ///                [0, cos(θ), -i sin(θ), 0],
-    ///                [0, -i sin(θ), cos(θ), 0],
-    ///                [0, 0, 0, e^(-iφ)]]
-    ///
-    /// Args:
-    ///     a, b: Qubit indices (int) or Qubit objects
-    ///     theta, phi: Parameters (can be float or Parameter)
+    fn crx(
+        &mut self,
+        control: PyIntOrQubit,
+        target: PyIntOrQubit,
+        theta: PyParamLike,
+    ) -> PyResult<()> {
+        self.inner
+            .crx(control.into(), target.into(), theta.into_value()?)
+            .map_err(|error| PyCircuitError::new_err(error.to_string()))
+    }
+
+    fn cry(
+        &mut self,
+        control: PyIntOrQubit,
+        target: PyIntOrQubit,
+        theta: PyParamLike,
+    ) -> PyResult<()> {
+        self.inner
+            .cry(control.into(), target.into(), theta.into_value()?)
+            .map_err(|error| PyCircuitError::new_err(error.to_string()))
+    }
+
+    fn crz(
+        &mut self,
+        control: PyIntOrQubit,
+        target: PyIntOrQubit,
+        theta: PyParamLike,
+    ) -> PyResult<()> {
+        self.inner
+            .crz(control.into(), target.into(), theta.into_value()?)
+            .map_err(|error| PyCircuitError::new_err(error.to_string()))
+    }
+
     fn fsim(
         &mut self,
         a: PyIntOrQubit,
@@ -614,841 +794,309 @@ impl PyCircuit {
         phi: PyParamLike,
     ) -> PyResult<()> {
         self.inner
-            .fsim(a.into(), b.into(), theta, phi)
-            .map_err(|e| PyValueError::new_err(e.to_string()))
+            .fsim(a.into(), b.into(), theta.into_value()?, phi.into_value()?)
+            .map_err(|error| PyCircuitError::new_err(error.to_string()))
     }
 
-    /// Applies a Controlled-RX (CRX) gate.
-    ///
-    /// Performs an X-rotation on the target if the control is |1⟩.
-    ///
-    /// Args:
-    ///     control: Control qubit index (int) or Qubit object
-    ///     target: Target qubit index (int) or Qubit object
-    ///     theta: Rotation angle (can be float or Parameter)
-    fn crx(
-        &mut self,
-        control: PyIntOrQubit,
-        target: PyIntOrQubit,
-        theta: PyParamLike,
-    ) -> PyResult<()> {
+    fn rxy(&mut self, qubit: PyIntOrQubit, theta: PyParamLike, phi: PyParamLike) -> PyResult<()> {
         self.inner
-            .crx(control.into(), target.into(), theta)
-            .map_err(|e| PyValueError::new_err(e.to_string()))
+            .rxy(qubit.into(), theta.into_value()?, phi.into_value()?)
+            .map_err(|error| PyCircuitError::new_err(error.to_string()))
     }
 
-    /// Applies a Controlled-RY (CRY) gate.
-    ///
-    /// Args:
-    ///     control: Control qubit index (int) or Qubit object
-    ///     target: Target qubit index (int) or Qubit object
-    ///     theta: Rotation angle (can be float or Parameter)
-    fn cry(
-        &mut self,
-        control: PyIntOrQubit,
-        target: PyIntOrQubit,
-        theta: PyParamLike,
-    ) -> PyResult<()> {
-        self.inner
-            .cry(control.into(), target.into(), theta)
-            .map_err(|e| PyValueError::new_err(e.to_string()))
-    }
-
-    /// Applies a Controlled-RZ (CRZ) gate.
-    ///
-    /// Args:
-    ///     control: Control qubit index (int) or Qubit object
-    ///     target: Target qubit index (int) or Qubit object
-    ///     theta: Rotation angle (can be float or Parameter)
-    fn crz(
-        &mut self,
-        control: PyIntOrQubit,
-        target: PyIntOrQubit,
-        theta: PyParamLike,
-    ) -> PyResult<()> {
-        self.inner
-            .crz(control.into(), target.into(), theta)
-            .map_err(|e| PyValueError::new_err(e.to_string()))
-    }
-
-    /// Applies a Toffoli gate (CCX / Toffoli).
-    ///
-    /// A 3-qubit gate where the target flips if and only if both controls are |1⟩.
-    ///
-    /// Args:
-    ///     control1, control2: Control qubit indices (int) or Qubit objects
-    ///     target: Target qubit index (int) or Qubit object
-    pub fn ccx(
-        &mut self,
-        control1: PyIntOrQubit,
-        control2: PyIntOrQubit,
-        target: PyIntOrQubit,
-    ) -> PyResult<()> {
-        self.inner
-            .ccx(control1.into(), control2.into(), target.into())
-            .map_err(|e| PyValueError::new_err(e.to_string()))
-    }
-
-    /// Applies a multi-controlled version of a standard gate.
-    ///
-    /// Automatically handles gate promotion: X with 1 control becomes CX,
-    /// with 2 controls becomes CCX, etc. For higher controls, creates an MCGate.
-    ///
-    /// Args:
-    ///     instruction: The base standard gate (e.g., StandardGate.X)
-    ///     controls: List of control qubit indices
-    ///     targets: List of target qubit indices
-    ///     params: Optional parameters for the base gate
-    ///
-    /// # Example
-    ///
-    /// ```python
-    /// circuit.multi_control(StandardGate.X, [0, 1], [2], None)  # Equivalent to CCX
-    /// ```
-    #[pyo3(signature = (instruction, controls, targets, params=None))]
-    pub fn multi_control(
-        &mut self,
-        instruction: PyStandardGate,
-        controls: Vec<usize>,
-        targets: Vec<usize>,
-        params: Option<Vec<PyParamLike>>,
-    ) -> PyResult<()> {
-        let mut ps = vec![];
-        if let Some(params) = params {
-            for p in params {
-                match p {
-                    PyParamLike::Float(f) => ps.push(ParameterValue::Fixed(f)),
-                    PyParamLike::Param(p) => ps.push(ParameterValue::Param(p.into_inner())),
-                }
-            }
-        }
-        let control_qubits: Vec<Qubit> = controls
-            .into_iter()
-            .map(|q| Qubit::try_from(q).map_err(|e| PyValueError::new_err(e.to_string())))
-            .collect::<PyResult<_>>()?;
-        let target_qubits: Vec<Qubit> = targets
-            .into_iter()
-            .map(|q| Qubit::try_from(q).map_err(|e| PyValueError::new_err(e.to_string())))
-            .collect::<PyResult<_>>()?;
-        self.inner
-            .multi_control(instruction.inner, control_qubits, target_qubits, ps)
-            .map_err(|e| PyValueError::new_err(e.to_string()))
-    }
-
-    /// Applies a multi-controlled (MC) gate.
-    ///
-    /// Similar to [`multi_control`][PyCircuit::multi_control] but accepts an
-    /// existing [`McGate`][PyMcGate] instead of a StandardGate.
-    ///
-    /// Args:
-    ///     instruction: The multi-controlled gate to apply
-    ///     qubits: List of qubit indices (first N-1 are controls, last is target)
-    ///     params: Optional parameters for the gate
-    ///
-    /// # Example
-    ///
-    /// ```python
-    /// from cqlib.circuit.gate import McGate, StandardGate
-    ///
-    /// # Create a 3-control toffoli-like gate
-    /// mc_gate = McGate(StandardGate.X, 3)
-    /// circuit.multi_control_gate(mc_gate, [0, 1, 2], None)
-    /// ```
-    #[pyo3(signature = (instruction, qubits, params=None))]
-    pub fn multi_control_gate(
-        &mut self,
-        instruction: PyMcGate,
-        qubits: Vec<usize>,
-        params: Option<Vec<PyParamLike>>,
-    ) -> PyResult<()> {
-        let qubits_core: Vec<Qubit> = qubits
-            .into_iter()
-            .map(|q| Qubit::try_from(q).map_err(|e| PyValueError::new_err(e.to_string())))
-            .collect::<PyResult<_>>()?;
-        let inst = Instruction::McGate(Box::new(instruction.inner));
-        let params_core: Vec<ParameterValue> = params
-            .unwrap_or_default()
-            .into_iter()
-            .map(ParameterValue::from)
-            .collect();
-
-        self.inner
-            .append(inst, qubits_core, params_core, None)
-            .map_err(|e| PyValueError::new_err(e.to_string()))
-    }
-
-    /// Appends a custom unitary gate to the circuit.
-    ///
-    /// Allows inserting user-defined gates specified by a unitary matrix.
-    ///
-    /// Args:
-    ///     gate: The custom unitary gate definition (UnitaryGate)
-    ///     qubits: The list of qubit indices to apply the gate to
-    ///
-    /// # Example
-    ///
-    /// ```python
-    /// from cqlib.circuit.gate import UnitaryGate
-    /// import numpy as np
-    ///
-    /// # Define a custom gate (e.g., a rotation)
-    /// mat = np.array([[0, 1], [1, 0]], dtype=complex)  # Pauli-X matrix
-    /// u_gate = UnitaryGate("MyGate", 1).with_matrix(mat)
-    ///
-    /// circuit.unitary(u_gate, [0])
-    /// ```
-    fn unitary(&mut self, gate: PyUnitaryGate, qubits: PyIntListOrQubitList) -> PyResult<()> {
-        self.inner
-            .unitary(gate.into(), qubits.into())
-            .map_err(|e| PyValueError::new_err(e.to_string()))
-    }
-
-    /// Measures the specified qubit.
-    ///
-    /// This is a non-unitary operation that collapses the qubit's state to |0⟩ or |1⟩.
-    ///
-    /// Args:
-    ///     qubit: Qubit index (int) or Qubit object
-    fn measure(&mut self, qubit: PyIntOrQubit) -> PyResult<()> {
-        self.inner
-            .measure(qubit.into())
-            .map_err(|e| PyValueError::new_err(e.to_string()))
-    }
-
-    /// Resets the specified qubit to the |0⟩ state.
-    ///
-    /// This is a non-unitary operation.
-    ///
-    /// Args:
-    ///     qubit: Qubit index (int) or Qubit object
-    fn reset(&mut self, qubit: PyIntOrQubit) -> PyResult<()> {
-        self.inner
-            .reset(qubit.into())
-            .map_err(|e| PyValueError::new_err(e.to_string()))
-    }
-
-    /// Inserts a barrier operation.
-    ///
-    /// A barrier forbids the compiler from optimizing across this boundary.
-    /// It has no physical effect but is useful for debugging and manual optimization.
-    ///
-    /// Args:
-    ///     qubits: List of qubit indices (int) or Qubit objects
     fn barrier(&mut self, qubits: PyIntListOrQubitList) -> PyResult<()> {
         self.inner
             .barrier(qubits.into())
-            .map_err(|e| PyValueError::new_err(e.to_string()))
+            .map_err(|error| PyCircuitError::new_err(error.to_string()))
     }
 
-    /// Appends a pre-compiled CircuitGate to this circuit.
-    ///
-    /// Allows nesting circuits within circuits (subroutines).
-    ///
-    /// Args:
-    ///     instruction: The CircuitGate to append
-    ///     qubits: List of qubit indices (int) or Qubit objects
-    ///     params: Optional parameter values to bind to the sub-circuit
-    #[pyo3(signature = (instruction, qubits, params=None))]
-    fn circuit_gate(
+    fn reset(&mut self, qubit: PyIntOrQubit) -> PyResult<()> {
+        self.inner
+            .reset(qubit.into())
+            .map_err(|error| PyCircuitError::new_err(error.to_string()))
+    }
+
+    fn delay(&mut self, qubit: PyIntOrQubit, duration: PyParamLike) -> PyResult<()> {
+        let qubit: cqlib_core::circuit::Qubit = qubit.into();
+        self.inner
+            .delay(qubit, duration.into_value()?)
+            .map_err(|error| PyCircuitError::new_err(error.to_string()))
+    }
+
+    /// Allocates a mutable classical variable owned by this circuit.
+    fn var(&mut self, ty: PyClassicalType) -> PyClassicalVar {
+        self.inner.var(ty.inner).into()
+    }
+
+    fn store(&mut self, target: PyClassicalVar, value: PyClassicalExpr) -> PyResult<()> {
+        self.inner
+            .store(target.inner, value.inner)
+            .map_err(|error| PyCircuitError::new_err(error.to_string()))
+    }
+
+    fn measure(&mut self, qubit: PyIntOrQubit) -> PyResult<PyMeasurement> {
+        self.inner
+            .measure(qubit.into())
+            .map(|inner| PyMeasurement { inner })
+            .map_err(|error| PyCircuitError::new_err(error.to_string()))
+    }
+
+    fn measure_bits(&mut self, qubits: PyIntListOrQubitList) -> PyResult<PyMeasurement> {
+        self.inner
+            .measure_bits(Vec::from(qubits))
+            .map(|inner| PyMeasurement { inner })
+            .map_err(|error| PyCircuitError::new_err(error.to_string()))
+    }
+
+    fn measure_into(
         &mut self,
-        instruction: PyCircuitGate,
+        qubit: PyIntOrQubit,
+        target: PyClassicalVar,
+    ) -> PyResult<PyMeasurement> {
+        self.inner
+            .measure_into(qubit.into(), target.inner)
+            .map(|inner| PyMeasurement { inner })
+            .map_err(|error| PyCircuitError::new_err(error.to_string()))
+    }
+
+    fn measure_bits_into(
+        &mut self,
         qubits: PyIntListOrQubitList,
-        params: Option<Vec<PyParamLike>>,
-    ) -> PyResult<()> {
-        let qubits_core: Vec<Qubit> = qubits.into();
-
-        let inst = Instruction::CircuitGate(Box::new(instruction.inner));
-        let params_core: Vec<ParameterValue> = params
-            .unwrap_or_default()
-            .into_iter()
-            .map(|p| p.into())
-            .collect();
+        target: PyClassicalVar,
+    ) -> PyResult<PyMeasurement> {
         self.inner
-            .append(inst, qubits_core, params_core, None)
-            .map_err(|e| PyValueError::new_err(e.to_string()))?;
-
-        Ok(())
+            .measure_bits_into(Vec::from(qubits), target.inner)
+            .map(|inner| PyMeasurement { inner })
+            .map_err(|error| PyCircuitError::new_err(error.to_string()))
     }
 
-    /// Applies a Delay instruction to the specified qubit.
-    ///
-    /// Represents an idle period, often used for timing control in pulse-level scheduling.
-    ///
-    /// Args:
-    ///     qubit: Qubit index (int) or Qubit object
-    ///     param: The duration of the delay (can be float or Parameter)
-    fn delay(&mut self, qubit: PyIntOrQubit, param: PyParamLike) -> PyResult<()> {
+    /// Returns an inverse circuit when every operation is reversible.
+    fn inverse(&self) -> PyResult<Self> {
         self.inner
-            .delay(qubit, param.into())
-            .map_err(|e| PyValueError::new_err(e.to_string()))?;
-        Ok(())
+            .inverse()
+            .map(Self::from)
+            .map_err(|error| PyCircuitError::new_err(error.to_string()))
     }
 
-    /// Returns the inverse (adjoint) of the circuit.
-    ///
-    /// Creates a new circuit representing U† such that U†U = I.
-    ///
-    /// Returns:
-    ///     A new circuit that is the inverse of this circuit.
-    ///
-    /// Raises:
-    ///     ValueError: If the circuit contains non-unitary operations (Measure, Reset)
-    ///                  or gates that cannot be symbolically inverted.
-    fn inverse(&self, py: Python<'_>) -> PyResult<Self> {
-        // Clone circuit data for thread-safe access without holding GIL
-        let circuit = self.inner.clone();
-        let new_inner = py
-            .detach(move || circuit.inverse())
-            .map_err(|e| PyValueError::new_err(e.to_string()))?;
-        Ok(PyCircuit { inner: new_inner })
+    /// Recursively expands circuit-defined gates.
+    fn decompose(&self) -> PyResult<Self> {
+        self.inner
+            .decompose()
+            .map(Self::from)
+            .map_err(|error| PyCircuitError::new_err(error.to_string()))
     }
 
-    /// Assign parameters to the circuit and return a new circuit with the assigned values.
-    ///
-    /// Args:
-    ///     bindings: A dictionary mapping parameter names to values.
-    ///         If None, all symbolic parameters remain symbolic.
-    ///
-    /// Returns:
-    ///     Circuit: A new circuit with parameters assigned.
-    ///
-    /// Example:
-    ///     >>> circuit = Circuit(1)
-    ///     >>> theta = Parameter.symbol("theta")
-    ///     >>> circuit.rx(0, theta)
-    ///     >>> assigned = circuit.assign_parameters({"theta": 3.14159})
-    #[pyo3(signature = (bindings=None))]
-    fn assign_parameters(
-        &self,
-        py: Python<'_>,
-        bindings: Option<HashMap<String, f64>>,
-    ) -> PyResult<Self> {
-        // Clone circuit data for thread-safe access without holding GIL
-        let circuit = self.inner.clone();
-        let bindings_ref = bindings.as_ref().map(|map| {
-            map.iter()
-                .map(|(k, v)| (k.as_str(), *v))
-                .collect::<HashMap<&str, f64>>()
-        });
-        let new_inner = py
-            .detach(move || circuit.assign_parameters(&bindings_ref))
-            .map_err(|e| PyValueError::new_err(e.to_string()))?;
-        Ok(PyCircuit { inner: new_inner })
-    }
-
-    /// Returns an iterator over all operations in the circuit.
-    #[getter]
-    fn operations(&self) -> PyOperationIter {
-        PyOperationIter::new(self.inner.operations().to_vec(), 0)
-    }
-
-    /// Converts the circuit to a reusable gate (CircuitGate).
-    ///
-    /// "Freezes" the current circuit and wraps it into an instruction that can be
-    /// appended to another circuit.
-    ///
-    /// Args:
-    ///     name: A name for the new gate
-    ///
-    /// Returns:
-    ///     A CircuitGate that can be applied to qubits
-    ///
-    /// # Example
-    ///
-    /// ```python
-    /// sub_circuit = Circuit(1)
-    /// sub_circuit.h(0)
-    /// sub_circuit.rz(0, 0.5)
-    ///
-    /// # Convert to a reusable gate
-    /// my_gate = sub_circuit.to_gate("MyH")
-    ///
-    /// # Use in another circuit
-    /// main_circuit = Circuit(2)
-    /// main_circuit.circuit_gate(my_gate, [0])
-    /// ```
+    /// Returns a reusable circuit-defined gate.
     fn to_gate(&self, name: String) -> PyResult<PyCircuitGate> {
-        let instruction = self
+        match self
             .inner
             .clone()
             .to_gate(name)
-            .map_err(|e| PyValueError::new_err(e.to_string()))?;
-
-        if let Instruction::CircuitGate(gate) = instruction {
-            Ok(PyCircuitGate { inner: *gate })
-        } else {
-            Err(PyValueError::new_err(
-                "Unexpected instruction type returned from to_gate",
-            ))
+            .map_err(|error| PyCircuitError::new_err(error.to_string()))?
+        {
+            Instruction::CircuitGate(gate) => Ok(PyCircuitGate::from(*gate)),
+            _ => unreachable!("Circuit::to_gate always returns a circuit gate"),
         }
     }
 
-    /// Converts the circuit to a unitary matrix.
-    ///
-    /// Args:
-    ///     qubits_order: Optional order of qubits for the matrix (default: qubit order in circuit)
-    ///
-    /// Returns:
-    ///     A 2D NumPy array representing the unitary matrix of the circuit.
-    ///
-    /// Raises:
-    ///     ValueError: If the circuit is non-unitary, contains unresolved
-    ///         parameters, or `qubits_order` is invalid.
-    ///
-    /// # Example
-    ///
-    /// ```python
-    /// circuit = Circuit(2)
-    /// circuit.h(0)
-    /// circuit.cx(0, 1)
-    /// matrix = circuit.to_matrix()
-    /// ```
+    /// Returns a new circuit with supplied symbols numerically bound.
+    #[pyo3(signature = (bindings=None))]
+    fn assign_parameters(&self, bindings: Option<HashMap<String, f64>>) -> PyResult<Self> {
+        if let Some(value) = bindings
+            .as_ref()
+            .and_then(|bindings| bindings.values().find(|value| !value.is_finite()))
+        {
+            return Err(PyParameterError::new_err(
+                ParameterError::DomainError(format!(
+                    "parameter binding must be finite, got {value}"
+                ))
+                .to_string(),
+            ));
+        }
+        let bindings = bindings.as_ref().map(|bindings| {
+            bindings
+                .iter()
+                .map(|(name, value)| (name.as_str(), *value))
+                .collect::<HashMap<_, _>>()
+        });
+        self.inner
+            .assign_parameters(&bindings)
+            .map(Self::from)
+            .map_err(|error| PyCircuitError::new_err(error.to_string()))
+    }
+
+    /// Appends another circuit, optionally remapping its qubits.
+    #[pyo3(signature = (other, qubits=None))]
+    fn compose(&mut self, other: &PyCircuit, qubits: Option<PyIntListOrQubitList>) -> PyResult<()> {
+        let qubits = qubits.map(Vec::from);
+        self.inner
+            .compose(&other.inner, qubits.as_deref())
+            .map_err(|error| PyCircuitError::new_err(error.to_string()))
+    }
+
+    /// Computes the dense numeric unitary matrix.
     #[pyo3(signature = (qubits_order=None))]
     fn to_matrix<'py>(
         &self,
         py: Python<'py>,
         qubits_order: Option<Vec<usize>>,
     ) -> PyResult<Bound<'py, PyArray2<Complex64>>> {
-        // Clone circuit data for thread-safe access without holding GIL
-        let circuit = self.inner.clone();
-        let order = qubits_order.clone();
-        // Release GIL during potentially expensive matrix computation
-        let result = py
-            .detach(move || circuit.to_matrix(order.as_deref()))
-            .map_err(|e| PyValueError::new_err(e.to_string()))?;
-        Ok(result.to_pyarray(py))
+        self.inner
+            .to_matrix(qubits_order.as_deref())
+            .map(|matrix| matrix.to_pyarray(py))
+            .map_err(|error| PyCircuitError::new_err(error.to_string()))
     }
 
-    /// Decomposes the circuit by expanding all sub-circuit gates.
-    ///
-    /// Recursively unpacks any CircuitGate instructions into their fundamental operations.
-    /// Handles parameter substitution and qubit mapping from parent circuits.
-    ///
-    /// Returns:
-    ///     A new flattened circuit with only base instructions.
-    ///
-    /// Raises:
-    ///     ValueError: If a symbolic parameter cannot be resolved during decomposition.
-    fn decompose(&self, py: Python<'_>) -> PyResult<Self> {
-        // Clone circuit data for thread-safe access without holding GIL
-        let circuit = self.inner.clone();
-        // Release GIL during potentially expensive decomposition
-        match py.detach(move || circuit.decompose()) {
-            Ok(circuit) => Ok(Self { inner: circuit }),
-            Err(e) => Err(PyValueError::new_err(format!(
-                "Circuit decomposition failed: {}",
-                e
-            ))),
-        }
+    /// Computes a dense unitary matrix while preserving symbolic parameters.
+    #[pyo3(signature = (qubits_order=None))]
+    fn to_symbolic_matrix(&self, qubits_order: Option<Vec<usize>>) -> PyResult<PySymbolicMatrix> {
+        circuit_to_symbolic_matrix(&self.inner, qubits_order.as_deref())
+            .map(PySymbolicMatrix::from)
+            .map_err(|error| PyCircuitError::new_err(error.to_string()))
     }
 
-    /// Accesses operations by index (supports negative indexing and slicing).
-    ///
-    /// Args:
-    ///     idx: Integer index or slice
-    ///
-    /// Returns:
-    ///     Operation at the given index, or a list of operations for a slice
-    fn __getitem__<'py>(
-        &self,
-        py: Python<'py>,
-        idx: Bound<'_, PyAny>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let ops = self.inner.operations();
-        let len = ops.len();
-
-        // 处理单个整数索引
-        if let Ok(index) = idx.extract::<isize>() {
-            let idx = if index < 0 {
-                let neg = len as isize + index;
-                if neg < 0 {
-                    return Err(PyIndexError::new_err(format!(
-                        "Index {} out of range for circuit with {} operations",
-                        index, len
-                    )));
-                }
-                neg as usize
-            } else {
-                if index as usize >= len {
-                    return Err(PyIndexError::new_err(format!(
-                        "Index {} out of range for circuit with {} operations",
-                        index, len
-                    )));
-                }
-                index as usize
-            };
-
-            let op = PyOperation::from(ops[idx].clone());
-            return op.into_bound_py_any(py);
-        }
-
-        if let Ok(slice) = idx.cast_into::<PySlice>() {
-            let indices = slice.indices(len as isize)?;
-
-            // indices 是 PySliceIndices 结构体，不是元组
-            let mut result = Vec::with_capacity(indices.slicelength);
-            let mut i = indices.start;
-
-            while (indices.step > 0 && i < indices.stop) || (indices.step < 0 && i > indices.stop) {
-                result.push(PyOperation::from(ops[i as usize].clone()));
-                i += indices.step;
-            }
-
-            return Ok(PyList::new(py, result)?.into_any());
-        }
-
-        Err(PyTypeError::new_err("Index must be integer or slice"))
+    /// Validates classical ownership, dominance, and control-flow invariants.
+    fn validate(&self) -> PyResult<()> {
+        self.inner
+            .validate()
+            .map_err(|error| PyCircuitError::new_err(error.to_string()))
     }
 
-    /// Returns the number of operations in the circuit.
     fn __len__(&self) -> usize {
         self.inner.operations().len()
     }
 
-    /// Adds new qubits to the circuit.
-    ///
-    /// Args:
-    ///     qubits: A list of qubit indices to add.
-    ///
-    /// Raises:
-    ///     ValueError: If any qubit already exists in the circuit.
-    ///
-    /// # Example
-    ///
-    /// ```python
-    /// circuit = Circuit(2)  # Qubits 0, 1
-    /// circuit.add_qubits([2, 3])  # Now has qubits 0, 1, 2, 3
-    /// ```
-    fn add_qubits(&mut self, qubits: Vec<usize>) -> PyResult<()> {
-        let qubits_core: Vec<Qubit> = qubits
-            .into_iter()
-            .map(|idx| Qubit::new(idx as u32))
-            .collect();
-        self.inner
-            .add_qubits(qubits_core)
-            .map_err(|e| PyValueError::new_err(e.to_string()))
+    fn __getitem__(&self, index: usize) -> PyResult<PyValueOperation> {
+        self.operation(index)
     }
 
-    /// Adds a parameter to the circuit.
-    ///
-    /// Args:
-    ///     param: A Parameter object to add to the circuit.
-    ///
-    /// Returns:
-    ///     A tuple of (index, is_new) where:
-    ///         - index: The parameter's index in the circuit's parameter table
-    ///         - is_new: True if the parameter was newly added, False if it already existed
-    ///
-    /// # Example
-    ///
-    /// ```python
-    /// from cqlib import Circuit, Parameter
-    ///
-    /// circuit = Circuit(1)
-    /// theta = Parameter.symbol("theta")
-    /// index, is_new = circuit.add_parameter(theta)
-    /// ```
-    fn add_parameter(&mut self, param: PyParameter) -> PyResult<(usize, bool)> {
-        let param_core = param.into_inner();
-        let (idx, is_new) = self.inner.add_parameter(param_core);
-        Ok((idx, is_new))
-    }
-
-    /// Composes another circuit into this circuit.
-    ///
-    /// This method merges the operations from `other` circuit into `self`. Qubits from `other`
-    /// can either be mapped to existing qubits in `self` (via `qubits_map`) or appended as new qubits.
-    ///
-    /// Args:
-    ///     other: The circuit to compose into this circuit.
-    ///     qubits_map: An optional list mapping qubits from `other` to qubits in `self`.
-    ///         - If `qubits_map` is provided, each qubit in `other` (in their natural iteration order)
-    ///           is mapped to the corresponding qubit in `qubits_map`.
-    ///         - If `qubits_map` is None, all qubits from `other` are appended as new qubits to `self`.
-    ///
-    /// Raises:
-    ///     ValueError: If the mapping is invalid (wrong length or non-existent qubits).
-    ///
-    /// # Example
-    ///
-    /// ```python
-    /// from cqlib import Circuit
-    ///
-    /// # Create first circuit
-    /// qc1 = Circuit(2)
-    /// qc1.h(0)
-    ///
-    /// # Create second circuit
-    /// qc2 = Circuit(2)
-    /// qc2.x(0)
-    ///
-    /// # Compose qc2 into qc1 (append as new qubits)
-    /// qc1.compose(qc2)
-    ///
-    /// # Or compose with mapping: map qc2's qubits 0,1 to qc1's qubits 1,0
-    /// qc1.compose(qc2, [1, 0])
-    /// ```
-    #[pyo3(signature = (other, qubits_map=None))]
-    fn compose(&mut self, other: &PyCircuit, qubits_map: Option<Vec<usize>>) -> PyResult<()> {
-        let qubits_map_core: Option<Vec<Qubit>> = qubits_map.map(|indices| {
-            indices
-                .into_iter()
-                .map(|idx| Qubit::new(idx as u32))
-                .collect()
-        });
-
-        self.inner
-            .compose(&other.inner, qubits_map_core.as_deref())
-            .map_err(|e| PyValueError::new_err(e.to_string()))
-    }
-
-    /// Appends a conditional (if-else) operation to the circuit.
-    ///
-    /// Executes different quantum operations based on a classical condition
-    /// (typically from a previous measurement).
-    ///
-    /// Args:
-    ///     condition: The classical condition to evaluate (ConditionView)
-    ///     true_body: List of operation tuples for the true branch.
-    ///         Each tuple is (gate, qubits) or (gate, qubits, params).
-    ///         - gate: The gate to apply (StandardGate, McGate, UnitaryGate, Directive, or ControlFlow)
-    ///         - qubits: List of qubit indices
-    ///         - params: Optional list of float parameters
-    ///     false_body: Optional list of operation tuples for the false branch.
-    ///
-    /// # Example
-    ///
-    /// ```python
-    /// from cqlib import Circuit, StandardGate
-    /// from cqlib.circuit.gate import ConditionView
-    ///
-    /// circuit = Circuit(2)
-    /// circuit.x(0)
-    /// circuit.measure(0)
-    ///
-    /// # If qubit 0 is 1, apply X to qubit 1; otherwise apply Z
-    /// condition = ConditionView(Qubit(0), 1)
-    /// circuit.if_else(
-    ///     condition,
-    ///     [(StandardGate.X, [1])],      # true body
-    ///     [(StandardGate.Z, [1])]       # false body
-    /// )
-    /// ```
-    #[pyo3(signature = (condition, true_body, false_body=None))]
-    fn if_else(
-        &mut self,
-        py: Python<'_>,
-        condition: PyConditionView,
-        true_body: Vec<PyOpTuple>,
-        false_body: Option<Vec<PyOpTuple>>,
-    ) -> PyResult<()> {
-        let true_body_core = convert_op_tuples(py, self, true_body)?;
-        let false_body_core = false_body
-            .map(|ops| convert_op_tuples(py, self, ops))
-            .transpose()?;
-
-        self.inner
-            .if_else(condition.inner, true_body_core, false_body_core)
-            .map_err(|e| PyValueError::new_err(e.to_string()))
-    }
-
-    /// Appends a while-loop operation to the circuit.
-    ///
-    /// Repeatedly executes quantum operations while a classical condition is true.
-    ///
-    /// Args:
-    ///     condition: The classical condition to evaluate before each iteration
-    ///     body: List of operation tuples for the loop body.
-    ///         Each tuple is (gate, qubits) or (gate, qubits, params).
-    ///         - gate: The gate to apply (StandardGate, McGate, UnitaryGate, Directive, or ControlFlow)
-    ///         - qubits: List of qubit indices
-    ///         - params: Optional list of float parameters
-    ///
-    /// # Example
-    ///
-    /// ```python
-    /// from cqlib import Circuit, StandardGate
-    /// from cqlib.circuit.gate import ConditionView
-    ///
-    /// circuit = Circuit(2)
-    /// circuit.x(0)
-    /// circuit.measure(0)
-    ///
-    /// # While qubit 0 equals 1, apply H to qubit 1
-    /// condition = ConditionView(Qubit(0), 1)
-    /// circuit.while_loop(condition, [(StandardGate.H, [1])])
-    /// ```
-    fn while_loop(
-        &mut self,
-        py: Python<'_>,
-        condition: PyConditionView,
-        body: Vec<PyOpTuple>,
-    ) -> PyResult<()> {
-        let body_core = convert_op_tuples(py, self, body)?;
-
-        self.inner
-            .while_loop(condition.inner, body_core)
-            .map_err(|e| PyValueError::new_err(e.to_string()))
-    }
-
-    /// Appends a Pauli evolution gate e^(-iθ/2 · P) to the circuit.
-    ///
-    /// This method implements the Pauli rotation using basis transformation
-    /// and CNOT ladder algorithm.
-    ///
-    /// Args:
-    ///     pauli: The Pauli string operator P to exponentiate. Must be Hermitian
-    ///         (i.e., its phase must be ±1) for the evolution to be unitary.
-    ///     angle: The rotation angle θ (in radians).
-    ///     qubits: The qubits to apply the operation on. Must match pauli.num_qubits.
-    ///
-    /// Returns:
-    ///     self (for method chaining)
-    ///
-    /// Raises:
-    ///     ValueError: If qubit count mismatch, PauliString has non-Hermitian
-    ///         phase (±i), or other error occurs.
-    ///
-    /// Algorithm:
-    ///     The rotation e^(-iθ/2 · P) is implemented as follows:
-    ///     1. Phase Validation: The PauliString's internal phase must be ±1.
-    ///     2. Basis Transformation: Convert non-Z Paulis to Z basis.
-    ///     3. CNOT Chain: Accumulate parity along the chain to the last qubit.
-    ///     4. Core Rotation: Apply RZ(θ) on the last qubit.
-    ///     5. Reverse CNOT Ladder: Uncompute parity.
-    ///     6. Inverse Transformation: Restore the original basis.
-    ///
-    /// Examples:
-    ///     >>> from cqlib import Circuit
-    ///     >>> from cqlib.qis import PauliString
-    ///     >>> circuit = Circuit(3)
-    ///     >>> pauli = PauliString.from_str("XZI")
-    ///     >>> circuit.pauli_evolution(pauli, 3.14159/2, [0, 1, 2])
-    fn pauli_evolution(
-        &mut self,
-        pauli: &PyPauliString,
-        angle: f64,
-        qubits: Vec<PyIntOrQubit>,
-    ) -> PyResult<()> {
-        // Convert Python qubit indices to Qubit objects
-        let qubits_core: Vec<Qubit> = qubits.into_iter().map(|q| q.into()).collect();
-
-        self.inner
-            .pauli_evolution(&pauli.inner, angle, &qubits_core)
-            .map_err(|e| PyValueError::new_err(e.to_string()))?;
-
-        Ok(())
-    }
-
-    fn __str__(&self) -> PyResult<String> {
-        py_draw_text(self, None, false, false, true, false)
+    fn __repr__(&self) -> String {
+        format!(
+            "Circuit(id={}, qubits={}, operations={})",
+            self.inner.id(),
+            self.inner.num_qubits(),
+            self.inner.operations().len()
+        )
     }
 }
 
-/// A tuple representing an operation for control flow bodies.
-/// Format: (gate, qubits) or (gate, qubits, params)
-/// - gate: StandardGate, McGate, UnitaryGate, Directive, or ControlFlow
-/// - qubits: List of qubit indices or Qubit objects
-/// - params: Optional list of parameters (float or Parameter objects)
-pub struct PyOpTuple {
-    gate: Py<PyAny>,
-    qubits: PyIntListOrQubitList,
-    params: Option<Vec<PyParamLike>>,
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cqlib_core::circuit::Qubit;
 
-impl<'py> FromPyObject<'_, 'py> for PyOpTuple {
-    type Error = PyErr;
+    #[test]
+    fn repr_contains_circuit_identity_and_shape() {
+        let circuit = PyCircuit::from(Circuit::new(2));
+        let repr = circuit.__repr__();
+        assert!(repr.contains(&circuit.inner.id().to_string()));
+        assert!(repr.contains("qubits=2"));
+        assert!(repr.contains("operations=0"));
+    }
 
-    fn extract(obj: Borrowed<'_, 'py, PyAny>) -> Result<Self, Self::Error> {
-        if let Ok((gate, qubits)) = obj.extract::<(Py<PyAny>, PyIntListOrQubitList)>() {
-            return Ok(PyOpTuple {
+    #[test]
+    fn operation_returns_value_level_parameters() {
+        let mut circuit = Circuit::new(1);
+        circuit
+            .rx(Qubit::new(0), Parameter::symbol("theta"))
+            .unwrap();
+        let operation = PyCircuit::from(circuit).operation(0).unwrap();
+        assert!(matches!(
+            operation.inner.params.first(),
+            Some(ParameterValue::Param(parameter)) if parameter.as_symbol().as_deref() == Some("theta")
+        ));
+    }
+
+    #[test]
+    fn xy_family_matches_core_builders() {
+        use cqlib_core::circuit::StandardGate;
+
+        let mut circuit = PyCircuit::from(Circuit::new(1));
+        circuit
+            .xy(PyIntOrQubit::Int(0), PyParamLike::Float(0.1))
+            .unwrap();
+        circuit
+            .xy2p(PyIntOrQubit::Int(0), PyParamLike::Float(0.2))
+            .unwrap();
+        circuit
+            .xy2m(PyIntOrQubit::Int(0), PyParamLike::Float(0.3))
+            .unwrap();
+
+        let operations = circuit.inner.operations();
+        assert!(matches!(
+            operations[0].instruction,
+            Instruction::Standard(StandardGate::XY)
+        ));
+        assert!(matches!(
+            operations[1].instruction,
+            Instruction::Standard(StandardGate::XY2P)
+        ));
+        assert!(matches!(
+            operations[2].instruction,
+            Instruction::Standard(StandardGate::XY2M)
+        ));
+        assert_eq!(circuit.inner.parameters().len(), 0);
+    }
+
+    #[test]
+    fn append_unitary_gate_preserves_parameter_contract() {
+        use cqlib_core::circuit::gate::UnitaryGate;
+
+        let mut circuit = PyCircuit::from(Circuit::new(1));
+        let gate = PyUnitaryGate::from(UnitaryGate::new("custom", 1, 1));
+        circuit
+            .append_unitary_gate(
                 gate,
-                qubits,
-                params: None,
-            });
-        }
-        if let Ok((gate, qubits, params)) =
-            obj.extract::<(Py<PyAny>, PyIntListOrQubitList, Option<Vec<PyParamLike>>)>()
-        {
-            return Ok(PyOpTuple {
-                gate,
-                qubits,
-                params,
-            });
-        }
+                PyIntListOrQubitList::IntList(vec![0]),
+                Some(vec![PyParamLike::Parameter(PyParameter::from(
+                    Parameter::symbol("theta"),
+                ))]),
+            )
+            .unwrap();
 
-        Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
-            "Expected a tuple of (gate, qubits) or (gate, qubits, params)",
-        ))
+        let operation = circuit.operation(0).unwrap();
+        assert!(matches!(
+            operation.inner.params.first(),
+            Some(ParameterValue::Param(parameter)) if parameter.as_symbol().as_deref() == Some("theta")
+        ));
     }
-}
 
-/// Converts a list of operation tuples to core Operations.
-fn convert_op_tuples(
-    py: Python,
-    circuit: &mut PyCircuit,
-    ops: Vec<PyOpTuple>,
-) -> PyResult<Vec<Operation>> {
-    ops.into_iter()
-        .map(|op_tuple| {
-            let PyOpTuple {
-                gate: gate_obj,
-                qubits,
-                params,
-            } = op_tuple;
-            // Extract instruction from gate object
-            let instruction: Instruction;
+    #[test]
+    fn append_control_uses_value_level_control_flow() {
+        use cqlib_core::circuit::{ClassicalExpr, ValueClassicalControlOp, ValueControlBody};
 
-            // Check the type of gate and extract the inner instruction
-            if let Ok(std_gate) = gate_obj.cast_bound::<PyStandardGate>(py) {
-                let py_gate = std_gate.extract::<PyStandardGate>()?;
-                instruction = py_gate.inner.into();
-            } else if let Ok(mc_gate) = gate_obj.cast_bound::<PyMcGate>(py) {
-                let py_gate = mc_gate.extract::<PyMcGate>()?;
-                instruction = Instruction::McGate(Box::new(py_gate.inner));
-            } else if let Ok(u_gate) = gate_obj.cast_bound::<PyUnitaryGate>(py) {
-                let py_gate = u_gate.extract::<PyUnitaryGate>()?;
-                instruction = Instruction::UnitaryGate(Box::new(py_gate.into()));
-            } else if let Ok(directive) = gate_obj.cast_bound::<PyDirective>(py) {
-                let py_gate = directive.extract::<PyDirective>()?;
-                instruction = Instruction::Directive(py_gate.into());
-            } else if let Ok(control_flow) = gate_obj.cast_bound::<PyControlFlow>(py) {
-                let py_gate = control_flow.extract::<PyControlFlow>()?;
-                instruction = Instruction::ControlFlowGate(py_gate.into());
-            } else {
-                return Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
-                    "Gate must be StandardGate, McGate, UnitaryGate, Directive, or ControlFlow",
-                ));
-            }
+        let mut circuit = PyCircuit::from(Circuit::new(1));
+        circuit
+            .append_control(PyClassicalControlOp::from(ValueClassicalControlOp::If {
+                condition: ClassicalExpr::bool_literal(true),
+                then_body: ValueControlBody::new(vec![]),
+                else_body: None,
+            }))
+            .unwrap();
 
-            // Convert qubits
-            let qubits: SmallVec<[Qubit; 3]> =
-                <PyIntListOrQubitList as Into<Vec<Qubit>>>::into(qubits)
-                    .into_iter()
-                    .collect();
-            // Convert params - handle both fixed values and symbolic parameters
-            let mut circuit_params = SmallVec::new();
-            if let Some(params) = params {
-                for p in params {
-                    match p {
-                        PyParamLike::Float(f) => {
-                            circuit_params.push(CircuitParam::Fixed(f));
-                        }
-                        PyParamLike::Param(py_param) => {
-                            let param = py_param.into_inner();
-                            // Add parameter to circuit's parameter table
-                            let (index, _) = circuit.inner.add_parameter(param);
-                            circuit_params.push(CircuitParam::Index(index as u32));
-                        }
-                    }
-                }
-            }
-            Ok(Operation {
-                instruction,
-                qubits,
-                params: circuit_params,
-                label: None,
-            })
-        })
-        .collect()
+        assert_eq!(circuit.inner.operations().len(), 1);
+        assert!(
+            circuit
+                .operation(0)
+                .unwrap()
+                .inner
+                .instruction
+                .is_classical_control()
+        );
+    }
+
+    #[test]
+    fn symbolic_matrix_preserves_unbound_parameters() {
+        let mut circuit = Circuit::new(1);
+        circuit
+            .rx(Qubit::new(0), Parameter::symbol("theta"))
+            .unwrap();
+
+        let matrix = PyCircuit::from(circuit).to_symbolic_matrix(None).unwrap();
+
+        assert!(matrix.inner.iter().any(|value| {
+            value.re.get_symbols().contains("theta") || value.im.get_symbols().contains("theta")
+        }));
+        assert_eq!(matrix.inner.dim(), (2, 2));
+    }
 }

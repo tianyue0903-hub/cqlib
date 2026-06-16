@@ -10,18 +10,16 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
-//! Python Bindings for Multi-Controlled Gates
+//! Python binding for multi-controlled standard gates.
 //!
-//! This module provides Python bindings for the [`MCGate`] from cqlib-core.
-//! It represents gates with multiple control qubits applied to a base gate.
-//!
-//! # Key Components
-//!
-//! - [`PyMcGate`]: The main class for multi-controlled quantum gates.
+//! A wrapper retains parameters already bound to the base standard gate so
+//! control promotion does not discard symbolic gate arguments.
 
 use crate::circuit::PyStandardGate;
+use crate::circuit::error::{CircuitError as PyCircuitError, ParameterError as PyParameterError};
 use crate::circuit::parameter::PyParameter;
 use cqlib_core::circuit::Parameter;
+use cqlib_core::circuit::error::ParameterError;
 use cqlib_core::circuit::gate::MCGate;
 use num_complex::Complex64;
 use numpy::{PyArray2, ToPyArray};
@@ -29,14 +27,12 @@ use pyo3::prelude::*;
 use pyo3::{PyResult, pyclass, pymethods};
 use std::fmt;
 
-/// Python wrapper for `MCGate`.
-///
-/// Represents a multi-controlled quantum gate.
-/// The gate applies the base operation only when all control qubits are in the |1⟩ state.
-#[pyclass(name = "McGate", module = "cqlib.circuit.gate")]
+/// Multi-controlled standard gate with optional bound parameters.
+#[pyclass(name = "MCGate", module = "cqlib.circuit.gates")]
 #[derive(Debug, Clone)]
 pub struct PyMcGate {
-    pub inner: MCGate,
+    pub(crate) inner: MCGate,
+    pub(crate) params: Vec<Parameter>,
 }
 
 #[pymethods]
@@ -61,6 +57,7 @@ impl PyMcGate {
     pub fn new(num_controls: u8, gate: PyStandardGate) -> Self {
         Self {
             inner: MCGate::new(num_controls, gate.inner),
+            params: gate.params,
         }
     }
 
@@ -79,12 +76,44 @@ impl PyMcGate {
         py: Python<'py>,
         params: Option<Vec<f64>>,
     ) -> PyResult<Bound<'py, PyArray2<Complex64>>> {
-        use pyo3::exceptions::PyValueError;
-        let params = params.unwrap_or_default();
+        let params = if let Some(params) = params {
+            if params.len() != self.inner.num_params() {
+                return Err(PyCircuitError::new_err(format!(
+                    "Gate {} expects {} parameters, got {}",
+                    self.inner,
+                    self.inner.num_params(),
+                    params.len()
+                )));
+            }
+            if let Some(value) = params.iter().find(|value| !value.is_finite()) {
+                return Err(PyParameterError::new_err(
+                    ParameterError::DomainError(format!(
+                        "numeric parameter must be finite, got {value}"
+                    ))
+                    .to_string(),
+                ));
+            }
+            params
+        } else if self.params.len() == self.inner.num_params() {
+            self.params
+                .iter()
+                .map(|parameter| {
+                    parameter
+                        .evaluate(&None)
+                        .map_err(|error| PyParameterError::new_err(error.to_string()))
+                })
+                .collect::<PyResult<_>>()?
+        } else {
+            return Err(PyCircuitError::new_err(format!(
+                "Gate {} requires {} bound parameters",
+                self.inner,
+                self.inner.num_params()
+            )));
+        };
         let mat = self
             .inner
             .matrix(&params)
-            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+            .map_err(|error| PyCircuitError::new_err(error.to_string()))?;
         Ok(mat.to_pyarray(py))
     }
 
@@ -99,26 +128,23 @@ impl PyMcGate {
     /// # Returns
     ///
     /// A tuple of (inverse gate, inverse parameters), or None if not invertible.
-    #[pyo3(signature = (params=None))]
-    pub fn inverse(
-        &self,
-        params: Option<Vec<PyParameter>>,
-    ) -> PyResult<Option<(Self, Vec<PyParameter>)>> {
-        let params_core: Vec<Parameter> = params
-            .unwrap_or_default()
-            .into_iter()
-            .map(|p| p.into_inner())
-            .collect();
-
-        match self.inner.inverse(&params_core) {
-            Some((inv_gate, inv_params)) => {
-                let py_params: Vec<PyParameter> = inv_params
-                    .into_iter()
-                    .map(|p| PyParameter { inner: p })
-                    .collect();
-                Ok(Some((PyMcGate { inner: inv_gate }, py_params)))
-            }
-            None => Ok(None),
+    pub fn inverse(&self) -> PyResult<Self> {
+        if self.params.len() != self.inner.num_params() {
+            return Err(PyCircuitError::new_err(format!(
+                "Gate {} requires {} bound parameters before inversion",
+                self.inner,
+                self.inner.num_params()
+            )));
+        }
+        match self.inner.inverse(&self.params) {
+            Some((inv_gate, inv_params)) => Ok(Self {
+                inner: inv_gate,
+                params: inv_params.into_vec(),
+            }),
+            None => Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
+                "Gate {} is not invertible",
+                self.inner
+            ))),
         }
     }
 
@@ -143,7 +169,41 @@ impl PyMcGate {
     /// Returns the base gate (without controls).
     #[getter]
     pub fn base_gate(&self) -> PyStandardGate {
-        PyStandardGate::from(*self.inner.base_gate(), vec![])
+        PyStandardGate::from(*self.inner.base_gate(), self.params.clone())
+    }
+
+    /// Returns parameters bound to the base gate.
+    #[getter]
+    pub fn params(&self) -> Vec<PyParameter> {
+        self.params.iter().cloned().map(PyParameter::from).collect()
+    }
+
+    fn __repr__(&self) -> String {
+        if self.params.is_empty() {
+            self.inner.to_string()
+        } else {
+            let params = self
+                .params
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{}({params})", self.inner)
+        }
+    }
+
+    fn __eq__(&self, other: &Self) -> bool {
+        self.inner == other.inner && self.params == other.params
+    }
+
+    fn __hash__(&self) -> u64 {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        let mut hasher = DefaultHasher::new();
+        self.inner.hash(&mut hasher);
+        self.params.hash(&mut hasher);
+        hasher.finish()
     }
 }
 

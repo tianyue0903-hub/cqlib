@@ -10,35 +10,47 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
-//! Python Bindings for Quantum Circuit Operations
+//! Python bindings for circuit operations.
 //!
-//! This module provides Python bindings for [`Operation`] from cqlib-core.
-//! It represents a single, concrete execution step within a quantum circuit.
-//!
-//! # Key Components
-//!
-//! - [`PyOperation`]: A fully resolved operation binding a gate to specific qubits and parameters.
-//! - [`PyOperationIter`]: An iterator over operations in a circuit.
-//!
-//! # Operation vs Instruction
-//!
-//! While [`Instruction`](cqlib_core::circuit::gate::instruction::Instruction) defines *what* to do
-//! (e.g., "apply a Hadamard gate"), [`PyOperation`] defines *where* and *how* to do it.
-//! An operation binds an instruction to specific qubits and concrete parameter values.
+//! [`PyValueOperation`] is the public, self-contained construction boundary
+//! and the only operation type registered on `cqlib.circuit`.
+//! [`PyOperation`] wraps circuit-local storage IR and is used internally for
+//! testing; it exposes the indexed-parameter form used by `Circuit` storage.
+//! New operations should be built via [`PyValueOperation`].
 
 use crate::circuit::bit::PyQubit;
-use crate::circuit::instruction::PyInstruction;
-use cqlib_core::circuit::circuit_param::CircuitParam;
-use cqlib_core::circuit::operation::Operation;
+use crate::circuit::control_flow::PyClassicalControlOp;
+use crate::circuit::error::{CircuitError as PyCircuitError, ParameterError as PyParameterError};
+use crate::circuit::gate::{PyMcGate, PyStandardGate};
+use crate::circuit::instruction::{PyInstruction, PyValueInstruction};
+use crate::circuit::parameter::PyParameter;
+use cqlib_core::circuit::circuit_param::{CircuitParam, ParameterValue};
+use cqlib_core::circuit::error::ParameterError;
+use cqlib_core::circuit::operation::{Operation, ValueOperation};
 use numpy::ToPyArray;
 use pyo3::IntoPyObjectExt;
+use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use std::sync::Arc;
 
-/// Python wrapper for `Operation`.
-///
-/// Represents a fully resolved operation in a quantum circuit.
-/// Each operation binds a gate (instruction) to specific qubits and parameters.
+fn extract_parameter_value(value: &Bound<'_, PyAny>) -> PyResult<ParameterValue> {
+    if let Ok(param) = value.extract::<PyParameter>() {
+        return Ok(ParameterValue::Param(param.inner));
+    }
+    if let Ok(value) = value.extract::<f64>() {
+        if value.is_finite() {
+            return Ok(ParameterValue::Fixed(value));
+        }
+        return Err(PyParameterError::new_err(
+            ParameterError::DomainError(format!("operation parameter must be finite, got {value}"))
+                .to_string(),
+        ));
+    }
+    Err(PyTypeError::new_err(
+        "operation parameter must be a finite float or Parameter",
+    ))
+}
+
+/// Internal Python wrapper for circuit-local storage IR.
 ///
 /// # Examples
 ///
@@ -141,12 +153,12 @@ impl PyOperation {
     ///
     /// # Raises
     ///
-    /// RuntimeError if the operation is non-unitary (e.g., Measure, Barrier).
+    /// CircuitError if the operation is non-unitary (e.g., Measure, Barrier).
     fn matrix(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let matrix_cow = self
             .operation
             .matrix()
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{:?}", e)))?;
+            .map_err(|e| PyCircuitError::new_err(e.to_string()))?;
         matrix_cow.to_pyarray(py).into_py_any(py)
     }
 
@@ -188,37 +200,209 @@ impl PyOperation {
     }
 }
 
-/// Iterator over operations in a circuit.
-#[pyclass]
-pub struct PyOperationIter {
-    ops: Arc<Vec<Operation>>,
-    index: usize,
+#[pyclass(name = "ValueOperation", module = "cqlib.circuit")]
+#[derive(Debug, Clone)]
+pub struct PyValueOperation {
+    pub(crate) inner: ValueOperation,
+}
+
+impl From<ValueOperation> for PyValueOperation {
+    fn from(inner: ValueOperation) -> Self {
+        Self { inner }
+    }
 }
 
 #[pymethods]
-impl PyOperationIter {
-    fn __iter__(slf: PyRef<'_, Self>) -> Py<Self> {
-        slf.into()
-    }
-
-    fn __next__(&mut self) -> Option<PyOperation> {
-        self.ops.get(self.index).map(|op| {
-            self.index += 1;
-            PyOperation::from(op.clone())
+impl PyValueOperation {
+    #[new]
+    #[pyo3(signature = (instruction, qubits, params=None, label=None))]
+    fn new(
+        instruction: PyValueInstruction,
+        qubits: Vec<PyQubit>,
+        params: Option<Vec<Bound<'_, PyAny>>>,
+        label: Option<String>,
+    ) -> PyResult<Self> {
+        let params = params
+            .unwrap_or_default()
+            .iter()
+            .map(extract_parameter_value)
+            .collect::<PyResult<_>>()?;
+        Ok(Self {
+            inner: ValueOperation {
+                instruction: instruction.inner,
+                qubits: qubits.into_iter().map(|q| q.inner).collect(),
+                params,
+                label: label.map(Into::into),
+            },
         })
     }
 
-    fn __len__(&self) -> usize {
-        self.ops.len().saturating_sub(self.index)
+    #[staticmethod]
+    #[pyo3(signature = (instruction, qubits, params=None, label=None))]
+    fn from_instruction(
+        instruction: PyInstruction,
+        qubits: Vec<PyQubit>,
+        params: Option<Vec<Bound<'_, PyAny>>>,
+        label: Option<String>,
+    ) -> PyResult<Self> {
+        Self::new(
+            PyValueInstruction::from(cqlib_core::circuit::ValueInstruction::from_instruction(
+                instruction.inner,
+            )),
+            qubits,
+            params,
+            label,
+        )
+    }
+
+    /// Creates a value operation while preserving parameters bound to a standard gate.
+    #[staticmethod]
+    #[pyo3(signature = (gate, qubits, label=None))]
+    fn from_standard_gate(
+        gate: PyStandardGate,
+        qubits: Vec<PyQubit>,
+        label: Option<String>,
+    ) -> Self {
+        Self {
+            inner: ValueOperation {
+                instruction: cqlib_core::circuit::ValueInstruction::from_instruction(
+                    cqlib_core::circuit::Instruction::Standard(gate.inner),
+                ),
+                qubits: qubits.into_iter().map(|q| q.inner).collect(),
+                params: gate.params.into_iter().map(ParameterValue::from).collect(),
+                label: label.map(Into::into),
+            },
+        }
+    }
+
+    /// Creates a value operation while preserving parameters bound to an MC gate.
+    #[staticmethod]
+    #[pyo3(signature = (gate, qubits, label=None))]
+    fn from_mc_gate(gate: PyMcGate, qubits: Vec<PyQubit>, label: Option<String>) -> Self {
+        Self {
+            inner: ValueOperation {
+                instruction: cqlib_core::circuit::ValueInstruction::from_instruction(
+                    cqlib_core::circuit::Instruction::McGate(Box::new(gate.inner)),
+                ),
+                qubits: qubits.into_iter().map(|q| q.inner).collect(),
+                params: gate.params.into_iter().map(ParameterValue::from).collect(),
+                label: label.map(Into::into),
+            },
+        }
+    }
+
+    /// Creates a value operation from construction-time classical control flow.
+    #[staticmethod]
+    fn from_classical_control(control: PyClassicalControlOp) -> Self {
+        let qubits = control.inner.used_qubits().into_iter().collect();
+        Self {
+            inner: ValueOperation {
+                instruction: cqlib_core::circuit::ValueInstruction::ClassicalControl(control.inner),
+                qubits,
+                params: Default::default(),
+                label: None,
+            },
+        }
+    }
+
+    #[getter]
+    fn instruction(&self) -> PyValueInstruction {
+        PyValueInstruction::from(self.inner.instruction.clone())
+    }
+
+    #[getter]
+    fn qubits(&self) -> Vec<PyQubit> {
+        self.inner
+            .qubits
+            .iter()
+            .copied()
+            .map(PyQubit::from)
+            .collect()
+    }
+
+    #[getter]
+    fn params(&self, py: Python<'_>) -> PyResult<Vec<Py<PyAny>>> {
+        let mut result = Vec::with_capacity(self.inner.params.len());
+        for param in &self.inner.params {
+            match param {
+                ParameterValue::Fixed(value) => {
+                    result.push(value.into_pyobject(py)?.into_any().unbind());
+                }
+                ParameterValue::Param(param) => {
+                    result.push(
+                        PyParameter {
+                            inner: param.clone(),
+                        }
+                        .into_py_any(py)?,
+                    );
+                }
+            }
+        }
+        Ok(result)
+    }
+
+    #[getter]
+    fn label(&self) -> Option<String> {
+        self.inner.label.as_ref().map(|s| s.to_string())
+    }
+
+    fn matrix(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let operation = Operation {
+            instruction: self
+                .inner
+                .instruction
+                .clone()
+                .into_instruction()
+                .ok_or_else(|| {
+                    PyValueError::new_err(
+                        "classical control value operations do not have a matrix",
+                    )
+                })?,
+            qubits: self.inner.qubits.clone(),
+            params: self
+                .inner
+                .params
+                .iter()
+                .map(|param| match param {
+                    ParameterValue::Fixed(value) => Ok(CircuitParam::Fixed(*value)),
+                    ParameterValue::Param(_) => Err(PyValueError::new_err(
+                        "symbolic value operation parameters cannot be converted without a circuit parameter table",
+                    )),
+                })
+                .collect::<PyResult<_>>()?,
+            label: self.inner.label.clone(),
+        };
+        let matrix_cow = operation
+            .matrix()
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        matrix_cow.to_pyarray(py).into_py_any(py)
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "ValueOperation(qubits={}, params={})",
+            self.inner.qubits.len(),
+            self.inner.params.len()
+        )
     }
 }
 
-impl PyOperationIter {
-    /// Creates a new operation iterator.
-    pub fn new(ops: Vec<Operation>, index: usize) -> Self {
-        Self {
-            ops: Arc::new(ops),
-            index,
-        }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cqlib_core::circuit::{Parameter, StandardGate};
+
+    #[test]
+    fn standard_gate_factory_preserves_bound_parameters() {
+        let operation = PyValueOperation::from_standard_gate(
+            PyStandardGate::from(StandardGate::RX, vec![Parameter::symbol("theta")]),
+            vec![PyQubit::from(cqlib_core::circuit::Qubit::new(0))],
+            None,
+        );
+
+        assert!(matches!(
+            operation.inner.params.first(),
+            Some(ParameterValue::Param(parameter)) if parameter.as_symbol().as_deref() == Some("theta")
+        ));
     }
 }

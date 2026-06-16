@@ -10,25 +10,16 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
-//! Python Bindings for Non-Unitary Circuit Directives
+//! Python binding for non-unitary circuit directives.
 //!
-//! This module provides Python bindings for the [`Directive`] enum from cqlib-core.
-//! It represents non-unitary operations in quantum circuits.
-//!
-//! # Key Components
-//!
-//! - [`PyDirective`]: The main class for circuit directives.
+//! Directives are instructions rather than unitary gates. They do not expose a
+//! matrix; only barriers have an inverse.
 
 use cqlib_core::circuit::gate::directive::Directive;
 use pyo3::prelude::*;
 
-/// Python wrapper for `Directive` enum.
-///
-/// Represents non-unitary operations in a quantum circuit:
-/// - `Barrier`: Prevents gate reordering during optimization
-/// - `Measure`: Collapses qubit state to classical bit
-/// - `Reset`: Prepares qubit in |0> state
-#[pyclass(name = "Directive", module = "cqlib.circuit.gate")]
+/// Non-unitary barrier, measurement, or reset instruction.
+#[pyclass(name = "Directive", module = "cqlib.circuit.gates")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PyDirective {
     pub(crate) inner: Directive,
@@ -127,11 +118,32 @@ impl PyDirective {
         matches!(self.inner, Directive::Reset)
     }
 
+    /// Returns the inverse directive when one exists.
+    fn inverse(&self) -> Option<Self> {
+        self.inner.inverse().map(Self::from)
+    }
+
     fn __repr__(&self) -> String {
-        self.name()
+        match self.inner {
+            Directive::Barrier => "Directive.barrier()".to_string(),
+            Directive::Measure => "Directive.measure()".to_string(),
+            Directive::Reset => "Directive.reset()".to_string(),
+        }
     }
 
     fn __str__(&self) -> String {
         self.name()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PyDirective;
+
+    #[test]
+    fn only_barrier_has_an_inverse() {
+        assert!(PyDirective::barrier().inverse().is_some());
+        assert!(PyDirective::measure().inverse().is_none());
+        assert!(PyDirective::reset().inverse().is_none());
     }
 }

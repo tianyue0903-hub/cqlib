@@ -10,89 +10,56 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
-//! Python Bindings for Symbolic Parameters
+//! Python binding for symbolic and numeric circuit parameters.
 //!
-//! This module provides Python bindings for the [`Parameter`] from cqlib-core.
-//! It supports parameterized quantum circuits (PQC) and variational quantum algorithms (VQA).
-//!
-//! # Key Features
-//!
-//! - Symbolic parameter creation and manipulation
-//! - Arithmetic operations via operator overloading
-//! - Mathematical functions (trigonometric, exponential, etc.)
-//! - Symbolic differentiation and simplification
+//! The wrapper follows the core [`Parameter`] expression model: strings are
+//! parsed as expressions, numeric values must be finite, arithmetic builds new
+//! immutable expressions, and evaluation errors are exposed as the dedicated
+//! Python `ParameterError` type.
 
+use crate::circuit::error::ParameterError as PyParameterError;
 use cqlib_core::circuit::Parameter;
-use pyo3::exceptions::{PyTypeError, PyValueError};
+use cqlib_core::circuit::error::ParameterError;
+use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::*;
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
-/// Python wrapper for `Parameter`.
-///
-/// Represents a symbolic parameter for parameterized quantum circuits.
-/// Supports arithmetic operations, mathematical functions, differentiation, and simplification.
-#[pyclass(name = "Parameter", module = "cqlib.circuit")]
-#[derive(Clone)]
+/// Immutable symbolic or numeric expression used as a circuit parameter.
+#[pyclass(name = "Parameter", module = "cqlib.circuit", subclass)]
+#[derive(Clone, Debug)]
 pub struct PyParameter {
     pub(crate) inner: Parameter,
 }
 
 #[pymethods]
 impl PyParameter {
-    /// Creates a new parameter.
+    /// Creates a parameter from a finite number or expression string.
     ///
-    /// This method intelligently detects the input type:
-    /// - If a number is passed, creates a numeric parameter (e.g., `Parameter(3.14)` creates 3.14)
-    /// - If a string that looks like a pure number is passed, creates a numeric parameter
-    /// - Otherwise, creates a symbolic parameter (e.g., `Parameter("theta")`)
-    ///
-    /// # Arguments
-    ///
-    /// * `value` - The value (number or string symbol name).
-    ///
-    /// # Examples
-    ///
-    /// ```python
-    /// # Numeric parameter
-    /// p1 = Parameter(3.14)  # Creates 3.14
-    /// p2 = Parameter("3.14") # Also creates 3.14
-    ///
-    /// # Symbolic parameter
-    /// p3 = Parameter("theta") # Creates symbol 'theta'
-    /// p4 = Parameter("x + 1") # Creates expression
-    /// ```
+    /// A plain identifier such as `"theta"` is parsed as a symbol. Invalid
+    /// expression syntax raises `ParameterError` instead of silently creating a
+    /// symbol with the invalid text.
     #[new]
     fn new(value: &Bound<'_, PyAny>) -> PyResult<Self> {
-        // First, try to extract as a number (int or float)
-        if let Ok(val) = value.extract::<f64>() {
-            return Ok(PyParameter {
-                inner: Parameter::from(val),
-            });
-        }
-        if let Ok(val) = value.extract::<i64>() {
-            return Ok(PyParameter {
-                inner: Parameter::from(val as f64),
+        if let Ok(number) = value.extract::<f64>() {
+            if !number.is_finite() {
+                return Err(PyParameterError::new_err(
+                    ParameterError::DomainError(format!(
+                        "numeric parameter must be finite, got {number}"
+                    ))
+                    .to_string(),
+                ));
+            }
+            return Ok(Self {
+                inner: Parameter::from(number),
             });
         }
 
-        // If not a number, try as string
-        if let Ok(name) = value.extract::<String>() {
-            // Try to parse as a number first
-            if let Ok(num) = name.parse::<f64>() {
-                return Ok(PyParameter {
-                    inner: Parameter::from(num),
-                });
-            }
-            // Try to parse as expression (might contain numbers like "3.14+2")
-            if let Ok(param) = Parameter::try_from(name.as_str()) {
-                return Ok(PyParameter { inner: param });
-            }
-            // Otherwise, treat as a symbol name
-            return Ok(PyParameter {
-                inner: Parameter::symbol(&name),
-            });
+        if let Ok(expression) = value.extract::<String>() {
+            return Parameter::try_from(expression.as_str())
+                .map(|inner| Self { inner })
+                .map_err(|error| PyParameterError::new_err(error.to_string()));
         }
 
         Err(PyTypeError::new_err(
@@ -121,8 +88,8 @@ impl PyParameter {
     #[staticmethod]
     fn from_expression(expr: String) -> PyResult<Self> {
         Parameter::try_from(expr.as_str())
-            .map(|param| PyParameter { inner: param })
-            .map_err(|e| PyValueError::new_err(e.to_string()))
+            .map(|inner| Self { inner })
+            .map_err(|error| PyParameterError::new_err(error.to_string()))
     }
 
     /// Returns the mathematical constant Pi.
@@ -159,26 +126,19 @@ impl PyParameter {
         });
         self.inner
             .evaluate(&bindings_ref)
-            .map_err(|e| PyValueError::new_err(e.to_string()))
+            .map_err(|error| PyParameterError::new_err(error.to_string()))
     }
 
     /// Simplifies the parameter expression.
     ///
-    /// # Arguments
-    ///
-    /// * `max_iterations` - Maximum simplification passes (default: 100).
-    ///
-    /// # Returns
-    ///
-    /// A new simplified parameter.
+    /// Returns a domain-safe algebraically simplified expression.
     #[pyo3(signature = ())]
     fn simplify(&self) -> PyResult<Self> {
-        // Note: max_iterations is ignored in the current implementation
         let inner = self
             .inner
             .simplify()
-            .map_err(|e| PyValueError::new_err(e.to_string()))?;
-        Ok(PyParameter { inner })
+            .map_err(|error| PyParameterError::new_err(error.to_string()))?;
+        Ok(Self { inner })
     }
 
     /// Computes the symbolic derivative with respect to a variable.
@@ -194,8 +154,8 @@ impl PyParameter {
         let inner = self
             .inner
             .derivative(&var)
-            .map_err(|e| PyValueError::new_err(e.to_string()))?;
-        Ok(PyParameter { inner })
+            .map_err(|error| PyParameterError::new_err(error.to_string()))?;
+        Ok(Self { inner })
     }
 
     /// Returns the power of this parameter raised to the given exponent.
@@ -222,6 +182,14 @@ impl PyParameter {
                 inner: self.inner.pow(param.inner),
             })
         } else if let Ok(val_f64) = val.extract::<f64>() {
+            if !val_f64.is_finite() {
+                return Err(PyParameterError::new_err(
+                    ParameterError::DomainError(format!(
+                        "numeric parameter must be finite, got {val_f64}"
+                    ))
+                    .to_string(),
+                ));
+            }
             let exp_param = Parameter::from(val_f64);
             Ok(PyParameter {
                 inner: self.inner.pow(exp_param),
@@ -236,7 +204,58 @@ impl PyParameter {
     /// Returns all unique symbols in this parameter.
     #[getter]
     fn symbols(&self) -> Vec<String> {
-        self.inner.get_symbols().into_iter().collect()
+        let mut symbols: Vec<_> = self.inner.get_symbols().into_iter().collect();
+        symbols.sort();
+        symbols
+    }
+
+    /// Returns the canonical storage form used by circuit parameter interning.
+    fn canonicalized(&self) -> PyResult<Self> {
+        self.inner
+            .canonicalized()
+            .map(|inner| Self { inner })
+            .map_err(|error| PyParameterError::new_err(error.to_string()))
+    }
+
+    /// Returns whether this expression is exactly the numeric constant zero.
+    fn is_exact_zero(&self) -> PyResult<bool> {
+        self.inner
+            .is_exact_zero()
+            .map_err(|error| PyParameterError::new_err(error.to_string()))
+    }
+
+    /// Returns the symbol name when this expression is exactly one symbol.
+    fn as_symbol(&self) -> Option<String> {
+        self.inner.as_symbol()
+    }
+
+    /// Substitutes multiple symbols and simplifies the resulting expression.
+    fn substitute(&self, bindings: HashMap<String, PyParameter>) -> Self {
+        let bindings = bindings
+            .into_iter()
+            .map(|(symbol, parameter)| (symbol, parameter.inner))
+            .collect();
+        Self {
+            inner: self.inner.substitute_many(&bindings),
+        }
+    }
+
+    /// Conservatively checks equality within a numeric tolerance.
+    #[pyo3(signature = (other, tolerance=1e-12))]
+    fn provably_equal(&self, other: PyParameter, tolerance: f64) -> bool {
+        self.inner.provably_equal(&other.inner, tolerance)
+    }
+
+    /// Conservatively checks equality modulo `modulus` within a tolerance.
+    #[pyo3(signature = (other, modulus, tolerance=1e-12))]
+    fn provably_equal_modulo(
+        &self,
+        other: PyParameter,
+        modulus: PyParameter,
+        tolerance: f64,
+    ) -> bool {
+        self.inner
+            .provably_equal_modulo(&other.inner, &modulus.inner, tolerance)
     }
 
     /// Returns the absolute value |x|.
@@ -415,7 +434,7 @@ impl PyParameter {
     }
 
     fn __repr__(&self) -> String {
-        format!("Parameter({})", self.inner)
+        format!("Parameter({:?})", self.inner.to_string())
     }
 
     fn __add__(&self, other: &Bound<'_, PyAny>) -> PyResult<Self> {
@@ -424,6 +443,14 @@ impl PyParameter {
                 inner: self.inner.clone() + param.inner,
             })
         } else if let Ok(val) = other.extract::<f64>() {
+            if !val.is_finite() {
+                return Err(PyParameterError::new_err(
+                    ParameterError::DomainError(format!(
+                        "numeric parameter must be finite, got {val}"
+                    ))
+                    .to_string(),
+                ));
+            }
             Ok(PyParameter {
                 inner: self.inner.clone() + val,
             })
@@ -442,6 +469,14 @@ impl PyParameter {
                 inner: self.inner.clone() - param.inner,
             })
         } else if let Ok(val) = other.extract::<f64>() {
+            if !val.is_finite() {
+                return Err(PyParameterError::new_err(
+                    ParameterError::DomainError(format!(
+                        "numeric parameter must be finite, got {val}"
+                    ))
+                    .to_string(),
+                ));
+            }
             Ok(PyParameter {
                 inner: self.inner.clone() - val,
             })
@@ -452,6 +487,14 @@ impl PyParameter {
 
     fn __rsub__(&self, other: &Bound<'_, PyAny>) -> PyResult<Self> {
         if let Ok(val) = other.extract::<f64>() {
+            if !val.is_finite() {
+                return Err(PyParameterError::new_err(
+                    ParameterError::DomainError(format!(
+                        "numeric parameter must be finite, got {val}"
+                    ))
+                    .to_string(),
+                ));
+            }
             Ok(PyParameter {
                 inner: val - self.inner.clone(),
             })
@@ -466,6 +509,14 @@ impl PyParameter {
                 inner: self.inner.clone() * param.inner,
             })
         } else if let Ok(val) = other.extract::<f64>() {
+            if !val.is_finite() {
+                return Err(PyParameterError::new_err(
+                    ParameterError::DomainError(format!(
+                        "numeric parameter must be finite, got {val}"
+                    ))
+                    .to_string(),
+                ));
+            }
             Ok(PyParameter {
                 inner: self.inner.clone() * val,
             })
@@ -484,6 +535,14 @@ impl PyParameter {
                 inner: self.inner.clone() / param.inner,
             })
         } else if let Ok(val) = other.extract::<f64>() {
+            if !val.is_finite() {
+                return Err(PyParameterError::new_err(
+                    ParameterError::DomainError(format!(
+                        "numeric parameter must be finite, got {val}"
+                    ))
+                    .to_string(),
+                ));
+            }
             Ok(PyParameter {
                 inner: self.inner.clone() / val,
             })
@@ -494,6 +553,14 @@ impl PyParameter {
 
     fn __rtruediv__(&self, other: &Bound<'_, PyAny>) -> PyResult<Self> {
         if let Ok(val) = other.extract::<f64>() {
+            if !val.is_finite() {
+                return Err(PyParameterError::new_err(
+                    ParameterError::DomainError(format!(
+                        "numeric parameter must be finite, got {val}"
+                    ))
+                    .to_string(),
+                ));
+            }
             Ok(PyParameter {
                 inner: val / self.inner.clone(),
             })
@@ -505,13 +572,26 @@ impl PyParameter {
     fn __pow__(
         &self,
         other: &Bound<'_, PyAny>,
-        _modulo: Option<&Bound<'_, PyAny>>,
+        modulo: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Self> {
+        if modulo.is_some() {
+            return Err(PyTypeError::new_err(
+                "Parameter exponentiation does not support a modulo argument",
+            ));
+        }
         if let Ok(param) = other.extract::<PyParameter>() {
             Ok(PyParameter {
                 inner: self.inner.pow(param.inner),
             })
         } else if let Ok(val) = other.extract::<f64>() {
+            if !val.is_finite() {
+                return Err(PyParameterError::new_err(
+                    ParameterError::DomainError(format!(
+                        "numeric parameter must be finite, got {val}"
+                    ))
+                    .to_string(),
+                ));
+            }
             let exp_param = Parameter::from(val);
             Ok(PyParameter {
                 inner: self.inner.pow(exp_param),
@@ -562,11 +642,11 @@ impl PyParameter {
     ///
     /// # Create expression: x + 2
     /// x = Parameter("x")
-    /// expr = x + Parameter.from_float(2.0)
+    /// expr = x + Parameter(2.0)
     ///
     /// # Replace x with y * 3
     /// y = Parameter("y")
-    /// replacement = y * Parameter.from_float(3.0)
+    /// replacement = y * Parameter(3.0)
     /// new_expr = expr.replace("x", replacement)
     /// # Result: (y * 3) + 2
     /// ```
@@ -589,9 +669,69 @@ impl PyParameter {
     }
 }
 
-// Helper conversion: allows CoreParameter to be converted to PyParameter
+/// Wraps a core parameter for return values from other binding modules.
 impl From<Parameter> for PyParameter {
     fn from(inner: Parameter) -> Self {
         PyParameter { inner }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PyParameter;
+    use crate::circuit::error::ParameterError as PyParameterError;
+    use pyo3::IntoPyObjectExt;
+    use pyo3::Python;
+
+    #[test]
+    fn invalid_expression_uses_parameter_error() {
+        Python::attach(|py| {
+            let value = "@@@".into_py_any(py).unwrap();
+            let error = PyParameter::new(value.bind(py)).unwrap_err();
+
+            assert!(error.is_instance_of::<PyParameterError>(py));
+            assert!(error.value(py).to_string().starts_with("Parse error:"));
+        });
+    }
+
+    #[test]
+    fn non_finite_number_uses_parameter_error_without_panicking() {
+        Python::attach(|py| {
+            let value = f64::NAN.into_py_any(py).unwrap();
+            let error = PyParameter::new(value.bind(py)).unwrap_err();
+
+            assert!(error.is_instance_of::<PyParameterError>(py));
+            assert!(error.value(py).to_string().contains("must be finite"));
+        });
+    }
+
+    #[test]
+    fn symbols_are_sorted_for_stable_python_results() {
+        let parameter = PyParameter {
+            inner: cqlib_core::circuit::Parameter::try_from("z + a + m").unwrap(),
+        };
+
+        assert_eq!(parameter.symbols(), vec!["a", "m", "z"]);
+    }
+
+    #[test]
+    fn repr_quotes_the_expression() {
+        let parameter = PyParameter {
+            inner: cqlib_core::circuit::Parameter::symbol("theta"),
+        };
+
+        assert_eq!(parameter.__repr__(), "Parameter(\"theta\")");
+        assert_eq!(parameter.as_symbol().as_deref(), Some("theta"));
+    }
+
+    #[test]
+    fn canonicalized_constant_matches_core_storage_form() {
+        let parameter = PyParameter {
+            inner: cqlib_core::circuit::Parameter::try_from("1 + 1").unwrap(),
+        };
+        let canonical = parameter.canonicalized().unwrap();
+
+        assert!(canonical.inner.is_constant());
+        assert_eq!(canonical.inner.evaluate(&None).unwrap(), 2.0);
     }
 }
