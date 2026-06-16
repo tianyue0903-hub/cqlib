@@ -12,6 +12,7 @@
 
 use super::*;
 use crate::circuit::{Directive, StandardGate};
+use crate::compile::knowledge::RuleLibrary;
 use crate::compile::knowledge::rule_dsl::load::load_rules_from_str;
 use ndarray::arr2;
 use smallvec::smallvec;
@@ -57,7 +58,11 @@ fn verify_accepts_symbolic_merge_rz() {
         )],
     );
 
-    assert_verify_passed(rule.verify_by_sampling(10, 1e-8).unwrap());
+    assert_verify_passed(rule.verify().unwrap());
+    assert!(matches!(
+        rule.verify().unwrap(),
+        VerifyResult::SampledEqual { .. }
+    ));
 }
 
 #[test]
@@ -94,7 +99,7 @@ fn verify_reports_numeric_failure_for_constant_mismatch() {
     );
 
     assert!(matches!(
-        rule.verify_by_sampling(10, 1e-8).unwrap(),
+        rule.verify().unwrap(),
         VerifyResult::NotEquivalent
     ));
 }
@@ -150,11 +155,11 @@ fn verify_accepts_conditioned_rx_inverse_eq_mod() {
         Parameter::from(4.0 * PI),
     )]);
 
-    assert_verify_passed(rule.verify_by_sampling(10, 1e-8).unwrap());
+    assert_verify_passed(rule.verify().unwrap());
 }
 
 #[test]
-fn verify_accepts_conditioned_eq_rule() {
+fn verify_accepts_conditioned_eq_rule_via_layered_fallback() {
     let mut rule = Rule::new(
         "conditioned_equal_rz",
         vec![RuleItem::standard(
@@ -173,7 +178,7 @@ fn verify_accepts_conditioned_eq_rule() {
         Parameter::symbol("b"),
     )]);
 
-    assert_verify_passed(rule.verify_by_sampling(10, 1e-8).unwrap());
+    assert_verify_passed(rule.verify().unwrap());
 }
 
 #[test]
@@ -181,7 +186,7 @@ fn verify_accepts_multi_controlled_rule_file_by_sampling() {
     let rules = load_rules_from_str(include_str!("rules/decompose_mc_gate.rule")).unwrap();
 
     for rule in rules {
-        assert_verify_passed(rule.verify_by_sampling(8, 1e-10).unwrap());
+        assert_verify_passed(rule.verify().unwrap());
     }
 }
 
@@ -268,4 +273,71 @@ fn max_diff_strict_detects_global_phase_difference() {
     let rhs = lhs.mapv(|value| Complex64::new(0.0, 1.0) * value);
 
     assert!(max_diff_strict(&lhs, &rhs) > 1.0);
+}
+
+/// Layered equivalence check for every rule in the builtin [`RuleLibrary`].
+fn verify_all_builtin_rules_layered_equivalence() {
+    let library = RuleLibrary::builtin_rules().unwrap();
+    let mut failures = Vec::new();
+
+    for rule in library.rules() {
+        if let Err(err) = rule.validate() {
+            failures.push(format!("{}: validate failed: {err}", rule.name));
+            continue;
+        }
+
+        match rule.verify() {
+            Ok(VerifyResult::Equivalent | VerifyResult::SampledEqual { .. }) => {}
+            Ok(VerifyResult::NotEquivalent) => {
+                failures.push(format!("{}: NotEquivalent", rule.name));
+            }
+            Ok(VerifyResult::Inconclusive { reason }) => {
+                failures.push(format!("{}: Inconclusive: {reason}", rule.name));
+            }
+            Err(err) => {
+                failures.push(format!("{}: verify setup error: {err}", rule.name));
+            }
+        }
+    }
+
+    assert!(
+        failures.is_empty(),
+        "builtin rule equivalence failures (bindings={}, tolerance={}): {failures:?}",
+        verify_sampling_bindings(),
+        verify_sampling_tolerance()
+    );
+}
+
+#[test]
+#[ignore = "single-rule timing probe; cargo test -p cqlib-core qcis_fsim_to_cz_verify_timing -- --ignored --nocapture"]
+fn qcis_fsim_to_cz_verify_timing() {
+    let library = RuleLibrary::builtin_rules().unwrap();
+    let rule = library
+        .get_by_name("qcis_fsim_to_cz")
+        .expect("qcis_fsim_to_cz");
+
+    let validate_start = std::time::Instant::now();
+    rule.validate().expect("validate");
+    let validate_elapsed = validate_start.elapsed();
+
+    let verify_start = std::time::Instant::now();
+    let result = rule.verify();
+    let verify_elapsed = verify_start.elapsed();
+
+    println!(
+        "qcis_fsim_to_cz: validate={validate_elapsed:?}, verify={verify_elapsed:?}, total={:?}",
+        validate_elapsed + verify_elapsed
+    );
+    println!("qcis_fsim_to_cz verify result: {result:?}");
+    println!(
+        "bindings={}, tolerance={}",
+        verify_sampling_bindings(),
+        verify_sampling_tolerance()
+    );
+}
+
+#[test]
+#[ignore = "full builtin rule equivalence sweep; cargo test -p cqlib-core verify_all_builtin_rules_layered_equivalence -- --ignored --nocapture"]
+fn verify_all_builtin_rules_layered_equivalence_ignored() {
+    verify_all_builtin_rules_layered_equivalence();
 }
