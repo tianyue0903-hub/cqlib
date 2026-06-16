@@ -781,24 +781,45 @@ fn dump_measurement(
     }
 
     if width == 1 {
-        let source = if qubit_map.len() == 1 && qubits[0] == "q[0]" {
-            "q"
-        } else {
-            &qubits[0]
-        };
+        let source = measurement_source(&qubits[0], qubit_map.len());
         if matches!(destination, MeasurementDestination::Discard(_)) {
             writeln!(output, "measure {source};")?;
         } else {
             writeln!(output, "{target} = measure {source};")?;
         }
-    } else {
+    } else if is_full_register_measurement(&qubits, qubit_map.len()) {
         if matches!(destination, MeasurementDestination::Discard(_)) {
             writeln!(output, "measure q;")?;
         } else {
             writeln!(output, "{target} = measure q;")?;
         }
+    } else {
+        for (index, qubit) in qubits.iter().enumerate() {
+            let source = measurement_source(qubit, qubit_map.len());
+            if matches!(destination, MeasurementDestination::Discard(_)) {
+                writeln!(output, "measure {source};")?;
+            } else {
+                writeln!(output, "{target}[{index}] = measure {source};")?;
+            }
+        }
     }
     Ok(())
+}
+
+fn measurement_source(qubit: &str, qubit_count: usize) -> &str {
+    if qubit_count == 1 && qubit == "q[0]" {
+        "q"
+    } else {
+        qubit
+    }
+}
+
+fn is_full_register_measurement(qubits: &[String], qubit_count: usize) -> bool {
+    qubits.len() == qubit_count
+        && qubits
+            .iter()
+            .enumerate()
+            .all(|(index, qubit)| qubit == &format!("q[{index}]"))
 }
 
 fn operation_reads_value(operation: &Operation, value: ClassicalValue) -> bool {

@@ -316,6 +316,58 @@ reset q[1];
 }
 
 #[test]
+fn dumps_partial_bitvec_measurement_as_indexed_assignments() {
+    let q0 = Qubit::new(0);
+    let q2 = Qubit::new(2);
+    let mut circuit = Circuit::new(3);
+    let bits = circuit.var(ClassicalType::bit_vec(2).unwrap());
+    circuit.measure_bits_into([q2, q0], bits).unwrap();
+
+    let qasm = dumps(&circuit).unwrap();
+
+    assert_eq!(
+        qasm,
+        r#"OPENQASM 3.0;
+include "stdgates.inc";
+
+qubit[3] q;
+bit[2] c0;
+
+c0[0] = measure q[2];
+c0[1] = measure q[0];
+"#
+    );
+    let loaded = qasm3_loads(&qasm).unwrap();
+    assert_eq!(loaded.num_qubits(), 3);
+    assert_eq!(loaded.operations().len(), 4);
+}
+
+#[test]
+fn dumps_unused_partial_bitvec_measurement_as_discarded_bits() {
+    let q0 = Qubit::new(0);
+    let q2 = Qubit::new(2);
+    let mut circuit = Circuit::new(3);
+    circuit.measure_bits([q2, q0]).unwrap();
+
+    let qasm = dumps(&circuit).unwrap();
+
+    assert_eq!(
+        qasm,
+        r#"OPENQASM 3.0;
+include "stdgates.inc";
+
+qubit[3] q;
+
+measure q[2];
+measure q[0];
+"#
+    );
+    let loaded = qasm3_loads(&qasm).unwrap();
+    assert_eq!(loaded.num_qubits(), 3);
+    assert_eq!(loaded.operations().len(), 2);
+}
+
+#[test]
 fn dumps_single_bit_measurement_round_trip() {
     let q0 = Qubit::new(0);
     let mut circuit = Circuit::new(1);
