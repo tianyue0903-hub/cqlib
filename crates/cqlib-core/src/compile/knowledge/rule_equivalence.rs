@@ -34,8 +34,47 @@ use std::collections::HashMap;
 
 const DETERMINISTIC_NUMERIC_TOLERANCE: f64 = 1e-12;
 const RULE_CONDITION_TOLERANCE: f64 = 1e-8;
+const DEFAULT_VERIFY_NUM_BINDINGS: usize = 16;
+const DEFAULT_VERIFY_SAMPLING_TOLERANCE: f64 = 1e-8;
+const ENV_VERIFY_BINDINGS: &str = "CQLIB_RULE_VERIFY_BINDINGS";
+const ENV_VERIFY_TOLERANCE: &str = "CQLIB_RULE_VERIFY_TOLERANCE";
 
-/// Result of verifying a rule via symbolic matrix comparison.
+/// Number of parameter bindings for layered / sampling rule verification.
+///
+/// Override at runtime with `CQLIB_RULE_VERIFY_BINDINGS` (e.g. `128` for nightly deep checks).
+pub fn verify_sampling_bindings() -> usize {
+    std::env::var(ENV_VERIFY_BINDINGS)
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .filter(|count| *count > 0)
+        .unwrap_or(DEFAULT_VERIFY_NUM_BINDINGS)
+}
+
+/// Numerical tolerance for sampling-based rule verification.
+///
+/// Override with `CQLIB_RULE_VERIFY_TOLERANCE`.
+pub fn verify_sampling_tolerance() -> f64 {
+    std::env::var(ENV_VERIFY_TOLERANCE)
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .filter(|tolerance: &f64| *tolerance > 0.0 && tolerance.is_finite())
+        .unwrap_or(DEFAULT_VERIFY_SAMPLING_TOLERANCE)
+}
+
+/// Result of layered rule equivalence verification via [`Rule::verify`].
+///
+/// Taxonomy for rule-library health checks:
+///
+/// | Outcome | Meaning |
+/// |---------|---------|
+/// | [`Equivalent`] | Symbolic or fixed-parameter numeric matrix comparison proved equivalence |
+/// | [`SampledEqual`] | Symbolic verification was insufficient, but parameter sampling passed |
+/// | [`NotEquivalent`] | Symbolic and sampling both failed — suspected rule bug |
+/// | [`Inconclusive`] | Could not generate parameter bindings satisfying `require` conditions |
+///
+/// Bare symbolic comparison alone is not sufficient for parametric rules, rules with
+/// `require` / `mod` conditions, or many commutation rules. [`Rule::verify`] falls back
+/// to sampling automatically when those features are present.
 #[derive(Debug)]
 pub enum VerifyResult {
     /// The symbolic verifier proved the rule equivalent up to global phase.
@@ -61,27 +100,20 @@ pub enum VerifyError {
 }
 
 impl Rule {
-    /// Verify this rule by comparing the symbolic unitary matrices of the LHS
-    /// and RHS up to global phase.
+    /// Verify this rule with layered equivalence checking:
+    ///
+    /// 1. Symbolic matrix comparison (and numeric check for fixed-parameter rules)
+    /// 2. If that fails and the rule has free parameters or `require` conditions,
+    ///    fall back to [`Self::verify_by_sampling`] with default binding count and tolerance
     pub fn verify(&self) -> Result<VerifyResult, VerifyError> {
         let (lhs, rhs) = build_simplified_matrices(self)?;
-        if symbolic_matrices_equivalent(&lhs, &rhs)? {
-            return Ok(VerifyResult::Equivalent);
-        }
-
-        if self.collect_free_symbols().is_empty() {
-            let (lhs_num, rhs_num) = rayon::join(
-                || evaluate_symbolic_matrix(&lhs, &None),
-                || evaluate_symbolic_matrix(&rhs, &None),
-            );
-            let lhs_num = lhs_num?;
-            let rhs_num = rhs_num?;
-            if max_diff_up_to_global_phase(&lhs_num, &rhs_num) < DETERMINISTIC_NUMERIC_TOLERANCE {
-                return Ok(VerifyResult::Equivalent);
-            }
-        }
-
-        Ok(VerifyResult::NotEquivalent)
+        layered_verify(
+            self,
+            &lhs,
+            &rhs,
+            verify_sampling_bindings(),
+            verify_sampling_tolerance(),
+        )
     }
 
     /// Verify this rule symbolically first, then fall back to numerical sampling.
@@ -91,12 +123,41 @@ impl Rule {
         tolerance: f64,
     ) -> Result<VerifyResult, VerifyError> {
         let (lhs, rhs) = build_simplified_matrices(self)?;
-        if symbolic_matrices_equivalent(&lhs, &rhs)? {
+        layered_verify(self, &lhs, &rhs, num_bindings, tolerance)
+    }
+
+    /// Whether layered verification should fall back to parameter sampling after
+    /// symbolic comparison fails.
+    pub fn needs_sampling_fallback(&self) -> bool {
+        !self.collect_free_symbols().is_empty() || self.conditions.is_some()
+    }
+}
+
+fn layered_verify(
+    rule: &Rule,
+    lhs: &SymbolicMatrix,
+    rhs: &SymbolicMatrix,
+    num_bindings: usize,
+    tolerance: f64,
+) -> Result<VerifyResult, VerifyError> {
+    if symbolic_matrices_equivalent(lhs, rhs)? {
+        return Ok(VerifyResult::Equivalent);
+    }
+
+    if !rule.needs_sampling_fallback() {
+        let (lhs_num, rhs_num) = rayon::join(
+            || evaluate_symbolic_matrix(lhs, &None),
+            || evaluate_symbolic_matrix(rhs, &None),
+        );
+        let lhs_num = lhs_num?;
+        let rhs_num = rhs_num?;
+        if max_diff_up_to_global_phase(&lhs_num, &rhs_num) < DETERMINISTIC_NUMERIC_TOLERANCE {
             return Ok(VerifyResult::Equivalent);
         }
-
-        verify_by_sampling(self, &lhs, &rhs, num_bindings, tolerance)
+        return Ok(VerifyResult::NotEquivalent);
     }
+
+    verify_by_sampling(rule, lhs, rhs, num_bindings, tolerance)
 }
 
 fn build_simplified_matrices(rule: &Rule) -> Result<(SymbolicMatrix, SymbolicMatrix), VerifyError> {
