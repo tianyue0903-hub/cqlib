@@ -158,7 +158,11 @@ struct ClassicalRegisterMap {
 }
 
 impl ClassicalRegisterMap {
-    fn new(circuit: &Circuit, output: &mut String) -> Result<Self, QasmDumpError> {
+    fn new(
+        circuit: &Circuit,
+        output: &mut String,
+        skipped_values: &HashSet<ClassicalValue>,
+    ) -> Result<Self, QasmDumpError> {
         let mut registers = Self::default();
 
         for (id, ty) in circuit.classical_vars().iter().copied().enumerate() {
@@ -170,12 +174,14 @@ impl ClassicalRegisterMap {
                 .insert(ClassicalVar::new(circuit.id(), id as u32, ty), name);
         }
         for (id, ty) in circuit.classical_values().iter().copied().enumerate() {
+            let value = ClassicalValue::new(circuit.id(), id as u32, ty);
+            if skipped_values.contains(&value) {
+                continue;
+            }
             let width = qasm_register_width(ty)?;
             let name = format!("v{id}");
             writeln!(output, "creg {name}[{width}];")?;
-            registers
-                .values
-                .insert(ClassicalValue::new(circuit.id(), id as u32, ty), name);
+            registers.values.insert(value, name);
         }
 
         Ok(registers)
@@ -258,7 +264,8 @@ pub fn dumps(circuit: &Circuit) -> Result<String, QasmDumpError> {
     writeln!(&mut output, "OPENQASM 2.0;")?;
     writeln!(&mut output, "include \"qelib1.inc\";\n")?;
     writeln!(&mut output, "qreg q[{}];", circuit.num_qubits())?;
-    let classical_registers = ClassicalRegisterMap::new(circuit, &mut output)?;
+    let skipped_values = skipped_classical_value_declarations(circuit.operations())?;
+    let classical_registers = ClassicalRegisterMap::new(circuit, &mut output, &skipped_values)?;
     writeln!(&mut output)?;
 
     // Output global phase as a comment (OpenQASM 2.0 does not have a standard directive for this)
@@ -814,6 +821,76 @@ enum MeasurementDestination {
     Value(ClassicalValue),
     VarWhole(ClassicalVar),
     VarBit(ClassicalVar, u32),
+}
+
+fn skipped_classical_value_declarations(
+    operations: &[Operation],
+) -> Result<HashSet<ClassicalValue>, QasmDumpError> {
+    let mut skipped = HashSet::new();
+    collect_skipped_classical_values(operations, &mut skipped)?;
+    Ok(skipped)
+}
+
+fn collect_skipped_classical_values(
+    operations: &[Operation],
+    skipped: &mut HashSet<ClassicalValue>,
+) -> Result<(), QasmDumpError> {
+    let mut index = 0;
+    while index < operations.len() {
+        let op = &operations[index];
+        match &op.instruction {
+            Instruction::ClassicalData(ClassicalDataOp::MeasureBit { result })
+            | Instruction::ClassicalData(ClassicalDataOp::MeasureBits { result }) => {
+                let next = operations.get(index + 1);
+                let (_, consumes_store) = measurement_destination(&op.instruction, *result, next)?;
+                if consumes_store {
+                    let read_later = operations[index + 2..]
+                        .iter()
+                        .any(|operation| operation_reads_value(operation, *result));
+                    if !read_later {
+                        skipped.insert(*result);
+                    }
+                    index += 1;
+                }
+            }
+            Instruction::ClassicalControl(control) => {
+                collect_skipped_classical_values_in_control(control, skipped)?;
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+    Ok(())
+}
+
+fn collect_skipped_classical_values_in_control(
+    control: &ClassicalControlOp,
+    skipped: &mut HashSet<ClassicalValue>,
+) -> Result<(), QasmDumpError> {
+    match control {
+        ClassicalControlOp::If(if_op) => {
+            collect_skipped_classical_values(if_op.then_body().operations(), skipped)?;
+            if let Some(body) = if_op.else_body() {
+                collect_skipped_classical_values(body.operations(), skipped)?;
+            }
+        }
+        ClassicalControlOp::While(while_op) => {
+            collect_skipped_classical_values(while_op.body().operations(), skipped)?;
+        }
+        ClassicalControlOp::For(for_op) => {
+            collect_skipped_classical_values(for_op.body().operations(), skipped)?;
+        }
+        ClassicalControlOp::Switch(switch_op) => {
+            for case in switch_op.cases() {
+                collect_skipped_classical_values(case.body().operations(), skipped)?;
+            }
+            if let Some(body) = switch_op.default() {
+                collect_skipped_classical_values(body.operations(), skipped)?;
+            }
+        }
+        ClassicalControlOp::Break | ClassicalControlOp::Continue => {}
+    }
+    Ok(())
 }
 
 fn measurement_destination(

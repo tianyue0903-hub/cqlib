@@ -633,7 +633,6 @@ fn test_dump_conditional_measurement() {
         &[
             "creg c0[1];",
             "creg v0[1];",
-            "creg v1[1];",
             "measure q[0] -> v0[0];",
             "if (v0 == 1) measure q[1] -> c0[0];",
         ],
@@ -717,6 +716,41 @@ fn test_dynamic_qasm_load_dump_roundtrip() {
         ],
     );
     verify_qasm_roundtrip(&qasm, 3);
+}
+
+#[test]
+fn test_dynamic_qasm_roundtrip_does_not_grow_unused_cregs() {
+    let circuit = loads(
+        r#"
+        OPENQASM 2.0;
+        include "qelib1.inc";
+        qreg q[2];
+        creg c[2];
+        h q[0];
+        measure q[0] -> c[0];
+        if (c == 1) x q[1];
+        "#,
+    )
+    .unwrap();
+
+    let first_dump = dumps(&circuit).unwrap();
+    let restored = loads(&first_dump).unwrap();
+    let second_dump = dumps(&restored).unwrap();
+    let restored_again = loads(&second_dump).unwrap();
+    let third_dump = dumps(&restored_again).unwrap();
+
+    assert_eq!(second_dump, first_dump);
+    assert_eq!(third_dump, second_dump);
+    assert_qasm_contains_ordered(
+        &first_dump,
+        &[
+            "creg c0[2];",
+            "h q[0];",
+            "measure q[0] -> c0[0];",
+            "if (c0 == 1) x q[1];",
+        ],
+    );
+    assert!(!first_dump.contains("creg v0[1];"), "got:\n{first_dump}");
 }
 
 #[test]
