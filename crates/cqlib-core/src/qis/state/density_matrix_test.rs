@@ -900,3 +900,226 @@ fn test_zero_qubit_validate_error_message() {
         err
     );
 }
+
+#[test]
+fn test_psd_gershgorin_false_negative_equal_superposition() {
+    // A 2-qubit equal superposition has density matrix (1/4)J.
+    // This is PSD (eigenvalues {1,0,0,0}) but
+    // Gershgorin disc radii exceed diagonal entries (1/4 < 3/4).
+    use num_complex::Complex64;
+    let n = 2usize;
+    let dim = 1 << n;
+    let size = dim * dim;
+    let mut data = vec![Complex64::new(0.0, 0.0); size];
+    let val = Complex64::new(0.25, 0.0);
+    for i in 0..size {
+        data[i] = val;
+    }
+    let dm = DensityMatrix {
+        data,
+        num_qubits: n,
+    };
+    // Hermitian and unit trace.
+    assert!(
+        dm.is_hermitian(1e-10),
+        "equal superposition must be Hermitian"
+    );
+    assert!((dm.trace().re - 1.0).abs() < 1e-10, "trace must be 1");
+    // Gershgorin-based check must NOT reject this valid PSD matrix.
+    assert!(
+        dm.is_positive_semidefinite_approx(1e-10),
+        "Gershgorin must not false-negative a PSD equal-superposition pure state"
+    );
+}
+
+#[test]
+fn test_psd_valid_pure_non_diagonally_dominant() {
+    // sqrt(0.6)|00> + sqrt(0.4)|11> is a rank-1 PSD state with
+    // large off-diagonal entries.
+    use num_complex::Complex64;
+    let n = 2usize;
+    let dim = 1 << n;
+    let size = dim * dim;
+    let sqrt_06 = 0.6_f64.sqrt();
+    let sqrt_04 = 0.4_f64.sqrt();
+    let mut data = vec![Complex64::new(0.0, 0.0); size];
+    data[0 * dim + 0] = Complex64::new(0.6, 0.0);
+    data[0 * dim + 3] = Complex64::new(sqrt_06 * sqrt_04, 0.0);
+    data[3 * dim + 0] = Complex64::new(sqrt_06 * sqrt_04, 0.0);
+    data[3 * dim + 3] = Complex64::new(0.4, 0.0);
+    let dm = DensityMatrix {
+        data,
+        num_qubits: n,
+    };
+    assert!(dm.is_hermitian(1e-10));
+    assert!((dm.trace().re - 1.0).abs() < 1e-10);
+    assert!(
+        dm.is_positive_semidefinite_approx(1e-10),
+        "PSD pure state with large off-diagonal must pass"
+    );
+}
+
+#[test]
+fn test_psd_valid_mixed_state_non_diagonally_dominant() {
+    // Mixed state: 0.6*I/4 + 0.4*|++><++|.
+    // Diagonals: 0.6/4+0.4/4=0.25. Off-diagonals: 0.4/4=0.1.
+    // Gershgorin row-sum: 3*0.1=0.3 > 0.25, which failed the old check.
+    use num_complex::Complex64;
+    let n = 2usize;
+    let dim = 1 << n;
+    let size = dim * dim;
+    let mut data = vec![Complex64::new(0.0, 0.0); size];
+    let d = Complex64::new(0.25, 0.0); // diagonal
+    let o = Complex64::new(0.10, 0.0); // off-diagonal
+    for i in 0..dim {
+        for j in 0..dim {
+            data[i * dim + j] = if i == j { d } else { o };
+        }
+    }
+    let dm = DensityMatrix {
+        data,
+        num_qubits: n,
+    };
+    assert!(dm.is_hermitian(1e-10));
+    assert!((dm.trace().re - 1.0).abs() < 1e-10);
+    assert!(
+        dm.is_positive_semidefinite_approx(1e-10),
+        "PSD mixed state with Gershgorin-violating off-diagonals must pass"
+    );
+}
+
+#[test]
+fn test_psd_zero_eigenvalue_boundary() {
+    // Pure state |00><00| has eigenvalues {1,0,0,0}.
+    use num_complex::Complex64;
+    let n = 2usize;
+    let dim = 1 << n;
+    let size = dim * dim;
+    let mut data = vec![Complex64::new(0.0, 0.0); size];
+    data[0] = Complex64::new(1.0, 0.0);
+    let dm = DensityMatrix {
+        data,
+        num_qubits: n,
+    };
+    assert!(dm.is_hermitian(1e-10));
+    assert!(dm.is_positive_semidefinite_approx(1e-10));
+}
+
+#[test]
+fn test_psd_negative_eigenvalue_rejected() {
+    // Matrix with a clearly negative eigenvalue:
+    // diag(-0.1, 1.1, 0, 0) has smallest eigenvalue -0.1.
+    use num_complex::Complex64;
+    let n = 2usize;
+    let dim = 1 << n;
+    let size = dim * dim;
+    let mut data = vec![Complex64::new(0.0, 0.0); size];
+    data[0] = Complex64::new(-0.1, 0.0);
+    data[1 * dim + 1] = Complex64::new(1.1, 0.0);
+    let dm = DensityMatrix {
+        data,
+        num_qubits: n,
+    };
+    assert!(dm.is_hermitian(1e-10));
+    // Has a negative eigenvalue, must be rejected.
+    assert!(
+        !dm.is_positive_semidefinite_approx(1e-10),
+        "matrix with negative eigenvalue must be rejected"
+    );
+}
+
+#[test]
+fn test_psd_tiny_negative_eigenvalue_accepted_with_tolerance() {
+    // Eigenvalues are approximately 1 + eps and -eps.
+    use num_complex::Complex64;
+    let n = 1usize;
+    let dim = 1 << n;
+    let size = dim * dim;
+    let eps = 1e-12_f64;
+    let mut data = vec![Complex64::new(0.0, 0.0); size];
+    data[0] = Complex64::new(1.0 + eps, 0.0);
+    data[1 * dim + 1] = Complex64::new(-eps, 0.0);
+    let dm = DensityMatrix {
+        data,
+        num_qubits: n,
+    };
+    assert!(dm.is_hermitian(1e-10));
+    assert!(
+        dm.is_positive_semidefinite_approx(1e-10),
+        "tiny negative eigenvalue must be accepted within tolerance"
+    );
+    assert!(
+        !dm.is_positive_semidefinite_approx(1e-13),
+        "tiny negative eigenvalue must be rejected with tighter tolerance"
+    );
+}
+
+#[test]
+fn test_psd_non_hermitian_rejected() {
+    // Non-Hermitian matrices are not valid PSD density matrices.
+    use num_complex::Complex64;
+    let n = 1usize;
+    let dim = 1 << n;
+    let size = dim * dim;
+    let mut data = vec![Complex64::new(0.0, 0.0); size];
+    data[0] = Complex64::new(0.5, 0.0);
+    data[3] = Complex64::new(0.5, 0.0);
+    data[1] = Complex64::new(0.0, 0.2); // non-Hermitian off-diagonal
+    let dm = DensityMatrix {
+        data,
+        num_qubits: n,
+    };
+    assert!(!dm.is_hermitian(1e-10));
+    assert!(!dm.is_positive_semidefinite_approx(1e-10));
+}
+
+#[test]
+fn test_psd_trace_not_one() {
+    // Scaled identity: 2*I/2 = I. Diagonal = 1, trace = 2.
+    use num_complex::Complex64;
+    let n = 1usize;
+    let dim = 1 << n;
+    let size = dim * dim;
+    let mut data = vec![Complex64::new(0.0, 0.0); size];
+    data[0] = Complex64::new(1.0, 0.0);
+    data[3] = Complex64::new(1.0, 0.0);
+    let dm = DensityMatrix {
+        data,
+        num_qubits: n,
+    };
+    assert!((dm.trace().re - 2.0).abs() < 1e-10);
+    // PSD check should still return true; trace validation is separate.
+    assert!(dm.is_positive_semidefinite_approx(1e-10));
+}
+
+#[test]
+fn test_psd_nan_rejected() {
+    use num_complex::Complex64;
+    let n = 1usize;
+    let dim = 1 << n;
+    let size = dim * dim;
+    let mut data = vec![Complex64::new(0.0, 0.0); size];
+    data[0] = Complex64::new(f64::NAN, 0.0);
+    data[3] = Complex64::new(f64::NAN, 0.0);
+    let dm = DensityMatrix {
+        data,
+        num_qubits: n,
+    };
+    assert!(!dm.is_positive_semidefinite_approx(1e-10));
+}
+
+#[test]
+fn test_psd_inf_rejected() {
+    use num_complex::Complex64;
+    let n = 1usize;
+    let dim = 1 << n;
+    let size = dim * dim;
+    let mut data = vec![Complex64::new(0.0, 0.0); size];
+    data[0] = Complex64::new(f64::INFINITY, 0.0);
+    data[3] = Complex64::new(0.0, 0.0);
+    let dm = DensityMatrix {
+        data,
+        num_qubits: n,
+    };
+    assert!(!dm.is_positive_semidefinite_approx(1e-10));
+}

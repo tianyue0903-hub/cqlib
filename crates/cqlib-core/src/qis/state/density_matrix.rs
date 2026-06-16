@@ -591,34 +591,58 @@ impl DensityMatrix {
         true
     }
 
-    /// Checks if the density matrix is positive semidefinite using Gershgorin circles.
+    /// Checks if the density matrix is positive semidefinite (approximately).
     ///
-    /// This is a sufficient but not necessary condition. Uses Gershgorin circle theorem:
-    /// If for each row i, |ρ_ii| >= sum_{j≠i} |ρ_ij|, then all eigenvalues are non-negative.
+    /// Uses faer's self-adjoint eigenvalue decomposition to check that
+    /// all eigenvalues satisfy λᵢ ≥ -tol.
+    ///
+    /// For Hermitian matrices the eigenvalue check is definitive.
+    /// For non-Hermitian inputs the decomposition may fail or produce
+    /// meaningless results, in which case `false` is returned.
+    ///
+    /// # Edge cases
+    /// - Matrices containing NaN or Inf return `false` without panicking.
+    /// - Negative eigenvalues smaller in magnitude than `tol` are treated
+    ///   as numerical noise and pass the check.
     ///
     /// # Arguments
     /// * `tol` - Tolerance for floating-point comparison.
     ///
     /// # Returns
-    /// `true` if positive semidefinite (approximately), `false` if definitely not.
+    /// `true` if all eigenvalues are ≥ -tol, `false` otherwise.
     pub fn is_positive_semidefinite_approx(&self, tol: f64) -> bool {
         let dim = 1 << self.num_qubits;
+
+        // Reject NaN/Inf immediately.
+        if self
+            .data
+            .iter()
+            .any(|c| c.re.is_nan() || c.re.is_infinite() || c.im.is_nan() || c.im.is_infinite())
+        {
+            return false;
+        }
+
+        if !self.is_hermitian(tol) {
+            return false;
+        }
+
+        // Quick rejection: negative diagonal (necessary condition).
         for i in 0..dim {
-            let diagonal = self.data[i * dim + i].re;
-            if diagonal < -tol {
-                return false;
-            }
-            let mut off_diag_sum: f64 = 0.0;
-            for j in 0..dim {
-                if i != j {
-                    off_diag_sum += self.data[i * dim + j].norm();
-                }
-            }
-            if diagonal + tol < off_diag_sum {
+            if self.data[i * dim + i].re < -tol {
                 return false;
             }
         }
-        true
+
+        // Build faer matrix and compute self-adjoint eigenvalues.
+        let mat = faer::Mat::from_fn(dim, dim, |row, col| {
+            let c = self.data[row * dim + col];
+            faer::c64::new(c.re, c.im)
+        });
+
+        match mat.self_adjoint_eigenvalues(faer::Side::Lower) {
+            Ok(eigenvalues) => eigenvalues.iter().all(|&lambda| lambda >= -tol),
+            Err(_) => false,
+        }
     }
 
     /// Validates all physical constraints of the density matrix.
