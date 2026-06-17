@@ -11,19 +11,19 @@
 # that they have been altered from the originals.
 
 """
-Tests for McGate (Multi-Controlled Gate).
+Tests for MCGate (Multi-Controlled Gate).
 
 Test coverage:
-- McGate creation with different control counts
-- McGate properties (num_qubits, num_ctrl_qubits, num_params)
-- McGate matrix computation
-- McGate with different base gates
-- McGate inverse
-- McGate unitary property
+- MCGate creation with different control counts
+- MCGate properties (num_qubits, num_ctrl_qubits, num_params)
+- MCGate matrix computation
+- MCGate with different base gates
+- MCGate inverse
+- MCGate unitary property
 """
 
 import numpy as np
-from cqlib.circuit.gates import McGate, X, H, RX, RZ, Phase, CX
+from cqlib.circuit.gates import MCGate, X, H, RX, RZ, Phase, CX
 from cqlib.circuit import Parameter
 
 
@@ -36,69 +36,69 @@ def is_unitary(matrix, atol=1e-10):
 
 
 class TestMcGateCreation:
-    """Test McGate creation"""
+    """Test MCGate creation"""
 
     def test_create_single_control_gate(self):
         """Create single-controlled gate"""
-        mc_gate = McGate(1, X)
+        mc_gate = MCGate(1, X)
         assert mc_gate.num_ctrl_qubits == 1
         assert mc_gate.num_qubits == 2
         assert mc_gate.base_gate == X
 
     def test_create_multi_control_gate(self):
         """Create multi-controlled gate"""
-        mc_gate = McGate(2, X)
+        mc_gate = MCGate(2, X)
         assert mc_gate.num_ctrl_qubits == 2
         assert mc_gate.num_qubits == 3
 
     def test_create_triple_control_gate(self):
         """Create triple-controlled gate"""
-        mc_gate = McGate(3, X)
+        mc_gate = MCGate(3, X)
         assert mc_gate.num_ctrl_qubits == 3
         assert mc_gate.num_qubits == 4
 
     def test_mc_gate_with_hadamard(self):
         """Create controlled-Hadamard gate"""
-        ch = McGate(1, H)
+        ch = MCGate(1, H)
         assert ch.num_ctrl_qubits == 1
         assert ch.num_qubits == 2
         assert ch.base_gate == H
 
     def test_mc_gate_zero_controls(self):
-        """McGate with 0 controls is equivalent to base gate"""
-        mc_gate = McGate(0, X)
+        """MCGate with 0 controls is equivalent to base gate"""
+        mc_gate = MCGate(0, X)
         assert mc_gate.num_ctrl_qubits == 0
         assert mc_gate.num_qubits == 1
 
 
 class TestMcGateProperties:
-    """Test McGate properties"""
+    """Test MCGate properties"""
 
     def test_num_params_with_non_parametric_gate(self):
-        """McGate with non-parametric base gate has 0 params"""
-        mc_gate = McGate(2, X)
+        """MCGate with non-parametric base gate has 0 params"""
+        mc_gate = MCGate(2, X)
         assert mc_gate.num_params == 0
 
     def test_num_params_with_parametric_gate(self):
-        """McGate inherits params from parametric base gate"""
-        mc_gate = McGate(1, RX)
+        """MCGate inherits params from parametric base gate"""
+        mc_gate = MCGate(1, RX)
         assert mc_gate.num_params == 1
 
-        mc_gate_rz = McGate(2, RZ)
+        mc_gate_rz = MCGate(2, RZ)
         assert mc_gate_rz.num_params == 1
 
     def test_base_gate_property(self):
         """base_gate property returns the wrapped gate"""
-        mc_gate = McGate(1, Phase)
+        mc_gate = MCGate(1, Phase)
         assert mc_gate.base_gate == Phase
 
 
 class TestMcGateMatrix:
-    """Test McGate matrix computation"""
+    """Test MCGate matrix computation"""
 
     def test_cnot_matrix(self):
         """CNOT matrix (X with 1 control)"""
-        cnot = McGate(1, X)
+        cnot = MCGate(1, X)
         mat = cnot.matrix([])
         expected = np.array(
             [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 0, 1], [0, 0, 1, 0]], dtype=complex
@@ -107,7 +107,7 @@ class TestMcGateMatrix:
 
     def test_ccx_matrix(self):
         """CCX (Toffoli) matrix (X with 2 controls)"""
-        ccx = McGate(2, X)
+        ccx = MCGate(2, X)
         mat = ccx.matrix([])
         # CCX is 8x8 matrix
         assert mat.shape == (8, 8)
@@ -115,14 +115,14 @@ class TestMcGateMatrix:
 
     def test_controlled_hadamard_matrix(self):
         """Controlled-Hadamard matrix"""
-        ch = McGate(1, H)
+        ch = MCGate(1, H)
         mat = ch.matrix([])
         assert mat.shape == (4, 4)
         assert is_unitary(mat), "CH should be unitary"
 
     def test_mc_rx_matrix(self):
         """Controlled-RX matrix"""
-        crx = McGate(1, RX)
+        crx = MCGate(1, RX)
         theta = np.pi / 2
         mat = crx.matrix([theta])
         assert mat.shape == (4, 4)
@@ -130,7 +130,7 @@ class TestMcGateMatrix:
 
     def test_mc_rx_matrix_values(self):
         """Controlled-RX matrix values verification"""
-        crx = McGate(1, RX)
+        crx = MCGate(1, RX)
         theta = np.pi / 2
         mat = crx.matrix([theta])
         cos_half = np.cos(theta / 2)
@@ -149,18 +149,18 @@ class TestMcGateMatrix:
 
 
 class TestMcGateUnitary:
-    """Test McGate unitary property"""
+    """Test MCGate unitary property"""
 
     def test_mc_x_is_unitary(self):
         """Multi-controlled X is unitary"""
         for n_ctrls in [1, 2, 3]:
-            mc_x = McGate(n_ctrls, X)
+            mc_x = MCGate(n_ctrls, X)
             mat = mc_x.matrix([])
             assert is_unitary(mat), f"MC-X with {n_ctrls} controls should be unitary"
 
     def test_mc_h_is_unitary(self):
         """Multi-controlled H is unitary"""
-        mc_h = McGate(1, H)
+        mc_h = MCGate(1, H)
         mat = mc_h.matrix([])
         assert is_unitary(mat), "CH should be unitary"
 
@@ -172,7 +172,7 @@ class TestMcGateUnitary:
             (1, RZ, [np.pi / 6]),
         ]
         for n_ctrls, gate, params in test_cases:
-            mc_gate = McGate(n_ctrls, gate)
+            mc_gate = MCGate(n_ctrls, gate)
             mat = mc_gate.matrix(params)
             assert is_unitary(mat), (
                 f"MC-{gate} with {n_ctrls} controls should be unitary"
@@ -180,22 +180,22 @@ class TestMcGateUnitary:
 
 
 class TestMcGateInverse:
-    """Test McGate inverse"""
+    """Test MCGate inverse"""
 
     def test_mc_x_inverse(self):
         """Multi-controlled X is self-inverse"""
-        ccx = McGate(2, X)
+        ccx = MCGate(2, X)
         inv_result = ccx.inverse([])
         assert inv_result is not None
         inv_gate, inv_params = inv_result
-        # Inverse should be another McGate with same controls
+        # Inverse should be another MCGate with same controls
         assert inv_gate.num_ctrl_qubits == 2
         # X is self-inverse, so inverse is itself
         assert inv_gate.base_gate == X
 
     def test_mc_rx_inverse_negates_angle(self):
         """Controlled-RX inverse negates the angle"""
-        crx = McGate(1, RX)
+        crx = MCGate(1, RX)
         inv_result = crx.inverse([Parameter("theta")])
         assert inv_result is not None
         inv_gate, inv_params = inv_result
@@ -205,7 +205,7 @@ class TestMcGateInverse:
 
     def test_mc_h_inverse(self):
         """Controlled-H inverse is itself (H is self-inverse)"""
-        ch = McGate(1, H)
+        ch = MCGate(1, H)
         inv_result = ch.inverse([])
         assert inv_result is not None
         inv_gate, _ = inv_result
@@ -213,7 +213,7 @@ class TestMcGateInverse:
 
 
 class TestMcGateMatrixShape:
-    """Test McGate matrix dimensions"""
+    """Test MCGate matrix dimensions"""
 
     def test_matrix_dimensions(self):
         """Matrix dimensions match num_qubits"""
@@ -224,7 +224,7 @@ class TestMcGateMatrixShape:
             (1, H, 4),  # 2^2 = 4
         ]
         for n_ctrls, gate, expected_dim in test_cases:
-            mc_gate = McGate(n_ctrls, gate)
+            mc_gate = MCGate(n_ctrls, gate)
             mat = mc_gate.matrix([])
             assert mat.shape == (expected_dim, expected_dim), (
                 f"MC-{gate} with {n_ctrls} controls should have {expected_dim}x{expected_dim} matrix"
@@ -232,18 +232,18 @@ class TestMcGateMatrixShape:
 
 
 class TestMcGateEdgeCases:
-    """Test McGate edge cases"""
+    """Test MCGate edge cases"""
 
     def test_mc_gate_with_zero_controls_equals_base(self):
-        """McGate with 0 controls has same matrix as base gate"""
-        mc_x = McGate(0, X)
+        """MCGate with 0 controls has same matrix as base gate"""
+        mc_x = MCGate(0, X)
         mat = mc_x.matrix([])
         base_mat = X.matrix()
         assert np.allclose(mat, base_mat), "MC-X with 0 controls should equal X"
 
     def test_mc_gate_with_pre_controlled_base(self):
-        """McGate can wrap already-controlled gates"""
+        """MCGate can wrap already-controlled gates"""
         # CX is already controlled, wrapping with 1 more control gives CCX
-        ccx_via_cx = McGate(1, CX)
+        ccx_via_cx = MCGate(1, CX)
         assert ccx_via_cx.num_ctrl_qubits == 2
         assert ccx_via_cx.num_qubits == 3

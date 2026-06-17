@@ -158,6 +158,7 @@ pub mod circuit_verify;
 pub mod classical;
 pub mod classical_expr;
 pub mod control_flow;
+pub mod depth;
 pub mod error;
 pub mod gate;
 pub mod operation;

@@ -10,12 +10,39 @@
 # copyright notice, and modified files need to carry a notice indicating
 # that they have been altered from the originals.
 
-"""Ansatz templates are not part of the active Python binding yet.
+"""Parameterized circuit ansatz templates."""
 
-The Rust ansatz wrappers currently depend on the Python QIS bindings, which
-are restored in a separate migration step.
-"""
+from ..._native import circuit as _circuit_module
 
-raise ImportError(
-    "cqlib.circuit.ansatz is not available until the Python QIS bindings are restored"
-)
+_ansatz_module = _circuit_module.ansatz
+
+EntanglementTopology = _ansatz_module.EntanglementTopology
+TwoLocal = _ansatz_module.TwoLocal
+AngleEncoding = _ansatz_module.AngleEncoding
+ZZFeatureMap = _ansatz_module.ZZFeatureMap
+PauliFeatureMap = _ansatz_module.PauliFeatureMap
+QAOAAnsatz = _ansatz_module.QAOAAnsatz
+EvolutionStrategy = _ansatz_module.EvolutionStrategy
+EvolutionInfo = _ansatz_module.EvolutionInfo
+PauliEvolutionAnsatz = _ansatz_module.PauliEvolutionAnsatz
+
+real_amplitudes = _ansatz_module.real_amplitudes
+efficient_su2 = _ansatz_module.efficient_su2
+zz_feature_map = _ansatz_module.zz_feature_map
+pauli_feature_map = _ansatz_module.pauli_feature_map
+
+__all__ = [
+    "EntanglementTopology",
+    "TwoLocal",
+    "AngleEncoding",
+    "ZZFeatureMap",
+    "PauliFeatureMap",
+    "QAOAAnsatz",
+    "EvolutionStrategy",
+    "EvolutionInfo",
+    "PauliEvolutionAnsatz",
+    "real_amplitudes",
+    "efficient_su2",
+    "zz_feature_map",
+    "pauli_feature_map",
+]

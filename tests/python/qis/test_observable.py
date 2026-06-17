@@ -63,6 +63,21 @@ def test_pauli_expectation_probs():
     assert math.isclose(ps_z.expectation_probs(measurements_mixed), 0.0)
 
 
+def test_pauli_variance_statevector():
+    ps_z = PauliString.from_str("Z")
+
+    sv_zero = Statevector(1)
+    assert math.isclose(ps_z.variance_statevector(sv_zero), 0.0, abs_tol=1e-10)
+
+    sv_plus = Statevector(1)
+    sv_plus.apply_h(0)
+    assert math.isclose(ps_z.variance_statevector(sv_plus), 1.0, abs_tol=1e-10)
+
+    ps_non_herm = PauliString.from_str("+iZ")
+    with pytest.raises(ValueError, match="Hermitian"):
+        ps_non_herm.variance_statevector(sv_zero)
+
+
 def test_hamiltonian_expectation_statevector():
     # Bell state |Φ+⟩ = (|00⟩ + |11⟩)/√2
     sv = Statevector(2)

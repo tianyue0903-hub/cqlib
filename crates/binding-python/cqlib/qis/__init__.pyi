@@ -36,6 +36,8 @@ from .evolution import TrotterMode as TrotterMode
 # State simulation module
 from .state import DensityMatrix as DensityMatrix
 from .state import DensityMatrixNoise as DensityMatrixNoise
+from .state import RuntimeValue as RuntimeValue
+from .state import ClassicalState as ClassicalState
 from .state import StabilizerCircuitResult as StabilizerCircuitResult
 from .state import StabilizerState as StabilizerState
 from .state import Statevector as Statevector
@@ -51,6 +53,7 @@ class Observable(Protocol):
     def expectation_probs(
         self, measurements: List[Tuple[PauliString, Dict[str, float]]]
     ) -> float: ...
+    def variance_statevector(self, sv: Statevector) -> float: ...
     @property
     def num_qubits(self) -> int: ...
 
@@ -63,6 +66,8 @@ __all__ = [
     "Statevector",
     "DensityMatrix",
     "DensityMatrixNoise",
+    "RuntimeValue",
+    "ClassicalState",
     "StabilizerState",
     "StabilizerCircuitResult",
     "Observable",

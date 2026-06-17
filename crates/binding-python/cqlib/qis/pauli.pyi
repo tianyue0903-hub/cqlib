@@ -279,6 +279,14 @@ class PauliString:
         """
         ...
 
+    def variance_statevector(self, sv: Statevector) -> float:
+        """Computes the variance for a statevector.
+
+        Raises:
+            ValueError: If the Pauli string is not Hermitian or qubit counts differ.
+        """
+        ...
+
     def __mul__(self, other: "PauliString") -> "PauliString":
         """Returns a new Pauli string that is the product of this and another."""
         ...

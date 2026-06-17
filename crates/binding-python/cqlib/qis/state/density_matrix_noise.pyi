@@ -10,12 +10,12 @@
 # copyright notice, and modified files need to carry a notice indicating
 # that they have been altered from the originals.
 
-from typing import List, Optional, Union, final
+from typing import Dict, List, Optional, Union, final
 import numpy as np
 
-from cqlib.circuit import Circuit
+from cqlib.circuit import Circuit, Measurement
 from cqlib.circuit.gates.standard import StandardGate
-from cqlib.device import NoiseModel, Outcome
+from cqlib.device import ExecutionResult, NoiseModel, Outcome
 from cqlib.qis import Hamiltonian, PauliString
 
 @final
@@ -183,10 +183,6 @@ class DensityMatrixNoise:
         """Applies a rotation around the Z-axis with optional noise."""
         ...
 
-    def apply_p(self, q: int, theta: float) -> None:
-        """Applies the phase gate with optional noise."""
-        ...
-
     def apply_phase(self, q: int, theta: float) -> None:
         """Applies the phase gate with optional noise."""
         ...
@@ -329,4 +325,16 @@ class DensityMatrixNoise:
 
     def sample_shots(self, shots: int) -> List[Outcome]:
         """Samples measurement outcomes with readout noise, without mutating this state."""
+        ...
+
+    def sample(self, measurement: Measurement, shots: int) -> ExecutionResult:
+        """Samples measurement outcomes according to a circuit measurement receipt."""
+        ...
+
+    def probs(self, measurement: Measurement) -> Dict[Outcome, float]:
+        """Returns ideal marginal probabilities according to a circuit measurement receipt."""
+        ...
+
+    def probs_with_readout(self, measurement: Measurement) -> Dict[Outcome, float]:
+        """Returns marginal probabilities with readout noise applied."""
         ...

@@ -941,18 +941,18 @@ impl DensityMatrixNoise {
     ///
     /// * `probs` - Mutable reference to the probability vector to modify.
     /// * `qubits` - Indices of qubits to apply readout noise for.
-    fn apply_readout_noise(&self, probs: &mut Vec<f64>, qubits: &[usize]) {
+    fn apply_readout_noise(&self, probs: &mut Vec<f64>, qubits: &[usize]) -> Result<(), QisError> {
         let Some(noise_model) = &self.noise_model else {
-            return;
+            return Ok(());
         };
 
         let mut next_probs = vec![0.0; probs.len()];
         for &q in qubits {
             if q >= self.state.num_qubits {
-                panic!(
-                    "Readout noise qubit {} out of bounds (num_qubits = {})",
-                    q, self.state.num_qubits
-                );
+                return Err(QisError::IndexOutOfBounds {
+                    index: q,
+                    max: self.state.num_qubits.saturating_sub(1),
+                });
             }
             let q_obj = Qubit::new(q as u32);
             let Some(err) = noise_model.get_readout_error(&q_obj) else {
@@ -977,6 +977,7 @@ impl DensityMatrixNoise {
             }
             std::mem::swap(probs, &mut next_probs);
         }
+        Ok(())
     }
 
     /// Computes measurement probabilities with readout error modeling.
@@ -1007,10 +1008,10 @@ impl DensityMatrixNoise {
     /// // probs[0] = P(|00⟩), probs[1] = P(|01⟩), probs[2] = P(|10⟩), probs[3] = P(|11⟩)
     /// // For Bell state |Φ+⟩, P(|00⟩) ≈ 0.5 and P(|11⟩) ≈ 0.5
     /// ```
-    pub fn probabilities_with_readout(&self, qubits: &[usize]) -> Vec<f64> {
+    pub fn probabilities_with_readout(&self, qubits: &[usize]) -> Result<Vec<f64>, QisError> {
         let mut probs = self.probabilities();
-        self.apply_readout_noise(&mut probs, qubits);
-        probs
+        self.apply_readout_noise(&mut probs, qubits)?;
+        Ok(probs)
     }
 
     /// Returns the ideal marginal probability distribution selected by a circuit [`Measurement`].
@@ -1037,7 +1038,7 @@ impl DensityMatrixNoise {
         let qubits: Vec<usize> = measurement.qubits().iter().map(Qubit::index).collect();
         let mut marginal = HashMap::new();
         for (basis, prob) in self
-            .probabilities_with_readout(&qubits)
+            .probabilities_with_readout(&qubits)?
             .into_iter()
             .enumerate()
         {

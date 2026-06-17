@@ -21,6 +21,10 @@ This module provides quantum state representations including:
 
 from .density_matrix import DensityMatrix as DensityMatrix
 from .density_matrix_noise import DensityMatrixNoise as DensityMatrixNoise
+from .classical import (
+    ClassicalState as ClassicalState,
+    RuntimeValue as RuntimeValue,
+)
 from .stabilizer import (
     StabilizerCircuitResult as StabilizerCircuitResult,
     StabilizerState as StabilizerState,
@@ -31,6 +35,8 @@ __all__ = [
     "Statevector",
     "DensityMatrix",
     "DensityMatrixNoise",
+    "RuntimeValue",
+    "ClassicalState",
     "StabilizerState",
     "StabilizerCircuitResult",
 ]

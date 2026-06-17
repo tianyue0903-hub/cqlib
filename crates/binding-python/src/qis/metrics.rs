@@ -16,9 +16,9 @@
 //! purity, and trace distance to Python.
 
 use cqlib_core::qis::metrics as core_metrics;
-use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
+use crate::qis::qis_error_to_py_err;
 use crate::qis::state::density_matrix::PyDensityMatrix;
 use crate::qis::state::statevector::PyStatevector;
 
@@ -34,7 +34,7 @@ use crate::qis::state::statevector::PyStatevector;
 ///     ValueError: If the calculation fails.
 #[pyfunction]
 pub fn purity_pure(sv: &PyStatevector) -> PyResult<f64> {
-    core_metrics::purity_pure(&sv.inner).map_err(|e| PyValueError::new_err(e.to_string()))
+    core_metrics::purity_pure(&sv.inner).map_err(qis_error_to_py_err)
 }
 
 /// Calculates the purity of a mixed quantum state.
@@ -49,7 +49,7 @@ pub fn purity_pure(sv: &PyStatevector) -> PyResult<f64> {
 ///     ValueError: If the calculation fails.
 #[pyfunction]
 pub fn purity_mixed(dm: &PyDensityMatrix) -> PyResult<f64> {
-    core_metrics::purity_mixed(&dm.inner).map_err(|e| PyValueError::new_err(e.to_string()))
+    core_metrics::purity_mixed(&dm.inner).map_err(qis_error_to_py_err)
 }
 
 /// Calculates the state fidelity between two pure quantum states.
@@ -65,8 +65,7 @@ pub fn purity_mixed(dm: &PyDensityMatrix) -> PyResult<f64> {
 ///     ValueError: If the number of qubits do not match.
 #[pyfunction]
 pub fn state_fidelity_pure(sv1: &PyStatevector, sv2: &PyStatevector) -> PyResult<f64> {
-    core_metrics::state_fidelity_pure(&sv1.inner, &sv2.inner)
-        .map_err(|e| PyValueError::new_err(e.to_string()))
+    core_metrics::state_fidelity_pure(&sv1.inner, &sv2.inner).map_err(qis_error_to_py_err)
 }
 
 /// Calculates the trace distance between two pure quantum states.
@@ -82,8 +81,7 @@ pub fn state_fidelity_pure(sv1: &PyStatevector, sv2: &PyStatevector) -> PyResult
 ///     ValueError: If the number of qubits do not match.
 #[pyfunction]
 pub fn trace_distance_pure(sv1: &PyStatevector, sv2: &PyStatevector) -> PyResult<f64> {
-    core_metrics::trace_distance_pure(&sv1.inner, &sv2.inner)
-        .map_err(|e| PyValueError::new_err(e.to_string()))
+    core_metrics::trace_distance_pure(&sv1.inner, &sv2.inner).map_err(qis_error_to_py_err)
 }
 
 /// Calculates the state fidelity between a pure state and a mixed state.
@@ -99,8 +97,7 @@ pub fn trace_distance_pure(sv1: &PyStatevector, sv2: &PyStatevector) -> PyResult
 ///     ValueError: If the number of qubits do not match.
 #[pyfunction]
 pub fn state_fidelity_pure_mixed(sv: &PyStatevector, dm: &PyDensityMatrix) -> PyResult<f64> {
-    core_metrics::state_fidelity_pure_mixed(&sv.inner, &dm.inner)
-        .map_err(|e| PyValueError::new_err(e.to_string()))
+    core_metrics::state_fidelity_pure_mixed(&sv.inner, &dm.inner).map_err(qis_error_to_py_err)
 }
 
 /// Calculates the von Neumann entropy of a mixed state.
@@ -115,7 +112,7 @@ pub fn state_fidelity_pure_mixed(sv: &PyStatevector, dm: &PyDensityMatrix) -> Py
 ///     ValueError: If eigendecomposition fails.
 #[pyfunction]
 pub fn entropy(dm: &PyDensityMatrix) -> PyResult<f64> {
-    core_metrics::entropy(&dm.inner).map_err(|e| PyValueError::new_err(e.to_string()))
+    core_metrics::entropy(&dm.inner).map_err(qis_error_to_py_err)
 }
 
 /// Calculates the trace distance between two mixed quantum states.
@@ -131,8 +128,7 @@ pub fn entropy(dm: &PyDensityMatrix) -> PyResult<f64> {
 ///     ValueError: If the number of qubits do not match.
 #[pyfunction]
 pub fn trace_distance_mixed(dm1: &PyDensityMatrix, dm2: &PyDensityMatrix) -> PyResult<f64> {
-    core_metrics::trace_distance_mixed(&dm1.inner, &dm2.inner)
-        .map_err(|e| PyValueError::new_err(e.to_string()))
+    core_metrics::trace_distance_mixed(&dm1.inner, &dm2.inner).map_err(qis_error_to_py_err)
 }
 
 /// Calculates the state fidelity between two mixed quantum states.
@@ -148,8 +144,7 @@ pub fn trace_distance_mixed(dm1: &PyDensityMatrix, dm2: &PyDensityMatrix) -> PyR
 ///     ValueError: If the number of qubits do not match or eigendecomposition fails.
 #[pyfunction]
 pub fn state_fidelity_mixed(dm1: &PyDensityMatrix, dm2: &PyDensityMatrix) -> PyResult<f64> {
-    core_metrics::state_fidelity_mixed(&dm1.inner, &dm2.inner)
-        .map_err(|e| PyValueError::new_err(e.to_string()))
+    core_metrics::state_fidelity_mixed(&dm1.inner, &dm2.inner).map_err(qis_error_to_py_err)
 }
 
 /// Performs the partial transpose operation on a density matrix.
@@ -168,8 +163,8 @@ pub fn partial_transpose(
     dm: &PyDensityMatrix,
     target_qubits: Vec<usize>,
 ) -> PyResult<PyDensityMatrix> {
-    let new_dm = core_metrics::partial_transpose(&dm.inner, &target_qubits)
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let new_dm =
+        core_metrics::partial_transpose(&dm.inner, &target_qubits).map_err(qis_error_to_py_err)?;
     Ok(PyDensityMatrix { inner: new_dm })
 }
 
@@ -186,8 +181,7 @@ pub fn partial_transpose(
 ///     ValueError: If subsystem indices are invalid or eigendecomposition fails.
 #[pyfunction]
 pub fn logarithmic_negativity(dm: &PyDensityMatrix, sys_a: Vec<usize>) -> PyResult<f64> {
-    core_metrics::logarithmic_negativity(&dm.inner, &sys_a)
-        .map_err(|e| PyValueError::new_err(e.to_string()))
+    core_metrics::logarithmic_negativity(&dm.inner, &sys_a).map_err(qis_error_to_py_err)
 }
 
 /// Register the metrics module with Python.

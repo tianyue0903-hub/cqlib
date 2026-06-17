@@ -36,6 +36,7 @@ use super::two_local::PyEntanglementTopology;
 ///     >>> ae.num_parameters()
 ///     4
 #[pyclass(name = "AngleEncoding", module = "cqlib.circuit.ansatz")]
+#[derive(Clone)]
 pub struct PyAngleEncoding {
     pub(crate) inner: AngleEncoding,
 }
@@ -43,6 +44,12 @@ pub struct PyAngleEncoding {
 impl From<AngleEncoding> for PyAngleEncoding {
     fn from(inner: AngleEncoding) -> Self {
         Self { inner }
+    }
+}
+
+impl From<PyAngleEncoding> for AngleEncoding {
+    fn from(value: PyAngleEncoding) -> Self {
+        value.inner
     }
 }
 
@@ -113,6 +120,14 @@ impl PyAngleEncoding {
     fn __str__(&self) -> String {
         self.__repr__()
     }
+
+    fn __copy__(&self) -> Self {
+        self.clone()
+    }
+
+    fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> Self {
+        self.clone()
+    }
 }
 
 /// A second-order Pauli-Z feature map for quantum kernel methods.
@@ -134,6 +149,7 @@ impl PyAngleEncoding {
 ///     >>> fm.num_parameters()
 ///     3
 #[pyclass(name = "ZZFeatureMap", module = "cqlib.circuit.ansatz")]
+#[derive(Clone)]
 pub struct PyZZFeatureMap {
     pub(crate) inner: ZZFeatureMap,
 }
@@ -141,6 +157,12 @@ pub struct PyZZFeatureMap {
 impl From<ZZFeatureMap> for PyZZFeatureMap {
     fn from(inner: ZZFeatureMap) -> Self {
         Self { inner }
+    }
+}
+
+impl From<PyZZFeatureMap> for ZZFeatureMap {
+    fn from(value: PyZZFeatureMap) -> Self {
+        value.inner
     }
 }
 
@@ -235,6 +257,14 @@ impl PyZZFeatureMap {
     fn __str__(&self) -> String {
         self.__repr__()
     }
+
+    fn __copy__(&self) -> Self {
+        self.clone()
+    }
+
+    fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> Self {
+        self.clone()
+    }
 }
 
 /// A general-purpose data encoding circuit using Pauli evolution gates.
@@ -255,10 +285,11 @@ impl PyZZFeatureMap {
 ///     >>> from cqlib import PauliString
 ///     >>> fm = (PauliFeatureMap(3)
 ///     ...     .reps(2)
-///     ...     .paulis([PauliString("Z"), PauliString("ZZ")])
+///     ...     .paulis([PauliString.from_str("Z"), PauliString.from_str("ZZ")])
 ///     ...     .entanglement(EntanglementTopology.full()))
 ///     >>> circuit = fm.build_circuit("x")
 #[pyclass(name = "PauliFeatureMap", module = "cqlib.circuit.ansatz")]
+#[derive(Clone)]
 pub struct PyPauliFeatureMap {
     pub(crate) inner: PauliFeatureMap,
 }
@@ -266,6 +297,12 @@ pub struct PyPauliFeatureMap {
 impl From<PauliFeatureMap> for PyPauliFeatureMap {
     fn from(inner: PauliFeatureMap) -> Self {
         Self { inner }
+    }
+}
+
+impl From<PyPauliFeatureMap> for PauliFeatureMap {
+    fn from(value: PyPauliFeatureMap) -> Self {
+        value.inner
     }
 }
 
@@ -307,7 +344,7 @@ impl PyPauliFeatureMap {
     /// non-identity operators in each string determines its locality (k).
     ///
     /// Args:
-    ///     paulis: List of PauliString instances (e.g. [PauliString("Z"), PauliString("ZZ")]).
+    ///     paulis: List of PauliString instances (e.g. [PauliString.from_str("Z"), PauliString.from_str("ZZ")]).
     ///             Labels are auto-generated from the string representation.
     ///
     /// Returns:
@@ -400,5 +437,13 @@ impl PyPauliFeatureMap {
 
     fn __str__(&self) -> String {
         self.__repr__()
+    }
+
+    fn __copy__(&self) -> Self {
+        self.clone()
+    }
+
+    fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> Self {
+        self.clone()
     }
 }

@@ -10,11 +10,12 @@
 # copyright notice, and modified files need to carry a notice indicating
 # that they have been altered from the originals.
 
-from typing import List, Optional, final
+from typing import Dict, List, final
 
-from cqlib.circuit import Circuit
-from cqlib.device import Outcome
+from cqlib.circuit import Circuit, Measurement
+from cqlib.device import ExecutionResult, Outcome
 from cqlib.qis import PauliString
+from .classical import ClassicalState
 
 @final
 class StabilizerCircuitResult:
@@ -26,8 +27,8 @@ class StabilizerCircuitResult:
         ...
 
     @property
-    def measurements(self) -> List[Optional[bool]]:
-        """Per-qubit last mid-circuit measurement result, or None if not measured."""
+    def classical(self) -> ClassicalState:
+        """Runtime classical values and variables produced during circuit execution."""
         ...
 
     def __repr__(self) -> str:
@@ -48,8 +49,12 @@ class StabilizerState:
         ...
 
     @staticmethod
-    def apply_circuit(circuit: Circuit) -> StabilizerCircuitResult:
-        """Executes a Clifford circuit and returns final state plus mid-circuit measurements."""
+    def run_circuit(circuit: Circuit) -> StabilizerCircuitResult:
+        """Executes a Clifford circuit and returns final state plus runtime classical data."""
+        ...
+
+    def apply_circuit(self, circuit: Circuit) -> None:
+        """Applies a Clifford circuit to this state in place."""
         ...
 
     @property
@@ -135,6 +140,14 @@ class StabilizerState:
 
     def sample_shots(self, shots: int) -> List[Outcome]:
         """Samples measurement outcomes without mutating this state."""
+        ...
+
+    def sample(self, measurement: Measurement, shots: int) -> ExecutionResult:
+        """Samples measurement outcomes according to a circuit measurement receipt."""
+        ...
+
+    def probs(self, measurement: Measurement) -> Dict[Outcome, float]:
+        """Returns marginal probabilities according to a circuit measurement receipt."""
         ...
 
     def get_stabilizers(self) -> List[PauliString]:

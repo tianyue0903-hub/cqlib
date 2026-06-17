@@ -120,7 +120,7 @@ def pauli_feature_map(
         >>> from cqlib import PauliString
         >>> fm = pauli_feature_map(
         ...     3, 2,
-        ...     [PauliString("Z"), PauliString("ZZ")],
+        ...     [PauliString.from_str("Z"), PauliString.from_str("ZZ")],
         ...     EntanglementTopology.full(),
         ... )
         >>> fm.num_parameters()

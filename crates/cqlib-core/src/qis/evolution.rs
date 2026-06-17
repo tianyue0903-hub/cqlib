@@ -69,7 +69,7 @@ use rand::seq::SliceRandom;
 ///
 /// These modes determine how the time evolution operator $U(t) = e^{-iHt}$ is
 /// approximated as a product of Pauli rotations.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TrotterMode {
     /// First-order Lie-Trotter decomposition.
     ///

@@ -16,6 +16,7 @@
 //! [`register_circuit_module`] exposes only types that have completed API,
 //! documentation, error-mapping, and test review.
 
+pub mod ansatz;
 pub mod bit;
 pub mod circuit_impl;
 pub mod circuit_to_matrix;
@@ -29,6 +30,10 @@ pub mod operation;
 pub mod parameter;
 pub mod symbolic_matrix;
 
+pub use ansatz::{
+    PyAngleEncoding, PyEvolutionInfo, PyEvolutionStrategy, PyPauliEvolutionAnsatz,
+    PyPauliFeatureMap, PyQAOAAnsatz, PyTwoLocal, PyZZFeatureMap,
+};
 pub use bit::PyQubit;
 pub use circuit_impl::PyCircuit;
 pub use circuit_to_matrix::py_circuit_to_matrix;
@@ -77,6 +82,7 @@ pub(crate) fn register_circuit_module(parent: &Bound<'_, PyModule>) -> PyResult<
     m.add_class::<PyCircuit>()?;
     m.add_function(pyo3::wrap_pyfunction!(py_circuit_to_matrix, &m)?)?;
     gate::register_gate_classes(&m)?;
+    ansatz::register_ansatz_module(&m)?;
 
     // PyO3 submodules must also be inserted into sys.modules for direct imports.
     parent.add_submodule(&m)?;

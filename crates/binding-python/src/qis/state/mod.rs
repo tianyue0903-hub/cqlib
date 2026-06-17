@@ -12,12 +12,23 @@
 
 //! Python bindings for cqlib-core quantum state simulation.
 
+use crate::device::result::PyOutcome;
+use cqlib_core::device::Outcome;
 use pyo3::prelude::*;
+use std::collections::HashMap;
 
+pub mod classical;
 pub mod density_matrix;
 pub mod density_matrix_noise;
 pub mod stabilizer;
 pub mod statevector;
+
+pub(crate) fn outcome_probabilities_to_py(probs: HashMap<Outcome, f64>) -> HashMap<PyOutcome, f64> {
+    probs
+        .into_iter()
+        .map(|(outcome, prob)| (PyOutcome::from(outcome), prob))
+        .collect()
+}
 
 /// Register the state submodule.
 pub fn register_state_module(parent: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -26,6 +37,8 @@ pub fn register_state_module(parent: &Bound<'_, PyModule>) -> PyResult<()> {
     state_module.add_class::<statevector::PyStatevector>()?;
     state_module.add_class::<density_matrix::PyDensityMatrix>()?;
     state_module.add_class::<density_matrix_noise::PyDensityMatrixNoise>()?;
+    state_module.add_class::<classical::PyRuntimeValue>()?;
+    state_module.add_class::<classical::PyClassicalState>()?;
     state_module.add_class::<stabilizer::PyStabilizerState>()?;
     state_module.add_class::<stabilizer::PyStabilizerCircuitResult>()?;
 

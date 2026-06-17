@@ -12,6 +12,7 @@
 
 import numpy as np
 from cqlib.circuit import StandardGate, Qubit
+from cqlib.qis import Pauli
 
 class SingleQubitNoise:
     """
@@ -169,6 +170,18 @@ class TwoQubitNoise:
         Args:
             q0_noise: Noise channel for the first qubit
             q1_noise: Noise channel for the second qubit
+        """
+        ...
+
+    @staticmethod
+    def correlated_pauli(op_q0: Pauli, op_q1: Pauli, p: float) -> "TwoQubitNoise":
+        """
+        Creates correlated Pauli noise on two qubits.
+
+        Args:
+            op_q0: Pauli operator for the first qubit.
+            op_q1: Pauli operator for the second qubit.
+            p: Correlation probability in range [0.0, 1.0].
         """
         ...
 

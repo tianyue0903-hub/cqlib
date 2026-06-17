@@ -77,7 +77,7 @@ use std::str::FromStr;
 /// // Convert to complex number
 /// let c = Phase::MinusI.to_complex();  // -i
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum Phase {
     /// $i^0 = 1$
@@ -423,7 +423,7 @@ impl Pauli {
 ///
 /// assert!(ps.commutes_with(&other)); // [X⊗Z, Z⊗X] ≠ 0
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PauliString {
     /// Number of qubits ($N$) in the string.
     pub num_qubits: usize,
