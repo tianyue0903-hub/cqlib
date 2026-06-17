@@ -70,6 +70,14 @@ impl PyValueControlBody {
             self.inner.operations().len()
         )
     }
+
+    fn __copy__(&self) -> Self {
+        self.clone()
+    }
+
+    fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> Self {
+        self.clone()
+    }
 }
 
 /// Exact integer match and body used by a construction-time switch.
@@ -106,6 +114,14 @@ impl PyValueSwitchCase {
 
     fn __repr__(&self) -> String {
         format!("ValueSwitchCase({})", self.inner.value)
+    }
+
+    fn __copy__(&self) -> Self {
+        self.clone()
+    }
+
+    fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> Self {
+        self.clone()
     }
 }
 
@@ -458,6 +474,14 @@ impl PyClassicalControlOp {
 
     fn __repr__(&self) -> String {
         format!("ClassicalControlOp({})", self.kind())
+    }
+
+    fn __copy__(&self) -> Self {
+        self.clone()
+    }
+
+    fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> Self {
+        self.clone()
     }
 }
 

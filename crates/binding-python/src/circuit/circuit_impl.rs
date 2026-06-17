@@ -60,7 +60,7 @@ impl PyParamLike {
 }
 
 /// Mutable quantum circuit with gate, parameter, and dynamic-control support.
-#[pyclass(name = "Circuit", module = "cqlib.circuit", subclass)]
+#[pyclass(name = "Circuit", module = "cqlib.circuit")]
 #[derive(Debug, Clone)]
 pub struct PyCircuit {
     pub(crate) inner: Circuit,
@@ -966,8 +966,27 @@ impl PyCircuit {
         self.inner.operations().len()
     }
 
-    fn __getitem__(&self, index: usize) -> PyResult<PyValueOperation> {
-        self.operation(index)
+    fn __copy__(&self) -> Self {
+        self.clone()
+    }
+
+    fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> Self {
+        self.clone()
+    }
+
+    fn __getitem__(&self, index: isize) -> PyResult<PyValueOperation> {
+        let len = self.inner.operations().len();
+        let resolved_index = if index < 0 {
+            len.checked_add_signed(index)
+        } else {
+            usize::try_from(index).ok()
+        };
+        match resolved_index {
+            Some(index) if index < len => self.operation(index),
+            _ => Err(PyIndexError::new_err(format!(
+                "operation index {index} out of bounds for circuit with {len} operations"
+            ))),
+        }
     }
 
     fn __repr__(&self) -> String {

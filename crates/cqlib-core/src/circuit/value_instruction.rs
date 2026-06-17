@@ -298,10 +298,6 @@ impl fmt::Display for ValueClassicalControlOp {
     }
 }
 
-// ---------------------------------------------------------------------------
-// ValueInstruction
-// ---------------------------------------------------------------------------
-
 /// A value-level instruction for circuit construction.
 ///
 /// `ValueInstruction` is the construction-IR counterpart of [`Instruction`]. It has two

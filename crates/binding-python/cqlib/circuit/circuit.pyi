@@ -114,17 +114,9 @@ class Circuit:
     Dynamic circuits use :meth:`var`, :meth:`measure`, and
     :meth:`append_control` for mid-circuit classical logic.
 
-    ``Circuit`` supports Python subclassing::
-
-        class VQECircuit(Circuit):
-            def ansatz(self, params):
-                for i, p in enumerate(params):
-                    self.ry(i, p)
-                for i in range(self.num_qubits - 1):
-                    self.cx(i, i + 1)
-
-    Methods returning ``Circuit`` (e.g. :meth:`inverse`, :meth:`decompose`,
-    :meth:`assign_parameters`) preserve the subclass type.
+    ``Circuit`` instances are copyable. Methods returning ``Circuit`` (e.g.
+    :meth:`inverse`, :meth:`decompose`, :meth:`assign_parameters`) return plain
+    ``Circuit`` objects.
     """
 
     def __init__(self, qubits: QubitInput) -> None:
@@ -575,5 +567,9 @@ class Circuit:
         """
         ...
     def __len__(self) -> int: ...
-    def __getitem__(self, index: int) -> ValueOperation: ...
+    def __getitem__(self, index: int) -> ValueOperation:
+        """Return an operation by index. Negative indices are supported."""
+        ...
+    def __copy__(self) -> Circuit: ...
+    def __deepcopy__(self, memo: dict) -> Circuit: ...
     def __repr__(self) -> str: ...

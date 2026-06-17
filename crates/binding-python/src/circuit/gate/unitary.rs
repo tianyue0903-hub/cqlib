@@ -27,7 +27,7 @@ use pyo3::{PyResult, Python, pyclass, pymethods};
 use std::sync::Arc;
 
 /// User-defined unitary gate with stable definition identity.
-#[pyclass(name = "UnitaryGate", module = "cqlib.circuit.gates", subclass)]
+#[pyclass(name = "UnitaryGate", module = "cqlib.circuit.gates")]
 #[derive(Debug, Clone)]
 pub struct PyUnitaryGate {
     inner: UnitaryGate,
@@ -225,6 +225,14 @@ impl PyUnitaryGate {
         let mut hasher = DefaultHasher::new();
         self.inner.hash(&mut hasher);
         hasher.finish()
+    }
+
+    fn __copy__(&self) -> Self {
+        self.clone()
+    }
+
+    fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> Self {
+        self.clone()
     }
 
     fn __repr__(&self) -> String {

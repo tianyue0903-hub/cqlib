@@ -57,7 +57,7 @@ def load(path: str) -> Circuit:
 
     Raises:
         ValueError: If parsing fails (syntax error, unknown gate, etc.).
-        IOError: If file cannot be read.
+        OSError: If file cannot be read.
 
     Example:
         >>> circuit = load("/path/to/circuit.qcis")
@@ -107,7 +107,7 @@ def dump(circuit: Circuit, path: str) -> None:
 
     Raises:
         ValueError: If the circuit contains unsupported gates.
-        IOError: If file cannot be written.
+        OSError: If file cannot be written.
 
     Example:
         >>> from cqlib import Circuit, Qubit

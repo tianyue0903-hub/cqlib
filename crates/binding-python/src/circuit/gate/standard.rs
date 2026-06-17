@@ -145,6 +145,14 @@ impl PyStandardGate {
         self.inner == other.inner && self.params == other.params
     }
 
+    fn __copy__(&self) -> Self {
+        self.clone()
+    }
+
+    fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> Self {
+        self.clone()
+    }
+
     fn __hash__(&self) -> u64 {
         match self.hash.read() {
             Ok(guard) if guard.is_some() => return guard.unwrap(),

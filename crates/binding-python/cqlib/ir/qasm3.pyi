@@ -54,7 +54,7 @@ def load(path: str) -> Circuit:
 
     Raises:
         ValueError: If parsing fails or the source uses unsupported features.
-        IOError: If file cannot be read.
+        OSError: If file cannot be read.
 
     Example:
         >>> circuit = load("/path/to/circuit.qasm")
@@ -93,7 +93,7 @@ def dump(circuit: Circuit, path: str) -> None:
 
     Raises:
         ValueError: If the circuit contains unsupported instructions.
-        IOError: If file cannot be written.
+        OSError: If file cannot be written.
 
     Example:
         >>> from cqlib import Circuit, Qubit

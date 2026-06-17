@@ -20,10 +20,10 @@ use pyo3::create_exception;
 use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
 
-create_exception!(circuit, CqlibError, PyException);
-create_exception!(circuit, CircuitError, CqlibError);
-create_exception!(circuit, ParameterError, CqlibError);
-create_exception!(circuit, QubitError, CqlibError);
+create_exception!(cqlib.circuit, CqlibError, PyException);
+create_exception!(cqlib.circuit, CircuitError, CqlibError);
+create_exception!(cqlib.circuit, ParameterError, CqlibError);
+create_exception!(cqlib.circuit, QubitError, CqlibError);
 
 /// Registers the exception hierarchy on `_native.circuit`.
 pub(crate) fn register_errors(module: &Bound<'_, PyModule>) -> PyResult<()> {

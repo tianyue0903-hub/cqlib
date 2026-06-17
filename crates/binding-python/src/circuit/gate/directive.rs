@@ -134,6 +134,14 @@ impl PyDirective {
     fn __str__(&self) -> String {
         self.name()
     }
+
+    fn __copy__(&self) -> Self {
+        *self
+    }
+
+    fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> Self {
+        *self
+    }
 }
 
 #[cfg(test)]

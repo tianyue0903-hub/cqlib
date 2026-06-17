@@ -60,6 +60,14 @@ impl PyCircuitId {
         self.inner.to_string()
     }
 
+    fn __copy__(&self) -> Self {
+        *self
+    }
+
+    fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> Self {
+        *self
+    }
+
     fn __eq__(&self, other: &Self) -> bool {
         self.inner == other.inner
     }
@@ -157,6 +165,14 @@ impl PyClassicalType {
         }
     }
 
+    fn __copy__(&self) -> Self {
+        *self
+    }
+
+    fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> Self {
+        *self
+    }
+
     fn __eq__(&self, other: &Self) -> bool {
         self.inner == other.inner
     }
@@ -227,6 +243,14 @@ impl PyClassicalVar {
         )
     }
 
+    fn __copy__(&self) -> Self {
+        *self
+    }
+
+    fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> Self {
+        *self
+    }
+
     fn __eq__(&self, other: &Self) -> bool {
         self.inner == other.inner
     }
@@ -288,6 +312,14 @@ impl PyClassicalValue {
             self.inner.index(),
             self.inner.ty()
         )
+    }
+
+    fn __copy__(&self) -> Self {
+        *self
+    }
+
+    fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> Self {
+        *self
     }
 
     fn __eq__(&self, other: &Self) -> bool {
@@ -366,6 +398,14 @@ impl PyMeasurement {
             self.inner.value(),
             self.inner.qubits().len()
         )
+    }
+
+    fn __copy__(&self) -> Self {
+        self.clone()
+    }
+
+    fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> Self {
+        self.clone()
     }
 
     fn __eq__(&self, other: &Self) -> bool {

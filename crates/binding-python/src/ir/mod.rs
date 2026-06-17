@@ -48,6 +48,14 @@ pub mod qasm2;
 pub mod qasm3;
 pub mod qcis;
 
+fn register_sys_module(module: &Bound<'_, PyModule>, name: &str) -> PyResult<()> {
+    module
+        .py()
+        .import("sys")?
+        .getattr("modules")?
+        .set_item(name, module)
+}
+
 /// Register the ir submodule with qasm2, qasm3, and qcis submodules.
 pub fn register_ir_module(parent: &Bound<'_, PyModule>) -> PyResult<()> {
     let ir_module = PyModule::new(parent.py(), "ir")?;
@@ -59,6 +67,7 @@ pub fn register_ir_module(parent: &Bound<'_, PyModule>) -> PyResult<()> {
     qasm2_module.add_function(wrap_pyfunction!(qasm2::py_qasm2_dump, &qasm2_module)?)?;
     qasm2_module.add_function(wrap_pyfunction!(qasm2::py_qasm2_dumps, &qasm2_module)?)?;
     ir_module.add_submodule(&qasm2_module)?;
+    register_sys_module(&qasm2_module, "cqlib._native.ir.qasm2")?;
 
     // Register qasm3 submodule under ir
     let qasm3_module = PyModule::new(parent.py(), "qasm3")?;
@@ -67,6 +76,7 @@ pub fn register_ir_module(parent: &Bound<'_, PyModule>) -> PyResult<()> {
     qasm3_module.add_function(wrap_pyfunction!(qasm3::py_qasm3_dump, &qasm3_module)?)?;
     qasm3_module.add_function(wrap_pyfunction!(qasm3::py_qasm3_dumps, &qasm3_module)?)?;
     ir_module.add_submodule(&qasm3_module)?;
+    register_sys_module(&qasm3_module, "cqlib._native.ir.qasm3")?;
 
     // Register qcis submodule under ir
     let qcis_module = PyModule::new(parent.py(), "qcis")?;
@@ -75,7 +85,9 @@ pub fn register_ir_module(parent: &Bound<'_, PyModule>) -> PyResult<()> {
     qcis_module.add_function(wrap_pyfunction!(qcis::py_qcis_dump, &qcis_module)?)?;
     qcis_module.add_function(wrap_pyfunction!(qcis::py_qcis_dumps, &qcis_module)?)?;
     ir_module.add_submodule(&qcis_module)?;
+    register_sys_module(&qcis_module, "cqlib._native.ir.qcis")?;
 
     parent.add_submodule(&ir_module)?;
+    register_sys_module(&ir_module, "cqlib._native.ir")?;
     Ok(())
 }
