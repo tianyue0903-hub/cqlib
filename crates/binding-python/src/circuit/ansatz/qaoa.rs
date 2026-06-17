@@ -20,6 +20,8 @@ use pyo3::prelude::*;
 use crate::circuit::circuit_impl::PyCircuit;
 use crate::qis::hamiltonian::PyHamiltonian;
 
+use super::hamiltonian_evolution::PyEvolutionStrategy;
+
 /// The Quantum Approximate Optimization Algorithm (QAOA) ansatz.
 ///
 /// QAOA alternates between cost and mixer Hamiltonian evolutions:
@@ -33,12 +35,13 @@ use crate::qis::hamiltonian::PyHamiltonian;
 ///     >>> from cqlib.circuit.ansatz import QAOAAnsatz
 ///     >>> from cqlib import Hamiltonian, PauliString
 ///     >>> h_c = Hamiltonian(2)
-///     >>> h_c.add_term(PauliString("ZZ"), 0.5)
+///     >>> h_c.add_term(PauliString.from_str("ZZ"), 0.5)
 ///     >>> ansatz = QAOAAnsatz(h_c).reps(3)
 ///     >>> circuit = ansatz.build_circuit("p")
 ///     >>> ansatz.num_parameters()
 ///     6
 #[pyclass(name = "QAOAAnsatz", module = "cqlib.circuit.ansatz")]
+#[derive(Clone)]
 pub struct PyQAOAAnsatz {
     pub(crate) inner: QAOAAnsatz,
 }
@@ -46,6 +49,12 @@ pub struct PyQAOAAnsatz {
 impl From<QAOAAnsatz> for PyQAOAAnsatz {
     fn from(inner: QAOAAnsatz) -> Self {
         Self { inner }
+    }
+}
+
+impl From<PyQAOAAnsatz> for QAOAAnsatz {
+    fn from(value: PyQAOAAnsatz) -> Self {
+        value.inner
     }
 }
 
@@ -123,6 +132,23 @@ impl PyQAOAAnsatz {
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
+    /// Sets the Hamiltonian evolution strategy for both cost and mixer layers.
+    ///
+    /// Args:
+    ///     strategy: The EvolutionStrategy used to compile cost and mixer
+    ///         Hamiltonian evolutions.
+    ///
+    /// Returns:
+    ///     A new QAOAAnsatz with the updated evolution strategy.
+    fn evolution_strategy(&self, strategy: PyRef<'_, PyEvolutionStrategy>) -> Self {
+        Self {
+            inner: self
+                .inner
+                .clone()
+                .evolution_strategy(strategy.inner.clone()),
+        }
+    }
+
     /// Validates the ansatz configuration.
     ///
     /// Raises:
@@ -135,8 +161,8 @@ impl PyQAOAAnsatz {
 
     /// Builds the QAOA circuit.
     ///
-    /// Parameters are named `{prefix}_0` (gamma), `{prefix}_1` (beta),
-    /// `{prefix}_2`, `{prefix}_3`, ... alternating for each QAOA layer.
+    /// Parameters are named `{prefix}_gamma_0`, `{prefix}_beta_0`,
+    /// `{prefix}_gamma_1`, `{prefix}_beta_1`, ... for each QAOA layer.
     ///
     /// Args:
     ///     prefix: Prefix for parameter names (e.g. "p").
@@ -173,5 +199,13 @@ impl PyQAOAAnsatz {
 
     fn __str__(&self) -> String {
         self.__repr__()
+    }
+
+    fn __copy__(&self) -> Self {
+        self.clone()
+    }
+
+    fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> Self {
+        self.clone()
     }
 }

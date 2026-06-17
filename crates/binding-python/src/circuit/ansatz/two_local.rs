@@ -91,6 +91,18 @@ impl PyEntanglementTopology {
         self.inner.generate_pairs(num_qubits)
     }
 
+    /// Returns all k-tuples of qubit indices for this topology.
+    ///
+    /// Args:
+    ///     k: Locality of the interaction.
+    ///     num_qubits: Total number of qubits.
+    ///
+    /// Returns:
+    ///     List of k-tuples represented as lists of qubit indices.
+    fn generate_k_tuples(&self, k: usize, num_qubits: usize) -> Vec<Vec<usize>> {
+        self.inner.generate_k_tuples(k, num_qubits)
+    }
+
     fn __repr__(&self) -> String {
         match &self.inner {
             EntanglementTopology::Linear => "EntanglementTopology.linear()".to_string(),
@@ -114,6 +126,14 @@ impl PyEntanglementTopology {
     fn __eq__(&self, other: &PyEntanglementTopology) -> bool {
         self.inner == other.inner
     }
+
+    fn __copy__(&self) -> Self {
+        self.clone()
+    }
+
+    fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> Self {
+        self.clone()
+    }
 }
 
 /// A hardware-efficient ansatz with alternating rotation and entanglement layers.
@@ -135,8 +155,9 @@ impl PyEntanglementTopology {
 ///     ...     .entanglement(EntanglementTopology.linear()))
 ///     >>> circuit = ansatz.build_circuit("theta")
 ///     >>> ansatz.num_parameters()
-///     9
+///     18
 #[pyclass(name = "TwoLocal", module = "cqlib.circuit.ansatz")]
+#[derive(Clone)]
 pub struct PyTwoLocal {
     pub(crate) inner: TwoLocal,
 }
@@ -144,6 +165,12 @@ pub struct PyTwoLocal {
 impl From<TwoLocal> for PyTwoLocal {
     fn from(inner: TwoLocal) -> Self {
         Self { inner }
+    }
+}
+
+impl From<PyTwoLocal> for TwoLocal {
+    fn from(value: PyTwoLocal) -> Self {
+        value.inner
     }
 }
 
@@ -155,7 +182,7 @@ impl PyTwoLocal {
     ///     num_qubits: Number of qubits (must be ≥ 1).
     ///
     /// Defaults:
-    ///     - 1 repetition layer
+    ///     - 3 repetition layers
     ///     - RY rotation gate
     ///     - CX entanglement gate
     ///     - Linear entanglement topology
@@ -284,5 +311,13 @@ impl PyTwoLocal {
 
     fn __str__(&self) -> String {
         self.__repr__()
+    }
+
+    fn __copy__(&self) -> Self {
+        self.clone()
+    }
+
+    fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> Self {
+        self.clone()
     }
 }

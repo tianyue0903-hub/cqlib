@@ -126,7 +126,7 @@ pub fn zz_feature_map(
 /// Examples:
 ///     >>> from cqlib.circuit.ansatz import pauli_feature_map, EntanglementTopology
 ///     >>> from cqlib import PauliString
-///     >>> fm = pauli_feature_map(3, 2, [PauliString("Z"), PauliString("ZZ")],
+///     >>> fm = pauli_feature_map(3, 2, [PauliString.from_str("Z"), PauliString.from_str("ZZ")],
 ///     ...                        EntanglementTopology.full())
 ///     >>> fm.num_parameters()
 ///     3

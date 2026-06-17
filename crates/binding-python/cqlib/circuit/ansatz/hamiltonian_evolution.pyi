@@ -150,6 +150,8 @@ class EvolutionStrategy:
     def __repr__(self) -> str: ...
     def __str__(self) -> str: ...
     def __eq__(self, other: object) -> bool: ...
+    def __copy__(self) -> "EvolutionStrategy": ...
+    def __deepcopy__(self, memo: dict) -> "EvolutionStrategy": ...
 
 @final
 class EvolutionInfo:
@@ -225,6 +227,8 @@ class EvolutionInfo:
         ...
 
     def __repr__(self) -> str: ...
+    def __copy__(self) -> "EvolutionInfo": ...
+    def __deepcopy__(self, memo: dict) -> "EvolutionInfo": ...
 
 @final
 class PauliEvolutionAnsatz:
@@ -300,8 +304,8 @@ class PauliEvolutionAnsatz:
         >>> from cqlib.circuit.ansatz import PauliEvolutionAnsatz, EvolutionStrategy
         >>> from cqlib.qis import Hamiltonian
         >>> h = Hamiltonian(2)
-        >>> h.add_term(PauliString("ZZ"), 0.5)
-        >>> h.add_term(PauliString("ZI"), 0.3)
+        >>> h.add_term(PauliString.from_str("ZZ"), 0.5)
+        >>> h.add_term(PauliString.from_str("ZI"), 0.3)
         >>> ansatz = PauliEvolutionAnsatz(h)
         >>> info = ansatz.evolution_info()
         >>> info.is_exact, info.all_terms_commute
@@ -312,8 +316,8 @@ class PauliEvolutionAnsatz:
         **Non-commuting Hamiltonian (Trotter approximation):**
 
         >>> h2 = Hamiltonian(1)
-        >>> h2.add_term(PauliString("X"), 1.0)
-        >>> h2.add_term(PauliString("Z"), 1.0)
+        >>> h2.add_term(PauliString.from_str("X"), 1.0)
+        >>> h2.add_term(PauliString.from_str("Z"), 1.0)
         >>> from cqlib.qis import TrotterMode
         >>> ansatz2 = (PauliEvolutionAnsatz(h2)
         ...     .with_strategy(EvolutionStrategy.trotter(TrotterMode.second_order(), steps=10))
@@ -474,3 +478,5 @@ class PauliEvolutionAnsatz:
 
     def __repr__(self) -> str: ...
     def __str__(self) -> str: ...
+    def __copy__(self) -> "PauliEvolutionAnsatz": ...
+    def __deepcopy__(self, memo: dict) -> "PauliEvolutionAnsatz": ...

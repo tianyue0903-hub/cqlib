@@ -54,6 +54,12 @@ impl From<EvolutionStrategy> for PyEvolutionStrategy {
     }
 }
 
+impl From<PyEvolutionStrategy> for EvolutionStrategy {
+    fn from(value: PyEvolutionStrategy) -> Self {
+        value.inner
+    }
+}
+
 #[pymethods]
 impl PyEvolutionStrategy {
     /// Returns the ``Exact`` strategy.
@@ -189,6 +195,14 @@ impl PyEvolutionStrategy {
             _ => false,
         }
     }
+
+    fn __copy__(&self) -> Self {
+        self.clone()
+    }
+
+    fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> Self {
+        self.clone()
+    }
 }
 
 /// Read-only metadata describing how a :class:`PauliEvolutionAnsatz` compiles.
@@ -272,6 +286,14 @@ impl PyEvolutionInfo {
             self.is_exact, self.steps, mode_str, self.all_terms_commute, self.num_terms,
         )
     }
+
+    fn __copy__(&self) -> Self {
+        self.clone()
+    }
+
+    fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> Self {
+        self.clone()
+    }
 }
 
 /// Compiles a Hamiltonian into a parameterized time-evolution circuit.
@@ -294,10 +316,11 @@ impl PyEvolutionInfo {
 ///
 /// Angle Convention
 /// ----------------
-/// The underlying :meth:`~cqlib.circuit.Circuit.pauli_evolution` gate implements
+/// The underlying Pauli evolution gate implements
 /// :math:`e^{-i\\theta/2 \\cdot P}`. To realize :math:`e^{-i c t P}`, the angle
 /// passed is :math:`\\theta = 2ct`. This is the same convention as
-/// :class:`~cqlib.circuit.ansatz.QAOAAnsatz`.
+/// :meth:`~cqlib.qis.Hamiltonian.to_trotter_circuit` and
+/// :meth:`~cqlib.qis.Hamiltonian.to_evolution_circuit`.
 ///
 /// Builder Methods
 /// ---------------
@@ -307,8 +330,8 @@ impl PyEvolutionInfo {
 ///     >>> from cqlib.circuit.ansatz import PauliEvolutionAnsatz, EvolutionStrategy
 ///     >>> from cqlib.qis import Hamiltonian, TrotterMode
 ///     >>> h = Hamiltonian(2)
-///     >>> h.add_term(PauliString("ZZ"), 0.5)
-///     >>> h.add_term(PauliString("ZI"), 0.3)
+///     >>> h.add_term(PauliString.from_str("ZZ"), 0.5)
+///     >>> h.add_term(PauliString.from_str("ZI"), 0.3)
 ///     >>> ansatz = PauliEvolutionAnsatz(h)   # Auto strategy (commuting → exact)
 ///     >>> circuit = ansatz.build_circuit("evo")
 ///     >>> # circuit has one symbolic parameter "evo_t"
@@ -317,16 +340,29 @@ impl PyEvolutionInfo {
 ///
 ///     >>> # Non-commuting Hamiltonian with Suzuki-2 decomposition
 ///     >>> h2 = Hamiltonian(1)
-///     >>> h2.add_term(PauliString("X"), 1.0)
-///     >>> h2.add_term(PauliString("Z"), 1.0)
+///     >>> h2.add_term(PauliString.from_str("X"), 1.0)
+///     >>> h2.add_term(PauliString.from_str("Z"), 1.0)
 ///     >>> ansatz2 = (PauliEvolutionAnsatz(h2)
 ///     ...     .with_strategy(EvolutionStrategy.trotter(TrotterMode.second_order(), steps=10))
 ///     ...     .with_time_param_name("tau"))
 ///     >>> circuit2 = ansatz2.build_circuit("ignored")
 ///     >>> # circuit2 has one symbolic parameter "tau"
 #[pyclass(name = "PauliEvolutionAnsatz", module = "cqlib.circuit.ansatz")]
+#[derive(Clone)]
 pub struct PyPauliEvolutionAnsatz {
     pub(crate) inner: PauliEvolutionAnsatz,
+}
+
+impl From<PauliEvolutionAnsatz> for PyPauliEvolutionAnsatz {
+    fn from(inner: PauliEvolutionAnsatz) -> Self {
+        Self { inner }
+    }
+}
+
+impl From<PyPauliEvolutionAnsatz> for PauliEvolutionAnsatz {
+    fn from(value: PyPauliEvolutionAnsatz) -> Self {
+        value.inner
+    }
 }
 
 #[pymethods]
@@ -490,5 +526,13 @@ impl PyPauliEvolutionAnsatz {
 
     fn __str__(&self) -> String {
         self.__repr__()
+    }
+
+    fn __copy__(&self) -> Self {
+        self.clone()
+    }
+
+    fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> Self {
+        self.clone()
     }
 }

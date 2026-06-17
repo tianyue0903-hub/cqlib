@@ -14,6 +14,7 @@ from typing import final
 
 from ...circuit import Circuit
 from ...qis import Hamiltonian
+from .hamiltonian_evolution import EvolutionStrategy
 
 @final
 class QAOAAnsatz:
@@ -35,7 +36,7 @@ class QAOAAnsatz:
         >>> from cqlib.circuit.ansatz import QAOAAnsatz
         >>> from cqlib import Hamiltonian, PauliString
         >>> h_c = Hamiltonian(2)
-        >>> h_c.add_term(PauliString("ZZ"), 0.5)
+        >>> h_c.add_term(PauliString.from_str("ZZ"), 0.5)
         >>> ansatz = QAOAAnsatz(h_c).reps(3)
         >>> circuit = ansatz.build_circuit("p")
         >>> ansatz.num_parameters()
@@ -96,6 +97,18 @@ class QAOAAnsatz:
         """
         ...
 
+    def evolution_strategy(self, strategy: EvolutionStrategy) -> "QAOAAnsatz":
+        """Sets the Hamiltonian evolution strategy for cost and mixer layers.
+
+        Args:
+            strategy: Strategy used to compile both cost and mixer Hamiltonian
+                evolutions.
+
+        Returns:
+            A new QAOAAnsatz with the updated evolution strategy.
+        """
+        ...
+
     def validate(self) -> None:
         """Validates the configuration.
 
@@ -107,8 +120,8 @@ class QAOAAnsatz:
     def build_circuit(self, prefix: str) -> Circuit:
         """Builds the QAOA circuit.
 
-        Parameters alternate: ``{prefix}_0`` (γ₁), ``{prefix}_1`` (β₁),
-        ``{prefix}_2`` (γ₂), ``{prefix}_3`` (β₂), ...
+        Parameters are named ``{prefix}_gamma_0``, ``{prefix}_beta_0``,
+        ``{prefix}_gamma_1``, ``{prefix}_beta_1``, ... for each QAOA layer.
 
         Args:
             prefix: Prefix for parameter names (e.g. ``"p"``).
@@ -131,3 +144,5 @@ class QAOAAnsatz:
 
     def __repr__(self) -> str: ...
     def __str__(self) -> str: ...
+    def __copy__(self) -> "QAOAAnsatz": ...
+    def __deepcopy__(self, memo: dict) -> "QAOAAnsatz": ...
