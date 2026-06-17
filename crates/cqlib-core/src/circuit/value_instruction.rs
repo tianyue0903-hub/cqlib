@@ -42,10 +42,12 @@
 
 use crate::circuit::ClassicalControlOp;
 use crate::circuit::circuit_param::{CircuitParam, ParameterValue};
-use crate::circuit::classical::ClassicalVar;
+use crate::circuit::classical::{ClassicalValue, ClassicalVar};
 use crate::circuit::classical_expr::ClassicalExpr;
 use crate::circuit::control_flow::ControlBody;
 use crate::circuit::error::CircuitError;
+use crate::circuit::gate::ClassicalDataOp;
+use crate::circuit::gate::directive::Directive;
 use crate::circuit::gate::instruction::Instruction;
 use crate::circuit::operation::{Operation, ValueOperation};
 use alloc::collections::BTreeSet;
@@ -105,6 +107,40 @@ impl ValueControlBody {
             }
         }
         qubits
+    }
+
+    /// Returns true if this body directly or recursively contains measurement.
+    pub fn has_measurement(&self) -> bool {
+        self.operations.iter().any(|operation| {
+            matches!(
+                &operation.instruction,
+                ValueInstruction::Instruction(Instruction::Directive(Directive::Measure))
+                    | ValueInstruction::Instruction(Instruction::ClassicalData(
+                        ClassicalDataOp::MeasureBit { .. }
+                    ))
+                    | ValueInstruction::Instruction(Instruction::ClassicalData(
+                        ClassicalDataOp::MeasureBits { .. }
+                    ))
+            ) || matches!(
+                &operation.instruction,
+                ValueInstruction::ClassicalControl(control) if control.has_measurement()
+            )
+        })
+    }
+
+    /// Returns true if this body directly or recursively reads `value`.
+    pub fn reads_value(&self, value: ClassicalValue) -> bool {
+        self.operations
+            .iter()
+            .any(|operation| match &operation.instruction {
+                ValueInstruction::Instruction(Instruction::ClassicalData(
+                    ClassicalDataOp::Store {
+                        value: expression, ..
+                    },
+                )) => expression.values().contains(&value),
+                ValueInstruction::ClassicalControl(control) => control.reads_value(value),
+                _ => false,
+            })
     }
 }
 
@@ -281,6 +317,53 @@ impl ValueClassicalControlOp {
         match self {
             Self::For { var, .. } => vec![*var],
             _ => Vec::new(),
+        }
+    }
+
+    /// Returns true if this control operation recursively contains measurement.
+    pub fn has_measurement(&self) -> bool {
+        match self {
+            Self::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                then_body.has_measurement()
+                    || else_body
+                        .as_ref()
+                        .is_some_and(|body| body.has_measurement())
+            }
+            Self::While { body, .. } | Self::For { body, .. } => body.has_measurement(),
+            Self::Switch { cases, default, .. } => {
+                cases.iter().any(|case| case.body.has_measurement())
+                    || default.as_ref().is_some_and(|body| body.has_measurement())
+            }
+            Self::Break | Self::Continue => false,
+        }
+    }
+
+    /// Returns true if this control operation recursively reads `value`.
+    pub fn reads_value(&self, value: ClassicalValue) -> bool {
+        if self.classical_value_reads().contains(&value) {
+            return true;
+        }
+        match self {
+            Self::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                then_body.reads_value(value)
+                    || else_body
+                        .as_ref()
+                        .is_some_and(|body| body.reads_value(value))
+            }
+            Self::While { body, .. } | Self::For { body, .. } => body.reads_value(value),
+            Self::Switch { cases, default, .. } => {
+                cases.iter().any(|case| case.body.reads_value(value))
+                    || default.as_ref().is_some_and(|body| body.reads_value(value))
+            }
+            Self::Break | Self::Continue => false,
         }
     }
 }
@@ -565,6 +648,56 @@ mod tests {
         assert_eq!(vcc.classical_var_reads().len(), 1);
         assert_eq!(vcc.classical_writes().len(), 1);
         assert_eq!(vcc.classical_writes()[0], var);
+    }
+
+    #[test]
+    fn value_body_reports_nested_measurements() {
+        let value =
+            ClassicalValue::new(crate::circuit::CircuitId::default(), 0, ClassicalType::Bit);
+        let nested = ValueControlBody::new(vec![ValueOperation {
+            instruction: ValueInstruction::from_instruction(Instruction::ClassicalData(
+                ClassicalDataOp::MeasureBit { result: value },
+            )),
+            qubits: smallvec::smallvec![Qubit::new(0)],
+            params: smallvec::smallvec![],
+            label: None,
+        }]);
+        let body = ValueControlBody::new(vec![ValueOperation {
+            instruction: ValueInstruction::ClassicalControl(ValueClassicalControlOp::If {
+                condition: ClassicalExpr::bool_literal(true),
+                then_body: nested,
+                else_body: None,
+            }),
+            qubits: smallvec::smallvec![Qubit::new(0)],
+            params: smallvec::smallvec![],
+            label: None,
+        }]);
+
+        assert!(body.has_measurement());
+    }
+
+    #[test]
+    fn value_body_reports_nested_value_reads() {
+        let circuit_id = crate::circuit::CircuitId::default();
+        let value = ClassicalValue::new(circuit_id, 0, ClassicalType::Bit);
+        let target = ClassicalVar::new(circuit_id, 1, ClassicalType::Bit);
+        let nested = ValueControlBody::new(vec![ValueOperation {
+            instruction: ValueInstruction::from_instruction(Instruction::ClassicalData(
+                ClassicalDataOp::Store {
+                    target,
+                    value: value.expr(),
+                },
+            )),
+            qubits: smallvec::smallvec![],
+            params: smallvec::smallvec![],
+            label: None,
+        }]);
+        let control = ValueClassicalControlOp::While {
+            condition: ClassicalExpr::bool_literal(true),
+            body: nested,
+        };
+
+        assert!(control.reads_value(value));
     }
 
     #[test]

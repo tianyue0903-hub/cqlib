@@ -467,7 +467,10 @@ fn test_pauli_feature_map_validation_custom_topology_out_of_bounds() {
 #[test]
 fn test_pauli_feature_map_validation_custom_topology_self_loop() {
     let fm = PauliFeatureMap::new(3)
-        .paulis(vec![("ZZ".parse::<PauliString>().unwrap(), "ZZ".to_string())])
+        .paulis(vec![(
+            "ZZ".parse::<PauliString>().unwrap(),
+            "ZZ".to_string(),
+        )])
         .entanglement(EntanglementTopology::Custom(vec![(1, 1)]));
 
     let result = fm.build_circuit("x");
@@ -484,7 +487,10 @@ fn test_pauli_feature_map_validation_custom_topology_self_loop() {
 #[test]
 fn test_pauli_feature_map_validation_custom_topology_duplicate_edge() {
     let fm = PauliFeatureMap::new(3)
-        .paulis(vec![("ZZ".parse::<PauliString>().unwrap(), "ZZ".to_string())])
+        .paulis(vec![(
+            "ZZ".parse::<PauliString>().unwrap(),
+            "ZZ".to_string(),
+        )])
         .entanglement(EntanglementTopology::Custom(vec![(0, 1), (1, 0)]));
 
     let result = fm.build_circuit("x");

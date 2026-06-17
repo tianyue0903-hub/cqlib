@@ -24,6 +24,8 @@
 //!
 //! - **QUBIT_LIST**: Space-separated list of qubits in `Q<id>` format (e.g., `Q0`, `Q1`)
 //! - **PARAMETER_LIST**: Optional space-separated parameters (numeric values or expressions)
+//!   except QCIS delay `I Qn t`, whose `t` must be a fixed non-negative integer
+//!   count of 0.5 ns ticks
 //!
 //! ## Examples
 //!
@@ -349,6 +351,28 @@ fn validate_gate_args(gate_name: &str, qubits: &[Qubit], params: &[ParameterValu
     Ok(())
 }
 
+fn validate_delay_tick(param: &ParameterValue, param_text: &str) -> Result<()> {
+    match param {
+        ParameterValue::Fixed(value)
+            if value.is_finite() && *value >= 0.0 && value.fract().abs() < 1e-10 =>
+        {
+            Ok(())
+        }
+        ParameterValue::Fixed(_) => Err(QcisParseError::InvalidParameter {
+            gate: "I".to_string(),
+            param: param_text.to_string(),
+            reason: "QCIS delay time must be a non-negative integer number of 0.5 ns ticks"
+                .to_string(),
+        }),
+        ParameterValue::Param(_) => Err(QcisParseError::InvalidParameter {
+            gate: "I".to_string(),
+            param: param_text.to_string(),
+            reason: "QCIS delay time must be a fixed non-negative integer number of 0.5 ns ticks"
+                .to_string(),
+        }),
+    }
+}
+
 fn process_line(line: &str, c: &mut Circuit, existing_qubits: &mut HashSet<u32>) -> Result<()> {
     let clean_line = line.split("//").next().unwrap_or("").trim();
     if clean_line.is_empty() {
@@ -394,6 +418,9 @@ fn process_line(line: &str, c: &mut Circuit, existing_qubits: &mut HashSet<u32>)
 
     // Validate qubit and parameter counts
     validate_gate_args(gate_name, &qubits, &params)?;
+    if gate_name == "I" {
+        validate_delay_tick(&params[0], param_slice[0])?;
+    }
 
     // Ensure circuit has enough qubits (using cached set for efficiency)
     ensure_qubits(c, &qubits, existing_qubits);

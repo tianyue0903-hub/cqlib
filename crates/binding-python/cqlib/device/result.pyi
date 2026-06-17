@@ -59,6 +59,11 @@ class Outcome:
         """Alternative constructor from bitstring (same as `Outcome()`)."""
         ...
 
+    @staticmethod
+    def from_indices(width: int, indices: list[int]) -> "Outcome":
+        """Create an outcome with the given bit indices set to one."""
+        ...
+
     def is_one(self, index: int) -> bool:
         """
         Returns True if the bit at the given index is 1.
@@ -224,6 +229,31 @@ class ExecutionResult:
         """
         ...
 
+    @staticmethod
+    def from_counts(
+        task_id: str,
+        qubits: list[int] | list[Qubit],
+        shots: int,
+        num_qubits: int,
+        counts: dict[str, int],
+        backend: str | None = None,
+    ) -> "ExecutionResult":
+        """
+        Creates a completed execution result from measurement counts.
+
+        Args:
+            task_id: Unique job identifier
+            qubits: List of measured qubits.
+            shots: Number of measurement shots
+            num_qubits: Total number of qubits in the circuit
+            counts: Dictionary mapping bitstrings to occurrence counts
+            backend: Optional backend name
+
+        Raises:
+            ValueError: If any bitstring contains invalid characters.
+        """
+        ...
+
     def start(self) -> None:
         """
         Marks the job as running.
@@ -328,4 +358,3 @@ class ExecutionResult:
 
     def __copy__(self) -> "ExecutionResult": ...
     def __deepcopy__(self, memo: dict) -> "ExecutionResult": ...
-

@@ -2720,37 +2720,21 @@ impl Statevector {
         measurement: &Measurement,
         shots: usize,
     ) -> Result<ExecutionResult, QisError> {
-        for qubit in measurement.qubits() {
-            let index = qubit.index();
-            if index >= self.num_qubits {
-                return Err(QisError::IndexOutOfBounds {
-                    index,
-                    max: self.num_qubits.saturating_sub(1),
-                });
-            }
-        }
+        measurement.check_qubits(self.num_qubits)?;
 
         let mut counts = HashMap::new();
         for full in self.sample_shots(shots) {
-            let mut chunks = SmallVec::from_elem(0u64, measurement.width().div_ceil(64));
-            for (bit, qubit) in measurement.qubits().iter().enumerate() {
-                if full.is_one(qubit.index()) {
-                    chunks[bit / 64] |= 1u64 << (bit % 64);
-                }
-            }
-            *counts.entry(Outcome::new(chunks)).or_insert(0usize) += 1;
+            *counts.entry(measurement.project(&full)).or_insert(0usize) += 1;
         }
 
-        let mut result = ExecutionResult::new(
+        Ok(ExecutionResult::from_counts(
             "statevector-sample".to_string(),
             measurement.qubits().to_vec(),
             shots,
             measurement.width(),
             Some("statevector".to_string()),
-            None,
-        );
-        result.start(None).finish(counts, None).calc_probabilities();
-        Ok(result)
+            counts,
+        ))
     }
 
     /// Returns the marginal probability distribution selected by a circuit [`Measurement`].
@@ -2759,28 +2743,16 @@ impl Statevector {
     /// a self-contained output contract and aggregates the full statevector
     /// computational-basis probabilities over unmeasured qubits.
     pub fn probs(&self, measurement: &Measurement) -> Result<HashMap<Outcome, f64>, QisError> {
-        for qubit in measurement.qubits() {
-            let index = qubit.index();
-            if index >= self.num_qubits {
-                return Err(QisError::IndexOutOfBounds {
-                    index,
-                    max: self.num_qubits.saturating_sub(1),
-                });
-            }
-        }
+        measurement.check_qubits(self.num_qubits)?;
 
         let mut marginal = HashMap::new();
         for (basis, prob) in self.probabilities().into_iter().enumerate() {
             if prob == 0.0 {
                 continue;
             }
-            let mut chunks = SmallVec::from_elem(0u64, measurement.width().div_ceil(64));
-            for (bit, qubit) in measurement.qubits().iter().enumerate() {
-                if (basis >> qubit.index()) & 1 == 1 {
-                    chunks[bit / 64] |= 1u64 << (bit % 64);
-                }
-            }
-            *marginal.entry(Outcome::new(chunks)).or_insert(0.0) += prob;
+            *marginal
+                .entry(measurement.project_basis(basis))
+                .or_insert(0.0) += prob;
         }
         Ok(marginal)
     }

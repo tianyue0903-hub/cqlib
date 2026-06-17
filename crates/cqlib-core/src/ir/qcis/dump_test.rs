@@ -266,6 +266,32 @@ I Q1 50
 }
 
 #[test]
+fn test_dump_rejects_identity_gate_as_qcis_delay() {
+    let mut c = Circuit::new(1);
+    c.i(Qubit::new(0)).unwrap();
+
+    let result = dumps(&c);
+
+    assert!(matches!(
+        result,
+        Err(QcisDumpError::UnsupportedGate(gate)) if gate == "I"
+    ));
+}
+
+#[test]
+fn test_dump_rejects_non_integer_delay_tick() {
+    let mut c = Circuit::new(1);
+    c.delay(Qubit::new(0), ParameterValue::Fixed(1.5)).unwrap();
+
+    let result = dumps(&c);
+
+    assert!(matches!(
+        result,
+        Err(QcisDumpError::InvalidDelayParameter(reason)) if reason.contains("integer")
+    ));
+}
+
+#[test]
 fn test_format_float() {
     assert_eq!(format_float(0.0), "0");
     assert_eq!(format_float(1.0), "1");

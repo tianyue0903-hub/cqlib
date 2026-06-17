@@ -24,8 +24,16 @@ use crate::util::test_utils::assert_circuits_equivalent_up_to_global_phase;
 use std::f64::consts::PI;
 
 const RULE_FILES: &[(&str, &str, RuleKind)] = &[
-    ("cancel.rule", include_str!("rules/cancel.rule"), RuleKind::Cancel),
-    ("merge.rule", include_str!("rules/merge.rule"), RuleKind::Merge),
+    (
+        "cancel.rule",
+        include_str!("rules/cancel.rule"),
+        RuleKind::Cancel,
+    ),
+    (
+        "merge.rule",
+        include_str!("rules/merge.rule"),
+        RuleKind::Merge,
+    ),
     (
         "commutation.rule",
         include_str!("rules/commutation.rule"),
@@ -111,7 +119,10 @@ fn assert_rule_verification_passes(rule: &Rule) {
     match classify_rule_verification(rule) {
         VerifyResult::Equivalent | VerifyResult::SampledEqual { .. } => {}
         VerifyResult::NotEquivalent => {
-            panic!("rule `{}` failed layered equivalence verification", rule.name);
+            panic!(
+                "rule `{}` failed layered equivalence verification",
+                rule.name
+            );
         }
         VerifyResult::Inconclusive { reason } => {
             panic!("rule `{}` inconclusive: {reason}", rule.name);
@@ -175,9 +186,7 @@ fn selected_semantic_rules_verify_via_matrix() {
         "decompose_cz_to_rzz",
         "decompose_cx_to_rzz",
     ] {
-        let rule = library
-            .get_by_name(name)
-            .expect("selected semantic rule");
+        let rule = library.get_by_name(name).expect("selected semantic rule");
         assert_rule_verification_passes(rule);
     }
 }
@@ -205,7 +214,10 @@ fn parametric_builtin_rules_pass_layered_verify() {
         let rule = library.get_by_name(name).expect("parametric builtin rule");
         let result = classify_rule_verification(rule);
         assert!(
-            matches!(result, VerifyResult::SampledEqual { .. } | VerifyResult::Equivalent),
+            matches!(
+                result,
+                VerifyResult::SampledEqual { .. } | VerifyResult::Equivalent
+            ),
             "rule `{name}` should pass layered verify, got {result:?}"
         );
     }

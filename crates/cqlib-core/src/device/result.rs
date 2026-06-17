@@ -98,6 +98,21 @@ impl Outcome {
         Self(chunks)
     }
 
+    /// Creates an outcome with the given bit indices set to one.
+    ///
+    /// `width` is the number of logical bits in the outcome. Indices greater
+    /// than or equal to `width` are ignored. Bit index 0 is stored as the least
+    /// significant bit, matching [`Outcome`]'s little-endian layout.
+    pub fn from_indices(width: usize, indices: impl IntoIterator<Item = usize>) -> Self {
+        let mut chunks = SmallVec::from_elem(0u64, width.div_ceil(BITS_PER_CHUNK));
+        for index in indices {
+            if index < width {
+                chunks[index / BITS_PER_CHUNK] |= 1u64 << (index % BITS_PER_CHUNK);
+            }
+        }
+        Self(chunks)
+    }
+
     /// Create an Outcome from a binary string (e.g., "101").
     ///
     /// # Convention
@@ -313,6 +328,24 @@ impl ExecutionResult {
         }
     }
 
+    /// Creates a completed execution result from measurement counts.
+    ///
+    /// This applies the same lifecycle as `new`, `start`, `finish`, and
+    /// `calc_probabilities`, but keeps simulator call sites focused on
+    /// producing counts.
+    pub fn from_counts(
+        task_id: String,
+        qubits: Vec<Qubit>,
+        shots: usize,
+        num_qubits: usize,
+        backend: Option<String>,
+        counts: HashMap<Outcome, usize>,
+    ) -> Self {
+        let mut result = Self::new(task_id, qubits, shots, num_qubits, backend, None);
+        result.start(None).finish(counts, None).calc_probabilities();
+        result
+    }
+
     /// Marks the job as running.
     pub fn start(&mut self, t: Option<OffsetDateTime>) -> &mut Self {
         self.started_at = t.or(Some(OffsetDateTime::now_utc()));
@@ -414,6 +447,49 @@ impl ExecutionResult {
     /// Returns the calculated probabilities (None if not computed).
     pub fn probabilities(&self) -> &Option<HashMap<Outcome, f64>> {
         &self.probabilities
+    }
+}
+
+#[cfg(test)]
+mod api_tests {
+    use super::{ExecutionResult, Outcome, Status};
+    use crate::circuit::Qubit;
+    use std::collections::HashMap;
+
+    #[test]
+    fn outcome_from_indices_uses_little_endian_bit_indices() {
+        let outcome = Outcome::from_indices(66, [0, 2, 65, 99]);
+
+        assert!(outcome.is_one(0));
+        assert!(!outcome.is_one(1));
+        assert!(outcome.is_one(2));
+        assert!(outcome.is_one(65));
+        assert!(!outcome.is_one(99));
+    }
+
+    #[test]
+    fn execution_result_from_counts_returns_completed_result_with_probabilities() {
+        let zero = Outcome::from_indices(1, []);
+        let one = Outcome::from_indices(1, [0]);
+        let mut counts = HashMap::new();
+        counts.insert(zero.clone(), 3);
+        counts.insert(one.clone(), 1);
+
+        let result = ExecutionResult::from_counts(
+            "task".to_string(),
+            vec![Qubit::new(0)],
+            4,
+            1,
+            Some("backend".to_string()),
+            counts,
+        );
+
+        assert_eq!(result.status(), &Status::Completed);
+        assert_eq!(result.counts().get(&zero), Some(&3));
+        assert_eq!(result.counts().get(&one), Some(&1));
+        let probabilities = result.probabilities().as_ref().unwrap();
+        assert_eq!(probabilities.get(&zero), Some(&0.75));
+        assert_eq!(probabilities.get(&one), Some(&0.25));
     }
 }
 

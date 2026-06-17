@@ -21,6 +21,7 @@ prevents accidental mixing of handles from different circuits.
 
 from .bit import Qubit
 from .classical_expr import ClassicalExpr
+from cqlib.device import Outcome
 
 class CircuitId:
     """Process-local identity shared by classical handles of one circuit.
@@ -170,6 +171,19 @@ class Measurement:
         ...
     def expr(self) -> ClassicalExpr:
         """An expression that reads the measurement result."""
+        ...
+    def check_qubits(self, num_qubits: int) -> None:
+        """Check that all measured qubits are valid for a state with ``num_qubits``.
+
+        Raises:
+            ValueError: If any measured qubit index is out of range.
+        """
+        ...
+    def project(self, full: Outcome) -> Outcome:
+        """Project a full-register outcome onto this measurement's qubit order."""
+        ...
+    def project_basis(self, basis: int) -> Outcome:
+        """Project a computational-basis index onto this measurement's qubit order."""
         ...
     def __repr__(self) -> str: ...
     def __copy__(self) -> Measurement: ...

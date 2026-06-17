@@ -25,6 +25,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::circuit::bit::Qubit;
 use crate::circuit::classical_expr::ClassicalExpr;
+use crate::device::Outcome;
+use crate::qis::error::QisError;
 use smallvec::SmallVec;
 
 static NEXT_CIRCUIT_ID: AtomicU64 = AtomicU64::new(1);
@@ -287,12 +289,59 @@ impl Measurement {
     pub fn ty(&self) -> ClassicalType {
         self.value.ty()
     }
+
+    /// Checks that all measured qubits are valid for a state with `num_qubits`.
+    ///
+    /// Returns [`QisError::IndexOutOfBounds`] for the first qubit index outside
+    /// `0..num_qubits`.
+    pub fn check_qubits(&self, num_qubits: usize) -> Result<(), QisError> {
+        for qubit in self.qubits() {
+            let index = qubit.index();
+            if index >= num_qubits {
+                return Err(QisError::IndexOutOfBounds {
+                    index,
+                    max: num_qubits.saturating_sub(1),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Projects a full-register outcome onto this measurement's qubit order.
+    ///
+    /// If `qubits()[i]` is one in `full`, bit `i` is set in the returned
+    /// [`Outcome`].
+    pub fn project(&self, full: &Outcome) -> Outcome {
+        Outcome::from_indices(
+            self.width(),
+            self.qubits()
+                .iter()
+                .enumerate()
+                .filter_map(|(bit, qubit)| full.is_one(qubit.index()).then_some(bit)),
+        )
+    }
+
+    /// Projects a computational-basis index onto this measurement's qubit order.
+    ///
+    /// If bit `qubits()[i]` is one in `basis`, bit `i` is set in the returned
+    /// [`Outcome`].
+    pub fn project_basis(&self, basis: usize) -> Outcome {
+        Outcome::from_indices(
+            self.width(),
+            self.qubits()
+                .iter()
+                .enumerate()
+                .filter_map(|(bit, qubit)| (((basis >> qubit.index()) & 1) == 1).then_some(bit)),
+        )
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{CircuitId, ClassicalType, ClassicalValue, ClassicalVar, Measurement};
     use crate::circuit::Qubit;
+    use crate::device::Outcome;
+    use crate::qis::QisError;
     use smallvec::smallvec;
 
     #[test]
@@ -351,5 +400,31 @@ mod tests {
         assert_eq!(measurement.width(), 2);
         assert_eq!(measurement.qubits(), &[Qubit::new(1), Qubit::new(0)]);
         assert_eq!(measurement.expr().ty(), ClassicalType::bit_vec(2).unwrap());
+    }
+
+    #[test]
+    fn measurement_projects_outcomes_in_measurement_order() {
+        let value = ClassicalValue::new(CircuitId::new(), 3, ClassicalType::bit_vec(3).unwrap());
+        let measurement = Measurement::new(
+            value,
+            smallvec![Qubit::new(2), Qubit::new(0), Qubit::new(1)],
+        );
+        let full = Outcome::from_indices(3, [0, 2]);
+
+        let projected = measurement.project(&full);
+        assert_eq!(projected.to_string(3), "011");
+        assert_eq!(measurement.project_basis(0b101).to_string(3), "011");
+    }
+
+    #[test]
+    fn measurement_checks_qubit_bounds() {
+        let value = ClassicalValue::new(CircuitId::new(), 3, ClassicalType::bit_vec(2).unwrap());
+        let measurement = Measurement::new(value, smallvec![Qubit::new(0), Qubit::new(2)]);
+
+        assert!(measurement.check_qubits(3).is_ok());
+        assert!(matches!(
+            measurement.check_qubits(2),
+            Err(QisError::IndexOutOfBounds { index: 2, max: 1 })
+        ));
     }
 }

@@ -10,30 +10,55 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
-//! # QCIS (Quantum Circuit Intermediate Representation) Parser and Serializer
+//! # QCIS Parser and Serializer
 //!
-//! This module provides bidirectional conversion between QCIS format and the internal
-//! `Circuit` representation.
+//! This module converts between QCIS text and cqlib's [`Circuit`](crate::circuit::Circuit)
+//! IR. It covers the circuit-level QCIS instruction set used by this crate; pulse
+//! and coupling-control instructions are intentionally outside this module.
 //!
-//! ## Overview
+//! ## Text Format
 //!
-//! QCIS (Quantum Circuit Intermediate Representation) is a simplified quantum circuit format
-//! optimized for backend execution. It uses a compact text-based format where each line
-//! represents a single quantum operation.
+//! QCIS is line oriented. Each non-empty line has an opcode, one or more qubits,
+//! and optional parameters:
 //!
-//! ## Supported Gates
+//! ```text
+//! OPCODE Q0 [Q1 ...] [param ...]
+//! ```
 //!
-//! ### Native QCIS Gates
-//! - **Single-qubit rotations**: X2P, X2M, Y2P, Y2M, XY2P, XY2M
-//! - **Two-qubit gates**: CZ
-//! - **Single-qubit gates**: RZ
-//! - **Delay**: I (identity with time parameter)
+//! Qubits are written as `Q<id>` with an unsigned decimal id. Parameters are
+//! parsed as cqlib parameter expressions, so numeric values and expressions such
+//! as `pi`, `pi/2`, and `theta` are accepted. Lines beginning with `//` and
+//! inline text after `//` are ignored.
 //!
-//! ### Standard Gates (mapped to QCIS equivalents)
-//! - **Pauli gates**: X, Y, Z
-//! - **Clifford gates**: H, S, T
-//! - **Parametrized gates**: RX, RY, RXY
-//! - **Multi-qubit**: Barrier, Measure
+//! ## Circuit Instructions
+//!
+//! The QCIS instructions represented directly by this module are:
+//!
+//! - `X2P Qn`, `X2M Qn`: positive/negative X half rotations.
+//! - `Y2P Qn`, `Y2M Qn`: positive/negative Y half rotations.
+//! - `XY2P Qn phi`, `XY2M Qn phi`: positive/negative half rotations around an
+//!   axis in the XY plane.
+//! - `RZ Qn theta`: virtual Z rotation.
+//! - `CZ Qa Qb`: controlled-Z two-qubit gate.
+//! - `I Qn t`: delay/no-op on `Qn` for `t` ticks. In QCIS, `t` must be a fixed
+//!   non-negative integer count whose unit is 0.5 ns, so `t = 1` means 0.5 ns.
+//!   This is represented as
+//!   [`Instruction::Delay`](crate::circuit::gate::Instruction::Delay), not as
+//!   cqlib's standard identity gate.
+//! - `M Qn [Qm ...]`: measurement. Loading expands multi-qubit measurement to
+//!   per-qubit measurement operations; dumping preserves grouped `measure_bits`
+//!   operations when present.
+//! - `B Qn [Qm ...]` or `Barrier Qn [Qm ...]`: barrier.
+//!
+//! For interoperability, the loader and dumper also accept the following
+//! circuit-level gate spellings when the internal circuit already contains them:
+//! `X`, `Y`, `Z`, `H`, `S`, `SD`, `SDG`, `T`, `TD`, `TDG`, `RX`, `RY`, and
+//! `RXY`. Dagger aliases are normalized when dumping: `SDG` becomes `SD`, and
+//! `TDG` becomes `TD`.
+//!
+//! QCIS `I` is not an alias for the cqlib identity gate. To emit `I Qn t`, use
+//! [`Circuit::delay`](crate::circuit::Circuit::delay). A standard identity gate
+//! is rejected by the QCIS dumper to avoid losing the required duration.
 //!
 //! ## Entry Points and Errors
 //!

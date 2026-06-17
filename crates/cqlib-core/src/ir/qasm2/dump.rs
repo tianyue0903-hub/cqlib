@@ -604,30 +604,7 @@ fn operations_contain_measurement(operations: &[Operation]) -> bool {
             Instruction::Directive(Directive::Measure)
             | Instruction::ClassicalData(ClassicalDataOp::MeasureBit { .. })
             | Instruction::ClassicalData(ClassicalDataOp::MeasureBits { .. }) => true,
-            Instruction::ClassicalControl(control) => match control {
-                ClassicalControlOp::If(if_op) => {
-                    operations_contain_measurement(if_op.then_body().operations())
-                        || if_op
-                            .else_body()
-                            .is_some_and(|body| operations_contain_measurement(body.operations()))
-                }
-                ClassicalControlOp::While(while_op) => {
-                    operations_contain_measurement(while_op.body().operations())
-                }
-                ClassicalControlOp::For(for_op) => {
-                    operations_contain_measurement(for_op.body().operations())
-                }
-                ClassicalControlOp::Switch(switch_op) => {
-                    switch_op
-                        .cases()
-                        .iter()
-                        .any(|case| operations_contain_measurement(case.body().operations()))
-                        || switch_op
-                            .default()
-                            .is_some_and(|body| operations_contain_measurement(body.operations()))
-                }
-                ClassicalControlOp::Break | ClassicalControlOp::Continue => false,
-            },
+            Instruction::ClassicalControl(control) => control.has_measurement(),
             _ => false,
         })
 }
@@ -770,48 +747,7 @@ fn operation_reads_value(operation: &Operation, value: ClassicalValue) -> bool {
             value: expression, ..
         }) => expression.values().contains(&value),
         Instruction::ClassicalData(_) => false,
-        Instruction::ClassicalControl(control) => {
-            if control.classical_value_reads().contains(&value) {
-                return true;
-            }
-            match control {
-                ClassicalControlOp::If(if_op) => {
-                    if_op
-                        .then_body()
-                        .operations()
-                        .iter()
-                        .any(|operation| operation_reads_value(operation, value))
-                        || if_op.else_body().is_some_and(|body| {
-                            body.operations()
-                                .iter()
-                                .any(|operation| operation_reads_value(operation, value))
-                        })
-                }
-                ClassicalControlOp::While(while_op) => while_op
-                    .body()
-                    .operations()
-                    .iter()
-                    .any(|operation| operation_reads_value(operation, value)),
-                ClassicalControlOp::For(for_op) => for_op
-                    .body()
-                    .operations()
-                    .iter()
-                    .any(|operation| operation_reads_value(operation, value)),
-                ClassicalControlOp::Switch(switch_op) => {
-                    switch_op.cases().iter().any(|case| {
-                        case.body()
-                            .operations()
-                            .iter()
-                            .any(|operation| operation_reads_value(operation, value))
-                    }) || switch_op.default().is_some_and(|body| {
-                        body.operations()
-                            .iter()
-                            .any(|operation| operation_reads_value(operation, value))
-                    })
-                }
-                ClassicalControlOp::Break | ClassicalControlOp::Continue => false,
-            }
-        }
+        Instruction::ClassicalControl(control) => control.reads_value(value),
         _ => false,
     }
 }

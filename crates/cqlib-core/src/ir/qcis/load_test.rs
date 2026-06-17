@@ -11,6 +11,7 @@
 // that they have been altered from the originals.
 
 use super::*;
+use crate::circuit::gate::Instruction;
 use crate::ir::qcis_dumps;
 use std::error::Error;
 use std::f64::consts::PI;
@@ -360,6 +361,38 @@ fn test_delay_requires_one_param() {
             expected: 1,
             actual: 0,
         }) if gate == "I"
+    ));
+}
+
+#[test]
+fn test_qcis_i_loads_as_delay_not_identity_gate() {
+    let circuit = loads("I Q0 1").unwrap();
+    let operations = circuit.operations();
+
+    assert_eq!(operations.len(), 1);
+    assert!(matches!(operations[0].instruction, Instruction::Delay));
+    assert_eq!("I Q0 1\n", qcis_dumps(&circuit).unwrap());
+}
+
+#[test]
+fn test_qcis_delay_rejects_non_integer_tick() {
+    let result = loads("I Q0 1.5");
+
+    assert!(matches!(
+        result,
+        Err(QcisParseError::InvalidParameter { gate, param, .. })
+            if gate == "I" && param == "1.5"
+    ));
+}
+
+#[test]
+fn test_qcis_delay_rejects_symbolic_tick() {
+    let result = loads("I Q0 theta");
+
+    assert!(matches!(
+        result,
+        Err(QcisParseError::InvalidParameter { gate, param, .. })
+            if gate == "I" && param == "theta"
     ));
 }
 
