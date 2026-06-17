@@ -98,10 +98,18 @@ impl PyFrozenCircuit {
             self.inner.circuit().operations().len()
         )
     }
+
+    fn __copy__(&self) -> Self {
+        self.clone()
+    }
+
+    fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> Self {
+        self.clone()
+    }
 }
 
 /// Composite gate defined by an immutable circuit.
-#[pyclass(name = "CircuitGate", module = "cqlib.circuit.gates", subclass)]
+#[pyclass(name = "CircuitGate", module = "cqlib.circuit.gates")]
 #[derive(Clone, Debug)]
 pub struct PyCircuitGate {
     pub(crate) inner: CircuitGate,
@@ -164,6 +172,14 @@ impl PyCircuitGate {
             self.inner.num_qubits(),
             self.inner.num_params()
         )
+    }
+
+    fn __copy__(&self) -> Self {
+        self.clone()
+    }
+
+    fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> Self {
+        self.clone()
     }
 }
 

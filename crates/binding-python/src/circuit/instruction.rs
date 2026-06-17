@@ -179,6 +179,14 @@ impl PyInstruction {
     fn __repr__(&self) -> String {
         format!("Instruction({})", self.name())
     }
+
+    fn __copy__(&self) -> Self {
+        self.clone()
+    }
+
+    fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> Self {
+        self.clone()
+    }
 }
 
 /// Python wrapper around the self-contained construction-IR instruction enum.
@@ -242,6 +250,14 @@ impl PyValueInstruction {
 
     fn __repr__(&self) -> String {
         format!("ValueInstruction(\"{}\")", self.inner)
+    }
+
+    fn __copy__(&self) -> Self {
+        self.clone()
+    }
+
+    fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> Self {
+        self.clone()
     }
 }
 

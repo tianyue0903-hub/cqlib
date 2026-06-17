@@ -168,6 +168,14 @@ impl PyQubit {
         format!("{}", self.inner)
     }
 
+    fn __copy__(&self) -> Self {
+        *self
+    }
+
+    fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> Self {
+        *self
+    }
+
     /// Compares two qubits for equality.
     ///
     /// Returns `True` if both qubits have the same index.

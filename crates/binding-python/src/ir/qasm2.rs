@@ -43,6 +43,8 @@
 //! ```
 
 use crate::circuit::PyCircuit;
+use cqlib_core::ir::qasm2::dump::QasmDumpError;
+use cqlib_core::ir::qasm2::load::QasmParseError;
 use cqlib_core::ir::{qasm2_dump, qasm2_dumps, qasm2_load, qasm2_loads};
 use pyo3::prelude::*;
 
@@ -100,6 +102,9 @@ pub fn py_qasm2_loads(qasm: &str) -> PyResult<PyCircuit> {
 pub fn py_qasm2_load(path: &str) -> PyResult<PyCircuit> {
     match qasm2_load(path) {
         Ok(circuit) => Ok(PyCircuit { inner: circuit }),
+        Err(QasmParseError::IoError(e)) => Err(PyErr::new::<pyo3::exceptions::PyIOError, _>(
+            format!("QASM load error: {}", e),
+        )),
         Err(e) => Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
             "QASM load error: {}",
             e
@@ -149,7 +154,8 @@ pub fn py_qasm2_dumps(circuit: &PyCircuit) -> PyResult<String> {
 /// * `path` - Output file path
 ///
 /// # Errors
-/// Returns `OSError` if the file cannot be written.
+/// Returns `ValueError` if serialization fails, or `OSError` if the file
+/// cannot be written.
 ///
 /// # Example
 /// ```python
@@ -164,7 +170,14 @@ pub fn py_qasm2_dumps(circuit: &PyCircuit) -> PyResult<String> {
 /// ```
 #[pyfunction(name = "dump")]
 pub fn py_qasm2_dump(circuit: &PyCircuit, path: &str) -> PyResult<()> {
-    qasm2_dump(&circuit.inner, path).map_err(|e| {
-        PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("QASM dump error: {}", e))
-    })
+    match qasm2_dump(&circuit.inner, path) {
+        Ok(()) => Ok(()),
+        Err(QasmDumpError::IoError(e)) => Err(PyErr::new::<pyo3::exceptions::PyIOError, _>(
+            format!("QASM dump error: {}", e),
+        )),
+        Err(e) => Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+            "QASM dump error: {}",
+            e
+        ))),
+    }
 }

@@ -10,30 +10,6 @@
 # copyright notice, and modified files need to carry a notice indicating
 # that they have been altered from the originals.
 
-"""Type stubs for ``cqlib.circuit.ansatz``."""
+"""``cqlib.circuit.ansatz`` is not part of the active Python binding yet."""
 
-from .facades import efficient_su2, pauli_feature_map, real_amplitudes, zz_feature_map
-from .feature_map import AngleEncoding, PauliFeatureMap, ZZFeatureMap
-from .hamiltonian_evolution import (
-    EvolutionInfo,
-    EvolutionStrategy,
-    PauliEvolutionAnsatz,
-)
-from .qaoa import QAOAAnsatz
-from .two_local import EntanglementTopology, TwoLocal
-
-__all__ = [
-    "EntanglementTopology",
-    "TwoLocal",
-    "AngleEncoding",
-    "ZZFeatureMap",
-    "PauliFeatureMap",
-    "QAOAAnsatz",
-    "EvolutionStrategy",
-    "EvolutionInfo",
-    "PauliEvolutionAnsatz",
-    "real_amplitudes",
-    "efficient_su2",
-    "zz_feature_map",
-    "pauli_feature_map",
-]
+__all__: list[str]

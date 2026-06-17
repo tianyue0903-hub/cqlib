@@ -165,6 +165,14 @@ impl PySymbolicComplex {
             self.inner.re, self.inner.im
         )
     }
+
+    fn __copy__(&self) -> Self {
+        self.clone()
+    }
+
+    fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> Self {
+        self.clone()
+    }
 }
 
 /// Dense row-major matrix of symbolic complex values.
@@ -316,6 +324,14 @@ impl PySymbolicMatrix {
     fn __repr__(&self) -> String {
         let (rows, cols) = self.inner.dim();
         format!("SymbolicMatrix(shape=({rows}, {cols}))")
+    }
+
+    fn __copy__(&self) -> Self {
+        self.clone()
+    }
+
+    fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> Self {
+        self.clone()
     }
 }
 

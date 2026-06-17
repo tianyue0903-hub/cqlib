@@ -385,6 +385,14 @@ impl PyValueOperation {
     fn __repr__(&self) -> String {
         format!("ValueOperation(\"{}\")", self.inner)
     }
+
+    fn __copy__(&self) -> Self {
+        self.clone()
+    }
+
+    fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> Self {
+        self.clone()
+    }
 }
 
 #[cfg(test)]

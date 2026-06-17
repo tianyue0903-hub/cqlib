@@ -261,6 +261,14 @@ impl PyClassicalExpr {
     fn __repr__(&self) -> String {
         format!("ClassicalExpr({:?})", self.inner.kind())
     }
+
+    fn __copy__(&self) -> Self {
+        self.clone()
+    }
+
+    fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> Self {
+        self.clone()
+    }
 }
 
 impl From<ClassicalExpr> for PyClassicalExpr {
