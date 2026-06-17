@@ -58,6 +58,56 @@ fn is_cnot_gate(op: &Operation, control: usize, target: usize) -> bool {
     }
 }
 
+fn is_x_gate_on_qubit(op: &Operation, expected_qubit: usize) -> bool {
+    match get_standard_gate(op) {
+        Some(StandardGate::X) => op.qubits.len() == 1 && op.qubits[0].index() == expected_qubit,
+        _ => false,
+    }
+}
+
+#[test]
+fn test_basis_encoding_prepares_selected_basis_bits() {
+    let encoder = BasisEncoding::new(vec![true, false, true]);
+    let circuit = encoder.build_circuit("ignored").unwrap();
+    let ops = circuit.operations();
+
+    assert_eq!(encoder.num_qubits(), 3);
+    assert_eq!(encoder.num_parameters(), 0);
+    assert_eq!(ops.len(), 2);
+    assert!(is_x_gate_on_qubit(&ops[0], 0));
+    assert!(is_x_gate_on_qubit(&ops[1], 2));
+    assert!(circuit.parameters().is_empty());
+}
+
+#[test]
+fn test_basis_encoding_rejects_empty_bitstring() {
+    assert!(BasisEncoding::new(vec![]).validate().is_err());
+}
+
+#[test]
+fn test_z_feature_map_structure() {
+    let fm = ZFeatureMap::new(2).reps(1);
+    let circuit = fm.build_circuit("x").unwrap();
+    let ops = circuit.operations();
+
+    assert_eq!(fm.num_parameters(), 2);
+    assert_eq!(ops.len(), 4);
+    assert!(is_h_gate_on_qubit(&ops[0], 0));
+    assert!(is_h_gate_on_qubit(&ops[1], 1));
+    assert!(is_rz_gate_with_param(&ops[2], 0));
+    assert!(is_rz_gate_with_param(&ops[3], 1));
+}
+
+#[test]
+fn test_z_feature_map_zero_reps_has_no_parameters() {
+    let fm = ZFeatureMap::new(3).reps(0);
+    let circuit = fm.build_circuit("x").unwrap();
+
+    assert!(circuit.operations().is_empty());
+    assert_eq!(fm.num_parameters(), 0);
+    assert!(circuit.parameters().is_empty());
+}
+
 #[test]
 fn test_pauli_feature_map_uses_default_parameter_prefix() {
     // Create feature map with default prefix "x"
