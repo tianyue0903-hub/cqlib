@@ -19,9 +19,11 @@
 use crate::circuit::bit::PyQubit;
 use crate::circuit::classical_expr::PyClassicalExpr;
 use crate::circuit::error::CircuitError as PyCircuitError;
+use crate::device::result::PyOutcome;
 use cqlib_core::circuit::{
     CircuitError, CircuitId, ClassicalType, ClassicalValue, ClassicalVar, Measurement,
 };
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use smallvec::SmallVec;
 use std::collections::hash_map::DefaultHasher;
@@ -392,6 +394,23 @@ impl PyMeasurement {
         }
     }
 
+    /// Checks that all measured qubits are valid for a state with `num_qubits`.
+    fn check_qubits(&self, num_qubits: usize) -> PyResult<()> {
+        self.inner
+            .check_qubits(num_qubits)
+            .map_err(|error| PyValueError::new_err(error.to_string()))
+    }
+
+    /// Projects a full-register outcome onto this measurement's qubit order.
+    fn project(&self, full: PyOutcome) -> PyOutcome {
+        self.inner.project(&full.inner).into()
+    }
+
+    /// Projects a computational-basis index onto this measurement's qubit order.
+    fn project_basis(&self, basis: usize) -> PyOutcome {
+        self.inner.project_basis(basis).into()
+    }
+
     fn __repr__(&self) -> String {
         format!(
             "Measurement(value={:?}, qubits={})",
@@ -415,7 +434,11 @@ impl PyMeasurement {
 
 #[cfg(test)]
 mod tests {
-    use super::{PyCircuitId, PyClassicalType, PyClassicalValue, PyClassicalVar};
+    use super::{PyCircuitId, PyClassicalType, PyClassicalValue, PyClassicalVar, PyMeasurement};
+    use crate::circuit::bit::PyQubit;
+    use crate::device::result::PyOutcome;
+    use cqlib_core::circuit::Qubit;
+    use cqlib_core::device::Outcome;
 
     #[test]
     fn circuit_id_repr_contains_the_allocated_identity() {
@@ -436,5 +459,21 @@ mod tests {
         assert_eq!(value.inner.circuit_id(), circuit_id.inner);
         assert!(var.__repr__().contains(&circuit_id.inner.to_string()));
         assert!(value.__repr__().contains(&circuit_id.inner.to_string()));
+    }
+
+    #[test]
+    fn measurement_projects_outcomes_through_python_wrapper() {
+        let circuit_id = PyCircuitId::new();
+        let value = PyClassicalValue::new(circuit_id, 0, PyClassicalType::uint(2).unwrap());
+        let measurement = PyMeasurement::new(
+            value,
+            vec![PyQubit::from(Qubit::new(1)), PyQubit::from(Qubit::new(0))],
+        );
+        let full = PyOutcome::from(Outcome::from_indices(2, [0]));
+
+        assert_eq!(measurement.project(full).inner.to_string(2), "10");
+        assert_eq!(measurement.project_basis(0b10).inner.to_string(2), "01");
+        assert!(measurement.check_qubits(2).is_ok());
+        assert!(measurement.check_qubits(1).is_err());
     }
 }

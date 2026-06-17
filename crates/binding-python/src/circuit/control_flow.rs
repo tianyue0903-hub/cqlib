@@ -18,7 +18,7 @@
 //! storage IR.
 
 use crate::circuit::circuit_impl::PyCircuit;
-use crate::circuit::classical::PyClassicalVar;
+use crate::circuit::classical::{PyClassicalValue, PyClassicalVar};
 use crate::circuit::classical_expr::PyClassicalExpr;
 use crate::circuit::error::CircuitError as PyCircuitError;
 use crate::circuit::operation::PyValueOperation;
@@ -62,6 +62,16 @@ impl PyValueControlBody {
 
     fn __len__(&self) -> usize {
         self.inner.operations().len()
+    }
+
+    /// Returns true if this body directly or recursively contains measurement.
+    fn has_measurement(&self) -> bool {
+        self.inner.has_measurement()
+    }
+
+    /// Returns true if this body directly or recursively reads `value`.
+    fn reads_value(&self, value: PyClassicalValue) -> bool {
+        self.inner.reads_value(value.inner)
     }
 
     fn __repr__(&self) -> String {
@@ -472,6 +482,16 @@ impl PyClassicalControlOp {
         }
     }
 
+    /// Returns true if this control operation recursively contains measurement.
+    fn has_measurement(&self) -> bool {
+        self.inner.has_measurement()
+    }
+
+    /// Returns true if this control operation recursively reads `value`.
+    fn reads_value(&self, value: PyClassicalValue) -> bool {
+        self.inner.reads_value(value.inner)
+    }
+
     fn __repr__(&self) -> String {
         format!("ClassicalControlOp({})", self.kind())
     }
@@ -488,7 +508,11 @@ impl PyClassicalControlOp {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cqlib_core::circuit::ClassicalExpr;
+    use cqlib_core::circuit::gate::ClassicalDataOp;
+    use cqlib_core::circuit::{
+        CircuitId, ClassicalExpr, ClassicalType, ClassicalValue, Instruction, Qubit,
+        ValueInstruction, ValueOperation,
+    };
 
     #[test]
     fn if_control_is_fully_observable() {
@@ -501,5 +525,32 @@ mod tests {
         assert!(control.condition().unwrap().inner.is_bool_true());
         assert!(control.then_body().is_some());
         assert!(control.else_body().is_some());
+    }
+
+    #[test]
+    fn value_body_reports_measurement_through_python_wrapper() {
+        let value = ClassicalValue::new(CircuitId::default(), 0, ClassicalType::Bit);
+        let body = PyValueControlBody::from(ValueControlBody::new(vec![ValueOperation {
+            instruction: ValueInstruction::from_instruction(Instruction::ClassicalData(
+                ClassicalDataOp::MeasureBit { result: value },
+            )),
+            qubits: smallvec::smallvec![Qubit::new(0)],
+            params: smallvec::smallvec![],
+            label: None,
+        }]));
+
+        assert!(body.has_measurement());
+    }
+
+    #[test]
+    fn control_reports_value_reads_through_python_wrapper() {
+        let value = ClassicalValue::new(CircuitId::default(), 0, ClassicalType::Bool);
+        let control = PyClassicalControlOp::from(ValueClassicalControlOp::If {
+            condition: value.expr().to_bool().unwrap(),
+            then_body: ValueControlBody::new(vec![]),
+            else_body: None,
+        });
+
+        assert!(control.reads_value(PyClassicalValue::from(value)));
     }
 }

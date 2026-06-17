@@ -47,6 +47,7 @@
 //! ```
 
 use crate::circuit::PyQubit;
+use crate::circuit::bit::PyIntListOrQubitList;
 use cqlib_core::device::{ExecutionResult, Outcome, Status};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -124,6 +125,12 @@ impl PyOutcome {
     #[staticmethod]
     fn from_bitstring(bitstring: String) -> PyResult<Self> {
         Self::new(bitstring)
+    }
+
+    /// Creates an outcome with the given bit indices set to one.
+    #[staticmethod]
+    fn from_indices(width: usize, indices: Vec<usize>) -> Self {
+        Self::from(Outcome::from_indices(width, indices))
     }
 
     /// Returns True if the bit at the given index is 1.
@@ -397,14 +404,41 @@ impl PyExecutionResult {
     #[pyo3(signature = (task_id, qubits, shots, num_qubits, backend=None))]
     fn new(
         task_id: String,
-        qubits: Vec<PyQubit>,
+        qubits: PyIntListOrQubitList,
         shots: usize,
         num_qubits: usize,
         backend: Option<String>,
     ) -> PyResult<Self> {
-        let qubits = qubits.into_iter().map(|q| q.inner).collect();
+        let qubits = qubits.into();
         Ok(Self {
             inner: ExecutionResult::new(task_id, qubits, shots, num_qubits, backend, None),
+        })
+    }
+
+    /// Creates a completed execution result from measurement counts.
+    #[staticmethod]
+    #[pyo3(signature = (task_id, qubits, shots, num_qubits, counts, backend=None))]
+    fn from_counts(
+        task_id: String,
+        qubits: PyIntListOrQubitList,
+        shots: usize,
+        num_qubits: usize,
+        counts: HashMap<String, usize>,
+        backend: Option<String>,
+    ) -> PyResult<Self> {
+        let qubits = qubits.into();
+        let counts = counts
+            .into_iter()
+            .map(|(bitstring, count)| {
+                Outcome::from_bitstring(&bitstring)
+                    .map(|outcome| (outcome, count))
+                    .map_err(|e| PyValueError::new_err(e.to_string()))
+            })
+            .collect::<PyResult<HashMap<_, _>>>()?;
+        Ok(Self {
+            inner: ExecutionResult::from_counts(
+                task_id, qubits, shots, num_qubits, backend, counts,
+            ),
         })
     }
 
@@ -590,4 +624,36 @@ fn probabilities_to_bitstring_map(
         .iter()
         .map(|(outcome, prob)| (outcome.to_string(num_qubits), *prob))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PyExecutionResult, PyOutcome};
+    use crate::circuit::bit::PyIntListOrQubitList;
+    use std::collections::HashMap;
+
+    #[test]
+    fn outcome_from_indices_sets_little_endian_bits() {
+        let outcome = PyOutcome::from_indices(3, vec![0, 2, 9]);
+
+        assert_eq!(outcome.to_bitstring(3), "101");
+    }
+
+    #[test]
+    fn execution_result_from_counts_returns_completed_result() {
+        let result = PyExecutionResult::from_counts(
+            "task".to_string(),
+            PyIntListOrQubitList::IntList(vec![0]),
+            2,
+            1,
+            HashMap::from([("0".to_string(), 1), ("1".to_string(), 1)]),
+            Some("sim".to_string()),
+        )
+        .unwrap();
+
+        assert_eq!(result.status().kind(), "completed");
+        assert_eq!(result.backend(), Some("sim".to_string()));
+        assert_eq!(result.counts().get("0"), Some(&1));
+        assert_eq!(result.probabilities().unwrap().get("1"), Some(&0.5));
+    }
 }
