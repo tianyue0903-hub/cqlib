@@ -118,5 +118,10 @@ pub fn register_device_module(parent: &Bound<'_, PyModule>) -> PyResult<()> {
     device_module.add_class::<result::PyExecutionResult>()?;
 
     parent.add_submodule(&device_module)?;
+    parent
+        .py()
+        .import("sys")?
+        .getattr("modules")?
+        .set_item("cqlib._native.device", &device_module)?;
     Ok(())
 }

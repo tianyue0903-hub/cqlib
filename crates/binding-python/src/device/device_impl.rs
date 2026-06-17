@@ -589,10 +589,6 @@ impl PyDevice {
         self.inner.default_two_qubit_error()
     }
 
-    // ---------------------------------------------------------------------
-    // Factory constructors -- create devices with common topologies
-    // ---------------------------------------------------------------------
-
     /// Creates a device with qubits connected as a directed line.
     ///
     /// The device contains physical qubits `0..num_qubits`, all online.
@@ -730,10 +726,6 @@ impl PyDevice {
         Ok(Self { inner })
     }
 
-    // ---------------------------------------------------------------------
-    // Per-qubit / per-edge error rate queries
-    // ---------------------------------------------------------------------
-
     /// Returns the error rate for a given instruction on a single qubit.
     ///
     /// Falls back to the per-qubit native instruction error if available,
@@ -803,10 +795,6 @@ impl PyDevice {
             PhysicalQubit::from_qubit(target.into()),
         )
     }
-
-    // ---------------------------------------------------------------------
-    // Qubit usability queries
-    // ---------------------------------------------------------------------
 
     /// Checks whether a physical qubit is registered and not marked
     /// invalid.

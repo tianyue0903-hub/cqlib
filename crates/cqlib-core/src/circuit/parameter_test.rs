@@ -287,10 +287,6 @@ fn test_p_equality() {
     assert_ne!(p1, p3);
 }
 
-// ---------------------------------------------------------
-// Simplify Tests Ported from parameter_simplify_test.rs
-// ---------------------------------------------------------
-
 #[test]
 fn test_p_simplify_add_num() {
     // 5 + 10 = 15
@@ -549,10 +545,6 @@ fn test_p_simplify_exp_log() {
         .unwrap();
     assert!((v3_left - v3_right).abs() < 1e-10);
 }
-
-// ---------------------------------------------------------
-// Derivative Tests Ported from parameter_derivative_test.rs
-// ---------------------------------------------------------
 
 #[test]
 fn test_p_derivative_constant() {
@@ -835,10 +827,6 @@ fn test_p_variable_base_log() {
     let eval_res = deriv.evaluate(&Some(bindings)).unwrap();
     assert!(eval_res.abs() < 1e-10);
 }
-
-// ---------------------------------------------------------
-// Parsing Tests Ported from parse_test.rs
-// ---------------------------------------------------------
 
 #[test]
 fn test_p_parse_number() {

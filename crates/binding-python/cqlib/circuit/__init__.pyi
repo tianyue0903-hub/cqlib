@@ -104,6 +104,37 @@ from .symbolic_matrix import (
     SymbolicMatrix as SymbolicMatrix,
 )
 
+__all__ = [
+    "Circuit",
+    "CircuitId",
+    "CircuitError",
+    "ClassicalControlOp",
+    "ClassicalExpr",
+    "ClassicalType",
+    "ClassicalValue",
+    "ClassicalVar",
+    "CqlibError",
+    "Instruction",
+    "Measurement",
+    "Parameter",
+    "ParameterError",
+    "Qubit",
+    "QubitError",
+    "SymbolicComplex",
+    "SymbolicMatrix",
+    "ValueControlBody",
+    "ValueInstruction",
+    "ValueOperation",
+    "ValueSwitchCase",
+    "CircuitGate",
+    "circuit_to_matrix",
+    "Directive",
+    "FrozenCircuit",
+    "MCGate",
+    "StandardGate",
+    "UnitaryGate",
+]
+
 class CqlibError(Exception):
     """Base class for all cqlib-specific exceptions."""
     ...
@@ -135,6 +166,6 @@ def circuit_to_matrix(
         A 2D NumPy array (dtype=complex128) of shape (2ⁿ, 2ⁿ).
 
     Raises:
-        RuntimeError: If the circuit contains non-unitary operations.
+        CircuitError: If the circuit contains non-unitary operations.
     """
     ...
