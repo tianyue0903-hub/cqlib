@@ -267,6 +267,13 @@ pub enum CircuitError {
         context: String,
     },
 
+    /// Thrown when `Circuit::depth(recurse=false)` is called on a circuit that
+    /// contains any classical control-flow operation (`if`/`while`/`for`/
+    /// `switch`/`break`/`continue`) at any nesting depth. Pass `recurse = true`
+    /// to obtain an estimated depth that unfolds control flow.
+    #[error("circuit contains control-flow operations; pass recurse=true for an estimated depth")]
+    ControlFlowPresent,
+
     /// Catch-all for an invalid operation that has no more specific error variant.
     #[error("Invalid Operation: {0}")]
     InvalidOperation(String),

@@ -481,6 +481,26 @@ impl PyCircuit {
             .collect()
     }
 
+    /// Returns the circuit depth (longest ASAP path over qubit wires).
+    ///
+    /// Every instruction node contributes one layer on the qubits it touches.
+    /// Barriers serialize their listed qubits (an empty-qubit barrier is
+    /// global). ``CircuitGate`` counts as depth 1 (opaque; call :meth:`decompose`
+    /// first to recurse).
+    ///
+    /// With ``recurse=False`` (default) raises :class:`CircuitError` if the
+    /// circuit contains any control-flow operation (``if``/``while``/``for``/
+    /// ``switch``/``break``/``continue``). With ``recurse=True`` returns an
+    /// estimated depth: ``if``/``switch`` take the max branch, ``while`` counts
+    /// its body once, ``for`` with a statically-known unsigned-literal range is
+    /// fully unrolled (else counted once).
+    #[pyo3(signature = (recurse=false))]
+    fn depth(&self, recurse: bool) -> PyResult<usize> {
+        self.inner
+            .depth(recurse)
+            .map_err(|error| PyCircuitError::new_err(error.to_string()))
+    }
+
     /// Appends a standard gate using its bound parameters.
     #[pyo3(signature = (gate, qubits, label=None))]
     fn append_gate(

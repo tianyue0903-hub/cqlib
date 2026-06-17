@@ -496,6 +496,29 @@ impl Circuit {
         &self.data
     }
 
+    /// Returns the circuit depth (longest ASAP schedule path over qubit wires).
+    ///
+    /// Every instruction node contributes one layer on the qubits it touches;
+    /// barriers synchronize their listed qubits (an empty-qubit barrier is
+    /// global, synchronizing every circuit qubit). `CircuitGate` is opaque
+    /// (depth 1); call [`decompose`](Self::decompose) first to recurse into
+    /// nested sub-circuits.
+    ///
+    /// With `recurse = false` (default), an error is returned if the circuit
+    /// contains any classical control-flow operation (`if`/`while`/`for`/
+    /// `switch`/`break`/`continue`). With `recurse = true`, control flow is
+    /// unfolded into an estimated depth: `if`/`switch` take the max branch,
+    /// `while` counts the body once, `for` with a statically-known
+    /// unsigned-literal range is fully unrolled (else counted once).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CircuitError::ControlFlowPresent`] when `recurse = false` and
+    /// the circuit contains control flow.
+    pub fn depth(&self, recurse: bool) -> Result<usize, CircuitError> {
+        crate::circuit::depth::circuit_depth(self.qubits.iter().copied(), &self.data, recurse)
+    }
+
     /// Returns the static types of runtime classical variables owned by this circuit.
     pub fn classical_vars(&self) -> &[ClassicalType] {
         &self.classical_vars

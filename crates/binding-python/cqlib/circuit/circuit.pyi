@@ -179,6 +179,28 @@ class Circuit:
     def operations(self) -> list[ValueOperation]:
         """All operations in insertion order."""
         ...
+    def depth(self, recurse: bool = False) -> int:
+        """Return the circuit depth (longest ASAP path over qubit wires).
+
+        Every instruction node contributes one layer on the qubits it touches.
+        Barriers serialize their listed qubits (an empty-qubit barrier is
+        global). ``CircuitGate`` counts as depth 1 (opaque; call :meth:`decompose`
+        first to recurse).
+
+        Args:
+            recurse: If ``False`` (default), raise :class:`CircuitError` when the
+                circuit contains any control-flow operation (``if``/``while``/
+                ``for``/``switch``/``break``/``continue``) at any depth. If
+                ``True``, return an estimated depth: ``if``/``switch`` take the
+                max branch, ``while`` counts its body once, ``for`` with a
+                statically-known unsigned-literal range is fully unrolled (else
+                counted once).
+
+        Raises:
+            CircuitError: If ``recurse=False`` and the circuit contains control
+                flow.
+        """
+        ...
     def set_global_phase(self, phase: ParamLike) -> None:
         """Replace the circuit global phase."""
         ...
