@@ -598,8 +598,10 @@ fn test_trotter_matrix_equivalence_xx() {
 fn test_evolution_circuit_exact_for_commuting_hamiltonian() {
     // ZZ and ZI commute → exact path should be taken (1 gate per term, no Trotter steps)
     let mut h = Hamiltonian::new(2);
-    h.add_term("ZZ".into(), 0.5.into()).unwrap();
-    h.add_term("ZI".into(), 0.3.into()).unwrap();
+    h.add_term("ZZ".parse::<PauliString>().unwrap(), 0.5.into())
+        .unwrap();
+    h.add_term("ZI".parse::<PauliString>().unwrap(), 0.3.into())
+        .unwrap();
 
     // steps=1 is irrelevant for commuting H; mode is also irrelevant
     let circuit = h
@@ -616,7 +618,8 @@ fn test_evolution_circuit_exact_matches_to_trotter_circuit_for_commuting() {
     // For commuting H, to_evolution_circuit should produce the same matrix as
     // to_trotter_circuit with 1 step (which for commuting H is also exact).
     let mut h = Hamiltonian::new(1);
-    h.add_term("Z".into(), 0.7.into()).unwrap();
+    h.add_term("Z".parse::<PauliString>().unwrap(), 0.7.into())
+        .unwrap();
 
     let t = 0.4_f64;
     let exact_circ = h
@@ -639,8 +642,10 @@ fn test_evolution_circuit_exact_matches_to_trotter_circuit_for_commuting() {
 fn test_evolution_circuit_noncommuting_uses_trotter() {
     // X and Z do not commute → falls back to Trotter
     let mut h = Hamiltonian::new(1);
-    h.add_term("X".into(), 1.0.into()).unwrap();
-    h.add_term("Z".into(), 1.0.into()).unwrap();
+    h.add_term("X".parse::<PauliString>().unwrap(), 1.0.into())
+        .unwrap();
+    h.add_term("Z".parse::<PauliString>().unwrap(), 1.0.into())
+        .unwrap();
 
     let circuit_trotter = h
         .to_evolution_circuit(0.5, 10, TrotterMode::FirstOrder)
@@ -668,7 +673,8 @@ fn test_evolution_circuit_rejects_empty_hamiltonian() {
 #[test]
 fn test_evolution_circuit_rejects_zero_steps() {
     let mut h = Hamiltonian::new(1);
-    h.add_term("X".into(), 1.0.into()).unwrap();
+    h.add_term("X".parse::<PauliString>().unwrap(), 1.0.into())
+        .unwrap();
     assert!(
         h.to_evolution_circuit(1.0, 0, TrotterMode::FirstOrder)
             .is_err()
@@ -680,7 +686,8 @@ fn test_evolution_circuit_exact_matrix_correctness() {
     // H = 0.5*Z, t = π  →  e^{-i*0.5*π*Z} = [[e^{-iπ/2}, 0], [0, e^{iπ/2}]]
     //                                        = [[-i, 0], [0, i]]
     let mut h = Hamiltonian::new(1);
-    h.add_term("Z".into(), 0.5.into()).unwrap();
+    h.add_term("Z".parse::<PauliString>().unwrap(), 0.5.into())
+        .unwrap();
 
     let circuit = h
         .to_evolution_circuit(PI, 1, TrotterMode::FirstOrder)

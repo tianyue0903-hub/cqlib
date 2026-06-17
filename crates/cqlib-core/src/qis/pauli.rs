@@ -41,7 +41,7 @@
 //! // ps now represents X ⊗ Z ⊗ I
 //! ```
 
-use crate::qis::error::PauliStringParseError;
+use crate::qis::error::{PauliStringParseError, QisError};
 use bitvec::prelude::*;
 use ndarray::{Array2, arr2};
 use num_complex::Complex64;
@@ -98,7 +98,7 @@ impl fmt::Display for Phase {
             Phase::Minus => "-1",
             Phase::MinusI => "-i",
         };
-        write!(f, "{:?}", s)
+        f.write_str(s)
     }
 }
 
@@ -233,15 +233,39 @@ pub enum Pauli {
     I,
 }
 
-impl From<char> for Pauli {
-    fn from(s: char) -> Self {
-        match &s {
-            'X' => Pauli::X,
-            'Y' => Pauli::Y,
-            'Z' => Pauli::Z,
-            'I' => Pauli::I,
-            _ => panic!("Invalid Pauli character: {}", s),
+impl TryFrom<char> for Pauli {
+    type Error = QisError;
+
+    fn try_from(s: char) -> Result<Self, Self::Error> {
+        match s {
+            'I' => Ok(Pauli::I),
+            'X' => Ok(Pauli::X),
+            'Y' => Ok(Pauli::Y),
+            'Z' => Ok(Pauli::Z),
+            other => Err(QisError::InvalidParameterValue(format!(
+                "invalid Pauli character '{}'",
+                other
+            ))),
         }
+    }
+}
+
+impl FromStr for Pauli {
+    type Err = QisError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.is_empty() {
+            return Err(QisError::InvalidParameterValue(
+                "empty string cannot be converted to Pauli".to_string(),
+            ));
+        }
+        if s.len() > 1 {
+            return Err(QisError::InvalidParameterValue(format!(
+                "expected a single Pauli character, got \"{}\"",
+                s
+            )));
+        }
+        s.chars().next().unwrap().try_into()
     }
 }
 
@@ -531,6 +555,45 @@ impl PauliString {
         }
     }
 
+    /// Returns the Pauli operator at the specified qubit index, or an error if out of bounds.
+    ///
+    /// # Arguments
+    ///
+    /// * idx - The qubit index.
+    ///
+    /// # Returns
+    ///
+    /// The Pauli operator at the specified index, or [QisError::IndexOutOfBounds].
+    pub fn try_get_pauli(&self, idx: usize) -> Result<Pauli, QisError> {
+        if idx >= self.num_qubits {
+            return Err(QisError::IndexOutOfBounds {
+                index: idx,
+                max: self.num_qubits.saturating_sub(1),
+            });
+        }
+        Ok(self.get_pauli(idx))
+    }
+
+    /// Sets the Pauli operator at the specified qubit index, or returns an error if out of bounds.
+    ///
+    /// # Arguments
+    ///
+    /// * idx - The qubit index.
+    /// * pauli - The Pauli operator to set.
+    ///
+    /// # Returns
+    ///
+    /// Ok(()) on success, or [QisError::IndexOutOfBounds] if the index is out of bounds.
+    pub fn try_set_pauli(&mut self, idx: usize, pauli: Pauli) -> Result<(), QisError> {
+        if idx >= self.num_qubits {
+            return Err(QisError::IndexOutOfBounds {
+                index: idx,
+                max: self.num_qubits.saturating_sub(1),
+            });
+        }
+        self.set_pauli(idx, pauli);
+        Ok(())
+    }
     /// Checks if this Pauli string commutes with another.
     ///
     /// Two Pauli strings commute if their symplectic inner product is 0 (mod 2).
@@ -983,27 +1046,6 @@ impl FromStr for PauliString {
         }
 
         Ok(result)
-    }
-}
-
-impl From<&str> for PauliString {
-    /// Creates a PauliString from a string slice.
-    ///
-    /// Panics if the string is not a valid Pauli string representation.
-    /// For a fallible version, use `str::parse::<PauliString>()`.
-    ///
-    /// # Examples
-    /// ```
-    /// use cqlib_core::qis::pauli::PauliString;
-    ///
-    /// let ps: PauliString = "XYZ".into();
-    /// assert_eq!(ps.to_string(), "+XYZ");
-    ///
-    /// let ps: PauliString = "-iZII".into();
-    /// assert_eq!(ps.to_string(), "-iZII");
-    /// ```
-    fn from(s: &str) -> Self {
-        s.parse().expect("Invalid PauliString format")
     }
 }
 

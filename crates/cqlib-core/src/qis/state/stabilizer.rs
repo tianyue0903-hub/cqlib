@@ -493,6 +493,11 @@ impl StabilizerState {
     }
 
     pub(crate) fn validate_qubit(&self, q: usize) -> Result<(), QisError> {
+        if self.num_qubits == 0 {
+            return Err(QisError::InvalidParameterValue(
+                "no valid qubit indices in a zero-qubit system".to_string(),
+            ));
+        }
         if q >= self.num_qubits {
             return Err(QisError::IndexOutOfBounds {
                 index: q,

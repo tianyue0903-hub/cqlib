@@ -666,3 +666,127 @@ fn test_expectation_partial_probabilities() {
         exp
     );
 }
+
+#[test]
+fn phase_display_has_no_debug_quotes() {
+    for (phase, expected) in [
+        (Phase::Plus, "1"),
+        (Phase::I, "i"),
+        (Phase::Minus, "-1"),
+        (Phase::MinusI, "-i"),
+    ] {
+        let s = phase.to_string();
+        assert!(
+            !s.contains('\"'),
+            "Phase::Display for {:?} produced quoted output: {:?}",
+            phase,
+            s
+        );
+        assert_eq!(
+            s, expected,
+            "Phase::Display for {:?}: expected {:?}, got {:?}",
+            phase, expected, s
+        );
+    }
+}
+
+#[test]
+fn phase_display_matches_expected_symbols() {
+    assert_eq!(Phase::Plus.to_string(), "1");
+    assert_eq!(Phase::I.to_string(), "i");
+    assert_eq!(Phase::Minus.to_string(), "-1");
+    assert_eq!(Phase::MinusI.to_string(), "-i");
+}
+
+#[test]
+fn pauli_try_from_valid_characters() {
+    use std::convert::TryFrom;
+    assert_eq!(Pauli::try_from('I').unwrap(), Pauli::I);
+    assert_eq!(Pauli::try_from('X').unwrap(), Pauli::X);
+    assert_eq!(Pauli::try_from('Y').unwrap(), Pauli::Y);
+    assert_eq!(Pauli::try_from('Z').unwrap(), Pauli::Z);
+}
+
+#[test]
+fn pauli_try_from_invalid_characters() {
+    use std::convert::TryFrom;
+    // 'A' is not a Pauli character
+    assert!(Pauli::try_from('A').is_err());
+    // Lowercase 'x' (strict uppercase only)
+    assert!(Pauli::try_from('x').is_err());
+    // Number
+    assert!(Pauli::try_from('0').is_err());
+    // Whitespace
+    assert!(Pauli::try_from(' ').is_err());
+}
+
+#[test]
+fn pauli_try_from_does_not_panic() {
+    use std::convert::TryFrom;
+    // This must not panic, just return Err
+    let _ = Pauli::try_from('\0');
+    let _ = Pauli::try_from('\x7f');
+    let _ = Pauli::try_from('!');
+}
+
+#[test]
+fn pauli_from_str_valid() {
+    assert_eq!("I".parse::<Pauli>().unwrap(), Pauli::I);
+    assert_eq!("X".parse::<Pauli>().unwrap(), Pauli::X);
+    assert_eq!("Y".parse::<Pauli>().unwrap(), Pauli::Y);
+    assert_eq!("Z".parse::<Pauli>().unwrap(), Pauli::Z);
+}
+
+#[test]
+fn pauli_from_str_invalid() {
+    assert!("".parse::<Pauli>().is_err());
+    assert!("A".parse::<Pauli>().is_err());
+    assert!("x".parse::<Pauli>().is_err());
+    assert!("XY".parse::<Pauli>().is_err());
+    assert!("II".parse::<Pauli>().is_err());
+}
+
+#[test]
+fn try_get_pauli_rejects_out_of_bounds_index() {
+    let ps = PauliString::new(2);
+    assert!(ps.try_get_pauli(0).is_ok());
+    assert!(ps.try_get_pauli(1).is_ok());
+    assert!(ps.try_get_pauli(2).is_err());
+    assert!(ps.try_get_pauli(100).is_err());
+}
+
+#[test]
+fn try_get_pauli_zero_qubits() {
+    let ps = PauliString::new(0);
+    assert!(ps.try_get_pauli(0).is_err());
+}
+
+#[test]
+fn try_set_pauli_rejects_out_of_bounds_index() {
+    let mut ps = PauliString::new(2);
+    assert!(ps.try_set_pauli(0, Pauli::X).is_ok());
+    assert!(ps.try_set_pauli(1, Pauli::Z).is_ok());
+    assert!(ps.try_set_pauli(2, Pauli::X).is_err());
+    assert!(ps.try_set_pauli(100, Pauli::I).is_err());
+}
+
+#[test]
+fn try_set_pauli_preserves_state_on_error() {
+    let mut ps = PauliString::new(2);
+    ps.try_set_pauli(0, Pauli::X).unwrap();
+    let result = ps.try_set_pauli(5, Pauli::Z);
+    assert!(result.is_err());
+    assert_eq!(ps.try_get_pauli(0).unwrap(), Pauli::X);
+    assert_eq!(ps.try_get_pauli(1).unwrap(), Pauli::I);
+}
+
+#[test]
+fn try_get_pauli_returns_correct_operator() {
+    let mut ps = PauliString::new(3);
+    ps.try_set_pauli(0, Pauli::X).unwrap();
+    ps.try_set_pauli(1, Pauli::Y).unwrap();
+    ps.try_set_pauli(2, Pauli::Z).unwrap();
+    assert_eq!(ps.try_get_pauli(0).unwrap(), Pauli::X);
+    assert_eq!(ps.try_get_pauli(1).unwrap(), Pauli::Y);
+    assert_eq!(ps.try_get_pauli(2).unwrap(), Pauli::Z);
+}
