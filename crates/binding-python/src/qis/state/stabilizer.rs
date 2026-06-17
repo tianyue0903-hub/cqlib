@@ -12,10 +12,12 @@
 
 //! Python bindings for cqlib-core StabilizerState module.
 
-use crate::circuit::circuit_impl::PyCircuit;
-use crate::device::result::PyOutcome;
+use crate::circuit::{PyMeasurement, circuit_impl::PyCircuit};
+use crate::device::result::{PyExecutionResult, PyOutcome};
 use crate::qis::pauli::PyPauliString;
 use crate::qis::qis_error_to_py_err;
+use crate::qis::state::classical::PyClassicalState;
+use crate::qis::state::outcome_probabilities_to_py;
 use cqlib_core::qis::state::stabilizer::{CircuitExecutionResult, StabilizerState};
 use pyo3::prelude::*;
 
@@ -34,18 +36,17 @@ impl PyStabilizerCircuitResult {
         PyStabilizerState::from(self.inner.state.clone())
     }
 
-    /// Per-qubit last mid-circuit measurement result, or None if not measured.
+    /// Runtime classical values and variables produced during circuit execution.
     #[getter]
-    fn measurements(&self) -> Vec<Option<bool>> {
-        self.inner.measurements.clone()
+    fn classical(&self) -> PyClassicalState {
+        PyClassicalState::from(self.inner.classical.clone())
     }
 
     /// Returns a string representation of the circuit execution result.
     fn __repr__(&self) -> String {
         format!(
-            "StabilizerCircuitResult(num_qubits={}, measurements={:?})",
-            self.inner.state.num_qubits(),
-            self.inner.measurements
+            "StabilizerCircuitResult(num_qubits={})",
+            self.inner.state.num_qubits()
         )
     }
 }
@@ -87,11 +88,18 @@ impl PyStabilizerState {
             .map_err(qis_error_to_py_err)
     }
 
-    /// Executes a Clifford circuit and returns final state plus mid-circuit measurements.
+    /// Executes a Clifford circuit and returns final state plus runtime classical data.
     #[staticmethod]
-    fn apply_circuit(circuit: &PyCircuit) -> PyResult<PyStabilizerCircuitResult> {
-        StabilizerState::apply_circuit(&circuit.inner)
+    fn run_circuit(circuit: &PyCircuit) -> PyResult<PyStabilizerCircuitResult> {
+        StabilizerState::run_circuit(&circuit.inner)
             .map(|inner| PyStabilizerCircuitResult { inner })
+            .map_err(qis_error_to_py_err)
+    }
+
+    /// Applies a Clifford circuit to this state in place.
+    fn apply_circuit(&mut self, circuit: &PyCircuit) -> PyResult<()> {
+        self.inner
+            .apply_circuit(&circuit.inner)
             .map_err(qis_error_to_py_err)
     }
 
@@ -209,6 +217,25 @@ impl PyStabilizerState {
             .into_iter()
             .map(PyOutcome::from)
             .collect()
+    }
+
+    /// Samples measurement outcomes according to a circuit measurement receipt.
+    fn sample(&self, measurement: &PyMeasurement, shots: usize) -> PyResult<PyExecutionResult> {
+        self.inner
+            .sample(&measurement.inner, shots)
+            .map(PyExecutionResult::from)
+            .map_err(qis_error_to_py_err)
+    }
+
+    /// Returns marginal probabilities according to a circuit measurement receipt.
+    fn probs(
+        &self,
+        measurement: &PyMeasurement,
+    ) -> PyResult<std::collections::HashMap<PyOutcome, f64>> {
+        self.inner
+            .probs(&measurement.inner)
+            .map(outcome_probabilities_to_py)
+            .map_err(qis_error_to_py_err)
     }
 
     /// Returns the stabilizer generators.

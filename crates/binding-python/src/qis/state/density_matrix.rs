@@ -12,9 +12,10 @@
 
 //! Python bindings for cqlib-core DensityMatrix module.
 
-use crate::circuit::{PyCircuit, PyStandardGate};
-use crate::device::result::PyOutcome;
+use crate::circuit::{PyCircuit, PyMeasurement, PyStandardGate};
+use crate::device::result::{PyExecutionResult, PyOutcome};
 use crate::qis::qis_error_to_py_err;
+use crate::qis::state::outcome_probabilities_to_py;
 use cqlib_core::qis::state::density_matrix::DensityMatrix;
 use num_complex::Complex64;
 use numpy::{PyArray1, PyArray2, PyArrayMethods, PyUntypedArrayMethods};
@@ -133,8 +134,7 @@ impl PyDensityMatrix {
             ));
         };
 
-        let inner = DensityMatrix::from_state(num_qubits, data)
-            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        let inner = DensityMatrix::from_state(num_qubits, data).map_err(qis_error_to_py_err)?;
 
         Ok(Self { inner })
     }
@@ -183,7 +183,7 @@ impl PyDensityMatrix {
         };
 
         let inner = DensityMatrix::from_density_matrix_state(num_qubits, data)
-            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+            .map_err(qis_error_to_py_err)?;
 
         Ok(Self { inner })
     }
@@ -210,8 +210,7 @@ impl PyDensityMatrix {
     ///     >>> dm = DensityMatrix.from_circuit(circuit)
     #[staticmethod]
     fn from_circuit(circuit: &PyCircuit) -> PyResult<Self> {
-        let inner = DensityMatrix::from_circuit(&circuit.inner)
-            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        let inner = DensityMatrix::from_circuit(&circuit.inner).map_err(qis_error_to_py_err)?;
         Ok(Self { inner })
     }
 
@@ -235,7 +234,7 @@ impl PyDensityMatrix {
     #[getter]
     fn data<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<Complex64>>> {
         let dim = 1 << self.inner.num_qubits;
-        let data = self.inner.data.clone();
+        let data = self.inner.data();
         // Reshape the flat data into 2D matrix
         let mut matrix = Vec::with_capacity(data.len());
         for i in 0..dim {
@@ -797,17 +796,10 @@ impl PyDensityMatrix {
     /// Raises:
     ///     ValueError: If any qubit index is out of bounds
     fn partial_trace(&self, keep: Vec<usize>) -> PyResult<Self> {
-        // Validate qubit indices
-        for &q in &keep {
-            if q >= self.inner.num_qubits {
-                return Err(PyValueError::new_err(format!(
-                    "Qubit index {} out of bounds for {} qubits",
-                    q, self.inner.num_qubits
-                )));
-            }
-        }
-
-        let inner = self.inner.partial_trace(&keep);
+        let inner = self
+            .inner
+            .partial_trace(&keep)
+            .map_err(qis_error_to_py_err)?;
         Ok(Self { inner })
     }
 
@@ -827,11 +819,11 @@ impl PyDensityMatrix {
         if let Ok(h) = observable.extract::<crate::qis::hamiltonian::PyHamiltonian>() {
             self.inner
                 .expectation(&h.inner)
-                .map_err(|e| PyValueError::new_err(e.to_string()))
+                .map_err(qis_error_to_py_err)
         } else if let Ok(ps) = observable.extract::<crate::qis::pauli::PyPauliString>() {
             self.inner
                 .expectation(&ps.inner)
-                .map_err(|e| PyValueError::new_err(e.to_string()))
+                .map_err(qis_error_to_py_err)
         } else {
             Err(PyValueError::new_err(
                 "Observable must be a Hamiltonian or a PauliString",
@@ -920,7 +912,18 @@ impl PyDensityMatrix {
     fn validate_physical(&self, tol: Option<f64>) -> PyResult<()> {
         self.inner
             .validate_physical(tol.unwrap_or(1e-10))
-            .map_err(|e| PyValueError::new_err(e.to_string()))
+            .map_err(qis_error_to_py_err)
+    }
+
+    /// Resets the specified qubit to the |0⟩ state by measuring and flipping if 1.
+    ///
+    /// Args:
+    ///     qubit: Target qubit index
+    ///
+    /// Raises:
+    ///     IndexError: If qubit index is out of bounds.
+    fn reset(&mut self, qubit: usize) -> PyResult<()> {
+        self.inner.reset(qubit).map_err(qis_error_to_py_err)
     }
 
     /// Measures one qubit and collapses the state.
@@ -940,5 +943,24 @@ impl PyDensityMatrix {
             .into_iter()
             .map(PyOutcome::from)
             .collect()
+    }
+
+    /// Samples measurement outcomes according to a circuit measurement receipt.
+    fn sample(&self, measurement: &PyMeasurement, shots: usize) -> PyResult<PyExecutionResult> {
+        self.inner
+            .sample(&measurement.inner, shots)
+            .map(PyExecutionResult::from)
+            .map_err(qis_error_to_py_err)
+    }
+
+    /// Returns marginal probabilities according to a circuit measurement receipt.
+    fn probs(
+        &self,
+        measurement: &PyMeasurement,
+    ) -> PyResult<std::collections::HashMap<PyOutcome, f64>> {
+        self.inner
+            .probs(&measurement.inner)
+            .map(outcome_probabilities_to_py)
+            .map_err(qis_error_to_py_err)
     }
 }

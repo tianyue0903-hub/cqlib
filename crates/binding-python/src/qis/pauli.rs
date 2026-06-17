@@ -12,16 +12,19 @@
 
 //! Python bindings for cqlib-core Pauli module.
 
+use crate::qis::qis_error_to_py_err;
 use crate::qis::state::density_matrix::PyDensityMatrix;
 use crate::qis::state::statevector::PyStatevector;
 use cqlib_core::qis::Observable;
 use cqlib_core::qis::pauli::{Pauli, PauliString, Phase};
 use numpy::PyArray2;
-use pyo3::exceptions::{PyIndexError, PyValueError};
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyComplex, PyDict, PyTuple};
 use std::collections::HashMap;
+use std::collections::hash_map::DefaultHasher;
 use std::fmt;
+use std::hash::{Hash, Hasher};
 
 /// Phase factor in the Pauli group, isomorphic to Z4 (the cyclic group of order 4).
 ///
@@ -123,6 +126,12 @@ impl PyPhase {
 
     fn __eq__(&self, other: &PyPhase) -> bool {
         self.inner == other.inner
+    }
+
+    fn __hash__(&self) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        self.inner.hash(&mut hasher);
+        hasher.finish()
     }
 
     fn __repr__(&self) -> String {
@@ -235,8 +244,6 @@ impl PyPauli {
     }
 
     fn __hash__(&self) -> u64 {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
         let mut hasher = DefaultHasher::new();
         self.inner.hash(&mut hasher);
         hasher.finish()
@@ -319,14 +326,9 @@ impl PyPauliString {
     /// Raises:
     ///     IndexError: If idx >= num_qubits
     fn set_pauli(&mut self, idx: usize, pauli: &PyPauli) -> PyResult<()> {
-        if idx >= self.inner.num_qubits {
-            return Err(PyIndexError::new_err(format!(
-                "Index {} out of bounds for {} qubits",
-                idx, self.inner.num_qubits
-            )));
-        }
-        self.inner.set_pauli(idx, pauli.inner);
-        Ok(())
+        self.inner
+            .try_set_pauli(idx, pauli.inner)
+            .map_err(crate::qis::qis_error_to_py_err)
     }
 
     /// Gets the Pauli operator at the specified qubit index.
@@ -337,21 +339,10 @@ impl PyPauliString {
     /// Returns:
     ///     The Pauli operator at the specified index
     fn get_pauli(&self, idx: usize) -> PyResult<PyPauli> {
-        if idx >= self.inner.num_qubits {
-            return Err(PyIndexError::new_err(format!(
-                "Index {} out of bounds for {} qubits",
-                idx, self.inner.num_qubits
-            )));
-        }
-        let x = self.inner.x[idx];
-        let z = self.inner.z[idx];
-        let pauli = match (x, z) {
-            (false, false) => Pauli::I,
-            (true, false) => Pauli::X,
-            (true, true) => Pauli::Y,
-            (false, true) => Pauli::Z,
-        };
-        Ok(PyPauli { inner: pauli })
+        self.inner
+            .try_get_pauli(idx)
+            .map(|pauli| PyPauli { inner: pauli })
+            .map_err(crate::qis::qis_error_to_py_err)
     }
 
     /// Returns the number of qubits in the Pauli string.
@@ -455,21 +446,21 @@ impl PyPauliString {
 
         self.inner
             .expectation(&rust_probs)
-            .map_err(|e| PyValueError::new_err(e.to_string()))
+            .map_err(qis_error_to_py_err)
     }
 
     /// Computes the expectation value for a statevector.
     fn expectation_statevector(&self, sv: &PyStatevector) -> PyResult<f64> {
         self.inner
             .expectation_statevector(&sv.inner)
-            .map_err(|e| PyValueError::new_err(e.to_string()))
+            .map_err(qis_error_to_py_err)
     }
 
     /// Computes the expectation value for a density matrix.
     fn expectation_density_matrix(&self, dm: &PyDensityMatrix) -> PyResult<f64> {
         self.inner
             .expectation_density_matrix(&dm.inner)
-            .map_err(|e| PyValueError::new_err(e.to_string()))
+            .map_err(qis_error_to_py_err)
     }
 
     /// Computes the expectation value from measurement probabilities.
@@ -499,7 +490,14 @@ impl PyPauliString {
 
         self.inner
             .expectation_probs(&rust_measurements)
-            .map_err(|e| PyValueError::new_err(e.to_string()))
+            .map_err(qis_error_to_py_err)
+    }
+
+    /// Computes the variance for a statevector.
+    fn variance_statevector(&self, sv: &PyStatevector) -> PyResult<f64> {
+        self.inner
+            .variance_statevector(&sv.inner)
+            .map_err(qis_error_to_py_err)
     }
 
     /// Returns a new Pauli string that is the product of this and another.
@@ -532,6 +530,12 @@ impl PyPauliString {
 
     fn __eq__(&self, other: &PyPauliString) -> bool {
         self.inner == other.inner
+    }
+
+    fn __hash__(&self) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        self.inner.hash(&mut hasher);
+        hasher.finish()
     }
 
     fn __str__(&self) -> String {

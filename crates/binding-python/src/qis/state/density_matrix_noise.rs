@@ -12,10 +12,11 @@
 
 //! Python bindings for cqlib-core DensityMatrixNoise module.
 
-use crate::circuit::{PyCircuit, PyStandardGate};
+use crate::circuit::{PyCircuit, PyMeasurement, PyStandardGate};
 use crate::device::noise::PyNoiseModel;
-use crate::device::result::PyOutcome;
+use crate::device::result::{PyExecutionResult, PyOutcome};
 use crate::qis::qis_error_to_py_err;
+use crate::qis::state::outcome_probabilities_to_py;
 use cqlib_core::qis::state::density_matrix_noise::DensityMatrixNoise;
 use numpy::{PyArray2, PyArrayMethods, PyUntypedArrayMethods};
 use pyo3::exceptions::PyValueError;
@@ -109,8 +110,8 @@ impl PyDensityMatrixNoise {
     #[pyo3(signature = (circuit, noise_model=None))]
     fn from_circuit(circuit: &PyCircuit, noise_model: Option<PyNoiseModel>) -> PyResult<Self> {
         let model = noise_model.map(|m| m.inner);
-        let inner = DensityMatrixNoise::from_circuit(&circuit.inner, model)
-            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        let inner =
+            DensityMatrixNoise::from_circuit(&circuit.inner, model).map_err(qis_error_to_py_err)?;
         Ok(Self { inner })
     }
 
@@ -137,7 +138,7 @@ impl PyDensityMatrixNoise {
         py: Python<'py>,
     ) -> PyResult<Bound<'py, PyArray2<num_complex::Complex64>>> {
         let dim = 1 << self.inner.state.num_qubits;
-        let data = self.inner.state.data.clone();
+        let data = self.inner.state.data();
         let mut matrix = Vec::with_capacity(data.len());
         for i in 0..dim {
             for j in 0..dim {
@@ -161,8 +162,10 @@ impl PyDensityMatrixNoise {
     ///
     /// Returns:
     ///     A vector of probabilities for all 2^n computational basis states.
-    fn probabilities_with_readout(&self, qubits: Vec<usize>) -> Vec<f64> {
-        self.inner.probabilities_with_readout(&qubits)
+    fn probabilities_with_readout(&self, qubits: Vec<usize>) -> PyResult<Vec<f64>> {
+        self.inner
+            .probabilities_with_readout(&qubits)
+            .map_err(qis_error_to_py_err)
     }
 
     /// Applies a standard gate to the density matrix, automatically applying any associated noise.
@@ -424,12 +427,11 @@ impl PyDensityMatrixNoise {
         if let Ok(h) = observable.extract::<crate::qis::hamiltonian::PyHamiltonian>() {
             self.inner
                 .expectation(&h.inner)
-                .map_err(|e| PyValueError::new_err(e.to_string()))
+                .map_err(qis_error_to_py_err)
         } else if let Ok(ps) = observable.extract::<crate::qis::pauli::PyPauliString>() {
             self.inner
-                .state
                 .expectation(&ps.inner)
-                .map_err(|e| PyValueError::new_err(e.to_string()))
+                .map_err(qis_error_to_py_err)
         } else {
             Err(PyValueError::new_err(
                 "Observable must be a Hamiltonian or a PauliString",
@@ -470,5 +472,35 @@ impl PyDensityMatrixNoise {
             .into_iter()
             .map(PyOutcome::from)
             .collect()
+    }
+
+    /// Samples measurement outcomes according to a circuit measurement receipt.
+    fn sample(&self, measurement: &PyMeasurement, shots: usize) -> PyResult<PyExecutionResult> {
+        self.inner
+            .sample(&measurement.inner, shots)
+            .map(PyExecutionResult::from)
+            .map_err(qis_error_to_py_err)
+    }
+
+    /// Returns ideal marginal probabilities according to a circuit measurement receipt.
+    fn probs(
+        &self,
+        measurement: &PyMeasurement,
+    ) -> PyResult<std::collections::HashMap<PyOutcome, f64>> {
+        self.inner
+            .probs(&measurement.inner)
+            .map(outcome_probabilities_to_py)
+            .map_err(qis_error_to_py_err)
+    }
+
+    /// Returns marginal probabilities with readout noise applied.
+    fn probs_with_readout(
+        &self,
+        measurement: &PyMeasurement,
+    ) -> PyResult<std::collections::HashMap<PyOutcome, f64>> {
+        self.inner
+            .probs_with_readout(&measurement.inner)
+            .map(outcome_probabilities_to_py)
+            .map_err(qis_error_to_py_err)
     }
 }

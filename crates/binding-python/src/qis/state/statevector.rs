@@ -12,9 +12,10 @@
 
 //! Python bindings for cqlib-core Statevector module.
 
-use crate::circuit::{PyStandardGate, circuit_impl::PyCircuit};
-use crate::device::result::PyOutcome;
+use crate::circuit::{PyMeasurement, PyStandardGate, circuit_impl::PyCircuit};
+use crate::device::result::{PyExecutionResult, PyOutcome};
 use crate::qis::qis_error_to_py_err;
+use crate::qis::state::outcome_probabilities_to_py;
 use cqlib_core::qis::state::statevector::Statevector;
 use num_complex::Complex64;
 use numpy::{PyArray1, PyArray2, PyArrayMethods, PyUntypedArrayMethods};
@@ -134,8 +135,7 @@ impl PyStatevector {
             ));
         };
 
-        let inner = Statevector::from_state(num_qubits, data)
-            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        let inner = Statevector::from_state(num_qubits, data).map_err(qis_error_to_py_err)?;
 
         Ok(Self { inner })
     }
@@ -162,8 +162,7 @@ impl PyStatevector {
     ///     >>> sv = Statevector.from_circuit(circuit)
     #[staticmethod]
     fn from_circuit(circuit: &PyCircuit) -> PyResult<Self> {
-        let inner = Statevector::from_circuit(&circuit.inner)
-            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        let inner = Statevector::from_circuit(&circuit.inner).map_err(qis_error_to_py_err)?;
         Ok(Self { inner })
     }
 
@@ -197,11 +196,11 @@ impl PyStatevector {
         if let Ok(h) = observable.extract::<crate::qis::hamiltonian::PyHamiltonian>() {
             self.inner
                 .expectation(&h.inner)
-                .map_err(|e| PyValueError::new_err(e.to_string()))
+                .map_err(qis_error_to_py_err)
         } else if let Ok(ps) = observable.extract::<crate::qis::pauli::PyPauliString>() {
             self.inner
                 .expectation(&ps.inner)
-                .map_err(|e| PyValueError::new_err(e.to_string()))
+                .map_err(qis_error_to_py_err)
         } else {
             Err(PyValueError::new_err(
                 "Observable must be a Hamiltonian or a PauliString",
@@ -475,14 +474,14 @@ impl PyStatevector {
             .map_err(qis_error_to_py_err)
     }
 
-    /// Applies the XY(pi/2) gate.
+    /// Applies the XY2P gate: Rz(θ - π/2) Ry(π/2) Rz(π/2 - θ).
     fn apply_xy2p(&mut self, qubit: usize, theta: f64) -> PyResult<()> {
         self.inner
             .apply_xy2p(qubit, theta)
             .map_err(qis_error_to_py_err)
     }
 
-    /// Applies the XY(-pi/2) gate.
+    /// Applies the XY2M gate: Rz(-θ + π/2) Ry(-π/2) Rz(-π/2 + θ).
     fn apply_xy2m(&mut self, qubit: usize, theta: f64) -> PyResult<()> {
         self.inner
             .apply_xy2m(qubit, theta)
@@ -626,6 +625,17 @@ impl PyStatevector {
             .map_err(qis_error_to_py_err)
     }
 
+    /// Resets the specified qubit to the |0⟩ state by measuring and flipping if 1.
+    ///
+    /// Args:
+    ///     qubit: Target qubit index
+    ///
+    /// Raises:
+    ///     IndexError: If qubit index is out of bounds.
+    fn reset(&mut self, qubit: usize) -> PyResult<()> {
+        self.inner.reset(qubit).map_err(qis_error_to_py_err)
+    }
+
     /// Measures one qubit and collapses the state.
     fn measure(&mut self, qubit: usize) -> PyResult<bool> {
         self.inner.measure(qubit).map_err(qis_error_to_py_err)
@@ -643,6 +653,25 @@ impl PyStatevector {
             .into_iter()
             .map(PyOutcome::from)
             .collect()
+    }
+
+    /// Samples measurement outcomes according to a circuit measurement receipt.
+    fn sample(&self, measurement: &PyMeasurement, shots: usize) -> PyResult<PyExecutionResult> {
+        self.inner
+            .sample(&measurement.inner, shots)
+            .map(PyExecutionResult::from)
+            .map_err(qis_error_to_py_err)
+    }
+
+    /// Returns marginal probabilities according to a circuit measurement receipt.
+    fn probs(
+        &self,
+        measurement: &PyMeasurement,
+    ) -> PyResult<std::collections::HashMap<PyOutcome, f64>> {
+        self.inner
+            .probs(&measurement.inner)
+            .map(outcome_probabilities_to_py)
+            .map_err(qis_error_to_py_err)
     }
 
     /// Returns a string representation of the statevector.

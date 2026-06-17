@@ -14,6 +14,8 @@
 
 use cqlib_core::qis::evolution::TrotterMode;
 use pyo3::prelude::*;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 
 /// Trotter-Suzuki decomposition modes for Hamiltonian time evolution.
 ///
@@ -117,5 +119,11 @@ impl PyTrotterMode {
             (TrotterMode::Randomized(a), TrotterMode::Randomized(b)) => a == b,
             _ => false,
         }
+    }
+
+    fn __hash__(&self) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        self.inner.hash(&mut hasher);
+        hasher.finish()
     }
 }

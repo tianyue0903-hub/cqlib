@@ -15,9 +15,9 @@
 //! This module exposes quantum entropy and entanglement measures to Python.
 
 use cqlib_core::qis::entropy as core_entropy;
-use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
+use crate::qis::qis_error_to_py_err;
 use crate::qis::state::density_matrix::PyDensityMatrix;
 use crate::qis::state::statevector::PyStatevector;
 
@@ -36,7 +36,7 @@ use crate::qis::state::statevector::PyStatevector;
 ///     ValueError: If the calculation fails.
 #[pyfunction]
 pub fn linear_entropy(dm: &PyDensityMatrix) -> PyResult<f64> {
-    core_entropy::linear_entropy(&dm.inner).map_err(|e| PyValueError::new_err(e.to_string()))
+    core_entropy::linear_entropy(&dm.inner).map_err(qis_error_to_py_err)
 }
 
 /// Calculates the Rényi entropy of order alpha.
@@ -52,7 +52,7 @@ pub fn linear_entropy(dm: &PyDensityMatrix) -> PyResult<f64> {
 ///     ValueError: If alpha <= 0 or if eigendecomposition fails.
 #[pyfunction]
 pub fn renyi_entropy(dm: &PyDensityMatrix, alpha: f64) -> PyResult<f64> {
-    core_entropy::renyi_entropy(&dm.inner, alpha).map_err(|e| PyValueError::new_err(e.to_string()))
+    core_entropy::renyi_entropy(&dm.inner, alpha).map_err(qis_error_to_py_err)
 }
 
 /// Calculates the entanglement entropy for a bipartite pure state.
@@ -70,8 +70,7 @@ pub fn renyi_entropy(dm: &PyDensityMatrix, alpha: f64) -> PyResult<f64> {
 ///     ValueError: If subsystem indices are invalid or out of bounds.
 #[pyfunction]
 pub fn entanglement_entropy_pure(sv: &PyStatevector, subsys_a: Vec<usize>) -> PyResult<f64> {
-    core_entropy::entanglement_entropy_pure(&sv.inner, &subsys_a)
-        .map_err(|e| PyValueError::new_err(e.to_string()))
+    core_entropy::entanglement_entropy_pure(&sv.inner, &subsys_a).map_err(qis_error_to_py_err)
 }
 
 /// Calculates the negativity entanglement measure.
@@ -89,7 +88,7 @@ pub fn entanglement_entropy_pure(sv: &PyStatevector, subsys_a: Vec<usize>) -> Py
 ///     ValueError: If subsystem indices are invalid or eigendecomposition fails.
 #[pyfunction]
 pub fn negativity(dm: &PyDensityMatrix, subsys_a: Vec<usize>) -> PyResult<f64> {
-    core_entropy::negativity(&dm.inner, &subsys_a).map_err(|e| PyValueError::new_err(e.to_string()))
+    core_entropy::negativity(&dm.inner, &subsys_a).map_err(qis_error_to_py_err)
 }
 
 /// Calculates the concurrence for a 2-qubit quantum state.
@@ -104,7 +103,7 @@ pub fn negativity(dm: &PyDensityMatrix, subsys_a: Vec<usize>) -> PyResult<f64> {
 ///     ValueError: If the state does not have exactly 2 qubits or calculation fails.
 #[pyfunction]
 pub fn concurrence(dm: &PyDensityMatrix) -> PyResult<f64> {
-    core_entropy::concurrence(&dm.inner).map_err(|e| PyValueError::new_err(e.to_string()))
+    core_entropy::concurrence(&dm.inner).map_err(qis_error_to_py_err)
 }
 
 /// Calculates the entanglement of formation for a 2-qubit state.
@@ -119,8 +118,7 @@ pub fn concurrence(dm: &PyDensityMatrix) -> PyResult<f64> {
 ///     ValueError: If the state does not have exactly 2 qubits.
 #[pyfunction]
 pub fn entanglement_of_formation(dm: &PyDensityMatrix) -> PyResult<f64> {
-    core_entropy::entanglement_of_formation(&dm.inner)
-        .map_err(|e| PyValueError::new_err(e.to_string()))
+    core_entropy::entanglement_of_formation(&dm.inner).map_err(qis_error_to_py_err)
 }
 
 /// Register the entropy module with Python.

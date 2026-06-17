@@ -15,7 +15,7 @@ pub mod circuit;
 // pub mod compile;
 pub mod device;
 pub mod ir;
-// pub mod qis;
+pub mod qis;
 // pub mod visualization;
 
 use pyo3::prelude::*;
@@ -27,6 +27,7 @@ fn binding_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     circuit::register_circuit_module(m)?;
     device::register_device_module(m)?;
     ir::register_ir_module(m)?;
+    qis::register_qis_module(m)?;
 
     Ok(())
 }
