@@ -33,7 +33,7 @@ fn test_bit_flip_noise() {
     let mut sim = DensityMatrixNoise::new(1, Some(noise_model));
     sim.apply_x(0).unwrap();
 
-    let probs = sim.probabilities_with_readout(&[0]);
+    let probs = sim.probabilities_with_readout(&[0]).unwrap();
     assert!((probs[1] - 0.9).abs() < 1e-6, "P(|1>) was {}", probs[1]);
     assert!((probs[0] - 0.1).abs() < 1e-6, "P(|0>) was {}", probs[0]);
 }
@@ -52,7 +52,7 @@ fn test_readout_error() {
         .unwrap();
 
     let sim = DensityMatrixNoise::new(1, Some(noise_model));
-    let probs = sim.probabilities_with_readout(&[0]);
+    let probs = sim.probabilities_with_readout(&[0]).unwrap();
 
     assert!((probs[1] - 0.1).abs() < 1e-6, "P(|1>) was {}", probs[1]);
     assert!((probs[0] - 0.9).abs() < 1e-6, "P(|0>) was {}", probs[0]);
@@ -64,7 +64,7 @@ fn test_ccx() {
     sim.apply_x(0).unwrap();
     sim.apply_x(1).unwrap();
     sim.apply_ccx(0, 1, 2).unwrap();
-    let probs = sim.probabilities_with_readout(&[2]);
+    let probs = sim.probabilities_with_readout(&[2]).unwrap();
     let p1: f64 = probs
         .iter()
         .enumerate()
@@ -89,7 +89,7 @@ fn test_apply_kraus_memory() {
     for _ in 0..100 {
         sim.apply_x(0).unwrap();
     }
-    let probs = sim.probabilities_with_readout(&[0]);
+    let probs = sim.probabilities_with_readout(&[0]).unwrap();
     assert!(probs[0] > 0.0);
     assert!(probs[1] > 0.0);
 }
@@ -109,7 +109,7 @@ fn test_from_circuit_with_noise() {
     circuit.x(Qubit::new(0)).unwrap();
 
     let sim = DensityMatrixNoise::from_circuit(&circuit, Some(noise_model)).unwrap();
-    let probs = sim.probabilities_with_readout(&[0]);
+    let probs = sim.probabilities_with_readout(&[0]).unwrap();
 
     assert!((probs[1] - 0.9).abs() < 1e-6);
     assert!((probs[0] - 0.1).abs() < 1e-6);
@@ -131,7 +131,7 @@ fn test_apply_circuit_with_noise() {
 
     let mut sim = DensityMatrixNoise::new(1, Some(noise_model));
     sim.apply_circuit(&circuit).unwrap();
-    let probs = sim.probabilities_with_readout(&[0]);
+    let probs = sim.probabilities_with_readout(&[0]).unwrap();
 
     assert!((probs[1] - 0.9).abs() < 1e-6);
     assert!((probs[0] - 0.1).abs() < 1e-6);
@@ -152,7 +152,7 @@ fn test_phase_flip_noise_exact() {
     sim.apply_h(0).unwrap();
     sim.apply_h(0).unwrap();
 
-    let probs = sim.probabilities_with_readout(&[0]);
+    let probs = sim.probabilities_with_readout(&[0]).unwrap();
     assert!((probs[1] - 0.1).abs() < 1e-6, "P(|1>) was {}", probs[1]);
     assert!((probs[0] - 0.9).abs() < 1e-6, "P(|0>) was {}", probs[0]);
 }
@@ -171,7 +171,7 @@ fn test_amplitude_damping_noise() {
     let mut sim = DensityMatrixNoise::new(1, Some(noise_model));
     sim.apply_x(0).unwrap();
 
-    let probs = sim.probabilities_with_readout(&[0]);
+    let probs = sim.probabilities_with_readout(&[0]).unwrap();
     assert!((probs[1] - 0.8).abs() < 1e-6, "P(|1>) was {}", probs[1]);
     assert!((probs[0] - 0.2).abs() < 1e-6, "P(|0>) was {}", probs[0]);
 }
@@ -191,7 +191,7 @@ fn test_phase_damping_noise() {
     sim.apply_h(0).unwrap();
     sim.apply_h(0).unwrap();
 
-    let probs = sim.probabilities_with_readout(&[0]);
+    let probs = sim.probabilities_with_readout(&[0]).unwrap();
     let expected_p0 = 0.5 * (1.0 + 0.8f64.sqrt());
     let expected_p1 = 0.5 * (1.0 - 0.8f64.sqrt());
     assert!(
@@ -224,7 +224,7 @@ fn test_pauli_noise() {
     let mut sim = DensityMatrixNoise::new(1, Some(noise_model));
     sim.apply_x(0).unwrap();
 
-    let probs = sim.probabilities_with_readout(&[0]);
+    let probs = sim.probabilities_with_readout(&[0]).unwrap();
     assert!((probs[0] - 0.3).abs() < 1e-6, "P(|0>) was {}", probs[0]);
     assert!((probs[1] - 0.7).abs() < 1e-6, "P(|1>) was {}", probs[1]);
 }
@@ -243,7 +243,7 @@ fn test_depolarizing_1q_noise() {
     let mut sim = DensityMatrixNoise::new(1, Some(noise_model));
     sim.apply_x(0).unwrap();
 
-    let probs = sim.probabilities_with_readout(&[0]);
+    let probs = sim.probabilities_with_readout(&[0]).unwrap();
     assert!((probs[1] - 0.8).abs() < 1e-6, "P(|1>) was {}", probs[1]);
     assert!((probs[0] - 0.2).abs() < 1e-6, "P(|0>) was {}", probs[0]);
 }
@@ -267,7 +267,7 @@ fn test_two_qubit_correlated_pauli_noise() {
     let mut sim = DensityMatrixNoise::new(2, Some(noise_model));
     sim.apply_cx(0, 1).unwrap();
 
-    let probs = sim.probabilities_with_readout(&[0, 1]);
+    let probs = sim.probabilities_with_readout(&[0, 1]).unwrap();
     assert!((probs[0] - 0.8).abs() < 1e-6, "P(|00>) was {}", probs[0]);
     assert!((probs[3] - 0.2).abs() < 1e-6, "P(|11>) was {}", probs[3]);
     assert!(probs[1] < 1e-6);
@@ -292,7 +292,7 @@ fn test_two_qubit_independent_noise() {
     let mut sim = DensityMatrixNoise::new(2, Some(noise_model));
     sim.apply_cx(0, 1).unwrap();
 
-    let probs = sim.probabilities_with_readout(&[0, 1]);
+    let probs = sim.probabilities_with_readout(&[0, 1]).unwrap();
     assert!((probs[0] - 0.72).abs() < 1e-6, "P(|00>) was {}", probs[0]);
     assert!((probs[1] - 0.08).abs() < 1e-6, "P(|01>) was {}", probs[1]);
     assert!((probs[2] - 0.18).abs() < 1e-6, "P(|10>) was {}", probs[2]);
@@ -315,7 +315,7 @@ fn test_two_qubit_depolarizing_noise() {
     sim.apply_x(0).unwrap();
     sim.apply_cx(0, 1).unwrap();
 
-    let probs = sim.probabilities_with_readout(&[0, 1]);
+    let probs = sim.probabilities_with_readout(&[0, 1]).unwrap();
     let sum: f64 = probs.iter().sum();
     assert!((sum - 1.0).abs() < 1e-6);
 
@@ -351,7 +351,7 @@ fn test_multi_qubit_readout_error() {
     let mut sim = DensityMatrixNoise::new(2, Some(noise_model));
     sim.apply_x(0).unwrap();
 
-    let probs = sim.probabilities_with_readout(&[0, 1]);
+    let probs = sim.probabilities_with_readout(&[0, 1]).unwrap();
     assert!((probs[0] - 0.06).abs() < 1e-6, "P(|00>) was {}", probs[0]);
     assert!((probs[1] - 0.54).abs() < 1e-6, "P(|01>) was {}", probs[1]);
     assert!((probs[2] - 0.04).abs() < 1e-6, "P(|10>) was {}", probs[2]);
@@ -386,7 +386,7 @@ fn test_from_circuit_complex() {
     let sim_result = DensityMatrixNoise::from_circuit(&circuit, Some(noise_model));
     assert!(sim_result.is_ok());
     let sim = sim_result.unwrap();
-    let probs = sim.probabilities_with_readout(&[0, 1, 2]);
+    let probs = sim.probabilities_with_readout(&[0, 1, 2]).unwrap();
     let sum: f64 = probs.iter().sum();
     assert!((sum - 1.0).abs() < 1e-6);
 }
@@ -411,7 +411,7 @@ fn test_from_circuit_unitary_gate() {
         .unwrap();
 
     let sim = DensityMatrixNoise::from_circuit(&circuit, None).unwrap();
-    let probs = sim.probabilities_with_readout(&[0]);
+    let probs = sim.probabilities_with_readout(&[0]).unwrap();
     assert!((probs[1] - 1.0).abs() < 1e-6);
     assert!((probs[0] - 0.0).abs() < 1e-6);
 }
@@ -431,7 +431,7 @@ fn test_x2p_y2m_noise() {
     sim.apply_x2p(0).unwrap();
     sim.apply_y2m(0).unwrap();
 
-    let probs = sim.probabilities_with_readout(&[0]);
+    let probs = sim.probabilities_with_readout(&[0]).unwrap();
     assert!(probs[0] >= 0.0);
     assert!(probs[1] >= 0.0);
     assert!((probs[0] + probs[1] - 1.0).abs() < 1e-6);
@@ -454,7 +454,7 @@ fn test_cz_xy2p_rz_noise() {
     sim.apply_xy2p(1, PI).unwrap();
     sim.apply_cz(0, 1).unwrap();
 
-    let probs = sim.probabilities_with_readout(&[0, 1]);
+    let probs = sim.probabilities_with_readout(&[0, 1]).unwrap();
     let sum: f64 = probs.iter().sum();
     assert!((sum - 1.0).abs() < 1e-6);
 }
@@ -493,7 +493,7 @@ fn test_complex_circuit_with_native_gates() {
         .unwrap();
 
     let sim = DensityMatrixNoise::from_circuit(&circuit, Some(noise_model)).unwrap();
-    let probs = sim.probabilities_with_readout(&[0, 1, 2]);
+    let probs = sim.probabilities_with_readout(&[0, 1, 2]).unwrap();
     let sum: f64 = probs.iter().sum();
     assert!((sum - 1.0).abs() < 1e-6);
 }
@@ -514,14 +514,14 @@ fn test_x2p_gate_noise() {
 
     // X2P + X2P = X (approximately, without noise)
     // With bit-flip noise after X2P, we expect some probability in |0>
-    let probs = sim.probabilities_with_readout(&[0]);
+    let probs = sim.probabilities_with_readout(&[0]).unwrap();
     assert!(probs[0] >= 0.0);
     assert!(probs[1] >= 0.0);
     assert!((probs[0] + probs[1] - 1.0).abs() < 1e-6);
 
     // Apply second X2P to complete X rotation
     sim.apply_x2p(0).unwrap();
-    let probs = sim.probabilities_with_readout(&[0]);
+    let probs = sim.probabilities_with_readout(&[0]).unwrap();
     // After two X2P gates with bit-flip noise, P(|0>) should be around 0.1
     assert!(probs[0] > 0.0, "P(|0>) should be > 0 due to noise");
 }
@@ -545,7 +545,7 @@ fn test_x2m_gate_noise() {
     // X2M rotates around X axis by -pi/2
     sim.apply_x2m(0).unwrap();
 
-    let probs = sim.probabilities_with_readout(&[0]);
+    let probs = sim.probabilities_with_readout(&[0]).unwrap();
     assert!(probs[0] >= 0.0);
     assert!(probs[1] >= 0.0);
     assert!((probs[0] + probs[1] - 1.0).abs() < 1e-6);
@@ -565,7 +565,7 @@ fn test_y2p_gate_noise() {
     let mut sim = DensityMatrixNoise::new(1, Some(noise_model));
     sim.apply_y2p(0).unwrap();
 
-    let probs = sim.probabilities_with_readout(&[0]);
+    let probs = sim.probabilities_with_readout(&[0]).unwrap();
     assert!(probs[0] >= 0.0);
     assert!(probs[1] >= 0.0);
     assert!((probs[0] + probs[1] - 1.0).abs() < 1e-6);
@@ -590,7 +590,7 @@ fn test_y2m_gate_noise() {
     // Y2M rotates around Y axis by -pi/2
     sim.apply_y2m(0).unwrap();
 
-    let probs = sim.probabilities_with_readout(&[0]);
+    let probs = sim.probabilities_with_readout(&[0]).unwrap();
     assert!(probs[0] >= 0.0);
     assert!(probs[1] >= 0.0);
     assert!((probs[0] + probs[1] - 1.0).abs() < 1e-6);
@@ -616,7 +616,7 @@ fn test_xy2p_gate_noise() {
     // |1> -> (i|0> + |1>)/sqrt(2), so P(|0>) = 0.5 without noise
     sim.apply_xy2p(0, PI).unwrap();
 
-    let probs = sim.probabilities_with_readout(&[0]);
+    let probs = sim.probabilities_with_readout(&[0]).unwrap();
     // With bit-flip noise, we expect P(|0>) around 0.5 (with some noise variation)
     assert!(
         probs[0] > 0.35 && probs[0] < 0.65,
@@ -645,7 +645,7 @@ fn test_xy2m_gate_noise() {
     // |1> -> (-i|0> + |1>)/sqrt(2), so P(|0>) = 0.5 without noise
     sim.apply_xy2m(0, PI).unwrap();
 
-    let probs = sim.probabilities_with_readout(&[0]);
+    let probs = sim.probabilities_with_readout(&[0]).unwrap();
     // With bit-flip noise, we expect P(|0>) around 0.5 (with some noise variation)
     assert!(
         probs[0] > 0.35 && probs[0] < 0.65,
@@ -679,7 +679,7 @@ fn test_cz_gate_noise() {
     sim.apply_cz(0, 1).unwrap();
 
     // CZ adds a phase to |11> but doesn't change probabilities
-    let probs = sim.probabilities_with_readout(&[0, 1]);
+    let probs = sim.probabilities_with_readout(&[0, 1]).unwrap();
 
     // With bit-flip noise, we expect slight deviation from P(|11>) = 1
     assert!(probs[3] > 0.8, "P(|11>) was {} (expected > 0.8)", probs[3]);
@@ -708,7 +708,7 @@ fn test_rz_gate_noise() {
 
     // RZ(pi) on |+> gives |->
     // With phase flip noise during RZ, we expect some |+> component
-    let probs = sim.probabilities_with_readout(&[0]);
+    let probs = sim.probabilities_with_readout(&[0]).unwrap();
     assert!((probs[0] + probs[1] - 1.0).abs() < 1e-6);
 }
 
@@ -738,7 +738,7 @@ fn test_rz_gate_multiple_rotations() {
     // Measure in X basis by applying H first
     sim.apply_h(0).unwrap();
 
-    let probs = sim.probabilities_with_readout(&[0]);
+    let probs = sim.probabilities_with_readout(&[0]).unwrap();
     // With phase damping, P(|1>) should be around 0.5
     assert!(probs[0] >= 0.0);
     assert!(probs[1] >= 0.0);
@@ -777,7 +777,7 @@ fn test_native_gates_combination() {
     sim.apply_y2p(0).unwrap();
     sim.apply_rz(0, PI).unwrap();
 
-    let probs = sim.probabilities_with_readout(&[0]);
+    let probs = sim.probabilities_with_readout(&[0]).unwrap();
     assert!((probs[0] + probs[1] - 1.0).abs() < 1e-6);
 }
 
@@ -833,7 +833,7 @@ fn test_complex_circuit_native_gates_with_cz() {
         .unwrap();
 
     let sim = DensityMatrixNoise::from_circuit(&circuit, Some(noise_model)).unwrap();
-    let probs = sim.probabilities_with_readout(&[0, 1, 2]);
+    let probs = sim.probabilities_with_readout(&[0, 1, 2]).unwrap();
     let sum: f64 = probs.iter().sum();
     assert!((sum - 1.0).abs() < 1e-6);
 }
@@ -899,7 +899,7 @@ fn test_complex_circuit_entanglement_with_noise() {
         .unwrap();
 
     let sim = DensityMatrixNoise::from_circuit(&circuit, Some(noise_model)).unwrap();
-    let probs = sim.probabilities_with_readout(&[0, 1, 2, 3]);
+    let probs = sim.probabilities_with_readout(&[0, 1, 2, 3]).unwrap();
     let sum: f64 = probs.iter().sum();
     assert!((sum - 1.0).abs() < 1e-6);
 
@@ -1007,7 +1007,7 @@ fn test_complex_circuit_all_native_gates() {
         .unwrap();
 
     let sim = DensityMatrixNoise::from_circuit(&circuit, Some(noise_model)).unwrap();
-    let probs = sim.probabilities_with_readout(&[0, 1, 2]);
+    let probs = sim.probabilities_with_readout(&[0, 1, 2]).unwrap();
     let sum: f64 = probs.iter().sum();
     assert!((sum - 1.0).abs() < 1e-6);
 }
@@ -1082,7 +1082,7 @@ fn test_complex_circuit_with_readout_and_gate_noise() {
         .unwrap();
 
     let sim = DensityMatrixNoise::from_circuit(&circuit, Some(noise_model)).unwrap();
-    let probs = sim.probabilities_with_readout(&[0, 1]);
+    let probs = sim.probabilities_with_readout(&[0, 1]).unwrap();
     let sum: f64 = probs.iter().sum();
     assert!((sum - 1.0).abs() < 1e-6);
 
@@ -1143,7 +1143,7 @@ fn test_native_gates_pauli_noise() {
     sim.apply_rz(0, PI / 2.0).unwrap();
     sim.apply_xy2p(0, PI / 4.0).unwrap();
 
-    let probs = sim.probabilities_with_readout(&[0]);
+    let probs = sim.probabilities_with_readout(&[0]).unwrap();
     assert!((probs[0] + probs[1] - 1.0).abs() < 1e-6);
     // Due to Pauli noise, both states should have some probability
     assert!(probs[0] > 0.0);
@@ -1170,7 +1170,7 @@ fn test_native_gates_amplitude_damping() {
     // Apply X2P with amplitude damping
     sim.apply_x2p(0).unwrap();
 
-    let probs = sim.probabilities_with_readout(&[0]);
+    let probs = sim.probabilities_with_readout(&[0]).unwrap();
     assert!((probs[0] + probs[1] - 1.0).abs() < 1e-6);
     // Amplitude damping increases P(|0>)
     assert!(probs[0] > 0.0);
@@ -1182,13 +1182,10 @@ fn test_apply_readout_noise_out_of_bounds() {
     sim.apply_h(0).unwrap();
     sim.apply_cx(0, 1).unwrap();
 
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let _ = sim.probabilities_with_readout(&[99]);
-    }));
-    assert!(
-        result.is_err(),
-        "readout noise on out-of-bounds qubit should panic"
-    );
+    assert!(matches!(
+        sim.probabilities_with_readout(&[99]),
+        Err(QisError::IndexOutOfBounds { index: 99, max: 1 })
+    ));
 }
 
 #[test]
@@ -1270,7 +1267,7 @@ fn test_sample_shots_with_readout_noise_model() {
         "sample_shots samples the quantum state; readout noise is applied by probabilities_with_readout"
     );
 
-    let readout_probs = sim.probabilities_with_readout(&[0]);
+    let readout_probs = sim.probabilities_with_readout(&[0]).unwrap();
     assert!((readout_probs[0] - 1.0).abs() < 1e-10);
 }
 
