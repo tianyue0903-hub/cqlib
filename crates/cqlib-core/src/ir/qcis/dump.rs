@@ -27,6 +27,7 @@
 //! Standard gates are mapped to QCIS equivalents:
 //! - `SDG` (S dagger) → `SD`
 //! - `TDG` (T dagger) → `TD`
+//! - `Delay` → `I Qn t`, where `t` is a non-negative integer count in 0.5 ns ticks
 //!
 //! ## Parameter Formatting
 //!
@@ -87,6 +88,8 @@ pub enum QcisDumpError {
     UnsupportedClassicalControl(String),
     /// Parameter contains symbolic values that cannot be resolved to numbers
     SymbolicParameter(String),
+    /// Delay parameter is not a valid QCIS tick count.
+    InvalidDelayParameter(String),
 }
 
 impl std::fmt::Display for QcisDumpError {
@@ -101,7 +104,7 @@ impl std::fmt::Display for QcisDumpError {
                 )?;
                 write!(
                     f,
-                    "Please compile the circuit to QCIS basis gates (X2P, X2M, Y2P, Y2M, XY2P, XY2M, CZ, RZ, I, X, Y, Z, H, S, SD, T, TD, RX, RY, RXY) before dumping."
+                    "Please compile the circuit to QCIS basis gates (X2P, X2M, Y2P, Y2M, XY2P, XY2M, CZ, RZ, X, Y, Z, H, S, SD, T, TD, RX, RY, RXY) and use delay operations for QCIS I instructions before dumping."
                 )
             }
             QcisDumpError::UnsupportedClassicalData(operation) => write!(
@@ -118,6 +121,9 @@ impl std::fmt::Display for QcisDumpError {
                     "Symbolic parameter '{}': QCIS only supports numeric parameters. Please bind all symbolic parameters to numeric values before dumping.",
                     p
                 )
+            }
+            QcisDumpError::InvalidDelayParameter(reason) => {
+                write!(f, "Invalid QCIS delay parameter: {reason}")
             }
         }
     }
@@ -293,9 +299,11 @@ fn format_float(v: f64) -> String {
 /// Convert a standard gate to QCIS format.
 ///
 /// Only QCIS natively supported gates are allowed:
-/// - Native gates: X2P, X2M, Y2P, Y2M, XY2P, XY2M, CZ, RZ, I
+/// - Native gates: X2P, X2M, Y2P, Y2M, XY2P, XY2M, CZ, RZ
 /// - Standard single-qubit: X, Y, Z, H, S, SD, T, TD
 /// - Parameterized: RX, RY, RXY
+///
+/// QCIS `I Qn t` is a delay instruction, not the cqlib identity gate.
 fn standard_gate_to_qcis(
     gate: StandardGate,
     qubits: &[Qubit],
@@ -332,6 +340,10 @@ fn standard_gate_to_qcis(
         StandardGate::RX => "RX",
         StandardGate::RY => "RY",
         StandardGate::RXY => "RXY",
+
+        StandardGate::I => {
+            return Err(QcisDumpError::UnsupportedGate("I".to_string()));
+        }
 
         // All other gates are not natively supported by QCIS
         _ => {
@@ -370,9 +382,39 @@ fn delay_to_qcis(
     circuit: &Circuit,
 ) -> Result<String, QcisDumpError> {
     let qubit_str = format_qubits(qubits);
-    let param_str = format_params(params, circuit)?;
+    let param_str = format_delay_param(params, circuit)?;
 
     Ok(format!("I {} {}", qubit_str, param_str))
+}
+
+fn format_delay_param(params: &[CircuitParam], circuit: &Circuit) -> Result<String, QcisDumpError> {
+    let [param] = params else {
+        return Err(QcisDumpError::InvalidDelayParameter(
+            "QCIS delay requires exactly one tick parameter".to_string(),
+        ));
+    };
+
+    let value = match param {
+        CircuitParam::Fixed(value) => *value,
+        CircuitParam::Index(idx) => {
+            let param = circuit
+                .parameters()
+                .iter()
+                .nth(*idx as usize)
+                .ok_or_else(|| QcisDumpError::SymbolicParameter(format!("p{}", idx)))?;
+            param
+                .evaluate(&None)
+                .map_err(|_| QcisDumpError::SymbolicParameter(param.to_string()))?
+        }
+    };
+
+    if !value.is_finite() || value < 0.0 || value.fract().abs() >= 1e-10 {
+        return Err(QcisDumpError::InvalidDelayParameter(format!(
+            "{value} is not a non-negative integer number of 0.5 ns ticks"
+        )));
+    }
+
+    Ok(format_float(value))
 }
 
 #[cfg(test)]
