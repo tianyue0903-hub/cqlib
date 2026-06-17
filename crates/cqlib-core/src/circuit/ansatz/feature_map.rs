@@ -308,9 +308,9 @@ impl Ansatz for ZZFeatureMap {
 /// let feature_map = PauliFeatureMap::new(3)
 ///     .reps(1)
 ///     .paulis(vec![
-///         (PauliString::from("Z"),   "Z".to_string()),
-///         (PauliString::from("ZZ"),  "ZZ".to_string()),
-///         (PauliString::from("ZZZ"), "ZZZ".to_string()),
+///         ("Z".parse::<PauliString>().unwrap(),   "Z".to_string()),
+///         ("ZZ".parse::<PauliString>().unwrap(),  "ZZ".to_string()),
+///         ("ZZZ".parse::<PauliString>().unwrap(), "ZZZ".to_string()),
 ///     ])
 ///     .entanglement(EntanglementTopology::Full);
 ///
@@ -358,8 +358,8 @@ impl PauliFeatureMap {
             num_qubits,
             reps: 2,
             paulis: vec![
-                (PauliString::from("Z"), "Z".to_string()),
-                (PauliString::from("ZZ"), "ZZ".to_string()),
+                ("Z".parse::<PauliString>().unwrap(), "Z".to_string()),
+                ("ZZ".parse::<PauliString>().unwrap(), "ZZ".to_string()),
             ],
             entanglement: EntanglementTopology::Full,
             parameter_prefix: "x".to_string(),

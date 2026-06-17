@@ -2053,6 +2053,17 @@ fn test_zero_qubit_measure_boundary() {
 }
 
 #[test]
+fn test_zero_qubit_validate_error_message() {
+    let mut sv = Statevector::new(0);
+    let err = sv.apply_x(0).unwrap_err();
+    assert!(
+        matches!(&err, QisError::InvalidParameterValue(msg) if msg.contains("zero-qubit")),
+        "Expected InvalidParameterValue with zero-qubit message, got {:?}",
+        err
+    );
+}
+
+#[test]
 fn test_measure_all_bit_packing() {
     let mut sv = Statevector::new(4);
     sv.apply_x(0).unwrap();

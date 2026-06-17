@@ -722,6 +722,11 @@ impl Statevector {
 
     /// Validates that a qubit index is within bounds.
     fn validate_qubit(&self, qubit: usize) -> Result<(), QisError> {
+        if self.num_qubits == 0 {
+            return Err(QisError::InvalidParameterValue(
+                "no valid qubit indices in a zero-qubit system".to_string(),
+            ));
+        }
         if qubit >= self.num_qubits {
             return Err(QisError::IndexOutOfBounds {
                 index: qubit,
