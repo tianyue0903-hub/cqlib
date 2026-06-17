@@ -56,7 +56,9 @@ pub mod traits;
 pub mod two_local;
 
 pub use facades::{efficient_su2, pauli_feature_map, real_amplitudes, zz_feature_map};
-pub use feature_map::{AngleEncoding, BasisEncoding, PauliFeatureMap, ZFeatureMap, ZZFeatureMap};
+pub use feature_map::{
+    AngleEncoding, BasisEncoding, IQPFeatureMap, PauliFeatureMap, ZFeatureMap, ZZFeatureMap,
+};
 pub use hamiltonian_evolution::{EvolutionInfo, EvolutionStrategy, PauliEvolutionAnsatz};
 pub use layers::{BasicEntanglerLayers, StronglyEntanglingLayers};
 pub use qaoa::QAOAAnsatz;

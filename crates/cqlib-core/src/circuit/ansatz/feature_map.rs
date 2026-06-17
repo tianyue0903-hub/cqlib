@@ -21,6 +21,7 @@
 //! - [`BasisEncoding`]: Computational basis state preparation from a bitstring
 //! - [`AngleEncoding`]: Simple tensor product encoding using rotation gates
 //! - [`ZFeatureMap`]: First-order Pauli-Z feature map
+//! - [`IQPFeatureMap`]: IQP-style diagonal feature map
 //! - [`ZZFeatureMap`]: Entangling feature map with ZZ interactions
 //! - [`PauliFeatureMap`]: General-purpose feature map with arbitrary Pauli strings
 
@@ -232,6 +233,56 @@ impl Ansatz for ZFeatureMap {
 
     fn num_qubits(&self) -> usize {
         self.num_qubits
+    }
+}
+
+/// IQP-style diagonal feature map.
+///
+/// This is an explicit named wrapper over the same diagonal ZZ feature-map
+/// structure used by [`ZZFeatureMap`]: each repetition applies a Hadamard
+/// layer, first-order Z rotations, and second-order ZZ interactions according
+/// to the selected entanglement topology.
+#[derive(Debug, Clone)]
+pub struct IQPFeatureMap {
+    inner: ZZFeatureMap,
+}
+
+impl IQPFeatureMap {
+    /// Creates a new IQPFeatureMap with `reps = 2` and full entanglement.
+    pub fn new(num_qubits: usize) -> Self {
+        Self {
+            inner: ZZFeatureMap::new(num_qubits),
+        }
+    }
+
+    /// Sets the number of repetition layers.
+    pub fn reps(mut self, reps: usize) -> Self {
+        self.inner = self.inner.reps(reps);
+        self
+    }
+
+    /// Sets the entanglement topology for two-qubit diagonal interactions.
+    pub fn entanglement(mut self, topology: EntanglementTopology) -> Self {
+        self.inner = self.inner.entanglement(topology);
+        self
+    }
+}
+
+impl Ansatz for IQPFeatureMap {
+    fn validate(&self) -> Result<(), CircuitError> {
+        self.inner.validate()
+    }
+
+    fn build_circuit(&self, prefix: &str) -> Result<Circuit, CircuitError> {
+        self.inner.build_circuit(prefix)
+    }
+
+    fn num_parameters(&self) -> usize {
+        self.inner.num_parameters()
+    }
+
+    fn num_qubits(&self) -> usize {
+        self.inner.num_qubits()
     }
 }
 

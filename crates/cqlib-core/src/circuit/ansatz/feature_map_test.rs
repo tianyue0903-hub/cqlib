@@ -109,6 +109,37 @@ fn test_z_feature_map_zero_reps_has_no_parameters() {
 }
 
 #[test]
+fn test_iqp_feature_map_matches_zz_feature_map_structure() {
+    let iqp = IQPFeatureMap::new(2)
+        .reps(1)
+        .entanglement(EntanglementTopology::Linear);
+    let zz = ZZFeatureMap::new(2)
+        .reps(1)
+        .entanglement(EntanglementTopology::Linear);
+
+    let iqp_circuit = iqp.build_circuit("x").unwrap();
+    let zz_circuit = zz.build_circuit("x").unwrap();
+
+    assert_eq!(iqp.num_parameters(), zz.num_parameters());
+    assert_eq!(iqp.num_qubits(), zz.num_qubits());
+    assert_eq!(
+        iqp_circuit.operations().len(),
+        zz_circuit.operations().len()
+    );
+    assert_eq!(iqp_circuit.symbols(), zz_circuit.symbols());
+}
+
+#[test]
+fn test_iqp_feature_map_zero_reps_has_no_parameters() {
+    let fm = IQPFeatureMap::new(3).reps(0);
+    let circuit = fm.build_circuit("x").unwrap();
+
+    assert!(circuit.operations().is_empty());
+    assert_eq!(fm.num_parameters(), 0);
+    assert!(circuit.parameters().is_empty());
+}
+
+#[test]
 fn test_pauli_feature_map_uses_default_parameter_prefix() {
     // Create feature map with default prefix "x"
     let fm = PauliFeatureMap::new(2);
