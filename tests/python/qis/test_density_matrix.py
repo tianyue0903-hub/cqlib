@@ -522,7 +522,7 @@ class TestDensityMatrixPartialTrace:
     def test_partial_trace_invalid_qubit(self):
         """Test partial trace with invalid qubit index."""
         dm = DensityMatrix(2)
-        with pytest.raises(ValueError):
+        with pytest.raises(IndexError):
             dm.partial_trace([2])  # Out of bounds
 
 

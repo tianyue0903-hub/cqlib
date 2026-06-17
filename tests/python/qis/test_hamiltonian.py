@@ -144,6 +144,71 @@ def test_trotter_circuit():
         h_non_herm.to_trotter_circuit(1.0, 1, TrotterMode.first_order())
 
 
+def test_hamiltonian_all_terms_commute():
+    h = Hamiltonian(2)
+    h.add_term(PauliString.from_str("ZZ"), 0.5)
+    h.add_term(PauliString.from_str("IZ"), 0.3)
+    assert h.all_terms_commute() is True
+
+    h_non_commuting = Hamiltonian(1)
+    h_non_commuting.add_term(PauliString.from_str("X"), 1.0)
+    h_non_commuting.add_term(PauliString.from_str("Z"), 1.0)
+    assert h_non_commuting.all_terms_commute() is False
+
+
+def test_hamiltonian_to_evolution_circuit():
+    h_commuting = Hamiltonian(2)
+    h_commuting.add_term(PauliString.from_str("ZZ"), 0.5)
+    h_commuting.add_term(PauliString.from_str("IZ"), 0.3)
+
+    exact = h_commuting.to_evolution_circuit(1.0, 1, TrotterMode.first_order())
+    assert exact.num_qubits == 2
+    assert len(exact) > 0
+
+    h_non_commuting = Hamiltonian(1)
+    h_non_commuting.add_term(PauliString.from_str("X"), 1.0)
+    h_non_commuting.add_term(PauliString.from_str("Z"), 1.0)
+
+    trotterized = h_non_commuting.to_evolution_circuit(
+        0.5, 4, TrotterMode.second_order()
+    )
+    assert trotterized.num_qubits == 1
+    assert len(trotterized) > 0
+
+
+def test_hamiltonian_to_evolution_circuit_rejects_invalid_inputs():
+    h = Hamiltonian(1)
+
+    with pytest.raises(ValueError):
+        h.to_evolution_circuit(1.0, 1, TrotterMode.first_order())
+
+    h.add_term(PauliString.from_str("X"), 1.0)
+    with pytest.raises(ValueError, match="greater than 0"):
+        h.to_evolution_circuit(1.0, 0, TrotterMode.first_order())
+
+    h_non_herm = Hamiltonian(1)
+    h_non_herm.add_term(PauliString.from_str("+iX"), 1.0)
+    with pytest.raises(ValueError, match="Hermitian"):
+        h_non_herm.to_evolution_circuit(1.0, 1, TrotterMode.first_order())
+
+
+def test_hamiltonian_variance_statevector():
+    from cqlib.qis import Statevector
+
+    h_z = Hamiltonian.from_pauli(PauliString.from_str("Z"))
+
+    sv_zero = Statevector(1)
+    assert math.isclose(h_z.variance_statevector(sv_zero), 0.0, abs_tol=1e-10)
+
+    sv_plus = Statevector(1)
+    sv_plus.apply_h(0)
+    assert math.isclose(h_z.variance_statevector(sv_plus), 1.0, abs_tol=1e-10)
+
+    h_non_herm = Hamiltonian.from_pauli(PauliString.from_str("+iZ"))
+    with pytest.raises(ValueError, match="Hermitian"):
+        h_non_herm.variance_statevector(sv_zero)
+
+
 def test_hamiltonian_terms_property():
     """Test terms property."""
     h = Hamiltonian(2)

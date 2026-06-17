@@ -16,9 +16,14 @@ import math
 
 import pytest
 
-from cqlib.circuit import Circuit, ConditionView, Qubit, StandardGate
+from cqlib.circuit import Circuit, ClassicalExpr, ClassicalType
 from cqlib.device import Outcome
-from cqlib.qis import PauliString, StabilizerCircuitResult, StabilizerState
+from cqlib.qis import (
+    PauliString,
+    RuntimeValue,
+    StabilizerCircuitResult,
+    StabilizerState,
+)
 from cqlib.qis.state import StabilizerState as StateModuleStabilizerState
 
 
@@ -209,26 +214,42 @@ class TestStabilizerCircuitExecution:
     def test_apply_circuit_returns_measurement_register(self):
         circuit = Circuit(2)
         circuit.x(0)
-        circuit.measure(0)
+        measurement = circuit.measure(0)
         circuit.reset(0)
         circuit.h(1)
 
-        result = StabilizerState.apply_circuit(circuit)
+        result = StabilizerState.run_circuit(circuit)
 
         assert isinstance(result, StabilizerCircuitResult)
-        assert result.measurements == [True, None]
+        measured = result.classical.value(measurement.value)
+        assert isinstance(measured, RuntimeValue)
+        assert measured.kind == "bit"
+        assert measured.as_bit() is True
+        assert measured.to_bitstring() == "1"
         assert_distribution_close(result.state.probabilities(), {0b00: 0.5, 0b10: 0.5})
         assert "StabilizerCircuitResult" in repr(result)
+
+    def test_apply_circuit_returns_stored_classical_var(self):
+        circuit = Circuit(1)
+        flag = circuit.var(ClassicalType.bool())
+        circuit.store(flag, ClassicalExpr.bool_literal(True))
+
+        result = StabilizerState.run_circuit(circuit)
+
+        stored = result.classical.var(flag)
+        assert isinstance(stored, RuntimeValue)
+        assert stored.kind == "bool"
+        assert stored.as_bool() is True
+        assert stored.to_bitstring() is None
 
     def test_apply_circuit_rejects_control_flow(self):
         circuit = Circuit(1)
         circuit.h(0)
         circuit.measure(0)
-        condition = ConditionView(Qubit(0), 1)
-        circuit.if_else(condition, [(StandardGate.X, [0])])
+        circuit.if_(ClassicalExpr.bool_literal(True), lambda body: body.x(0))
 
         with pytest.raises(ValueError):
-            StabilizerState.apply_circuit(circuit)
+            StabilizerState.run_circuit(circuit)
 
 
 class TestStabilizerErrors:
