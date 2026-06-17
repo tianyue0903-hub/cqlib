@@ -28,7 +28,7 @@ repos:
 
   # 3. Python 检查 (Binding-Python)
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.14.10
+    rev: v0.15.17
     hooks:
       - id: ruff
         args: [ --fix ]
@@ -36,7 +36,7 @@ repos:
 
   # 4. C++ 格式化 (Binding-Cpp)
   - repo: https://github.com/pre-commit/mirrors-clang-format
-    rev: v21.1.8
+    rev: v22.1.5
     hooks:
       - id: clang-format
         types_or: [c++, c]
