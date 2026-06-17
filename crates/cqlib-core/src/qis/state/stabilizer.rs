@@ -1369,38 +1369,21 @@ impl StabilizerState {
         measurement: &Measurement,
         shots: usize,
     ) -> Result<ExecutionResult, QisError> {
-        for qubit in measurement.qubits() {
-            let index = qubit.index();
-            if index >= self.num_qubits {
-                return Err(QisError::IndexOutOfBounds {
-                    index,
-                    max: self.num_qubits.saturating_sub(1),
-                });
-            }
-        }
+        measurement.check_qubits(self.num_qubits)?;
 
         let mut counts = HashMap::new();
         for full in self.sample_shots(shots) {
-            let mut chunks = SmallVec::from_elem(0u64, measurement.width().div_ceil(64));
-            for (bit, qubit) in measurement.qubits().iter().enumerate() {
-                if full.is_one(qubit.index()) {
-                    chunks[bit / 64] |= 1u64 << (bit % 64);
-                }
-            }
-            let projected = Outcome::new(chunks);
-            *counts.entry(projected).or_insert(0usize) += 1;
+            *counts.entry(measurement.project(&full)).or_insert(0usize) += 1;
         }
 
-        let mut result = ExecutionResult::new(
+        Ok(ExecutionResult::from_counts(
             "stabilizer-sample".to_string(),
             measurement.qubits().to_vec(),
             shots,
             measurement.width(),
             Some("stabilizer".to_string()),
-            None,
-        );
-        result.start(None).finish(counts, None).calc_probabilities();
-        Ok(result)
+            counts,
+        ))
     }
 
     /// Returns the probability distribution selected by a circuit [`Measurement`].
@@ -1412,28 +1395,16 @@ impl StabilizerState {
     /// v1 intentionally reuses [`probabilities`](Self::probabilities), so it has
     /// the same `n <= 20` limit. Use [`sample`](Self::sample) for larger states.
     pub fn probs(&self, measurement: &Measurement) -> Result<HashMap<Outcome, f64>, QisError> {
-        for qubit in measurement.qubits() {
-            let index = qubit.index();
-            if index >= self.num_qubits {
-                return Err(QisError::IndexOutOfBounds {
-                    index,
-                    max: self.num_qubits.saturating_sub(1),
-                });
-            }
-        }
+        measurement.check_qubits(self.num_qubits)?;
 
         let mut marginal = HashMap::new();
         for (basis, prob) in self.probabilities()?.into_iter().enumerate() {
             if prob == 0.0 {
                 continue;
             }
-            let mut chunks = SmallVec::from_elem(0u64, measurement.width().div_ceil(64));
-            for (bit, qubit) in measurement.qubits().iter().enumerate() {
-                if (basis >> qubit.index()) & 1 == 1 {
-                    chunks[bit / 64] |= 1u64 << (bit % 64);
-                }
-            }
-            *marginal.entry(Outcome::new(chunks)).or_insert(0.0) += prob;
+            *marginal
+                .entry(measurement.project_basis(basis))
+                .or_insert(0.0) += prob;
         }
         Ok(marginal)
     }

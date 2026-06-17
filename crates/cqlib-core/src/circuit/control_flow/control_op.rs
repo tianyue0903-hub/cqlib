@@ -75,6 +75,45 @@ impl ClassicalControlOp {
             Self::Break | Self::Continue => BTreeSet::new(),
         }
     }
+
+    /// Returns true when any structured body contains a measurement operation.
+    pub fn has_measurement(&self) -> bool {
+        match self {
+            Self::If(op) => {
+                op.then_body().has_measurement()
+                    || op.else_body().is_some_and(|body| body.has_measurement())
+            }
+            Self::While(op) => op.body().has_measurement(),
+            Self::For(op) => op.body().has_measurement(),
+            Self::Switch(op) => {
+                op.cases().iter().any(|case| case.body().has_measurement())
+                    || op.default().is_some_and(|body| body.has_measurement())
+            }
+            Self::Break | Self::Continue => false,
+        }
+    }
+
+    /// Returns true when this operation's controlling expressions or structured
+    /// bodies read `value`.
+    pub fn reads_value(&self, value: ClassicalValue) -> bool {
+        if self.classical_value_reads().contains(&value) {
+            return true;
+        }
+
+        match self {
+            Self::If(op) => {
+                op.then_body().reads_value(value)
+                    || op.else_body().is_some_and(|body| body.reads_value(value))
+            }
+            Self::While(op) => op.body().reads_value(value),
+            Self::For(op) => op.body().reads_value(value),
+            Self::Switch(op) => {
+                op.cases().iter().any(|case| case.body().reads_value(value))
+                    || op.default().is_some_and(|body| body.reads_value(value))
+            }
+            Self::Break | Self::Continue => false,
+        }
+    }
 }
 
 impl fmt::Display for ClassicalControlOp {
