@@ -10,12 +10,12 @@
 # copyright notice, and modified files need to carry a notice indicating
 # that they have been altered from the originals.
 
-from typing import List, Union, final, Optional
+from typing import Dict, List, Union, final, Optional
 import numpy as np
 
-from cqlib.circuit import Circuit
+from cqlib.circuit import Circuit, Measurement
 from cqlib.circuit.gates.standard import StandardGate
-from cqlib.device import Outcome
+from cqlib.device import ExecutionResult, Outcome
 from cqlib.qis import Hamiltonian, PauliString
 
 @final
@@ -248,15 +248,6 @@ class DensityMatrix:
         Args:
             qubit: Target qubit index
             theta: Rotation angle in radians
-        """
-        ...
-
-    def apply_p(self, qubit: int, theta: float) -> None:
-        """Applies a parameterized phase (P) gate.
-
-        Args:
-            qubit: Target qubit index
-            theta: Phase angle in radians
         """
         ...
 
@@ -541,7 +532,8 @@ class DensityMatrix:
             A new DensityMatrix representing the subsystem
 
         Raises:
-            ValueError: If any qubit index is out of bounds
+            IndexError: If any qubit index is out of bounds.
+            ValueError: If qubit indices contain duplicates.
         """
         ...
 
@@ -639,6 +631,14 @@ class DensityMatrix:
         """
         ...
 
+    def reset(self, qubit: int) -> None:
+        """Resets the specified qubit to the |0⟩ state by measuring and flipping if 1.
+
+        Raises:
+            IndexError: If qubit index is out of bounds.
+        """
+        ...
+
     def measure(self, qubit: int) -> bool:
         """Measures one qubit and collapses the state."""
         ...
@@ -649,4 +649,12 @@ class DensityMatrix:
 
     def sample_shots(self, shots: int) -> List[Outcome]:
         """Samples measurement outcomes without mutating this state."""
+        ...
+
+    def sample(self, measurement: Measurement, shots: int) -> ExecutionResult:
+        """Samples measurement outcomes according to a circuit measurement receipt."""
+        ...
+
+    def probs(self, measurement: Measurement) -> Dict[Outcome, float]:
+        """Returns marginal probabilities according to a circuit measurement receipt."""
         ...

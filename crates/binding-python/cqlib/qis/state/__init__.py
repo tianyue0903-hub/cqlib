@@ -43,19 +43,20 @@ sim = DensityMatrixNoise(2, NoiseModel())
 ```
 """
 
-from ..._native import qis as _qis_module
-
-# State classes from native module
-Statevector = _qis_module.state.Statevector
-DensityMatrix = _qis_module.state.DensityMatrix
-DensityMatrixNoise = _qis_module.state.DensityMatrixNoise
-StabilizerState = _qis_module.state.StabilizerState
-StabilizerCircuitResult = _qis_module.state.StabilizerCircuitResult
+from .statevector import Statevector as Statevector
+from .density_matrix import DensityMatrix as DensityMatrix
+from .density_matrix_noise import DensityMatrixNoise as DensityMatrixNoise
+from .classical import RuntimeValue as RuntimeValue
+from .classical import ClassicalState as ClassicalState
+from .stabilizer import StabilizerState as StabilizerState
+from .stabilizer import StabilizerCircuitResult as StabilizerCircuitResult
 
 __all__ = [
     "Statevector",
     "DensityMatrix",
     "DensityMatrixNoise",
+    "RuntimeValue",
+    "ClassicalState",
     "StabilizerState",
     "StabilizerCircuitResult",
 ]

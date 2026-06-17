@@ -12,7 +12,7 @@
 
 from typing import List, Tuple, Union, final, Sequence, Dict
 
-from cqlib.circuit.circuit import Circuit
+from cqlib.circuit import Circuit
 
 from . import TrotterMode
 from .pauli import PauliString
@@ -174,6 +174,10 @@ class Hamiltonian:
         """
         ...
 
+    def all_terms_commute(self) -> bool:
+        """Returns ``True`` if all Pauli terms mutually commute."""
+        ...
+
     def expectation_statevector(self, sv: Statevector) -> float:
         """Computes the expectation value for a statevector.
 
@@ -283,6 +287,30 @@ class Hamiltonian:
             >>> h.add_term(PauliString.from_str("ZZ"), 0.5)
             >>> h.add_term(PauliString.from_str("XX"), 0.3)
             >>> circuit = h.to_trotter_circuit(1.0, 10, TrotterMode.first_order())
+        """
+        ...
+
+    def to_evolution_circuit(self, time: float, steps: int, mode: TrotterMode) -> Circuit:
+        """Converts the Hamiltonian evolution e^(-iHt) into a quantum circuit.
+
+        Commuting terms use an exact single-pass decomposition. Non-commuting
+        terms fall back to the selected Trotter-Suzuki approximation.
+
+        Args:
+            time: The total evolution time.
+            steps: Trotter steps used for non-commuting terms; must be positive.
+            mode: Trotter decomposition mode used for non-commuting terms.
+
+        Raises:
+            ValueError: If the Hamiltonian is empty, non-Hermitian, or ``steps`` is zero.
+        """
+        ...
+
+    def variance_statevector(self, sv: Statevector) -> float:
+        """Computes the variance for a statevector.
+
+        Raises:
+            ValueError: If the Hamiltonian is not Hermitian or qubit counts differ.
         """
         ...
 

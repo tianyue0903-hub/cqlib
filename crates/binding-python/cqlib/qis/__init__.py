@@ -55,24 +55,25 @@ circuit = h.to_trotter_circuit(1.0, 10, TrotterMode.first_order())
 from typing import Protocol, List, Tuple, Dict
 
 from . import state
-from .._native import qis as _qis_module
 
 # Pauli module
-Phase = _qis_module.Phase
-Pauli = _qis_module.Pauli
-PauliString = _qis_module.PauliString
+from .pauli import Phase as Phase
+from .pauli import Pauli as Pauli
+from .pauli import PauliString as PauliString
 
 # Hamiltonian module
-Hamiltonian = _qis_module.Hamiltonian
+from .hamiltonian import Hamiltonian as Hamiltonian
 
 # Evolution module
-TrotterMode = _qis_module.TrotterMode
+from .evolution import TrotterMode as TrotterMode
 
 
 # Expose key state classes at qis level for convenience
 DensityMatrix = state.DensityMatrix
 Statevector = state.Statevector
 DensityMatrixNoise = state.DensityMatrixNoise
+RuntimeValue = state.RuntimeValue
+ClassicalState = state.ClassicalState
 StabilizerState = state.StabilizerState
 StabilizerCircuitResult = state.StabilizerCircuitResult
 
@@ -85,13 +86,14 @@ class Observable(Protocol):
     def expectation_probs(
         self, measurements: List[Tuple[PauliString, Dict[str, float]]]
     ) -> float: ...
+    def variance_statevector(self, sv: Statevector) -> float: ...
     @property
     def num_qubits(self) -> int: ...
 
 
 # Entropy and metrics modules
-entropy = _qis_module.entropy
-metrics = _qis_module.metrics
+from . import entropy as entropy
+from . import metrics as metrics
 
 __all__ = [
     "Phase",
@@ -103,6 +105,8 @@ __all__ = [
     "Statevector",
     "DensityMatrix",
     "DensityMatrixNoise",
+    "RuntimeValue",
+    "ClassicalState",
     "StabilizerState",
     "StabilizerCircuitResult",
     "Observable",

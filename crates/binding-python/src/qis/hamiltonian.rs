@@ -15,6 +15,7 @@
 use crate::circuit::circuit_impl::PyCircuit;
 use crate::qis::evolution::PyTrotterMode;
 use crate::qis::pauli::PyPauliString;
+use crate::qis::qis_error_to_py_err;
 use crate::qis::state::density_matrix::PyDensityMatrix;
 use crate::qis::state::statevector::PyStatevector;
 use cqlib_core::qis::Observable;
@@ -181,8 +182,7 @@ impl PyHamiltonian {
             rust_terms.push((pauli.inner, coeff));
         }
 
-        let inner =
-            Hamiltonian::from_list(rust_terms).map_err(|e| PyValueError::new_err(e.to_string()))?;
+        let inner = Hamiltonian::from_list(rust_terms).map_err(qis_error_to_py_err)?;
 
         Ok(Self { inner })
     }
@@ -208,7 +208,7 @@ impl PyHamiltonian {
         let coeff = extract_complex(coeff)?;
         self.inner
             .add_term(op.inner.clone(), coeff)
-            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+            .map_err(qis_error_to_py_err)?;
         Ok(())
     }
 
@@ -284,6 +284,11 @@ impl PyHamiltonian {
     #[getter]
     fn num_terms(&self) -> usize {
         self.inner.terms.len()
+    }
+
+    /// Returns true if all Pauli terms mutually commute.
+    fn all_terms_commute(&self) -> bool {
+        self.inner.all_terms_commute()
     }
 
     /// Adds two Hamiltonians together.
@@ -392,7 +397,25 @@ impl PyHamiltonian {
         let circuit = self
             .inner
             .to_trotter_circuit(time, steps, mode.inner)
-            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+            .map_err(qis_error_to_py_err)?;
+
+        Ok(PyCircuit { inner: circuit })
+    }
+
+    /// Converts the Hamiltonian to a time evolution circuit.
+    ///
+    /// Commuting terms use the exact single-pass decomposition. Non-commuting
+    /// terms fall back to the requested Trotter mode and number of steps.
+    fn to_evolution_circuit(
+        &self,
+        time: f64,
+        steps: usize,
+        mode: &PyTrotterMode,
+    ) -> PyResult<PyCircuit> {
+        let circuit = self
+            .inner
+            .to_evolution_circuit(time, steps, mode.inner)
+            .map_err(qis_error_to_py_err)?;
 
         Ok(PyCircuit { inner: circuit })
     }
@@ -411,14 +434,14 @@ impl PyHamiltonian {
     fn expectation_statevector(&self, sv: &PyStatevector) -> PyResult<f64> {
         self.inner
             .expectation_statevector(&sv.inner)
-            .map_err(|e| PyValueError::new_err(e.to_string()))
+            .map_err(qis_error_to_py_err)
     }
 
     /// Computes the expectation value for a density matrix.
     fn expectation_density_matrix(&self, dm: &PyDensityMatrix) -> PyResult<f64> {
         self.inner
             .expectation_density_matrix(&dm.inner)
-            .map_err(|e| PyValueError::new_err(e.to_string()))
+            .map_err(qis_error_to_py_err)
     }
 
     /// Computes the expectation value from measurement probabilities.
@@ -448,6 +471,13 @@ impl PyHamiltonian {
 
         self.inner
             .expectation_probs(&rust_measurements)
-            .map_err(|e| PyValueError::new_err(e.to_string()))
+            .map_err(qis_error_to_py_err)
+    }
+
+    /// Computes the variance for a statevector.
+    fn variance_statevector(&self, sv: &PyStatevector) -> PyResult<f64> {
+        self.inner
+            .variance_statevector(&sv.inner)
+            .map_err(qis_error_to_py_err)
     }
 }
