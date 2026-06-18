@@ -31,8 +31,9 @@ pub mod parameter;
 pub mod symbolic_matrix;
 
 pub use ansatz::{
-    PyAngleEncoding, PyEvolutionInfo, PyEvolutionStrategy, PyPauliEvolutionAnsatz,
-    PyPauliFeatureMap, PyQAOAAnsatz, PyTwoLocal, PyZZFeatureMap,
+    PyAngleEncoding, PyBasicEntanglerLayers, PyBasisEncoding, PyEvolutionInfo, PyEvolutionStrategy,
+    PyIQPFeatureMap, PyPauliEvolutionAnsatz, PyPauliFeatureMap, PyQAOAAnsatz,
+    PyStronglyEntanglingLayers, PyTwoLocal, PyZFeatureMap, PyZZFeatureMap,
 };
 pub use bit::PyQubit;
 pub use circuit_impl::PyCircuit;

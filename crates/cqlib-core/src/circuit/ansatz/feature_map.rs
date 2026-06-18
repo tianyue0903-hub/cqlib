@@ -18,7 +18,10 @@
 //!
 //! ## Available Encodings
 //!
+//! - [`BasisEncoding`]: Computational basis state preparation from a bitstring
 //! - [`AngleEncoding`]: Simple tensor product encoding using rotation gates
+//! - [`ZFeatureMap`]: First-order Pauli-Z feature map
+//! - [`IQPFeatureMap`]: IQP-style diagonal feature map
 //! - [`ZZFeatureMap`]: Entangling feature map with ZZ interactions
 //! - [`PauliFeatureMap`]: General-purpose feature map with arbitrary Pauli strings
 
@@ -106,6 +109,180 @@ impl Ansatz for AngleEncoding {
 
     fn num_qubits(&self) -> usize {
         self.num_qubits
+    }
+}
+
+/// Basis encoding into a computational basis state.
+///
+/// A boolean bitstring is mapped to a basis state by applying `X` to every qubit
+/// whose bit value is `true`. For example, `[true, false, true]` prepares `|101>`.
+/// This encoding has no trainable or symbolic parameters.
+#[derive(Debug, Clone)]
+pub struct BasisEncoding {
+    bits: Vec<bool>,
+}
+
+impl BasisEncoding {
+    /// Creates a new basis encoder from a boolean bitstring.
+    pub fn new(bits: Vec<bool>) -> Self {
+        Self { bits }
+    }
+}
+
+impl Ansatz for BasisEncoding {
+    fn validate(&self) -> Result<(), CircuitError> {
+        if self.bits.is_empty() {
+            return Err(CircuitError::InvalidOperation(
+                "BasisEncoding requires at least 1 bit".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn build_circuit(&self, _prefix: &str) -> Result<Circuit, CircuitError> {
+        self.validate()?;
+
+        let mut circuit = Circuit::new(self.bits.len());
+        for (idx, bit) in self.bits.iter().enumerate() {
+            if *bit {
+                circuit.x(Qubit::new(idx as u32))?;
+            }
+        }
+        Ok(circuit)
+    }
+
+    fn num_parameters(&self) -> usize {
+        0
+    }
+
+    fn num_qubits(&self) -> usize {
+        self.bits.len()
+    }
+}
+
+/// First-order Z feature map.
+///
+/// Each repetition applies a Hadamard layer followed by independent
+/// `RZ(2 * x_i)` rotations. This is the non-entangling base case of
+/// [`ZZFeatureMap`].
+#[derive(Debug, Clone)]
+pub struct ZFeatureMap {
+    num_qubits: usize,
+    reps: usize,
+}
+
+impl ZFeatureMap {
+    /// Creates a new ZFeatureMap with `reps = 2`.
+    pub fn new(num_qubits: usize) -> Self {
+        Self {
+            num_qubits,
+            reps: 2,
+        }
+    }
+
+    /// Sets the number of repetition layers.
+    pub fn reps(mut self, reps: usize) -> Self {
+        self.reps = reps;
+        self
+    }
+}
+
+impl Ansatz for ZFeatureMap {
+    fn validate(&self) -> Result<(), CircuitError> {
+        if self.num_qubits == 0 {
+            return Err(CircuitError::InvalidOperation(
+                "ZFeatureMap requires at least 1 qubit".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn build_circuit(&self, prefix: &str) -> Result<Circuit, CircuitError> {
+        self.validate()?;
+
+        let mut circuit = Circuit::new(self.num_qubits);
+        let mut x_params = Vec::with_capacity(self.num_qubits);
+        for i in 0..self.num_qubits {
+            let param_name = format!("{}_{}", prefix, i);
+            let param = Parameter::try_from(param_name.as_str())
+                .map_err(|_| CircuitError::InvalidParameterValue(i, f64::NAN))?;
+            x_params.push(param);
+        }
+
+        for _layer in 0..self.reps {
+            for q in 0..self.num_qubits {
+                circuit.h(Qubit::new(q as u32))?;
+            }
+            for (i, param) in x_params.iter().enumerate() {
+                circuit.rz(
+                    Qubit::new(i as u32),
+                    ParameterValue::Param(param.clone() * 2.0),
+                )?;
+            }
+        }
+
+        Ok(circuit)
+    }
+
+    fn num_parameters(&self) -> usize {
+        if self.reps == 0 {
+            return 0;
+        }
+        self.num_qubits
+    }
+
+    fn num_qubits(&self) -> usize {
+        self.num_qubits
+    }
+}
+
+/// IQP-style diagonal feature map.
+///
+/// This is an explicit named wrapper over the same diagonal ZZ feature-map
+/// structure used by [`ZZFeatureMap`]: each repetition applies a Hadamard
+/// layer, first-order Z rotations, and second-order ZZ interactions according
+/// to the selected entanglement topology.
+#[derive(Debug, Clone)]
+pub struct IQPFeatureMap {
+    inner: ZZFeatureMap,
+}
+
+impl IQPFeatureMap {
+    /// Creates a new IQPFeatureMap with `reps = 2` and full entanglement.
+    pub fn new(num_qubits: usize) -> Self {
+        Self {
+            inner: ZZFeatureMap::new(num_qubits),
+        }
+    }
+
+    /// Sets the number of repetition layers.
+    pub fn reps(mut self, reps: usize) -> Self {
+        self.inner = self.inner.reps(reps);
+        self
+    }
+
+    /// Sets the entanglement topology for two-qubit diagonal interactions.
+    pub fn entanglement(mut self, topology: EntanglementTopology) -> Self {
+        self.inner = self.inner.entanglement(topology);
+        self
+    }
+}
+
+impl Ansatz for IQPFeatureMap {
+    fn validate(&self) -> Result<(), CircuitError> {
+        self.inner.validate()
+    }
+
+    fn build_circuit(&self, prefix: &str) -> Result<Circuit, CircuitError> {
+        self.inner.build_circuit(prefix)
+    }
+
+    fn num_parameters(&self) -> usize {
+        self.inner.num_parameters()
+    }
+
+    fn num_qubits(&self) -> usize {
+        self.inner.num_qubits()
     }
 }
 

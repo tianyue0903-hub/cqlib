@@ -18,11 +18,16 @@
 pub mod facades;
 pub mod feature_map;
 pub mod hamiltonian_evolution;
+pub mod layers;
 pub mod qaoa;
 pub mod two_local;
 
-pub use feature_map::{PyAngleEncoding, PyPauliFeatureMap, PyZZFeatureMap};
+pub use feature_map::{
+    PyAngleEncoding, PyBasisEncoding, PyIQPFeatureMap, PyPauliFeatureMap, PyZFeatureMap,
+    PyZZFeatureMap,
+};
 pub use hamiltonian_evolution::{PyEvolutionInfo, PyEvolutionStrategy, PyPauliEvolutionAnsatz};
+pub use layers::{PyBasicEntanglerLayers, PyStronglyEntanglingLayers};
 pub use qaoa::PyQAOAAnsatz;
 pub use two_local::{PyEntanglementTopology, PyTwoLocal};
 
@@ -38,8 +43,13 @@ pub(crate) fn register_ansatz_module(parent: &Bound<'_, PyModule>) -> PyResult<(
     m.add_class::<PyEntanglementTopology>()?;
     m.add_class::<PyTwoLocal>()?;
     m.add_class::<PyAngleEncoding>()?;
+    m.add_class::<PyBasisEncoding>()?;
+    m.add_class::<PyZFeatureMap>()?;
+    m.add_class::<PyIQPFeatureMap>()?;
     m.add_class::<PyZZFeatureMap>()?;
     m.add_class::<PyPauliFeatureMap>()?;
+    m.add_class::<PyBasicEntanglerLayers>()?;
+    m.add_class::<PyStronglyEntanglingLayers>()?;
     m.add_class::<PyQAOAAnsatz>()?;
     m.add_class::<PyEvolutionStrategy>()?;
     m.add_class::<PyEvolutionInfo>()?;
