@@ -106,6 +106,17 @@ fn test_strongly_entangling_layers_default_structure() {
 }
 
 #[test]
+fn test_strongly_entangling_layers_supports_custom_entanglement_gate() {
+    let ansatz = StronglyEntanglingLayers::new(3).entanglement_gate(StandardGate::CZ);
+    let circuit = ansatz.build_circuit("theta").unwrap();
+    let ops = circuit.operations();
+
+    assert!(is_two_qubit_gate(&ops[3], StandardGate::CZ, 0, 1));
+    assert!(is_two_qubit_gate(&ops[4], StandardGate::CZ, 1, 2));
+    assert!(is_two_qubit_gate(&ops[5], StandardGate::CZ, 2, 0));
+}
+
+#[test]
 fn test_strongly_entangling_layers_custom_ranges() {
     let ansatz = StronglyEntanglingLayers::new(4).reps(2).ranges(vec![2]);
     let circuit = ansatz.build_circuit("theta").unwrap();

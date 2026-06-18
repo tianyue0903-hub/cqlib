@@ -58,10 +58,15 @@ class BasicEntanglerLayers:
 
 @final
 class StronglyEntanglingLayers:
-    """U-rotation + range-based ring entanglement layer template."""
+    """U-rotation + range-based ring entanglement layer template.
+
+    Uses CX by default because the range pattern is directed and has explicit
+    control-target semantics. The entanglement gate remains configurable for
+    hardware-native gates or experiment-specific circuit conventions.
+    """
 
     def __init__(self, num_qubits: int) -> None:
-        """Creates a new StronglyEntanglingLayers template."""
+        """Creates a new StronglyEntanglingLayers template with CX entanglers."""
         ...
 
     def reps(self, n: int) -> "StronglyEntanglingLayers":
@@ -69,7 +74,10 @@ class StronglyEntanglingLayers:
         ...
 
     def entanglement_gate(self, gate: StandardGate) -> "StronglyEntanglingLayers":
-        """Sets the two-qubit entanglement gate."""
+        """Sets the two-qubit entanglement gate.
+
+        Valid choices are CX, CY, and CZ.
+        """
         ...
 
     def ranges(self, ranges: list[int]) -> "StronglyEntanglingLayers":

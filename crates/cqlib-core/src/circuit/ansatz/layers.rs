@@ -162,6 +162,11 @@ impl Ansatz for BasicEntanglerLayers {
 /// Each layer applies a general single-qubit `U(theta, phi, lambda)` on every
 /// qubit, then entangles every qubit `i` with `(i + range) mod num_qubits`.
 /// The default range cycles through `1..num_qubits` across layers.
+///
+/// `CX` is the default entangling gate because the layer uses a directed
+/// `(control, target)` connection pattern, and a controlled-X gate makes that
+/// direction explicit. Users can still select `CX`, `CY`, or `CZ` manually to
+/// match backend-native gates or experiment-specific circuit conventions.
 #[derive(Debug, Clone)]
 pub struct StronglyEntanglingLayers {
     num_qubits: usize,
@@ -174,6 +179,8 @@ impl StronglyEntanglingLayers {
     /// Creates a new StronglyEntanglingLayers template.
     ///
     /// Defaults: `reps = 1`, `entanglement_gate = CX`, ranges cycle by layer.
+    /// The entanglement gate remains configurable so users can align the
+    /// template with hardware-native or experiment-specific two-qubit gates.
     pub fn new(num_qubits: usize) -> Self {
         Self {
             num_qubits,
@@ -190,6 +197,10 @@ impl StronglyEntanglingLayers {
     }
 
     /// Sets the two-qubit entangling gate used after each U layer.
+    ///
+    /// Valid choices are `CX`, `CY`, and `CZ`. `CX` is the default because this
+    /// layer's range pattern is directed; custom gates are accepted when users
+    /// intentionally want a different controlled or symmetric entangler.
     pub fn entanglement_gate(mut self, gate: StandardGate) -> Self {
         self.entanglement_gate = gate;
         self

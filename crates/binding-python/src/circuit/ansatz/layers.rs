@@ -117,6 +117,10 @@ impl PyBasicEntanglerLayers {
 }
 
 /// Strongly entangling layers with U rotations and range-based ring entanglement.
+///
+/// Uses CX by default because the range pattern is directed and has explicit
+/// control-target semantics. Users can still choose CX, CY, or CZ manually to
+/// match backend-native gates or experiment-specific circuit conventions.
 #[pyclass(name = "StronglyEntanglingLayers", module = "cqlib.circuit.ansatz")]
 #[derive(Clone)]
 pub struct PyStronglyEntanglingLayers {
@@ -138,6 +142,9 @@ impl From<PyStronglyEntanglingLayers> for StronglyEntanglingLayers {
 #[pymethods]
 impl PyStronglyEntanglingLayers {
     /// Creates a new StronglyEntanglingLayers template.
+    ///
+    /// Defaults to CX as the entanglement gate. The gate remains configurable
+    /// through `entanglement_gate`.
     #[new]
     fn new(num_qubits: usize) -> Self {
         Self {
@@ -153,6 +160,8 @@ impl PyStronglyEntanglingLayers {
     }
 
     /// Sets the two-qubit entanglement gate.
+    ///
+    /// Valid choices are CX, CY, and CZ.
     fn entanglement_gate(&self, gate: PyRef<'_, PyStandardGate>) -> Self {
         Self {
             inner: self.inner.clone().entanglement_gate(gate.inner),
