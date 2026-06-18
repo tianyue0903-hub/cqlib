@@ -19,8 +19,13 @@ _ansatz_module = _circuit_module.ansatz
 EntanglementTopology = _ansatz_module.EntanglementTopology
 TwoLocal = _ansatz_module.TwoLocal
 AngleEncoding = _ansatz_module.AngleEncoding
+BasisEncoding = _ansatz_module.BasisEncoding
+ZFeatureMap = _ansatz_module.ZFeatureMap
+IQPFeatureMap = _ansatz_module.IQPFeatureMap
 ZZFeatureMap = _ansatz_module.ZZFeatureMap
 PauliFeatureMap = _ansatz_module.PauliFeatureMap
+BasicEntanglerLayers = _ansatz_module.BasicEntanglerLayers
+StronglyEntanglingLayers = _ansatz_module.StronglyEntanglingLayers
 QAOAAnsatz = _ansatz_module.QAOAAnsatz
 EvolutionStrategy = _ansatz_module.EvolutionStrategy
 EvolutionInfo = _ansatz_module.EvolutionInfo
@@ -35,8 +40,13 @@ __all__ = [
     "EntanglementTopology",
     "TwoLocal",
     "AngleEncoding",
+    "BasisEncoding",
+    "ZFeatureMap",
+    "IQPFeatureMap",
     "ZZFeatureMap",
     "PauliFeatureMap",
+    "BasicEntanglerLayers",
+    "StronglyEntanglingLayers",
     "QAOAAnsatz",
     "EvolutionStrategy",
     "EvolutionInfo",

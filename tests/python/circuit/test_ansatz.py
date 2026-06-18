@@ -17,12 +17,17 @@ import copy
 from cqlib.circuit import Circuit, StandardGate
 from cqlib.circuit.ansatz import (
     AngleEncoding,
+    BasicEntanglerLayers,
+    BasisEncoding,
     EntanglementTopology,
     EvolutionStrategy,
+    IQPFeatureMap,
     PauliEvolutionAnsatz,
     PauliFeatureMap,
     QAOAAnsatz,
+    StronglyEntanglingLayers,
     TwoLocal,
+    ZFeatureMap,
     ZZFeatureMap,
     efficient_su2,
     pauli_feature_map,
@@ -64,13 +69,18 @@ def test_ansatz_exports_match_runtime_all():
     assert sorted(ansatz.__all__) == sorted(
         [
             "AngleEncoding",
+            "BasicEntanglerLayers",
+            "BasisEncoding",
             "EntanglementTopology",
             "EvolutionInfo",
             "EvolutionStrategy",
+            "IQPFeatureMap",
             "PauliEvolutionAnsatz",
             "PauliFeatureMap",
             "QAOAAnsatz",
+            "StronglyEntanglingLayers",
             "TwoLocal",
+            "ZFeatureMap",
             "ZZFeatureMap",
             "efficient_su2",
             "pauli_feature_map",
@@ -122,6 +132,36 @@ def test_angle_encoding_copy_and_build_circuit():
     assert_copy_protocol(encoding)
 
 
+def test_basis_encoding_copy_and_build_circuit():
+    encoding = BasisEncoding([True, False, True])
+    circuit = encoding.build_circuit("ignored")
+
+    assert isinstance(circuit, Circuit)
+    assert encoding.num_qubits() == 3
+    assert encoding.num_parameters() == 0
+    assert len(circuit) == 2
+    assert set(circuit.symbols) == set()
+    assert_copy_protocol(encoding)
+
+
+def test_z_feature_map_copy_and_build_circuit():
+    feature_map = ZFeatureMap(3).reps(1)
+
+    assert feature_map.num_qubits() == 3
+    assert feature_map.num_parameters() == 3
+    assert_builds_symbolic_circuit(feature_map, "x", {"x_0", "x_1", "x_2"})
+    assert_copy_protocol(feature_map)
+
+
+def test_iqp_feature_map_copy_and_build_circuit():
+    feature_map = IQPFeatureMap(3).reps(1).entanglement(EntanglementTopology.linear())
+
+    assert feature_map.num_qubits() == 3
+    assert feature_map.num_parameters() == 3
+    assert_builds_symbolic_circuit(feature_map, "x", {"x_0", "x_1", "x_2"})
+    assert_copy_protocol(feature_map)
+
+
 def test_zz_feature_map_copy_and_build_circuit():
     feature_map = ZZFeatureMap(3).reps(1).entanglement(EntanglementTopology.linear())
 
@@ -146,6 +186,42 @@ def test_pauli_feature_map_copy_and_build_circuit():
         feature_map, "ignored", {"ignored_0", "ignored_1", "ignored_2"}
     )
     assert_copy_protocol(feature_map)
+
+
+def test_basic_entangler_layers_copy_and_build_circuit():
+    ansatz = (
+        BasicEntanglerLayers(3)
+        .reps(2)
+        .rotation_gate(StandardGate.RY)
+        .entanglement_gate(StandardGate.CZ)
+    )
+
+    assert ansatz.num_qubits() == 3
+    assert ansatz.num_parameters() == 6
+    assert_builds_symbolic_circuit(
+        ansatz,
+        "theta",
+        {f"theta_{index}" for index in range(ansatz.num_parameters())},
+    )
+    assert_copy_protocol(ansatz)
+
+
+def test_strongly_entangling_layers_copy_and_build_circuit():
+    ansatz = (
+        StronglyEntanglingLayers(3)
+        .reps(2)
+        .ranges([1, 2])
+        .entanglement_gate(StandardGate.CX)
+    )
+
+    assert ansatz.num_qubits() == 3
+    assert ansatz.num_parameters() == 18
+    assert_builds_symbolic_circuit(
+        ansatz,
+        "theta",
+        {f"theta_{index}" for index in range(ansatz.num_parameters())},
+    )
+    assert_copy_protocol(ansatz)
 
 
 def test_qaoa_copy_and_build_circuit():

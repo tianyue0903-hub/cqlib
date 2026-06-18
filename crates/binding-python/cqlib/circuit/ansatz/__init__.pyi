@@ -20,13 +20,20 @@ from .facades import (
 )
 from .feature_map import (
     AngleEncoding as AngleEncoding,
+    BasisEncoding as BasisEncoding,
+    IQPFeatureMap as IQPFeatureMap,
     PauliFeatureMap as PauliFeatureMap,
+    ZFeatureMap as ZFeatureMap,
     ZZFeatureMap as ZZFeatureMap,
 )
 from .hamiltonian_evolution import (
     EvolutionInfo as EvolutionInfo,
     EvolutionStrategy as EvolutionStrategy,
     PauliEvolutionAnsatz as PauliEvolutionAnsatz,
+)
+from .layers import (
+    BasicEntanglerLayers as BasicEntanglerLayers,
+    StronglyEntanglingLayers as StronglyEntanglingLayers,
 )
 from .qaoa import QAOAAnsatz as QAOAAnsatz
 from .two_local import (
@@ -38,8 +45,13 @@ __all__ = [
     "EntanglementTopology",
     "TwoLocal",
     "AngleEncoding",
+    "BasisEncoding",
+    "ZFeatureMap",
+    "IQPFeatureMap",
     "ZZFeatureMap",
     "PauliFeatureMap",
+    "BasicEntanglerLayers",
+    "StronglyEntanglingLayers",
     "QAOAAnsatz",
     "EvolutionStrategy",
     "EvolutionInfo",

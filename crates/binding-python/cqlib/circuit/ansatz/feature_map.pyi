@@ -80,6 +80,105 @@ class AngleEncoding:
     def __deepcopy__(self, memo: dict) -> "AngleEncoding": ...
 
 @final
+class BasisEncoding:
+    """Computational basis encoding from a bitstring."""
+
+    def __init__(self, bits: list[bool]) -> None:
+        """Creates a new BasisEncoding from a boolean bitstring."""
+        ...
+
+    def validate(self) -> None:
+        """Validates the configuration."""
+        ...
+
+    def build_circuit(self, prefix: str) -> Circuit:
+        """Builds the basis preparation circuit."""
+        ...
+
+    def num_parameters(self) -> int:
+        """Returns 0."""
+        ...
+
+    def num_qubits(self) -> int:
+        """Returns the number of qubits."""
+        ...
+
+    def __repr__(self) -> str: ...
+    def __str__(self) -> str: ...
+    def __copy__(self) -> "BasisEncoding": ...
+    def __deepcopy__(self, memo: dict) -> "BasisEncoding": ...
+
+@final
+class ZFeatureMap:
+    """First-order Pauli-Z feature map."""
+
+    def __init__(self, num_qubits: int) -> None:
+        """Creates a new ZFeatureMap with 2 repetition layers."""
+        ...
+
+    def reps(self, n: int) -> "ZFeatureMap":
+        """Sets the number of repetition layers."""
+        ...
+
+    def validate(self) -> None:
+        """Validates the configuration."""
+        ...
+
+    def build_circuit(self, prefix: str) -> Circuit:
+        """Builds the encoding circuit."""
+        ...
+
+    def num_parameters(self) -> int:
+        """Returns the number of input feature parameters."""
+        ...
+
+    def num_qubits(self) -> int:
+        """Returns the number of qubits."""
+        ...
+
+    def __repr__(self) -> str: ...
+    def __str__(self) -> str: ...
+    def __copy__(self) -> "ZFeatureMap": ...
+    def __deepcopy__(self, memo: dict) -> "ZFeatureMap": ...
+
+@final
+class IQPFeatureMap:
+    """IQP-style diagonal feature map."""
+
+    def __init__(self, num_qubits: int) -> None:
+        """Creates a new IQPFeatureMap with 2 repetition layers and full entanglement."""
+        ...
+
+    def reps(self, n: int) -> "IQPFeatureMap":
+        """Sets the number of repetition layers."""
+        ...
+
+    def entanglement(self, topology: EntanglementTopology) -> "IQPFeatureMap":
+        """Sets the entanglement topology."""
+        ...
+
+    def validate(self) -> None:
+        """Validates the configuration."""
+        ...
+
+    def build_circuit(self, prefix: str) -> Circuit:
+        """Builds the encoding circuit."""
+        ...
+
+    def num_parameters(self) -> int:
+        """Returns the number of input feature parameters."""
+        ...
+
+    def num_qubits(self) -> int:
+        """Returns the number of qubits."""
+        ...
+
+    def __repr__(self) -> str: ...
+    def __str__(self) -> str: ...
+    def __copy__(self) -> "IQPFeatureMap": ...
+    def __deepcopy__(self, memo: dict) -> "IQPFeatureMap": ...
+
+@final
 class ZZFeatureMap:
     """Second-order Pauli-Z feature map for quantum kernel methods.
 

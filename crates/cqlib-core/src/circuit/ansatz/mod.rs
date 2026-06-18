@@ -27,7 +27,11 @@
 //! - [`traits`]: Defines the core [`Ansatz`] trait that all ansatze implement.
 //! - [`two_local`]: Hardware-efficient ansatze with alternating rotation and entanglement layers.
 //! - [`facades`]: Convenient constructors for common ansatz patterns (RealAmplitudes, EfficientSU2).
-//! - [`feature_map`]: Data encoding circuits for quantum machine learning.
+//! - [`feature_map`]: Data encoding circuits, including [`BasisEncoding`], [`AngleEncoding`],
+//!   [`ZFeatureMap`], [`IQPFeatureMap`], [`ZZFeatureMap`], and [`PauliFeatureMap`].
+//! - [`layers`]: Layer-style templates, including [`BasicEntanglerLayers`] and
+//!   [`StronglyEntanglingLayers`].
+//! - [`hamiltonian_evolution`]: Hamiltonian time-evolution ansatz utilities.
 //! - [`qaoa`]: The Quantum Approximate Optimization Algorithm ansatz.
 //!
 //! # Example

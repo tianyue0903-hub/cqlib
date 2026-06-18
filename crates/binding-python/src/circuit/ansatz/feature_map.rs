@@ -10,9 +10,11 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
-//! Python bindings for `AngleEncoding`, `ZZFeatureMap`, and `PauliFeatureMap`.
+//! Python bindings for feature map ansatze.
 
-use cqlib_core::circuit::ansatz::feature_map::{AngleEncoding, PauliFeatureMap, ZZFeatureMap};
+use cqlib_core::circuit::ansatz::feature_map::{
+    AngleEncoding, BasisEncoding, IQPFeatureMap, PauliFeatureMap, ZFeatureMap, ZZFeatureMap,
+};
 use cqlib_core::circuit::ansatz::traits::Ansatz;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -112,6 +114,248 @@ impl PyAngleEncoding {
     fn __repr__(&self) -> String {
         format!(
             "AngleEncoding(num_qubits={}, num_parameters={})",
+            self.inner.num_qubits(),
+            self.inner.num_parameters()
+        )
+    }
+
+    fn __str__(&self) -> String {
+        self.__repr__()
+    }
+
+    fn __copy__(&self) -> Self {
+        self.clone()
+    }
+
+    fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> Self {
+        self.clone()
+    }
+}
+
+/// Computational basis encoding from a bitstring.
+#[pyclass(name = "BasisEncoding", module = "cqlib.circuit.ansatz")]
+#[derive(Clone)]
+pub struct PyBasisEncoding {
+    pub(crate) inner: BasisEncoding,
+}
+
+impl From<BasisEncoding> for PyBasisEncoding {
+    fn from(inner: BasisEncoding) -> Self {
+        Self { inner }
+    }
+}
+
+impl From<PyBasisEncoding> for BasisEncoding {
+    fn from(value: PyBasisEncoding) -> Self {
+        value.inner
+    }
+}
+
+#[pymethods]
+impl PyBasisEncoding {
+    /// Creates a new BasisEncoding from a boolean bitstring.
+    #[new]
+    fn new(bits: Vec<bool>) -> Self {
+        Self {
+            inner: BasisEncoding::new(bits),
+        }
+    }
+
+    /// Validates the configuration.
+    fn validate(&self) -> PyResult<()> {
+        self.inner
+            .validate()
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    /// Builds the basis preparation circuit.
+    fn build_circuit(&self, prefix: &str) -> PyResult<PyCircuit> {
+        self.inner
+            .build_circuit(prefix)
+            .map(|c| PyCircuit { inner: c })
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    /// Returns zero because basis encoding has no symbolic parameters.
+    fn num_parameters(&self) -> usize {
+        self.inner.num_parameters()
+    }
+
+    /// Returns the number of qubits.
+    fn num_qubits(&self) -> usize {
+        self.inner.num_qubits()
+    }
+
+    fn __repr__(&self) -> String {
+        format!("BasisEncoding(num_qubits={})", self.inner.num_qubits())
+    }
+
+    fn __str__(&self) -> String {
+        self.__repr__()
+    }
+
+    fn __copy__(&self) -> Self {
+        self.clone()
+    }
+
+    fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> Self {
+        self.clone()
+    }
+}
+
+/// A first-order Z feature map without entanglement.
+#[pyclass(name = "ZFeatureMap", module = "cqlib.circuit.ansatz")]
+#[derive(Clone)]
+pub struct PyZFeatureMap {
+    pub(crate) inner: ZFeatureMap,
+}
+
+impl From<ZFeatureMap> for PyZFeatureMap {
+    fn from(inner: ZFeatureMap) -> Self {
+        Self { inner }
+    }
+}
+
+impl From<PyZFeatureMap> for ZFeatureMap {
+    fn from(value: PyZFeatureMap) -> Self {
+        value.inner
+    }
+}
+
+#[pymethods]
+impl PyZFeatureMap {
+    /// Creates a new ZFeatureMap.
+    #[new]
+    fn new(num_qubits: usize) -> Self {
+        Self {
+            inner: ZFeatureMap::new(num_qubits),
+        }
+    }
+
+    /// Sets the number of repetition layers.
+    fn reps(&self, n: usize) -> Self {
+        Self {
+            inner: self.inner.clone().reps(n),
+        }
+    }
+
+    /// Validates the configuration.
+    fn validate(&self) -> PyResult<()> {
+        self.inner
+            .validate()
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    /// Builds the encoding circuit.
+    fn build_circuit(&self, prefix: &str) -> PyResult<PyCircuit> {
+        self.inner
+            .build_circuit(prefix)
+            .map(|c| PyCircuit { inner: c })
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    /// Returns the number of parameters.
+    fn num_parameters(&self) -> usize {
+        self.inner.num_parameters()
+    }
+
+    /// Returns the number of qubits.
+    fn num_qubits(&self) -> usize {
+        self.inner.num_qubits()
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "ZFeatureMap(num_qubits={}, num_parameters={})",
+            self.inner.num_qubits(),
+            self.inner.num_parameters()
+        )
+    }
+
+    fn __str__(&self) -> String {
+        self.__repr__()
+    }
+
+    fn __copy__(&self) -> Self {
+        self.clone()
+    }
+
+    fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> Self {
+        self.clone()
+    }
+}
+
+/// An IQP-style diagonal feature map.
+#[pyclass(name = "IQPFeatureMap", module = "cqlib.circuit.ansatz")]
+#[derive(Clone)]
+pub struct PyIQPFeatureMap {
+    pub(crate) inner: IQPFeatureMap,
+}
+
+impl From<IQPFeatureMap> for PyIQPFeatureMap {
+    fn from(inner: IQPFeatureMap) -> Self {
+        Self { inner }
+    }
+}
+
+impl From<PyIQPFeatureMap> for IQPFeatureMap {
+    fn from(value: PyIQPFeatureMap) -> Self {
+        value.inner
+    }
+}
+
+#[pymethods]
+impl PyIQPFeatureMap {
+    /// Creates a new IQPFeatureMap.
+    #[new]
+    fn new(num_qubits: usize) -> Self {
+        Self {
+            inner: IQPFeatureMap::new(num_qubits),
+        }
+    }
+
+    /// Sets the number of repetition layers.
+    fn reps(&self, n: usize) -> Self {
+        Self {
+            inner: self.inner.clone().reps(n),
+        }
+    }
+
+    /// Sets the entanglement topology.
+    fn entanglement(&self, topology: PyRef<'_, PyEntanglementTopology>) -> Self {
+        Self {
+            inner: self.inner.clone().entanglement(topology.inner.clone()),
+        }
+    }
+
+    /// Validates the configuration.
+    fn validate(&self) -> PyResult<()> {
+        self.inner
+            .validate()
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    /// Builds the encoding circuit.
+    fn build_circuit(&self, prefix: &str) -> PyResult<PyCircuit> {
+        self.inner
+            .build_circuit(prefix)
+            .map(|c| PyCircuit { inner: c })
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    /// Returns the number of parameters.
+    fn num_parameters(&self) -> usize {
+        self.inner.num_parameters()
+    }
+
+    /// Returns the number of qubits.
+    fn num_qubits(&self) -> usize {
+        self.inner.num_qubits()
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "IQPFeatureMap(num_qubits={}, num_parameters={})",
             self.inner.num_qubits(),
             self.inner.num_parameters()
         )
