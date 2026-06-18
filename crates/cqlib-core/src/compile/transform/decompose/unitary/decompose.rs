@@ -43,7 +43,7 @@ use crate::circuit::{
     WhileOp,
 };
 use crate::compile::CompilerError;
-use crate::compile::transform::{TransformResult, Transformer};
+use crate::compile::transform::{CircuitAnalysis, TransformResult, Transformer};
 use ndarray::Array2;
 use num_complex::Complex64;
 use smallvec::{SmallVec, smallvec};
@@ -100,7 +100,25 @@ impl Transformer for DecomposeUnitaries {
         SYNTHESIS_NAME
     }
 
-    fn transform(&self, circuit: &Circuit) -> Result<TransformResult, CompilerError> {
+    fn transform(
+        &self,
+        circuit: &Circuit,
+        analysis: Option<&CircuitAnalysis>,
+    ) -> Result<TransformResult, CompilerError> {
+        let local_analysis;
+        let analysis = match analysis {
+            Some(analysis) => analysis,
+            None => {
+                local_analysis = CircuitAnalysis::analyze(circuit);
+                &local_analysis
+            }
+        };
+        if !analysis.has_unitary_gates {
+            return Ok(TransformResult {
+                circuit: circuit.clone(),
+                changed: false,
+            });
+        }
         let result = decompose_unitaries_transform(circuit, self.config)?;
         if result.changed {
             Ok(result)
@@ -672,7 +690,9 @@ mod tests {
         let mut circuit = Circuit::new(1);
         circuit.h(Qubit::new(0)).unwrap();
 
-        let result = DecomposeUnitaries::default().transform(&circuit).unwrap();
+        let result = DecomposeUnitaries::default()
+            .transform(&circuit, None)
+            .unwrap();
 
         assert!(!result.changed);
         assert_eq!(result.circuit.operations().len(), 1);

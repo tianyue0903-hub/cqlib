@@ -347,7 +347,7 @@ fn canonicalizer_implements_transformer_trait() {
     circuit.i(Qubit::new(0)).unwrap();
 
     let transformer = &Canonicalizer::production();
-    let result = transformer.transform(&circuit).unwrap();
+    let result = transformer.transform(&circuit, None).unwrap();
 
     assert!(result.changed);
     assert!(result.circuit.operations().is_empty());

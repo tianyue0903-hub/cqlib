@@ -52,6 +52,7 @@
 //! so target constraints, resources, routing, and output canonicalization stay
 //! ordered consistently.
 
+pub mod analysis;
 pub mod canonicalize;
 pub mod decompose;
 pub mod layout;
@@ -59,6 +60,7 @@ pub mod rewrite;
 pub mod routing;
 pub mod transformer;
 
+pub use analysis::CircuitAnalysis;
 pub use canonicalize::{
     CanonicalizeConfig, CanonicalizeResult, Canonicalizer, canonicalize_circuit,
 };

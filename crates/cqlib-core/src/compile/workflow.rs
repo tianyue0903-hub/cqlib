@@ -48,8 +48,8 @@ use crate::compile::transform::decompose::{
 };
 use crate::compile::transform::layout::build_physical_layout_graph;
 use crate::compile::transform::{
-    Canonicalizer, KnowledgeRewriter, LayoutObjective, RewriteConfig, TransformResult, Transformer,
-    route_sabre, route_with_layout,
+    Canonicalizer, CircuitAnalysis, KnowledgeRewriter, LayoutObjective, RewriteConfig,
+    TransformResult, Transformer, route_sabre, route_with_layout,
 };
 
 use super::{CompileConfig, CompileMode, CompileResult};
@@ -71,6 +71,7 @@ pub struct WorkflowStepReport {
 
 struct WorkflowState {
     current: Circuit,
+    analysis: CircuitAnalysis,
     changed: bool,
     steps: Vec<WorkflowStepReport>,
     target_basis: Option<Vec<Instruction>>,
@@ -107,6 +108,7 @@ impl CompilerWorkflow {
         let resolved_target = self.resolve_target_basis()?;
         let mut state = WorkflowState {
             current: circuit.clone(),
+            analysis: CircuitAnalysis::analyze(circuit),
             changed: false,
             steps: Vec::new(),
             target_basis: resolved_target,
@@ -134,17 +136,17 @@ impl CompilerWorkflow {
     /// Definition expansion precedes the first rewrite pass so knowledge rules
     /// see the operations contained by user-defined gates.
     fn lower_init(&self, state: &mut WorkflowState) -> Result<(), CompilerError> {
-        apply_circuit_transform(state, "init", "canonicalize.input", |circuit| {
-            Canonicalizer::production().transform(circuit)
+        apply_circuit_transform(state, "init", "canonicalize.input", |circuit, analysis| {
+            Canonicalizer::production().transform(circuit, Some(analysis))
         })?;
         self.apply_definition_decomposition(state)?;
         apply_circuit_transform(
             state,
             "optimization",
             "optimize.pre_decomposition",
-            |circuit| {
+            |circuit, analysis| {
                 KnowledgeRewriter::new(self.rewrite_config(RewritePhase::PreDecomposition)?)
-                    .transform(circuit)
+                    .transform(circuit, Some(analysis))
             },
         )
     }
@@ -160,7 +162,7 @@ impl CompilerWorkflow {
             state,
             "optimization",
             "canonicalize.after_decomposition",
-            |circuit| Canonicalizer::production().transform(circuit),
+            |circuit, analysis| Canonicalizer::production().transform(circuit, Some(analysis)),
         )
     }
 
@@ -169,9 +171,9 @@ impl CompilerWorkflow {
             state,
             "optimization",
             "optimize.post_decomposition",
-            |circuit| {
+            |circuit, analysis| {
                 KnowledgeRewriter::new(self.rewrite_config(RewritePhase::PostDecomposition)?)
-                    .transform(circuit)
+                    .transform(circuit, Some(analysis))
             },
         )
     }
@@ -200,16 +202,21 @@ impl CompilerWorkflow {
                 state,
                 "optimization",
                 "optimize.target_cleanup",
-                |circuit| KnowledgeRewriter::new(cleanup_config).transform(circuit),
+                |circuit, analysis| {
+                    KnowledgeRewriter::new(cleanup_config).transform(circuit, Some(analysis))
+                },
             )?;
         }
         Ok(())
     }
 
     fn lower_output(&self, state: &mut WorkflowState) -> Result<(), CompilerError> {
-        apply_circuit_transform(state, "output", "canonicalize.output", |circuit| {
-            Canonicalizer::production().transform(circuit)
-        })
+        apply_circuit_transform(
+            state,
+            "output",
+            "canonicalize.output",
+            |circuit, analysis| Canonicalizer::production().transform(circuit, Some(analysis)),
+        )
     }
 
     /// Builds the rewrite configuration for a workflow phase.
@@ -240,22 +247,31 @@ impl CompilerWorkflow {
         &self,
         state: &mut WorkflowState,
     ) -> Result<(), CompilerError> {
-        apply_circuit_transform(state, "init", "decompose.definitions", |circuit| {
-            DecomposeDefinitions.transform(circuit)
-        })
+        apply_circuit_transform(
+            state,
+            "init",
+            "decompose.definitions",
+            |circuit, analysis| DecomposeDefinitions.transform(circuit, Some(analysis)),
+        )
     }
 
     fn apply_unitary_decomposition(&self, state: &mut WorkflowState) -> Result<(), CompilerError> {
-        apply_circuit_transform(state, "translation", "decompose.unitary", |circuit| {
-            DecomposeUnitaries::default().transform(circuit)
-        })
+        apply_circuit_transform(
+            state,
+            "translation",
+            "decompose.unitary",
+            |circuit, analysis| DecomposeUnitaries::default().transform(circuit, Some(analysis)),
+        )
     }
 
     fn apply_mc_gate_decomposition(&self, state: &mut WorkflowState) -> Result<(), CompilerError> {
         let config = self.mc_gate_decompose_config();
-        apply_circuit_transform(state, "translation", "decompose.mc_gates", |circuit| {
-            DecomposeMcGates::new(config).transform(circuit)
-        })
+        apply_circuit_transform(
+            state,
+            "translation",
+            "decompose.mc_gates",
+            |circuit, analysis| DecomposeMcGates::new(config).transform(circuit, Some(analysis)),
+        )
     }
 
     fn mc_gate_decompose_config(&self) -> McGateDecomposeConfig {
@@ -389,10 +405,15 @@ impl CompilerWorkflow {
             return Ok(());
         }
 
-        apply_circuit_transform(state, "optimization", "optimize.post_routing", |circuit| {
-            KnowledgeRewriter::new(self.rewrite_config(RewritePhase::PostRouting)?)
-                .transform(circuit)
-        })
+        apply_circuit_transform(
+            state,
+            "optimization",
+            "optimize.post_routing",
+            |circuit, analysis| {
+                KnowledgeRewriter::new(self.rewrite_config(RewritePhase::PostRouting)?)
+                    .transform(circuit, Some(analysis))
+            },
+        )
     }
 
     fn apply_target_translation(&self, state: &mut WorkflowState) -> Result<(), CompilerError> {
@@ -410,9 +431,12 @@ impl CompilerWorkflow {
             .rewrite_config(RewritePhase::TargetTranslation)?
             .with_target_instructions(target_basis)?;
 
-        apply_circuit_transform(state, "translation", "translate.target_basis", |circuit| {
-            KnowledgeRewriter::new(config).transform(circuit)
-        })
+        apply_circuit_transform(
+            state,
+            "translation",
+            "translate.target_basis",
+            |circuit, analysis| KnowledgeRewriter::new(config).transform(circuit, Some(analysis)),
+        )
     }
 
     /// Resolves the target instruction basis from explicit config or device data.
@@ -471,9 +495,12 @@ fn apply_circuit_transform(
     state: &mut WorkflowState,
     stage: &'static str,
     name: &'static str,
-    transform: impl FnOnce(&Circuit) -> Result<TransformResult, CompilerError>,
+    transform: impl FnOnce(&Circuit, &CircuitAnalysis) -> Result<TransformResult, CompilerError>,
 ) -> Result<(), CompilerError> {
-    let TransformResult { circuit, changed } = transform(&state.current)?;
+    let TransformResult { circuit, changed } = transform(&state.current, &state.analysis)?;
+    if changed {
+        state.analysis = CircuitAnalysis::analyze(&circuit);
+    }
     state.current = circuit;
     state.changed |= changed;
     state.steps.push(WorkflowStepReport {

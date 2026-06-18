@@ -45,7 +45,7 @@ use crate::compile::resource::{
     AncillaRequirement, ResourceError, ResourceLimits, ResourceManager, ResourcePolicy,
     ResourceRequest,
 };
-use crate::compile::transform::{TransformResult, Transformer};
+use crate::compile::transform::{CircuitAnalysis, TransformResult, Transformer};
 use crate::device::Device;
 use smallvec::SmallVec;
 use std::collections::BTreeSet;
@@ -92,7 +92,25 @@ impl Transformer for DecomposeMcGates {
         DECOMPOSE_MC_GATES_NAME
     }
 
-    fn transform(&self, circuit: &Circuit) -> Result<TransformResult, CompilerError> {
+    fn transform(
+        &self,
+        circuit: &Circuit,
+        analysis: Option<&CircuitAnalysis>,
+    ) -> Result<TransformResult, CompilerError> {
+        let local_analysis;
+        let analysis = match analysis {
+            Some(analysis) => analysis,
+            None => {
+                local_analysis = CircuitAnalysis::analyze(circuit);
+                &local_analysis
+            }
+        };
+        if !analysis.has_mc_gates {
+            return Ok(TransformResult {
+                circuit: circuit.clone(),
+                changed: false,
+            });
+        }
         decompose_mc_gates(circuit, self.config)
     }
 }

@@ -179,7 +179,28 @@ impl Transformer for KnowledgeRewriter {
         "knowledge_rewrite"
     }
 
-    fn transform(&self, circuit: &Circuit) -> Result<TransformResult, CompilerError> {
+    fn transform(
+        &self,
+        circuit: &Circuit,
+        analysis: Option<&crate::compile::transform::CircuitAnalysis>,
+    ) -> Result<TransformResult, CompilerError> {
+        let local_analysis;
+        let analysis = match analysis {
+            Some(analysis) => analysis,
+            None => {
+                local_analysis = crate::compile::transform::CircuitAnalysis::analyze(circuit);
+                &local_analysis
+            }
+        };
+        // The current rewrite engine rebuilds into an empty target circuit.
+        // Skip runtime-classical circuits until rewrite lowering is upgraded
+        // to preserve classical handle identity and measurement definitions.
+        if analysis.has_runtime_classical {
+            return Ok(TransformResult {
+                circuit: circuit.clone(),
+                changed: false,
+            });
+        }
         let result = self.run(circuit)?;
         Ok(TransformResult {
             circuit: result.circuit,
