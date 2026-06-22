@@ -14,6 +14,7 @@ from . import commutation as commutation
 from . import knowledge as knowledge
 from . import resource as resource
 from . import sabre as sabre
+from . import transform as transform
 from .compiler import CompileMode as CompileMode
 from .compiler import CompileResult as CompileResult
 from .compiler import WorkflowStepReport as WorkflowStepReport

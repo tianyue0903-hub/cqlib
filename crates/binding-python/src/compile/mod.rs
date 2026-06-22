@@ -17,6 +17,7 @@ pub mod compiler;
 pub mod knowledge;
 pub mod resource;
 pub mod sabre;
+pub mod transform;
 
 pub use compiler::{PyCompileMode, PyCompileResult, PyWorkflowStepReport, py_compile};
 
@@ -35,6 +36,7 @@ pub(crate) fn register_compile_module(parent: &Bound<'_, PyModule>) -> PyResult<
     knowledge::register_knowledge_module(&m)?;
     resource::register_resource_module(&m)?;
     sabre::register_sabre_module(&m)?;
+    transform::register_transform_module(&m)?;
 
     parent.add_submodule(&m)?;
     parent

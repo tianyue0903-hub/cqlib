@@ -10,23 +10,16 @@
 # copyright notice, and modified files need to carry a notice indicating
 # that they have been altered from the originals.
 
-"""Compiler pipeline bindings."""
+"""Reusable compiler transforms."""
 
-from . import commutation as commutation
-from . import knowledge as knowledge
-from . import resource as resource
-from . import sabre as sabre
-from . import transform as transform
-from .compiler import CompileMode, CompileResult, WorkflowStepReport, compile
+from .canonicalize import CanonicalizeConfig as CanonicalizeConfig
+from .canonicalize import CanonicalizeResult as CanonicalizeResult
+from .canonicalize import Canonicalizer as Canonicalizer
+from .canonicalize import canonicalize_circuit as canonicalize_circuit
 
 __all__ = [
-    "commutation",
-    "knowledge",
-    "resource",
-    "sabre",
-    "transform",
-    "CompileMode",
-    "WorkflowStepReport",
-    "CompileResult",
-    "compile",
+    "CanonicalizeConfig",
+    "Canonicalizer",
+    "CanonicalizeResult",
+    "canonicalize_circuit",
 ]

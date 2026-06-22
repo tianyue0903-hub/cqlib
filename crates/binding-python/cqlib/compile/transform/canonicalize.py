@@ -10,23 +10,20 @@
 # copyright notice, and modified files need to carry a notice indicating
 # that they have been altered from the originals.
 
-"""Compiler pipeline bindings."""
+"""Public bridge to the native circuit canonicalizer."""
 
-from . import commutation as commutation
-from . import knowledge as knowledge
-from . import resource as resource
-from . import sabre as sabre
-from . import transform as transform
-from .compiler import CompileMode, CompileResult, WorkflowStepReport, compile
+from ..._native import compile as _compile_module
+
+_transform_module = _compile_module.transform
+
+CanonicalizeConfig = _transform_module.CanonicalizeConfig
+Canonicalizer = _transform_module.Canonicalizer
+CanonicalizeResult = _transform_module.CanonicalizeResult
+canonicalize_circuit = _transform_module.canonicalize_circuit
 
 __all__ = [
-    "commutation",
-    "knowledge",
-    "resource",
-    "sabre",
-    "transform",
-    "CompileMode",
-    "WorkflowStepReport",
-    "CompileResult",
-    "compile",
+    "CanonicalizeConfig",
+    "Canonicalizer",
+    "CanonicalizeResult",
+    "canonicalize_circuit",
 ]

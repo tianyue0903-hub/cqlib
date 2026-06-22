@@ -93,19 +93,23 @@ impl CanonicalizeConfig {
         self.recurse_control_flow
     }
 
-    pub(super) const fn folds_gphase(&self) -> bool {
+    /// Returns whether `GPhase` operations are folded into scope-local phase.
+    pub const fn folds_gphase(&self) -> bool {
         self.fold_gphase
     }
 
-    pub(super) const fn canonicalizes_instruction_form(&self) -> bool {
+    /// Returns whether instruction forms are canonicalized.
+    pub const fn canonicalizes_instruction_form(&self) -> bool {
         self.canonicalize_instruction_form
     }
 
-    pub(super) const fn drops_noops(&self) -> bool {
+    /// Returns whether strict no-ops are removed.
+    pub const fn drops_noops(&self) -> bool {
         self.drop_noops
     }
 
-    pub(super) const fn canonicalizes_barriers(&self) -> bool {
+    /// Returns whether barrier scopes are canonicalized and merged.
+    pub const fn canonicalizes_barriers(&self) -> bool {
         self.canonicalize_barriers
     }
 }
