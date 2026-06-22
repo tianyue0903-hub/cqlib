@@ -693,6 +693,7 @@ mod tests {
 
     #[test]
     fn invalid_expression_uses_parameter_error() {
+        Python::initialize();
         Python::attach(|py| {
             let value = "@@@".into_py_any(py).unwrap();
             let error = PyParameter::new(value.bind(py)).unwrap_err();
@@ -704,6 +705,7 @@ mod tests {
 
     #[test]
     fn non_finite_number_uses_parameter_error_without_panicking() {
+        Python::initialize();
         Python::attach(|py| {
             let value = f64::NAN.into_py_any(py).unwrap();
             let error = PyParameter::new(value.bind(py)).unwrap_err();
