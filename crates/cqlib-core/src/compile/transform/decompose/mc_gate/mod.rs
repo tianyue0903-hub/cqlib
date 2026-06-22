@@ -279,6 +279,7 @@ pub mod unitary;
 
 pub use decomposer::{
     DecomposeMcGates, McGateDecomposeConfig, decompose_mc_gates, decompose_mc_gates_for_device,
+    decompose_mc_gates_with_rule_stats,
 };
 
 pub use fsim::{decompose_fsim_n_clean, decompose_fsim_no_aux};

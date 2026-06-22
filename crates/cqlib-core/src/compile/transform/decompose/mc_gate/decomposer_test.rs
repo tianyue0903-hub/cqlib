@@ -10,7 +10,10 @@
 // copyright notice, and modified files need to carry a notice indicating
 // that they have been altered from the originals.
 
-use super::{McGateDecomposeConfig, decompose_mc_gates, decompose_mc_gates_for_device};
+use super::{
+    McGateDecomposeConfig, decompose_mc_gates, decompose_mc_gates_for_device,
+    decompose_mc_gates_with_rule_stats,
+};
 use crate::circuit::{
     Circuit, CircuitError, CircuitParam, ClassicalControlOp, ClassicalExpr, Instruction, MCGate,
     Operation, Parameter, ParameterValue, Qubit, StandardGate, circuit_to_matrix,
@@ -683,6 +686,71 @@ fn symbolic_rotation_parameters_are_reinterned_and_bindable() {
     assert!(result.circuit.symbols().contains("theta"));
     assert_no_mc_gates(result.circuit.operations());
     circuit_to_matrix(&bound, None).unwrap();
+}
+
+#[test]
+fn repeated_control_permuted_mcrx_reuses_runtime_rule() {
+    let theta = ParameterValue::Fixed(0.375);
+    let mut circuit = Circuit::new(4);
+    circuit
+        .append(
+            Instruction::McGate(Box::new(MCGate::new(3, StandardGate::RX))),
+            [Qubit::new(0), Qubit::new(1), Qubit::new(2), Qubit::new(3)],
+            [theta.clone()],
+            None,
+        )
+        .unwrap();
+    circuit
+        .append(
+            Instruction::McGate(Box::new(MCGate::new(3, StandardGate::RX))),
+            [Qubit::new(2), Qubit::new(1), Qubit::new(0), Qubit::new(3)],
+            [theta],
+            None,
+        )
+        .unwrap();
+    let expected = circuit_to_matrix(&circuit, None).unwrap();
+
+    let (result, stats) =
+        decompose_mc_gates_with_rule_stats(&circuit, McGateDecomposeConfig::default()).unwrap();
+    let actual = circuit_to_matrix(&result.circuit, None).unwrap();
+
+    assert_eq!(stats.misses, 1);
+    assert_eq!(stats.inserts, 1);
+    assert_eq!(stats.hits, 1);
+    assert_no_mc_gates(result.circuit.operations());
+    assert_selected_matrix_columns_equal_up_to_global_phase(
+        &actual,
+        &expected,
+        0..expected.ncols(),
+        EPSILON,
+    );
+}
+
+#[test]
+fn repeated_clean_mcrz_reuses_clean_runtime_rule() {
+    let theta = ParameterValue::Fixed(-0.25);
+    let mut circuit = Circuit::new(4);
+    for target_order in [
+        [Qubit::new(0), Qubit::new(1), Qubit::new(2), Qubit::new(3)],
+        [Qubit::new(2), Qubit::new(0), Qubit::new(1), Qubit::new(3)],
+    ] {
+        circuit
+            .append(
+                Instruction::McGate(Box::new(MCGate::new(3, StandardGate::RZ))),
+                target_order,
+                [theta.clone()],
+                None,
+            )
+            .unwrap();
+    }
+
+    let (result, stats) = decompose_mc_gates_with_rule_stats(&circuit, config(2, false)).unwrap();
+
+    assert_eq!(result.circuit.num_qubits(), 6);
+    assert_eq!(stats.misses, 1);
+    assert_eq!(stats.inserts, 1);
+    assert_eq!(stats.hits, 1);
+    assert_no_mc_gates(result.circuit.operations());
 }
 
 #[test]

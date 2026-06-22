@@ -45,3 +45,8 @@ pub mod decompose;
 pub mod two_qubit_kak;
 pub mod unitary_1q;
 pub mod unitary_2q;
+
+pub use decompose::{
+    DecomposeUnitaries, UnitaryDecomposeConfig, decompose_unitaries,
+    decompose_unitaries_with_rule_stats,
+};

@@ -46,8 +46,18 @@
 
 pub mod definition;
 pub mod mc_gate;
+pub mod rule;
 pub mod unitary;
 
 pub use definition::{DecomposeDefinitions, expand_definitions};
-pub use mc_gate::{DecomposeMcGates, McGateDecomposeConfig, decompose_mc_gates};
-pub use unitary::decompose::{DecomposeUnitaries, UnitaryDecomposeConfig, decompose_unitaries};
+pub use mc_gate::{
+    DecomposeMcGates, McGateDecomposeConfig, decompose_mc_gates, decompose_mc_gates_with_rule_stats,
+};
+pub use rule::{
+    DecompositionAlgorithm, DecompositionRule, DecompositionRuleCache, DecompositionRuleStats,
+    McGateRuleRequest, NumericUnitaryRuleRequest, ResourceSignature, RuntimeAncillaKind,
+};
+pub use unitary::decompose::{
+    DecomposeUnitaries, UnitaryDecomposeConfig, decompose_unitaries,
+    decompose_unitaries_with_rule_stats,
+};

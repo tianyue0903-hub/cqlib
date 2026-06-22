@@ -45,6 +45,10 @@ use crate::compile::resource::{
     AncillaRequirement, ResourceError, ResourceLimits, ResourceManager, ResourcePolicy,
     ResourceRequest,
 };
+use crate::compile::transform::decompose::rule::{
+    DecompositionAlgorithm, DecompositionRuleCache, DecompositionRuleStats, McGateRuleRequest,
+    ResourceSignature,
+};
 use crate::compile::transform::rebuild::{CircuitRebuildContext, ClassicalRemap};
 use crate::compile::transform::{CircuitAnalysis, TransformResult, Transformer};
 use crate::device::Device;
@@ -175,6 +179,17 @@ pub fn decompose_mc_gates(
     McGateDecomposer::new(circuit, config)?.run()
 }
 
+/// Rewrites multi-controlled gates and returns runtime decomposition-rule stats.
+///
+/// This is the diagnostic form of [`decompose_mc_gates`]. The returned stats
+/// describe pass-local runtime rule reuse during this decomposition run.
+pub fn decompose_mc_gates_with_rule_stats(
+    circuit: &Circuit,
+    config: McGateDecomposeConfig,
+) -> Result<(TransformResult, DecompositionRuleStats), CompilerError> {
+    McGateDecomposer::new(circuit, config)?.run_with_rule_stats()
+}
+
 /// Rewrites multi-controlled gates while enforcing target-device capacity.
 ///
 /// This is a pre-layout logical transform. It limits the complete logical
@@ -207,7 +222,22 @@ struct McGateDecomposer<'a> {
     rebuild: CircuitRebuildContext,
     resource_circuit: Circuit,
     resources: ResourceManager,
+    rule_cache: DecompositionRuleCache,
     changed: bool,
+}
+
+#[derive(Clone, Copy)]
+struct McSynthesisContext<'a> {
+    gate: StandardGate,
+    params: &'a [ParameterValue],
+    controls: &'a [Qubit],
+    targets: &'a [Qubit],
+}
+
+#[derive(Clone, Copy)]
+struct OptionalCleanAlgorithms {
+    clean: DecompositionAlgorithm,
+    no_aux: DecompositionAlgorithm,
 }
 
 impl<'a> McGateDecomposer<'a> {
@@ -228,6 +258,7 @@ impl<'a> McGateDecomposer<'a> {
             rebuild: CircuitRebuildContext::new(source),
             resource_circuit,
             resources,
+            rule_cache: DecompositionRuleCache::default(),
             changed: false,
         })
     }
@@ -236,7 +267,13 @@ impl<'a> McGateDecomposer<'a> {
     ///
     /// Ancilla leases are scoped to the synthesis of one source operation and
     /// must all be released when the pass completes.
-    fn run(mut self) -> Result<TransformResult, CompilerError> {
+    fn run(self) -> Result<TransformResult, CompilerError> {
+        self.run_with_rule_stats().map(|(result, _)| result)
+    }
+
+    fn run_with_rule_stats(
+        mut self,
+    ) -> Result<(TransformResult, DecompositionRuleStats), CompilerError> {
         let source = self.source;
         let root_classical = self.rebuild.root_classical().clone();
         let mut operations = Vec::with_capacity(source.operations().len());
@@ -250,10 +287,14 @@ impl<'a> McGateDecomposer<'a> {
         let circuit = self
             .rebuild
             .finish(qubits, operations, source.global_phase())?;
-        Ok(TransformResult {
-            circuit,
-            changed: self.changed,
-        })
+        let stats = self.rule_cache.stats();
+        Ok((
+            TransformResult {
+                circuit,
+                changed: self.changed,
+            },
+            stats,
+        ))
     }
 
     /// Rebuilds a sequence of operations for a control-flow body.
@@ -446,9 +487,13 @@ impl<'a> McGateDecomposer<'a> {
             | StandardGate::Y
             | StandardGate::CY
             | StandardGate::Z
-            | StandardGate::CZ => {
-                self.synthesize_pauli(gate, controls, one_target(gate, targets)?, &excluded)
-            }
+            | StandardGate::CZ => self.synthesize_pauli(
+                gate,
+                params,
+                controls,
+                one_target(gate, targets)?,
+                &excluded,
+            ),
             StandardGate::RX
             | StandardGate::RY
             | StandardGate::RZ
@@ -458,8 +503,18 @@ impl<'a> McGateDecomposer<'a> {
                 let theta = one_param(gate, params)?;
                 let target = one_target(gate, targets)?;
                 self.synthesize_with_optional_clean(
+                    McSynthesisContext {
+                        gate,
+                        params,
+                        controls,
+                        targets: &[target],
+                    },
                     controls.len().saturating_sub(1),
                     &excluded,
+                    OptionalCleanAlgorithms {
+                        clean: DecompositionAlgorithm::CleanAccumulator,
+                        no_aux: DecompositionAlgorithm::NoAux,
+                    },
                     |ancillas| decompose_rotation_n_clean(gate, theta, controls, target, ancillas),
                     || decompose_rotation_no_aux(gate, theta, controls, target),
                 )
@@ -472,8 +527,18 @@ impl<'a> McGateDecomposer<'a> {
                 let theta = phase_param(gate, params)?;
                 let target = one_target(gate, targets)?;
                 self.synthesize_with_optional_clean(
+                    McSynthesisContext {
+                        gate,
+                        params,
+                        controls,
+                        targets: &[target],
+                    },
                     controls.len().saturating_sub(1),
                     &excluded,
+                    OptionalCleanAlgorithms {
+                        clean: DecompositionAlgorithm::CleanAccumulator,
+                        no_aux: DecompositionAlgorithm::NoAux,
+                    },
                     |ancillas| decompose_phase_n_clean(gate, theta, controls, target, ancillas),
                     || decompose_phase_no_aux(gate, theta, controls, target),
                 )
@@ -481,8 +546,18 @@ impl<'a> McGateDecomposer<'a> {
             StandardGate::H => {
                 let target = one_target(gate, targets)?;
                 self.synthesize_with_optional_clean(
+                    McSynthesisContext {
+                        gate,
+                        params,
+                        controls,
+                        targets: &[target],
+                    },
                     controls.len().saturating_sub(1),
                     &excluded,
+                    OptionalCleanAlgorithms {
+                        clean: DecompositionAlgorithm::CleanAccumulator,
+                        no_aux: DecompositionAlgorithm::NoAux,
+                    },
                     |ancillas| decompose_hadamard_n_clean(controls, target, ancillas),
                     || decompose_hadamard_no_aux(controls, target),
                 )
@@ -491,8 +566,18 @@ impl<'a> McGateDecomposer<'a> {
                 let [theta, phi, lambda] = three_params(gate, params)?;
                 let target = one_target(gate, targets)?;
                 self.synthesize_with_optional_clean(
+                    McSynthesisContext {
+                        gate,
+                        params,
+                        controls,
+                        targets: &[target],
+                    },
                     controls.len().saturating_sub(1),
                     &excluded,
+                    OptionalCleanAlgorithms {
+                        clean: DecompositionAlgorithm::CleanAccumulator,
+                        no_aux: DecompositionAlgorithm::NoAux,
+                    },
                     |ancillas| {
                         decompose_unitary_n_clean(theta, phi, lambda, controls, target, ancillas)
                     },
@@ -503,8 +588,18 @@ impl<'a> McGateDecomposer<'a> {
                 let theta = one_param(gate, params)?;
                 let [first, second] = two_targets(gate, targets)?;
                 self.synthesize_with_optional_clean(
+                    McSynthesisContext {
+                        gate,
+                        params,
+                        controls,
+                        targets,
+                    },
                     controls.len().saturating_sub(1),
                     &excluded,
+                    OptionalCleanAlgorithms {
+                        clean: DecompositionAlgorithm::CleanAccumulator,
+                        no_aux: DecompositionAlgorithm::NoAux,
+                    },
                     |ancillas| {
                         decompose_pauli_rotation_n_clean(
                             gate, theta, controls, first, second, ancillas,
@@ -516,8 +611,18 @@ impl<'a> McGateDecomposer<'a> {
             StandardGate::SWAP => {
                 let [first, second] = two_targets(gate, targets)?;
                 self.synthesize_with_optional_clean(
+                    McSynthesisContext {
+                        gate,
+                        params,
+                        controls,
+                        targets,
+                    },
                     controls.len().saturating_sub(1),
                     &excluded,
+                    OptionalCleanAlgorithms {
+                        clean: DecompositionAlgorithm::CleanAccumulator,
+                        no_aux: DecompositionAlgorithm::NoAux,
+                    },
                     |ancillas| decompose_swap_n_clean(controls, first, second, ancillas),
                     || decompose_swap_no_aux(controls, first, second),
                 )
@@ -530,8 +635,18 @@ impl<'a> McGateDecomposer<'a> {
             | StandardGate::XY2M => {
                 let target = one_target(gate, targets)?;
                 self.synthesize_with_optional_clean(
+                    McSynthesisContext {
+                        gate,
+                        params,
+                        controls,
+                        targets: &[target],
+                    },
                     controls.len().saturating_sub(1),
                     &excluded,
+                    OptionalCleanAlgorithms {
+                        clean: DecompositionAlgorithm::CleanAccumulator,
+                        no_aux: DecompositionAlgorithm::NoAux,
+                    },
                     |ancillas| decompose_qcis_n_clean(gate, params, controls, target, ancillas),
                     || decompose_qcis_no_aux(gate, params, controls, target),
                 )
@@ -539,8 +654,18 @@ impl<'a> McGateDecomposer<'a> {
             StandardGate::FSIM => {
                 let [first, second] = two_targets(gate, targets)?;
                 self.synthesize_with_optional_clean(
+                    McSynthesisContext {
+                        gate,
+                        params,
+                        controls,
+                        targets,
+                    },
                     controls.len(),
                     &excluded,
+                    OptionalCleanAlgorithms {
+                        clean: DecompositionAlgorithm::CleanAccumulator,
+                        no_aux: DecompositionAlgorithm::NoAux,
+                    },
                     |ancillas| decompose_fsim_n_clean(params, controls, first, second, ancillas),
                     || decompose_fsim_no_aux(params, controls, first, second),
                 )
@@ -555,12 +680,25 @@ impl<'a> McGateDecomposer<'a> {
     fn synthesize_pauli(
         &mut self,
         pauli: StandardGate,
+        params: &[ParameterValue],
         controls: &[Qubit],
         target: Qubit,
         excluded: &BTreeSet<Qubit>,
     ) -> Result<Vec<ValueOperation>, CompilerError> {
+        let targets = [target];
+        let context = McSynthesisContext {
+            gate: pauli,
+            params,
+            controls,
+            targets: &targets,
+        };
         if controls.len() <= 2 {
-            return decompose_pauli_small(pauli, controls, target);
+            return self.cached_synthesis(
+                context,
+                &[],
+                ResourceSignature::no_aux(DecompositionAlgorithm::PauliSmall),
+                || decompose_pauli_small(pauli, controls, target),
+            );
         }
 
         // Try exact Pauli/MCX candidates in a fixed two-qubit-cost-oriented
@@ -569,60 +707,84 @@ impl<'a> McGateDecomposer<'a> {
         // This keeps selection deterministic while preferring low-cost
         // ancillary-assisted constructions when the resource policy allows
         // them.
-        if let Some(operations) =
-            self.try_resource_candidate(excluded, AncillaRequirement::CleanZero, 2, |ancillas| {
-                decompose_pauli_2_clean(pauli, controls, target, [ancillas[0], ancillas[1]])
-            })?
-        {
+        if let Some(operations) = self.try_cached_resource_candidate(
+            context,
+            excluded,
+            AncillaRequirement::CleanZero,
+            2,
+            DecompositionAlgorithm::PauliTwoClean,
+            |ancillas| decompose_pauli_2_clean(pauli, controls, target, [ancillas[0], ancillas[1]]),
+        )? {
             return Ok(operations);
         }
-        if let Some(operations) =
-            self.try_resource_candidate(excluded, AncillaRequirement::CleanZero, 1, |ancillas| {
-                decompose_pauli_1_clean_kg24(pauli, controls, target, ancillas[0])
-            })?
-        {
+        if let Some(operations) = self.try_cached_resource_candidate(
+            context,
+            excluded,
+            AncillaRequirement::CleanZero,
+            1,
+            DecompositionAlgorithm::PauliOneCleanKg24,
+            |ancillas| decompose_pauli_1_clean_kg24(pauli, controls, target, ancillas[0]),
+        )? {
             return Ok(operations);
         }
 
         let v_chain_ancillas = controls.len() - 2;
-        if let Some(operations) = self.try_resource_candidate(
+        if let Some(operations) = self.try_cached_resource_candidate(
+            context,
             excluded,
             AncillaRequirement::CleanZero,
             v_chain_ancillas,
+            DecompositionAlgorithm::PauliManyClean,
             |ancillas| decompose_pauli_n_clean(pauli, controls, target, ancillas),
         )? {
             return Ok(operations);
         }
-        if let Some(operations) = self.try_resource_candidate(
+        if let Some(operations) = self.try_cached_resource_candidate(
+            context,
             excluded,
             AncillaRequirement::Dirty,
             v_chain_ancillas,
+            DecompositionAlgorithm::PauliManyDirty,
             |ancillas| decompose_pauli_n_dirty(pauli, controls, target, ancillas),
         )? {
             return Ok(operations);
         }
-        if let Some(operations) =
-            self.try_resource_candidate(excluded, AncillaRequirement::Dirty, 2, |ancillas| {
-                decompose_pauli_2_dirty(pauli, controls, target, [ancillas[0], ancillas[1]])
-            })?
-        {
+        if let Some(operations) = self.try_cached_resource_candidate(
+            context,
+            excluded,
+            AncillaRequirement::Dirty,
+            2,
+            DecompositionAlgorithm::PauliTwoDirty,
+            |ancillas| decompose_pauli_2_dirty(pauli, controls, target, [ancillas[0], ancillas[1]]),
+        )? {
             return Ok(operations);
         }
-        if let Some(operations) =
-            self.try_resource_candidate(excluded, AncillaRequirement::Dirty, 1, |ancillas| {
-                decompose_pauli_1_dirty(pauli, controls, target, ancillas[0])
-            })?
-        {
+        if let Some(operations) = self.try_cached_resource_candidate(
+            context,
+            excluded,
+            AncillaRequirement::Dirty,
+            1,
+            DecompositionAlgorithm::PauliOneDirty,
+            |ancillas| decompose_pauli_1_dirty(pauli, controls, target, ancillas[0]),
+        )? {
             return Ok(operations);
         }
-        if let Some(operations) =
-            self.try_resource_candidate(excluded, AncillaRequirement::CleanZero, 1, |ancillas| {
-                decompose_pauli_1_clean_b95(pauli, controls, target, ancillas[0])
-            })?
-        {
+        if let Some(operations) = self.try_cached_resource_candidate(
+            context,
+            excluded,
+            AncillaRequirement::CleanZero,
+            1,
+            DecompositionAlgorithm::PauliOneCleanB95,
+            |ancillas| decompose_pauli_1_clean_b95(pauli, controls, target, ancillas[0]),
+        )? {
             return Ok(operations);
         }
-        decompose_pauli_no_aux(pauli, controls, target)
+        self.cached_synthesis(
+            context,
+            &[],
+            ResourceSignature::no_aux(DecompositionAlgorithm::PauliNoAux),
+            || decompose_pauli_no_aux(pauli, controls, target),
+        )
     }
 
     /// Tries a clean-ancilla construction before a no-auxiliary fallback.
@@ -632,29 +794,40 @@ impl<'a> McGateDecomposer<'a> {
     /// whether the clean construction can be attempted.
     fn synthesize_with_optional_clean(
         &mut self,
+        context: McSynthesisContext<'_>,
         required_ancillas: usize,
         excluded: &BTreeSet<Qubit>,
+        algorithms: OptionalCleanAlgorithms,
         synthesize_clean: impl FnOnce(&[Qubit]) -> Result<Vec<ValueOperation>, CompilerError>,
         synthesize_no_aux: impl FnOnce() -> Result<Vec<ValueOperation>, CompilerError>,
     ) -> Result<Vec<ValueOperation>, CompilerError> {
         if required_ancillas > 0
-            && let Some(operations) = self.try_resource_candidate(
+            && let Some(operations) = self.try_cached_resource_candidate(
+                context,
                 excluded,
                 AncillaRequirement::CleanZero,
                 required_ancillas,
+                algorithms.clean,
                 synthesize_clean,
             )?
         {
             return Ok(operations);
         }
-        synthesize_no_aux()
+        self.cached_synthesis(
+            context,
+            &[],
+            ResourceSignature::no_aux(algorithms.no_aux),
+            synthesize_no_aux,
+        )
     }
 
-    fn try_resource_candidate(
+    fn try_cached_resource_candidate(
         &mut self,
+        context: McSynthesisContext<'_>,
         excluded: &BTreeSet<Qubit>,
         requirement: AncillaRequirement,
         count: usize,
+        algorithm: DecompositionAlgorithm,
         synthesize: impl FnOnce(&[Qubit]) -> Result<Vec<ValueOperation>, CompilerError>,
     ) -> Result<Option<Vec<ValueOperation>>, CompilerError> {
         let request = ResourceRequest {
@@ -671,7 +844,13 @@ impl<'a> McGateDecomposer<'a> {
         // Synthesis primitives are pure. Generate from the prospective qubits
         // before committing so a rejected candidate cannot allocate ancillas
         // or invalidate later previews.
-        let operations = match synthesize(plan.qubits()) {
+        let signature = match requirement {
+            AncillaRequirement::CleanZero => ResourceSignature::clean(algorithm, count),
+            AncillaRequirement::Dirty => ResourceSignature::dirty(algorithm, count),
+        };
+        let operations = match self.cached_synthesis(context, plan.qubits(), signature, || {
+            synthesize(plan.qubits())
+        }) {
             Ok(operations) => operations,
             Err(CompilerError::TransformFailed { .. }) => return Ok(None),
             Err(error) => return Err(error),
@@ -696,6 +875,40 @@ impl<'a> McGateDecomposer<'a> {
             .release(&lease)
             .map_err(resource_invariant_failed)?;
         Ok(Some(operations))
+    }
+
+    fn cached_synthesis(
+        &mut self,
+        context: McSynthesisContext<'_>,
+        ancillas: &[Qubit],
+        resource: ResourceSignature,
+        synthesize: impl FnOnce() -> Result<Vec<ValueOperation>, CompilerError>,
+    ) -> Result<Vec<ValueOperation>, CompilerError> {
+        let request = McGateRuleRequest {
+            gate: context.gate,
+            control_count: context.controls.len(),
+            target_count: context.targets.len(),
+            params: context.params,
+            resource,
+        };
+        if let Some(operations) = self.rule_cache.instantiate_mc_gate(
+            request,
+            context.controls,
+            context.targets,
+            ancillas,
+        )? {
+            return Ok(operations);
+        }
+
+        let operations = synthesize()?;
+        self.rule_cache.insert_mc_gate(
+            request,
+            context.controls,
+            context.targets,
+            ancillas,
+            &operations,
+        )?;
+        Ok(operations)
     }
 
     /// Resolves source-table parameters into value-level synthesis parameters.

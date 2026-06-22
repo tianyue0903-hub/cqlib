@@ -43,6 +43,9 @@ use crate::circuit::{
     ValueOperation, ValueSwitchCase,
 };
 use crate::compile::CompilerError;
+use crate::compile::transform::decompose::rule::{
+    DecompositionRuleCache, DecompositionRuleStats, NumericUnitaryRuleRequest,
+};
 use crate::compile::transform::rebuild::{CircuitRebuildContext, ClassicalRemap};
 use crate::compile::transform::{CircuitAnalysis, TransformResult, Transformer};
 use ndarray::Array2;
@@ -160,11 +163,30 @@ fn decompose_unitaries_transform(
     circuit: &Circuit,
     config: UnitaryDecomposeConfig,
 ) -> Result<TransformResult, CompilerError> {
+    decompose_unitaries_transform_with_rule_stats(circuit, config).map(|(result, _)| result)
+}
+
+/// Rewrites supported matrix-backed unitary operations and returns runtime rule stats.
+///
+/// This diagnostic entry point exposes pass-local decomposition-rule reuse for
+/// numeric unitary synthesis. Matrix cache keys are bit-exact.
+pub fn decompose_unitaries_with_rule_stats(
+    circuit: &Circuit,
+    config: UnitaryDecomposeConfig,
+) -> Result<(TransformResult, DecompositionRuleStats), CompilerError> {
+    decompose_unitaries_transform_with_rule_stats(circuit, config)
+}
+
+fn decompose_unitaries_transform_with_rule_stats(
+    circuit: &Circuit,
+    config: UnitaryDecomposeConfig,
+) -> Result<(TransformResult, DecompositionRuleStats), CompilerError> {
     let decomposer = UnitaryDecomposer {
         source: circuit,
         rebuild: CircuitRebuildContext::new(circuit),
         top_phase: circuit.global_phase(),
         config,
+        rule_cache: DecompositionRuleCache::default(),
         changed: false,
     };
     decomposer.run()
@@ -175,6 +197,7 @@ struct UnitaryDecomposer<'a> {
     rebuild: CircuitRebuildContext,
     top_phase: Parameter,
     config: UnitaryDecomposeConfig,
+    rule_cache: DecompositionRuleCache,
     changed: bool,
 }
 
@@ -184,7 +207,7 @@ struct Decomposition {
 }
 
 impl<'a> UnitaryDecomposer<'a> {
-    fn run(mut self) -> Result<TransformResult, CompilerError> {
+    fn run(mut self) -> Result<(TransformResult, DecompositionRuleStats), CompilerError> {
         let root_classical = self.rebuild.root_classical().clone();
         let mut operations = Vec::with_capacity(self.source.operations().len());
         let phase_delta =
@@ -195,10 +218,14 @@ impl<'a> UnitaryDecomposer<'a> {
         let circuit = self
             .rebuild
             .finish(self.source.qubits(), operations, self.top_phase)?;
-        Ok(TransformResult {
-            circuit,
-            changed: self.changed,
-        })
+        let stats = self.rule_cache.stats();
+        Ok((
+            TransformResult {
+                circuit,
+                changed: self.changed,
+            },
+            stats,
+        ))
     }
 
     fn apply_sequence(
@@ -379,6 +406,21 @@ impl<'a> UnitaryDecomposer<'a> {
         }
 
         let matrix = self.numeric_matrix_for_gate(gate, operation)?;
+        let request = NumericUnitaryRuleRequest {
+            num_qubits: gate.num_qubits(),
+            matrix: matrix.as_ref(),
+            two_qubit_basis: self.config.two_qubit_basis,
+        };
+        if let Some((operations, phase_delta)) = self
+            .rule_cache
+            .instantiate_numeric_unitary(request, &operation.qubits)?
+        {
+            return Ok(Decomposition {
+                operations,
+                phase_delta,
+            });
+        }
+
         match gate.num_qubits() {
             1 => {
                 let ([theta, phi, lambda], global_phase) =
@@ -406,10 +448,17 @@ impl<'a> UnitaryDecomposer<'a> {
                         label: None,
                     });
                 }
-                Ok(Decomposition {
+                let decomposition = Decomposition {
                     operations,
                     phase_delta: global_phase,
-                })
+                };
+                self.rule_cache.insert_numeric_unitary(
+                    request,
+                    &operation.qubits,
+                    &decomposition.operations,
+                    decomposition.phase_delta,
+                )?;
+                Ok(decomposition)
             }
             2 => {
                 let qubits = [operation.qubits[0], operation.qubits[1]];
@@ -425,13 +474,20 @@ impl<'a> UnitaryDecomposer<'a> {
                         gate.label(),
                     ),
                 })?;
-                Ok(Decomposition {
+                let decomposition = Decomposition {
                     operations: operations
                         .into_iter()
                         .map(synthesized_operation_to_value)
                         .collect::<Result<Vec<_>, _>>()?,
                     phase_delta,
-                })
+                };
+                self.rule_cache.insert_numeric_unitary(
+                    request,
+                    &operation.qubits,
+                    &decomposition.operations,
+                    decomposition.phase_delta,
+                )?;
+                Ok(decomposition)
             }
             other => Err(CompilerError::TransformFailed {
                 name: SYNTHESIS_NAME,
@@ -591,6 +647,36 @@ mod tests {
     }
 
     #[test]
+    fn repeated_numeric_1q_unitary_reuses_runtime_rule() {
+        let gamma = 0.17;
+        let matrix = gate_matrix::u_gate(0.2, -0.3, 0.4) * Complex64::from_polar(1.0, gamma);
+        let first_gate = UnitaryGate::new("first_u", 1, 0)
+            .with_matrix(matrix.clone())
+            .unwrap();
+        let second_gate = UnitaryGate::new("second_u", 1, 0)
+            .with_matrix(matrix)
+            .unwrap();
+        let mut circuit = Circuit::new(2);
+        circuit.unitary(first_gate, vec![Qubit::new(0)]).unwrap();
+        circuit.unitary(second_gate, vec![Qubit::new(1)]).unwrap();
+        let before = circuit_to_matrix(&circuit, None).unwrap();
+
+        let (result, stats) =
+            decompose_unitaries_with_rule_stats(&circuit, UnitaryDecomposeConfig::default())
+                .unwrap();
+        let after = circuit_to_matrix(&result.circuit, None).unwrap();
+
+        assert_eq!(stats.misses, 1);
+        assert_eq!(stats.inserts, 1);
+        assert_eq!(stats.hits, 1);
+        assert!(result.circuit.operations().iter().all(|operation| matches!(
+            operation.instruction,
+            Instruction::Standard(StandardGate::U)
+        )));
+        assert_abs_diff_eq!(before, after, epsilon = 1e-8);
+    }
+
+    #[test]
     fn decomposes_unitary_inside_runtime_classical_control() {
         let gate = UnitaryGate::new("runtime_u", 1, 0)
             .with_matrix(gate_matrix::u_gate(0.3, 0.4, 0.5))
@@ -674,6 +760,45 @@ mod tests {
         let after = circuit_to_matrix(&decomposed, None).unwrap();
 
         assert!(decomposed.operations().iter().all(|operation| matches!(
+            operation.instruction,
+            Instruction::Standard(StandardGate::U)
+                | Instruction::Standard(StandardGate::RXX)
+                | Instruction::Standard(StandardGate::RYY)
+                | Instruction::Standard(StandardGate::RZZ)
+        )));
+        assert_abs_diff_eq!(before, after, epsilon = 1e-8);
+    }
+
+    #[test]
+    fn repeated_numeric_2q_unitary_reuses_runtime_rule() {
+        let matrix = StandardGate::FSIM
+            .matrix(&[0.23, -0.31])
+            .unwrap()
+            .into_owned();
+        let first_gate = UnitaryGate::new("first_2q", 2, 0)
+            .with_matrix(matrix.clone())
+            .unwrap();
+        let second_gate = UnitaryGate::new("second_2q", 2, 0)
+            .with_matrix(matrix)
+            .unwrap();
+        let mut circuit = Circuit::new(4);
+        circuit
+            .unitary(first_gate, vec![Qubit::new(0), Qubit::new(1)])
+            .unwrap();
+        circuit
+            .unitary(second_gate, vec![Qubit::new(2), Qubit::new(3)])
+            .unwrap();
+        let before = circuit_to_matrix(&circuit, None).unwrap();
+
+        let (result, stats) =
+            decompose_unitaries_with_rule_stats(&circuit, UnitaryDecomposeConfig::default())
+                .unwrap();
+        let after = circuit_to_matrix(&result.circuit, None).unwrap();
+
+        assert_eq!(stats.misses, 1);
+        assert_eq!(stats.inserts, 1);
+        assert_eq!(stats.hits, 1);
+        assert!(result.circuit.operations().iter().all(|operation| matches!(
             operation.instruction,
             Instruction::Standard(StandardGate::U)
                 | Instruction::Standard(StandardGate::RXX)
