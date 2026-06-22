@@ -13,10 +13,12 @@
 """Compiler pipeline bindings."""
 
 from . import commutation as commutation
+from . import knowledge as knowledge
 from .compiler import CompileMode, CompileResult, WorkflowStepReport, compile
 
 __all__ = [
     "commutation",
+    "knowledge",
     "CompileMode",
     "WorkflowStepReport",
     "CompileResult",
