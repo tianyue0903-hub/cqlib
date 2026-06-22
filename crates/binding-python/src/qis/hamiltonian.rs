@@ -372,21 +372,26 @@ impl PyHamiltonian {
     ///     ValueError: If steps is 0, Hamiltonian is empty, or other error occurs.
     ///
     /// Mathematical Formulation:
-    ///     For H = Σ_k c_k P_k, the decomposition approximates:
     ///
-    ///     First Order:
-    ///     U(t) ≈ Π_{s=1}^{n} Π_k e^(-i c_k Δt · P_k), where Δt = t/n
+    /// For H = Σ_k c_k P_k, the decomposition approximates:
     ///
-    ///     Second Order:
-    ///     U(t) ≈ Π_{s=1}^{n} [Π_k e^(-i c_k Δt/2 · P_k) · Π_k e^(-i c_k Δt/2 · P_k)]
-    ///     (with reverse order in second product)
+    /// ```text
+    /// First Order:
+    /// U(t) ≈ Π_{s=1}^{n} Π_k e^(-i c_k Δt · P_k), where Δt = t/n
+    ///
+    /// Second Order:
+    /// U(t) ≈ Π_{s=1}^{n} [Π_k e^(-i c_k Δt/2 · P_k) · Π_k e^(-i c_k Δt/2 · P_k)]
+    /// (with reverse order in second product)
+    /// ```
     ///
     /// Examples:
-    ///     >>> from cqlib.qis import Hamiltonian, PauliString, TrotterMode
-    ///     >>> h = Hamiltonian(2)
-    ///     >>> h.add_term(PauliString.from_str("ZZ"), 0.5)
-    ///     >>> h.add_term(PauliString.from_str("XX"), 0.3)
-    ///     >>> circuit = h.to_trotter_circuit(1.0, 10, TrotterMode.first_order())
+    /// ```python
+    /// >>> from cqlib.qis import Hamiltonian, PauliString, TrotterMode
+    /// >>> h = Hamiltonian(2)
+    /// >>> h.add_term(PauliString.from_str("ZZ"), 0.5)
+    /// >>> h.add_term(PauliString.from_str("XX"), 0.3)
+    /// >>> circuit = h.to_trotter_circuit(1.0, 10, TrotterMode.first_order())
+    /// ```
     #[allow(clippy::wrong_self_convention)]
     fn to_trotter_circuit(
         &self,

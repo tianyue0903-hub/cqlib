@@ -66,9 +66,9 @@ impl PyEvolutionStrategy {
     ///
     /// Compiles the Hamiltonian as a single product of Pauli rotations:
     ///
-    /// .. math::
-    ///
-    ///     U(t) = \\prod_k e^{-i c_k t P_k}
+    /// ```text
+    /// U(t) = \\prod_k e^{-i c_k t P_k}
+    /// ```
     ///
     /// This is **mathematically exact** when all Hamiltonian terms mutually commute.
     /// If any two terms do not commute, :meth:`~PauliEvolutionAnsatz.build_circuit`
@@ -300,53 +300,55 @@ impl PyEvolutionInfo {
 ///
 /// Implements (or approximates) the unitary:
 ///
-/// .. math::
+/// ```text
+/// U(t) = e^{-iHt}, \\quad H = \\sum_k c_k P_k
+/// ```
 ///
-///     U(t) = e^{-iHt}, \\quad H = \\sum_k c_k P_k
-///
-/// where :math:`t` is a single symbolic :class:`~cqlib.circuit.Parameter`.
+/// where `t` is a single symbolic `cqlib.circuit.Parameter`.
 ///
 /// **Exact evolution** is possible when all terms commute:
 ///
-/// .. math::
-///
-///     e^{-iHt} = \\prod_k e^{-i c_k t P_k}
+/// ```text
+/// e^{-iHt} = \\prod_k e^{-i c_k t P_k}
+/// ```
 ///
 /// **Approximate evolution** uses product-formula methods when terms do not commute.
 ///
-/// Angle Convention
-/// ----------------
-/// The underlying Pauli evolution gate implements
-/// :math:`e^{-i\\theta/2 \\cdot P}`. To realize :math:`e^{-i c t P}`, the angle
-/// passed is :math:`\\theta = 2ct`. This is the same convention as
-/// :meth:`~cqlib.qis.Hamiltonian.to_trotter_circuit` and
-/// :meth:`~cqlib.qis.Hamiltonian.to_evolution_circuit`.
+/// # Angle Convention
 ///
-/// Builder Methods
-/// ---------------
+/// The underlying Pauli evolution gate implements
+/// `e^{-i\\theta/2 \\cdot P}`. To realize `e^{-i c t P}`, the angle
+/// passed is `\\theta = 2ct`. This is the same convention as
+/// `cqlib.qis.Hamiltonian.to_trotter_circuit` and
+/// `cqlib.qis.Hamiltonian.to_evolution_circuit`.
+///
+/// # Builder Methods
+///
 /// Builder methods return a **new** ``PauliEvolutionAnsatz`` (immutable builder pattern).
 ///
 /// Examples:
-///     >>> from cqlib.circuit.ansatz import PauliEvolutionAnsatz, EvolutionStrategy
-///     >>> from cqlib.qis import Hamiltonian, TrotterMode
-///     >>> h = Hamiltonian(2)
-///     >>> h.add_term(PauliString.from_str("ZZ"), 0.5)
-///     >>> h.add_term(PauliString.from_str("ZI"), 0.3)
-///     >>> ansatz = PauliEvolutionAnsatz(h)   # Auto strategy (commuting → exact)
-///     >>> circuit = ansatz.build_circuit("evo")
-///     >>> # circuit has one symbolic parameter "evo_t"
-///     >>> ansatz.num_parameters()
-///     1
+/// ```python
+/// >>> from cqlib.circuit.ansatz import PauliEvolutionAnsatz, EvolutionStrategy
+/// >>> from cqlib.qis import Hamiltonian, PauliString, TrotterMode
+/// >>> h = Hamiltonian(2)
+/// >>> h.add_term(PauliString.from_str("ZZ"), 0.5)
+/// >>> h.add_term(PauliString.from_str("ZI"), 0.3)
+/// >>> ansatz = PauliEvolutionAnsatz(h)   # Auto strategy (commuting → exact)
+/// >>> circuit = ansatz.build_circuit("evo")
+/// >>> # circuit has one symbolic parameter "evo_t"
+/// >>> ansatz.num_parameters()
+/// 1
 ///
-///     >>> # Non-commuting Hamiltonian with Suzuki-2 decomposition
-///     >>> h2 = Hamiltonian(1)
-///     >>> h2.add_term(PauliString.from_str("X"), 1.0)
-///     >>> h2.add_term(PauliString.from_str("Z"), 1.0)
-///     >>> ansatz2 = (PauliEvolutionAnsatz(h2)
-///     ...     .with_strategy(EvolutionStrategy.trotter(TrotterMode.second_order(), steps=10))
-///     ...     .with_time_param_name("tau"))
-///     >>> circuit2 = ansatz2.build_circuit("ignored")
-///     >>> # circuit2 has one symbolic parameter "tau"
+/// >>> # Non-commuting Hamiltonian with Suzuki-2 decomposition
+/// >>> h2 = Hamiltonian(1)
+/// >>> h2.add_term(PauliString.from_str("X"), 1.0)
+/// >>> h2.add_term(PauliString.from_str("Z"), 1.0)
+/// >>> ansatz2 = (PauliEvolutionAnsatz(h2)
+/// ...     .with_strategy(EvolutionStrategy.trotter(TrotterMode.second_order(), steps=10))
+/// ...     .with_time_param_name("tau"))
+/// >>> circuit2 = ansatz2.build_circuit("ignored")
+/// >>> # circuit2 has one symbolic parameter "tau"
+/// ```
 #[pyclass(name = "PauliEvolutionAnsatz", module = "cqlib.circuit.ansatz")]
 #[derive(Clone)]
 pub struct PyPauliEvolutionAnsatz {
@@ -478,12 +480,12 @@ impl PyPauliEvolutionAnsatz {
     ///   name is used exactly (``prefix`` is ignored for the time parameter).
     /// - Otherwise the parameter is named ``"{prefix}_t"``.
     ///
-    /// Angle Convention
-    /// ~~~~~~~~~~~~~~~~
-    /// Each Pauli term :math:`c_k P_k` is realized as a rotation with angle
-    /// :math:`\\theta_k = 2 c_k t` per Trotter step (or per circuit for exact
+    /// # Angle Convention
+    ///
+    /// Each Pauli term `c_k P_k` is realized as a rotation with angle
+    /// `\\theta_k = 2 c_k t` per Trotter step (or per circuit for exact
     /// evolution). This follows the underlying convention
-    /// :math:`e^{-i\\theta/2 \\cdot P}`.
+    /// `e^{-i\\theta/2 \\cdot P}`.
     ///
     /// Args:
     ///     prefix: Prefix for the time parameter name when no explicit name is set.
