@@ -46,7 +46,7 @@ const ANGLE_EPS: f64 = 1e-12;
 const FIDELITY_IMPROVEMENT_EPS: f64 = 1e-12;
 
 /// Output basis used for two-qubit unitary synthesis.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum TwoQubitUnitaryDecomposeBasis {
     /// Emit local `U` gates plus `RXX/RYY/RZZ` for the Cartan core.
     PauliRotations,

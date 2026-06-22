@@ -17,11 +17,13 @@
 //! unitaries or lower standard gates to a target basis.
 
 use crate::circuit::{
-    Circuit, CircuitParam, ClassicalControlOp, ControlBody, ForOp, IfOp, Instruction, Operation,
-    Parameter, Qubit, StandardGate, SwitchCase, SwitchOp, ValueOperation, WhileOp,
+    Circuit, CircuitParam, ClassicalControlOp, Instruction, Operation, Parameter, ParameterValue,
+    Qubit, StandardGate, ValueClassicalControlOp, ValueControlBody, ValueInstruction,
+    ValueOperation, ValueSwitchCase,
 };
 use crate::compile::CompilerError;
-use crate::compile::transform::{TransformResult, Transformer};
+use crate::compile::transform::rebuild::{CircuitRebuildContext, ClassicalRemap};
+use crate::compile::transform::{CircuitAnalysis, TransformResult, Transformer};
 use smallvec::{SmallVec, smallvec};
 use std::collections::{HashMap, HashSet};
 
@@ -38,16 +40,26 @@ impl Transformer for DecomposeDefinitions {
         "decompose_definitions"
     }
 
-    fn transform(&self, circuit: &Circuit) -> Result<TransformResult, CompilerError> {
-        let result = expand_definitions_transform(circuit)?;
-        if result.changed {
-            Ok(result)
-        } else {
-            Ok(TransformResult {
+    fn transform(
+        &self,
+        circuit: &Circuit,
+        analysis: Option<&CircuitAnalysis>,
+    ) -> Result<TransformResult, CompilerError> {
+        let local_analysis;
+        let analysis = match analysis {
+            Some(analysis) => analysis,
+            None => {
+                local_analysis = CircuitAnalysis::analyze(circuit);
+                &local_analysis
+            }
+        };
+        if !analysis.has_circuit_gate_definitions && !analysis.has_unitary_circuit_definitions {
+            return Ok(TransformResult {
                 circuit: circuit.clone(),
                 changed: false,
-            })
+            });
         }
+        expand_definitions_transform(circuit)
     }
 }
 
@@ -88,21 +100,17 @@ fn expand_definitions_transform(circuit: &Circuit) -> Result<TransformResult, Co
 
 struct DefinitionExpander<'a> {
     source: &'a Circuit,
-    target: Circuit,
+    rebuild: CircuitRebuildContext,
     top_phase: Parameter,
     changed: bool,
 }
 
 impl<'a> DefinitionExpander<'a> {
     fn new(source: &'a Circuit) -> Result<Self, CompilerError> {
+        let rebuild = CircuitRebuildContext::new(source);
         Ok(Self {
             source,
-            target: Circuit::from_operations(
-                source.qubits(),
-                Vec::<ValueOperation>::new(),
-                Some(source.classical_vars().to_vec()),
-                Some(source.classical_values().to_vec()),
-            )?,
+            rebuild,
             top_phase: source.global_phase(),
             changed: false,
         })
@@ -111,38 +119,41 @@ impl<'a> DefinitionExpander<'a> {
     fn run(mut self) -> Result<TransformResult, CompilerError> {
         let qubit_map = QubitMap::Identity;
         let symbol_bindings = HashMap::new();
+        let root_classical = self.rebuild.root_classical().clone();
+        let mut operations = Vec::with_capacity(self.source.operations().len());
 
         for operation in self.source.operations() {
-            let mut operations = Vec::new();
             let phase = self.expand_operation(
                 operation,
                 self.source,
                 &qubit_map,
+                &root_classical,
                 &symbol_bindings,
                 0,
                 &mut operations,
             )?;
             self.top_phase = self.top_phase.clone() + phase;
-            for operation in operations {
-                self.append_top_level(operation)?;
-            }
         }
 
-        self.target.set_global_phase(self.top_phase);
+        let target = self
+            .rebuild
+            .finish(self.source.qubits(), operations, self.top_phase)?;
         Ok(TransformResult {
-            circuit: self.target,
+            circuit: target,
             changed: self.changed,
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn expand_operation(
         &mut self,
         operation: &Operation,
         context: &Circuit,
         qubit_map: &QubitMap<'_>,
+        classical_remap: &ClassicalRemap,
         symbol_bindings: &HashMap<String, Parameter>,
         depth: usize,
-        operations: &mut Vec<Operation>,
+        operations: &mut Vec<ValueOperation>,
     ) -> Result<Parameter, CompilerError> {
         match &operation.instruction {
             Instruction::CircuitGate(gate) => {
@@ -156,6 +167,7 @@ impl<'a> DefinitionExpander<'a> {
                     operation,
                     context,
                     qubit_map,
+                    classical_remap,
                     symbol_bindings,
                     depth,
                     operations,
@@ -172,12 +184,20 @@ impl<'a> DefinitionExpander<'a> {
                         operation,
                         context,
                         qubit_map,
+                        classical_remap,
                         symbol_bindings,
                         depth,
                         operations,
                     )
                 } else {
-                    self.keep_operation(operation, context, qubit_map, symbol_bindings, operations)
+                    self.keep_operation(
+                        operation,
+                        context,
+                        qubit_map,
+                        classical_remap,
+                        symbol_bindings,
+                        operations,
+                    )
                 }
             }
             Instruction::ClassicalControl(control) => self.expand_control_flow(
@@ -185,11 +205,19 @@ impl<'a> DefinitionExpander<'a> {
                 control,
                 context,
                 qubit_map,
+                classical_remap,
                 symbol_bindings,
                 depth,
                 operations,
             ),
-            _ => self.keep_operation(operation, context, qubit_map, symbol_bindings, operations),
+            _ => self.keep_operation(
+                operation,
+                context,
+                qubit_map,
+                classical_remap,
+                symbol_bindings,
+                operations,
+            ),
         }
     }
 
@@ -207,9 +235,10 @@ impl<'a> DefinitionExpander<'a> {
         operation: &Operation,
         context: &Circuit,
         qubit_map: &QubitMap<'_>,
+        _classical_remap: &ClassicalRemap,
         symbol_bindings: &HashMap<String, Parameter>,
         depth: usize,
-        operations: &mut Vec<Operation>,
+        operations: &mut Vec<ValueOperation>,
     ) -> Result<Parameter, CompilerError> {
         if depth >= MAX_DEFINITION_DEPTH {
             return Err(CompilerError::InvalidInput(format!(
@@ -263,6 +292,7 @@ impl<'a> DefinitionExpander<'a> {
             next_qubit_map.insert(*inner, map_qubit(*callsite, qubit_map)?);
         }
         let next_qubit_map = QubitMap::Mapped(&next_qubit_map);
+        let next_classical_remap = self.rebuild.allocate_classical_instance(definition);
 
         let mut phase = apply_symbol_bindings(definition.global_phase(), &next_symbol_bindings);
         for inner_operation in definition.operations() {
@@ -270,6 +300,7 @@ impl<'a> DefinitionExpander<'a> {
                 inner_operation,
                 definition,
                 &next_qubit_map,
+                &next_classical_remap,
                 &next_symbol_bindings,
                 depth + 1,
                 operations,
@@ -289,83 +320,102 @@ impl<'a> DefinitionExpander<'a> {
         control: &ClassicalControlOp,
         context: &Circuit,
         qubit_map: &QubitMap<'_>,
+        classical_remap: &ClassicalRemap,
         symbol_bindings: &HashMap<String, Parameter>,
         depth: usize,
-        operations: &mut Vec<Operation>,
+        operations: &mut Vec<ValueOperation>,
     ) -> Result<Parameter, CompilerError> {
         let instruction = match control {
-            ClassicalControlOp::If(op) => {
-                let then_body =
-                    self.expand_body(op.then_body(), context, qubit_map, symbol_bindings, depth)?;
-                let else_body = op
+            ClassicalControlOp::If(op) => ValueClassicalControlOp::If {
+                condition: classical_remap.remap_expr(op.condition())?,
+                then_body: ValueControlBody::new(self.expand_body(
+                    op.then_body().operations(),
+                    context,
+                    qubit_map,
+                    classical_remap,
+                    symbol_bindings,
+                    depth,
+                )?),
+                else_body: op
                     .else_body()
-                    .map(|body| self.expand_body(body, context, qubit_map, symbol_bindings, depth))
-                    .transpose()?;
-                Instruction::ClassicalControl(ClassicalControlOp::If(
-                    IfOp::new(
-                        op.condition().clone(),
-                        ControlBody::new(then_body),
-                        else_body.map(ControlBody::new),
-                    )
-                    .map_err(CompilerError::Circuit)?,
-                ))
-            }
-            ClassicalControlOp::While(op) => {
-                let body =
-                    self.expand_body(op.body(), context, qubit_map, symbol_bindings, depth)?;
-                Instruction::ClassicalControl(ClassicalControlOp::While(
-                    WhileOp::new(op.condition().clone(), ControlBody::new(body))
-                        .map_err(CompilerError::Circuit)?,
-                ))
-            }
-            ClassicalControlOp::For(op) => {
-                let body =
-                    self.expand_body(op.body(), context, qubit_map, symbol_bindings, depth)?;
-                Instruction::ClassicalControl(ClassicalControlOp::For(
-                    ForOp::new(
-                        op.var(),
-                        op.start().clone(),
-                        op.stop().clone(),
-                        op.step().clone(),
-                        ControlBody::new(body),
-                    )
-                    .map_err(CompilerError::Circuit)?,
-                ))
-            }
-            ClassicalControlOp::Switch(op) => {
-                let cases = op
+                    .map(|body| {
+                        self.expand_body(
+                            body.operations(),
+                            context,
+                            qubit_map,
+                            classical_remap,
+                            symbol_bindings,
+                            depth,
+                        )
+                        .map(ValueControlBody::new)
+                    })
+                    .transpose()?,
+            },
+            ClassicalControlOp::While(op) => ValueClassicalControlOp::While {
+                condition: classical_remap.remap_expr(op.condition())?,
+                body: ValueControlBody::new(self.expand_body(
+                    op.body().operations(),
+                    context,
+                    qubit_map,
+                    classical_remap,
+                    symbol_bindings,
+                    depth,
+                )?),
+            },
+            ClassicalControlOp::For(op) => ValueClassicalControlOp::For {
+                var: classical_remap.remap_var(op.var())?,
+                start: classical_remap.remap_expr(op.start())?,
+                stop: classical_remap.remap_expr(op.stop())?,
+                step: classical_remap.remap_expr(op.step())?,
+                body: ValueControlBody::new(self.expand_body(
+                    op.body().operations(),
+                    context,
+                    qubit_map,
+                    classical_remap,
+                    symbol_bindings,
+                    depth,
+                )?),
+            },
+            ClassicalControlOp::Switch(op) => ValueClassicalControlOp::Switch {
+                target: classical_remap.remap_expr(op.target())?,
+                cases: op
                     .cases()
                     .iter()
                     .map(|case| {
-                        Ok(SwitchCase::new(
+                        Ok(ValueSwitchCase::new(
                             case.value(),
-                            ControlBody::new(self.expand_body(
-                                case.body(),
+                            ValueControlBody::new(self.expand_body(
+                                case.body().operations(),
                                 context,
                                 qubit_map,
+                                classical_remap,
                                 symbol_bindings,
                                 depth,
                             )?),
                         ))
                     })
-                    .collect::<Result<Vec<_>, CompilerError>>()?;
-                let default = op
+                    .collect::<Result<Vec<_>, CompilerError>>()?,
+                default: op
                     .default()
-                    .map(|body| self.expand_body(body, context, qubit_map, symbol_bindings, depth))
-                    .transpose()?
-                    .map(ControlBody::new);
-                Instruction::ClassicalControl(ClassicalControlOp::Switch(
-                    SwitchOp::new(op.target().clone(), cases, default)
-                        .map_err(CompilerError::Circuit)?,
-                ))
-            }
-            ClassicalControlOp::Break | ClassicalControlOp::Continue => {
-                Instruction::ClassicalControl(control.clone())
-            }
+                    .map(|body| {
+                        self.expand_body(
+                            body.operations(),
+                            context,
+                            qubit_map,
+                            classical_remap,
+                            symbol_bindings,
+                            depth,
+                        )
+                        .map(ValueControlBody::new)
+                    })
+                    .transpose()?,
+            },
+            ClassicalControlOp::Break => ValueClassicalControlOp::Break,
+            ClassicalControlOp::Continue => ValueClassicalControlOp::Continue,
         };
 
-        operations.push(Operation {
-            instruction,
+        operations.push(ValueOperation {
+            instruction: ValueInstruction::ClassicalControl(instruction),
             qubits: map_qubits(&operation.qubits, qubit_map)?,
             params: smallvec![],
             label: operation.label.clone(),
@@ -375,21 +425,22 @@ impl<'a> DefinitionExpander<'a> {
 
     fn expand_body(
         &mut self,
-        body: &ControlBody,
+        body: &[Operation],
         context: &Circuit,
         qubit_map: &QubitMap<'_>,
+        classical_remap: &ClassicalRemap,
         symbol_bindings: &HashMap<String, Parameter>,
         depth: usize,
-    ) -> Result<Vec<Operation>, CompilerError> {
-        let body_ops = body.operations();
-        let mut operations = Vec::with_capacity(body_ops.len());
+    ) -> Result<Vec<ValueOperation>, CompilerError> {
+        let mut operations = Vec::with_capacity(body.len());
         let mut phase = Parameter::from(0.0);
 
-        for operation in body_ops {
+        for operation in body {
             let operation_phase = self.expand_operation(
                 operation,
                 context,
                 qubit_map,
+                classical_remap,
                 symbol_bindings,
                 depth,
                 &mut operations,
@@ -398,13 +449,14 @@ impl<'a> DefinitionExpander<'a> {
         }
 
         if !phase.is_zero() {
-            let param = self.intern_parameter(phase)?;
             operations.insert(
                 0,
-                Operation {
-                    instruction: Instruction::Standard(StandardGate::GPhase),
+                ValueOperation {
+                    instruction: ValueInstruction::from_instruction(Instruction::Standard(
+                        StandardGate::GPhase,
+                    )),
                     qubits: smallvec![],
-                    params: smallvec![param],
+                    params: smallvec![ParameterValue::from(phase)],
                     label: None,
                 },
             );
@@ -418,17 +470,20 @@ impl<'a> DefinitionExpander<'a> {
         operation: &Operation,
         context: &Circuit,
         qubit_map: &QubitMap<'_>,
+        classical_remap: &ClassicalRemap,
         symbol_bindings: &HashMap<String, Parameter>,
-        operations: &mut Vec<Operation>,
+        operations: &mut Vec<ValueOperation>,
     ) -> Result<Parameter, CompilerError> {
         let params = self
             .resolve_params(context, &operation.params, symbol_bindings)?
             .into_iter()
-            .map(|param| self.intern_parameter(param))
-            .collect::<Result<SmallVec<[CircuitParam; 1]>, _>>()?;
+            .map(ParameterValue::from)
+            .collect::<SmallVec<[ParameterValue; 1]>>();
 
-        operations.push(Operation {
-            instruction: operation.instruction.clone(),
+        operations.push(ValueOperation {
+            instruction: self
+                .rebuild
+                .remap_non_control_instruction(&operation.instruction, classical_remap)?,
             qubits: map_qubits(&operation.qubits, qubit_map)?,
             params,
             label: operation.label.clone(),
@@ -449,26 +504,6 @@ impl<'a> DefinitionExpander<'a> {
                 Ok(apply_symbol_bindings(resolved, symbol_bindings))
             })
             .collect()
-    }
-
-    fn intern_parameter(&mut self, parameter: Parameter) -> Result<CircuitParam, CompilerError> {
-        Ok(self.target.map_param(parameter)?)
-    }
-
-    fn append_top_level(&mut self, operation: Operation) -> Result<(), CompilerError> {
-        let params = operation
-            .params
-            .iter()
-            .map(|param| self.target.parameter_value(param))
-            .collect::<Result<Vec<_>, _>>()?;
-
-        self.target.append(
-            operation.instruction,
-            operation.qubits,
-            params,
-            operation.label.as_deref(),
-        )?;
-        Ok(())
     }
 }
 
@@ -555,9 +590,9 @@ fn fresh_temp_symbol(index: usize, symbol: &str, occupied: &mut HashSet<String>)
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::circuit::ClassicalExpr;
     use crate::circuit::ParameterValue;
     use crate::circuit::gate::{FrozenCircuit, UnitaryGate};
+    use crate::circuit::{ClassicalDataOp, ClassicalExpr};
     use ndarray::array;
     use num_complex::Complex;
     use std::collections::HashMap;
@@ -575,13 +610,34 @@ mod tests {
         let mut circuit = Circuit::new(1);
         circuit.h(Qubit::new(0)).unwrap();
 
-        let result = DecomposeDefinitions.transform(&circuit).unwrap();
+        let result = DecomposeDefinitions.transform(&circuit, None).unwrap();
 
         assert!(!result.changed);
         assert_eq!(result.circuit.operations().len(), 1);
         assert!(matches!(
             result.circuit.operations()[0].instruction,
             Instruction::Standard(StandardGate::H)
+        ));
+    }
+
+    #[test]
+    fn transform_keeps_measurement_circuit_without_definitions() {
+        let mut circuit = Circuit::new(2);
+        circuit
+            .measure_bits([Qubit::new(0), Qubit::new(1)])
+            .unwrap();
+
+        let result = DecomposeDefinitions.transform(&circuit, None).unwrap();
+
+        assert!(!result.changed);
+        assert_eq!(result.circuit.operations().len(), 1);
+        assert_eq!(
+            result.circuit.classical_values(),
+            circuit.classical_values()
+        );
+        assert!(matches!(
+            result.circuit.operations()[0].instruction,
+            Instruction::ClassicalData(ClassicalDataOp::MeasureBits { .. })
         ));
     }
 
@@ -854,6 +910,88 @@ mod tests {
             then_body[1].instruction,
             Instruction::Standard(StandardGate::X)
         ));
+    }
+
+    #[test]
+    fn expands_definition_with_measurement_and_classical_control() {
+        let mut inner = Circuit::new(1);
+        let measured = inner.measure(Qubit::new(0)).unwrap();
+        inner
+            .if_(
+                ClassicalExpr::bit_to_bool(measured.expr()).unwrap(),
+                |body| body.x(Qubit::new(0)),
+            )
+            .unwrap();
+        let gate = inner.to_gate("measure_then_x").unwrap();
+
+        let mut outer = Circuit::new(1);
+        outer.append(gate, [Qubit::new(0)], [], None).unwrap();
+
+        let expanded = expand_definitions(&outer).unwrap();
+        assert_eq!(expanded.classical_values().len(), 1);
+        assert!(expanded.validate().is_ok());
+        assert!(matches!(
+            expanded.operations()[0].instruction,
+            Instruction::ClassicalData(ClassicalDataOp::MeasureBit { .. })
+        ));
+        let Instruction::ClassicalControl(ClassicalControlOp::If(op)) =
+            &expanded.operations()[1].instruction
+        else {
+            panic!("expected expanded if operation");
+        };
+        assert_eq!(op.then_body().operations().len(), 1);
+        assert!(matches!(
+            op.then_body().operations()[0].instruction,
+            Instruction::Standard(StandardGate::X)
+        ));
+    }
+
+    #[test]
+    fn expands_multiple_definition_calls_with_distinct_classical_handles() {
+        let mut inner = Circuit::new(1);
+        let measured = inner.measure(Qubit::new(0)).unwrap();
+        inner
+            .if_(
+                ClassicalExpr::bit_to_bool(measured.expr()).unwrap(),
+                |body| body.x(Qubit::new(0)),
+            )
+            .unwrap();
+        let gate = inner.to_gate("measure_then_x").unwrap();
+
+        let mut outer = Circuit::new(2);
+        outer
+            .append(gate.clone(), [Qubit::new(0)], [], None)
+            .unwrap();
+        outer.append(gate, [Qubit::new(1)], [], None).unwrap();
+
+        let expanded = expand_definitions(&outer).unwrap();
+        assert_eq!(expanded.classical_values().len(), 2);
+        assert!(expanded.validate().is_ok());
+
+        let Instruction::ClassicalData(ClassicalDataOp::MeasureBit { result: first }) =
+            expanded.operations()[0].instruction
+        else {
+            panic!("expected first measurement");
+        };
+        let Instruction::ClassicalData(ClassicalDataOp::MeasureBit { result: second }) =
+            expanded.operations()[2].instruction
+        else {
+            panic!("expected second measurement");
+        };
+
+        assert_ne!(first.index(), second.index());
+        let Instruction::ClassicalControl(ClassicalControlOp::If(first_if)) =
+            &expanded.operations()[1].instruction
+        else {
+            panic!("expected first if");
+        };
+        let Instruction::ClassicalControl(ClassicalControlOp::If(second_if)) =
+            &expanded.operations()[3].instruction
+        else {
+            panic!("expected second if");
+        };
+        assert!(first_if.condition().values().contains(&first));
+        assert!(second_if.condition().values().contains(&second));
     }
 
     #[test]

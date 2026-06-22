@@ -37,17 +37,21 @@ use super::{
 use crate::circuit::operation::ValueOperation;
 use crate::circuit::value_instruction::ValueInstruction;
 use crate::circuit::{
-    Circuit, CircuitParam, ClassicalControlOp, ControlBody, ForOp, IfOp, Instruction, MCGate,
-    Operation, ParameterValue, Qubit, StandardGate, SwitchCase, SwitchOp, WhileOp,
+    Circuit, CircuitParam, ClassicalControlOp, Instruction, MCGate, Operation, ParameterValue,
+    Qubit, StandardGate, ValueClassicalControlOp, ValueControlBody, ValueSwitchCase,
 };
 use crate::compile::CompilerError;
 use crate::compile::resource::{
     AncillaRequirement, ResourceError, ResourceLimits, ResourceManager, ResourcePolicy,
     ResourceRequest,
 };
-use crate::compile::transform::{TransformResult, Transformer};
+use crate::compile::transform::decompose::rule::{
+    DecompositionAlgorithm, DecompositionRuleCache, DecompositionRuleStats, McGateRuleRequest,
+    ResourceSignature,
+};
+use crate::compile::transform::rebuild::{CircuitRebuildContext, ClassicalRemap};
+use crate::compile::transform::{CircuitAnalysis, TransformResult, Transformer};
 use crate::device::Device;
-use smallvec::SmallVec;
 use std::collections::BTreeSet;
 
 const DECOMPOSE_MC_GATES_NAME: &str = "decompose.mc_gates";
@@ -92,7 +96,25 @@ impl Transformer for DecomposeMcGates {
         DECOMPOSE_MC_GATES_NAME
     }
 
-    fn transform(&self, circuit: &Circuit) -> Result<TransformResult, CompilerError> {
+    fn transform(
+        &self,
+        circuit: &Circuit,
+        analysis: Option<&CircuitAnalysis>,
+    ) -> Result<TransformResult, CompilerError> {
+        let local_analysis;
+        let analysis = match analysis {
+            Some(analysis) => analysis,
+            None => {
+                local_analysis = CircuitAnalysis::analyze(circuit);
+                &local_analysis
+            }
+        };
+        if !analysis.has_mc_gates {
+            return Ok(TransformResult {
+                circuit: circuit.clone(),
+                changed: false,
+            });
+        }
         decompose_mc_gates(circuit, self.config)
     }
 }
@@ -157,6 +179,17 @@ pub fn decompose_mc_gates(
     McGateDecomposer::new(circuit, config)?.run()
 }
 
+/// Rewrites multi-controlled gates and returns runtime decomposition-rule stats.
+///
+/// This is the diagnostic form of [`decompose_mc_gates`]. The returned stats
+/// describe pass-local runtime rule reuse during this decomposition run.
+pub fn decompose_mc_gates_with_rule_stats(
+    circuit: &Circuit,
+    config: McGateDecomposeConfig,
+) -> Result<(TransformResult, DecompositionRuleStats), CompilerError> {
+    McGateDecomposer::new(circuit, config)?.run_with_rule_stats()
+}
+
 /// Rewrites multi-controlled gates while enforcing target-device capacity.
 ///
 /// This is a pre-layout logical transform. It limits the complete logical
@@ -186,9 +219,25 @@ pub fn decompose_mc_gates_for_device(
 
 struct McGateDecomposer<'a> {
     source: &'a Circuit,
-    target: Circuit,
+    rebuild: CircuitRebuildContext,
+    resource_circuit: Circuit,
     resources: ResourceManager,
+    rule_cache: DecompositionRuleCache,
     changed: bool,
+}
+
+#[derive(Clone, Copy)]
+struct McSynthesisContext<'a> {
+    gate: StandardGate,
+    params: &'a [ParameterValue],
+    controls: &'a [Qubit],
+    targets: &'a [Qubit],
+}
+
+#[derive(Clone, Copy)]
+struct OptionalCleanAlgorithms {
+    clean: DecompositionAlgorithm,
+    no_aux: DecompositionAlgorithm,
 }
 
 impl<'a> McGateDecomposer<'a> {
@@ -197,20 +246,19 @@ impl<'a> McGateDecomposer<'a> {
     /// The target shell is built before resource initialization so the manager
     /// sees exactly the logical qubits that are already occupied.
     fn new(source: &'a Circuit, config: McGateDecomposeConfig) -> Result<Self, CompilerError> {
-        let mut target = Circuit::from_operations(
-            source.qubits(),
-            Vec::<ValueOperation>::new(),
-            Some(source.classical_vars().to_vec()),
-            Some(source.classical_values().to_vec()),
-        )?;
-        target.set_global_phase(source.global_phase());
-        let resources =
-            ResourceManager::from_circuit(&target, config.resource_policy, config.resource_limits)
-                .map_err(resource_input_failed)?;
+        let resource_circuit = Circuit::from_qubits(source.qubits())?;
+        let resources = ResourceManager::from_circuit(
+            &resource_circuit,
+            config.resource_policy,
+            config.resource_limits,
+        )
+        .map_err(resource_input_failed)?;
         Ok(Self {
             source,
-            target,
+            rebuild: CircuitRebuildContext::new(source),
+            resource_circuit,
             resources,
+            rule_cache: DecompositionRuleCache::default(),
             changed: false,
         })
     }
@@ -219,21 +267,34 @@ impl<'a> McGateDecomposer<'a> {
     ///
     /// Ancilla leases are scoped to the synthesis of one source operation and
     /// must all be released when the pass completes.
-    fn run(mut self) -> Result<TransformResult, CompilerError> {
+    fn run(self) -> Result<TransformResult, CompilerError> {
+        self.run_with_rule_stats().map(|(result, _)| result)
+    }
+
+    fn run_with_rule_stats(
+        mut self,
+    ) -> Result<(TransformResult, DecompositionRuleStats), CompilerError> {
         let source = self.source;
+        let root_classical = self.rebuild.root_classical().clone();
+        let mut operations = Vec::with_capacity(source.operations().len());
         for operation in source.operations() {
-            let operations = self.rebuild_operation(operation)?;
-            for operation in operations {
-                self.append_top_level(operation)?;
-            }
+            operations.extend(self.rebuild_operation(operation, &root_classical)?);
         }
         self.resources
-            .verify_idle(&self.target)
+            .verify_idle(&self.resource_circuit)
             .map_err(resource_invariant_failed)?;
-        Ok(TransformResult {
-            circuit: self.target,
-            changed: self.changed,
-        })
+        let qubits = self.resource_circuit.qubits();
+        let circuit = self
+            .rebuild
+            .finish(qubits, operations, source.global_phase())?;
+        let stats = self.rule_cache.stats();
+        Ok((
+            TransformResult {
+                circuit,
+                changed: self.changed,
+            },
+            stats,
+        ))
     }
 
     /// Rebuilds a sequence of operations for a control-flow body.
@@ -243,10 +304,11 @@ impl<'a> McGateDecomposer<'a> {
     fn rebuild_sequence(
         &mut self,
         source_operations: &[Operation],
-    ) -> Result<Vec<Operation>, CompilerError> {
+        classical_remap: &ClassicalRemap,
+    ) -> Result<Vec<ValueOperation>, CompilerError> {
         let mut operations = Vec::with_capacity(source_operations.len());
         for operation in source_operations {
-            operations.extend(self.rebuild_operation(operation)?);
+            operations.extend(self.rebuild_operation(operation, classical_remap)?);
         }
         Ok(operations)
     }
@@ -258,18 +320,20 @@ impl<'a> McGateDecomposer<'a> {
     fn rebuild_operation(
         &mut self,
         operation: &Operation,
-    ) -> Result<Vec<Operation>, CompilerError> {
+        classical_remap: &ClassicalRemap,
+    ) -> Result<Vec<ValueOperation>, CompilerError> {
         match &operation.instruction {
             Instruction::McGate(gate) => self.decompose_mc_operation(gate, operation),
-            Instruction::ClassicalControl(control) => {
-                Ok(vec![self.rebuild_control_flow(operation, control)?])
-            }
-            _ => Ok(vec![Operation {
-                instruction: operation.instruction.clone(),
-                qubits: operation.qubits.clone(),
-                params: self.remap_source_params(&operation.params)?,
-                label: operation.label.clone(),
-            }]),
+            Instruction::ClassicalControl(control) => Ok(vec![self.rebuild_control_flow(
+                operation,
+                control,
+                classical_remap,
+            )?]),
+            _ => Ok(vec![self.rebuild.remap_preserved_operation(
+                self.source,
+                operation,
+                classical_remap,
+            )?]),
         }
     }
 
@@ -282,76 +346,71 @@ impl<'a> McGateDecomposer<'a> {
         &mut self,
         operation: &Operation,
         control: &ClassicalControlOp,
-    ) -> Result<Operation, CompilerError> {
+        classical_remap: &ClassicalRemap,
+    ) -> Result<ValueOperation, CompilerError> {
         let instruction = match control {
             ClassicalControlOp::If(op) => {
-                let then_body = self.rebuild_sequence(op.then_body().operations())?;
+                let then_body =
+                    self.rebuild_sequence(op.then_body().operations(), classical_remap)?;
                 let else_body = op
                     .else_body()
-                    .map(|body| self.rebuild_sequence(body.operations()))
+                    .map(|body| self.rebuild_sequence(body.operations(), classical_remap))
                     .transpose()?;
-                Instruction::ClassicalControl(ClassicalControlOp::If(
-                    IfOp::new(
-                        op.condition().clone(),
-                        ControlBody::new(then_body),
-                        else_body.map(ControlBody::new),
-                    )
-                    .map_err(CompilerError::Circuit)?,
-                ))
+                ValueClassicalControlOp::If {
+                    condition: classical_remap.remap_expr(op.condition())?,
+                    then_body: ValueControlBody::new(then_body),
+                    else_body: else_body.map(ValueControlBody::new),
+                }
             }
             ClassicalControlOp::While(op) => {
-                let body = self.rebuild_sequence(op.body().operations())?;
-                Instruction::ClassicalControl(ClassicalControlOp::While(
-                    WhileOp::new(op.condition().clone(), ControlBody::new(body))
-                        .map_err(CompilerError::Circuit)?,
-                ))
+                let body = self.rebuild_sequence(op.body().operations(), classical_remap)?;
+                ValueClassicalControlOp::While {
+                    condition: classical_remap.remap_expr(op.condition())?,
+                    body: ValueControlBody::new(body),
+                }
             }
             ClassicalControlOp::For(op) => {
-                let body = self.rebuild_sequence(op.body().operations())?;
-                Instruction::ClassicalControl(ClassicalControlOp::For(
-                    ForOp::new(
-                        op.var(),
-                        op.start().clone(),
-                        op.stop().clone(),
-                        op.step().clone(),
-                        ControlBody::new(body),
-                    )
-                    .map_err(CompilerError::Circuit)?,
-                ))
+                let body = self.rebuild_sequence(op.body().operations(), classical_remap)?;
+                ValueClassicalControlOp::For {
+                    var: classical_remap.remap_var(op.var())?,
+                    start: classical_remap.remap_expr(op.start())?,
+                    stop: classical_remap.remap_expr(op.stop())?,
+                    step: classical_remap.remap_expr(op.step())?,
+                    body: ValueControlBody::new(body),
+                }
             }
             ClassicalControlOp::Switch(op) => {
                 let cases = op
                     .cases()
                     .iter()
                     .map(|case| {
-                        Ok(SwitchCase::new(
+                        Ok(ValueSwitchCase::new(
                             case.value(),
-                            ControlBody::new(self.rebuild_sequence(case.body().operations())?),
+                            ValueControlBody::new(
+                                self.rebuild_sequence(case.body().operations(), classical_remap)?,
+                            ),
                         ))
                     })
                     .collect::<Result<Vec<_>, CompilerError>>()?;
                 let default = op
                     .default()
-                    .map(|body| self.rebuild_sequence(body.operations()))
+                    .map(|body| self.rebuild_sequence(body.operations(), classical_remap))
                     .transpose()?
-                    .map(ControlBody::new);
-                Instruction::ClassicalControl(ClassicalControlOp::Switch(
-                    SwitchOp::new(op.target().clone(), cases, default)
-                        .map_err(CompilerError::Circuit)?,
-                ))
+                    .map(ValueControlBody::new);
+                ValueClassicalControlOp::Switch {
+                    target: classical_remap.remap_expr(op.target())?,
+                    cases,
+                    default,
+                }
             }
-            ClassicalControlOp::Break | ClassicalControlOp::Continue => {
-                Instruction::ClassicalControl(control.clone())
-            }
+            ClassicalControlOp::Break => ValueClassicalControlOp::Break,
+            ClassicalControlOp::Continue => ValueClassicalControlOp::Continue,
         };
-        let qubits: SmallVec<[Qubit; 3]> = match &instruction {
-            Instruction::ClassicalControl(cc) => cc.used_qubits().into_iter().collect(),
-            _ => SmallVec::new(),
-        };
-        Ok(Operation {
-            instruction,
+        let qubits = instruction.used_qubits().into_iter().collect();
+        Ok(ValueOperation {
+            instruction: ValueInstruction::ClassicalControl(instruction),
             qubits,
-            params: self.remap_source_params(&operation.params)?,
+            params: CircuitRebuildContext::resolve_source_params(self.source, &operation.params)?,
             label: operation.label.clone(),
         })
     }
@@ -364,18 +423,15 @@ impl<'a> McGateDecomposer<'a> {
         &mut self,
         gate: &MCGate,
         operation: &Operation,
-    ) -> Result<Vec<Operation>, CompilerError> {
+    ) -> Result<Vec<ValueOperation>, CompilerError> {
         self.validate_mc_operation(gate, operation)?;
         let params = self.resolve_source_params(&operation.params)?;
         let num_controls = gate.num_ctrl_qubits();
         let controls = &operation.qubits[..num_controls];
         let targets = &operation.qubits[num_controls..];
-        let values = self.synthesize_mc_gate(*gate.base_gate(), &params, controls, targets)?;
+        let operations = self.synthesize_mc_gate(*gate.base_gate(), &params, controls, targets)?;
         self.changed = true;
-        values
-            .into_iter()
-            .map(|operation| self.intern_value_operation(operation))
-            .collect()
+        Ok(operations)
     }
 
     fn validate_mc_operation(
@@ -431,9 +487,13 @@ impl<'a> McGateDecomposer<'a> {
             | StandardGate::Y
             | StandardGate::CY
             | StandardGate::Z
-            | StandardGate::CZ => {
-                self.synthesize_pauli(gate, controls, one_target(gate, targets)?, &excluded)
-            }
+            | StandardGate::CZ => self.synthesize_pauli(
+                gate,
+                params,
+                controls,
+                one_target(gate, targets)?,
+                &excluded,
+            ),
             StandardGate::RX
             | StandardGate::RY
             | StandardGate::RZ
@@ -443,8 +503,18 @@ impl<'a> McGateDecomposer<'a> {
                 let theta = one_param(gate, params)?;
                 let target = one_target(gate, targets)?;
                 self.synthesize_with_optional_clean(
+                    McSynthesisContext {
+                        gate,
+                        params,
+                        controls,
+                        targets: &[target],
+                    },
                     controls.len().saturating_sub(1),
                     &excluded,
+                    OptionalCleanAlgorithms {
+                        clean: DecompositionAlgorithm::CleanAccumulator,
+                        no_aux: DecompositionAlgorithm::NoAux,
+                    },
                     |ancillas| decompose_rotation_n_clean(gate, theta, controls, target, ancillas),
                     || decompose_rotation_no_aux(gate, theta, controls, target),
                 )
@@ -457,8 +527,18 @@ impl<'a> McGateDecomposer<'a> {
                 let theta = phase_param(gate, params)?;
                 let target = one_target(gate, targets)?;
                 self.synthesize_with_optional_clean(
+                    McSynthesisContext {
+                        gate,
+                        params,
+                        controls,
+                        targets: &[target],
+                    },
                     controls.len().saturating_sub(1),
                     &excluded,
+                    OptionalCleanAlgorithms {
+                        clean: DecompositionAlgorithm::CleanAccumulator,
+                        no_aux: DecompositionAlgorithm::NoAux,
+                    },
                     |ancillas| decompose_phase_n_clean(gate, theta, controls, target, ancillas),
                     || decompose_phase_no_aux(gate, theta, controls, target),
                 )
@@ -466,8 +546,18 @@ impl<'a> McGateDecomposer<'a> {
             StandardGate::H => {
                 let target = one_target(gate, targets)?;
                 self.synthesize_with_optional_clean(
+                    McSynthesisContext {
+                        gate,
+                        params,
+                        controls,
+                        targets: &[target],
+                    },
                     controls.len().saturating_sub(1),
                     &excluded,
+                    OptionalCleanAlgorithms {
+                        clean: DecompositionAlgorithm::CleanAccumulator,
+                        no_aux: DecompositionAlgorithm::NoAux,
+                    },
                     |ancillas| decompose_hadamard_n_clean(controls, target, ancillas),
                     || decompose_hadamard_no_aux(controls, target),
                 )
@@ -476,8 +566,18 @@ impl<'a> McGateDecomposer<'a> {
                 let [theta, phi, lambda] = three_params(gate, params)?;
                 let target = one_target(gate, targets)?;
                 self.synthesize_with_optional_clean(
+                    McSynthesisContext {
+                        gate,
+                        params,
+                        controls,
+                        targets: &[target],
+                    },
                     controls.len().saturating_sub(1),
                     &excluded,
+                    OptionalCleanAlgorithms {
+                        clean: DecompositionAlgorithm::CleanAccumulator,
+                        no_aux: DecompositionAlgorithm::NoAux,
+                    },
                     |ancillas| {
                         decompose_unitary_n_clean(theta, phi, lambda, controls, target, ancillas)
                     },
@@ -488,8 +588,18 @@ impl<'a> McGateDecomposer<'a> {
                 let theta = one_param(gate, params)?;
                 let [first, second] = two_targets(gate, targets)?;
                 self.synthesize_with_optional_clean(
+                    McSynthesisContext {
+                        gate,
+                        params,
+                        controls,
+                        targets,
+                    },
                     controls.len().saturating_sub(1),
                     &excluded,
+                    OptionalCleanAlgorithms {
+                        clean: DecompositionAlgorithm::CleanAccumulator,
+                        no_aux: DecompositionAlgorithm::NoAux,
+                    },
                     |ancillas| {
                         decompose_pauli_rotation_n_clean(
                             gate, theta, controls, first, second, ancillas,
@@ -501,8 +611,18 @@ impl<'a> McGateDecomposer<'a> {
             StandardGate::SWAP => {
                 let [first, second] = two_targets(gate, targets)?;
                 self.synthesize_with_optional_clean(
+                    McSynthesisContext {
+                        gate,
+                        params,
+                        controls,
+                        targets,
+                    },
                     controls.len().saturating_sub(1),
                     &excluded,
+                    OptionalCleanAlgorithms {
+                        clean: DecompositionAlgorithm::CleanAccumulator,
+                        no_aux: DecompositionAlgorithm::NoAux,
+                    },
                     |ancillas| decompose_swap_n_clean(controls, first, second, ancillas),
                     || decompose_swap_no_aux(controls, first, second),
                 )
@@ -515,8 +635,18 @@ impl<'a> McGateDecomposer<'a> {
             | StandardGate::XY2M => {
                 let target = one_target(gate, targets)?;
                 self.synthesize_with_optional_clean(
+                    McSynthesisContext {
+                        gate,
+                        params,
+                        controls,
+                        targets: &[target],
+                    },
                     controls.len().saturating_sub(1),
                     &excluded,
+                    OptionalCleanAlgorithms {
+                        clean: DecompositionAlgorithm::CleanAccumulator,
+                        no_aux: DecompositionAlgorithm::NoAux,
+                    },
                     |ancillas| decompose_qcis_n_clean(gate, params, controls, target, ancillas),
                     || decompose_qcis_no_aux(gate, params, controls, target),
                 )
@@ -524,8 +654,18 @@ impl<'a> McGateDecomposer<'a> {
             StandardGate::FSIM => {
                 let [first, second] = two_targets(gate, targets)?;
                 self.synthesize_with_optional_clean(
+                    McSynthesisContext {
+                        gate,
+                        params,
+                        controls,
+                        targets,
+                    },
                     controls.len(),
                     &excluded,
+                    OptionalCleanAlgorithms {
+                        clean: DecompositionAlgorithm::CleanAccumulator,
+                        no_aux: DecompositionAlgorithm::NoAux,
+                    },
                     |ancillas| decompose_fsim_n_clean(params, controls, first, second, ancillas),
                     || decompose_fsim_no_aux(params, controls, first, second),
                 )
@@ -540,12 +680,25 @@ impl<'a> McGateDecomposer<'a> {
     fn synthesize_pauli(
         &mut self,
         pauli: StandardGate,
+        params: &[ParameterValue],
         controls: &[Qubit],
         target: Qubit,
         excluded: &BTreeSet<Qubit>,
     ) -> Result<Vec<ValueOperation>, CompilerError> {
+        let targets = [target];
+        let context = McSynthesisContext {
+            gate: pauli,
+            params,
+            controls,
+            targets: &targets,
+        };
         if controls.len() <= 2 {
-            return decompose_pauli_small(pauli, controls, target);
+            return self.cached_synthesis(
+                context,
+                &[],
+                ResourceSignature::no_aux(DecompositionAlgorithm::PauliSmall),
+                || decompose_pauli_small(pauli, controls, target),
+            );
         }
 
         // Try exact Pauli/MCX candidates in a fixed two-qubit-cost-oriented
@@ -554,60 +707,84 @@ impl<'a> McGateDecomposer<'a> {
         // This keeps selection deterministic while preferring low-cost
         // ancillary-assisted constructions when the resource policy allows
         // them.
-        if let Some(operations) =
-            self.try_resource_candidate(excluded, AncillaRequirement::CleanZero, 2, |ancillas| {
-                decompose_pauli_2_clean(pauli, controls, target, [ancillas[0], ancillas[1]])
-            })?
-        {
+        if let Some(operations) = self.try_cached_resource_candidate(
+            context,
+            excluded,
+            AncillaRequirement::CleanZero,
+            2,
+            DecompositionAlgorithm::PauliTwoClean,
+            |ancillas| decompose_pauli_2_clean(pauli, controls, target, [ancillas[0], ancillas[1]]),
+        )? {
             return Ok(operations);
         }
-        if let Some(operations) =
-            self.try_resource_candidate(excluded, AncillaRequirement::CleanZero, 1, |ancillas| {
-                decompose_pauli_1_clean_kg24(pauli, controls, target, ancillas[0])
-            })?
-        {
+        if let Some(operations) = self.try_cached_resource_candidate(
+            context,
+            excluded,
+            AncillaRequirement::CleanZero,
+            1,
+            DecompositionAlgorithm::PauliOneCleanKg24,
+            |ancillas| decompose_pauli_1_clean_kg24(pauli, controls, target, ancillas[0]),
+        )? {
             return Ok(operations);
         }
 
         let v_chain_ancillas = controls.len() - 2;
-        if let Some(operations) = self.try_resource_candidate(
+        if let Some(operations) = self.try_cached_resource_candidate(
+            context,
             excluded,
             AncillaRequirement::CleanZero,
             v_chain_ancillas,
+            DecompositionAlgorithm::PauliManyClean,
             |ancillas| decompose_pauli_n_clean(pauli, controls, target, ancillas),
         )? {
             return Ok(operations);
         }
-        if let Some(operations) = self.try_resource_candidate(
+        if let Some(operations) = self.try_cached_resource_candidate(
+            context,
             excluded,
             AncillaRequirement::Dirty,
             v_chain_ancillas,
+            DecompositionAlgorithm::PauliManyDirty,
             |ancillas| decompose_pauli_n_dirty(pauli, controls, target, ancillas),
         )? {
             return Ok(operations);
         }
-        if let Some(operations) =
-            self.try_resource_candidate(excluded, AncillaRequirement::Dirty, 2, |ancillas| {
-                decompose_pauli_2_dirty(pauli, controls, target, [ancillas[0], ancillas[1]])
-            })?
-        {
+        if let Some(operations) = self.try_cached_resource_candidate(
+            context,
+            excluded,
+            AncillaRequirement::Dirty,
+            2,
+            DecompositionAlgorithm::PauliTwoDirty,
+            |ancillas| decompose_pauli_2_dirty(pauli, controls, target, [ancillas[0], ancillas[1]]),
+        )? {
             return Ok(operations);
         }
-        if let Some(operations) =
-            self.try_resource_candidate(excluded, AncillaRequirement::Dirty, 1, |ancillas| {
-                decompose_pauli_1_dirty(pauli, controls, target, ancillas[0])
-            })?
-        {
+        if let Some(operations) = self.try_cached_resource_candidate(
+            context,
+            excluded,
+            AncillaRequirement::Dirty,
+            1,
+            DecompositionAlgorithm::PauliOneDirty,
+            |ancillas| decompose_pauli_1_dirty(pauli, controls, target, ancillas[0]),
+        )? {
             return Ok(operations);
         }
-        if let Some(operations) =
-            self.try_resource_candidate(excluded, AncillaRequirement::CleanZero, 1, |ancillas| {
-                decompose_pauli_1_clean_b95(pauli, controls, target, ancillas[0])
-            })?
-        {
+        if let Some(operations) = self.try_cached_resource_candidate(
+            context,
+            excluded,
+            AncillaRequirement::CleanZero,
+            1,
+            DecompositionAlgorithm::PauliOneCleanB95,
+            |ancillas| decompose_pauli_1_clean_b95(pauli, controls, target, ancillas[0]),
+        )? {
             return Ok(operations);
         }
-        decompose_pauli_no_aux(pauli, controls, target)
+        self.cached_synthesis(
+            context,
+            &[],
+            ResourceSignature::no_aux(DecompositionAlgorithm::PauliNoAux),
+            || decompose_pauli_no_aux(pauli, controls, target),
+        )
     }
 
     /// Tries a clean-ancilla construction before a no-auxiliary fallback.
@@ -617,29 +794,40 @@ impl<'a> McGateDecomposer<'a> {
     /// whether the clean construction can be attempted.
     fn synthesize_with_optional_clean(
         &mut self,
+        context: McSynthesisContext<'_>,
         required_ancillas: usize,
         excluded: &BTreeSet<Qubit>,
+        algorithms: OptionalCleanAlgorithms,
         synthesize_clean: impl FnOnce(&[Qubit]) -> Result<Vec<ValueOperation>, CompilerError>,
         synthesize_no_aux: impl FnOnce() -> Result<Vec<ValueOperation>, CompilerError>,
     ) -> Result<Vec<ValueOperation>, CompilerError> {
         if required_ancillas > 0
-            && let Some(operations) = self.try_resource_candidate(
+            && let Some(operations) = self.try_cached_resource_candidate(
+                context,
                 excluded,
                 AncillaRequirement::CleanZero,
                 required_ancillas,
+                algorithms.clean,
                 synthesize_clean,
             )?
         {
             return Ok(operations);
         }
-        synthesize_no_aux()
+        self.cached_synthesis(
+            context,
+            &[],
+            ResourceSignature::no_aux(algorithms.no_aux),
+            synthesize_no_aux,
+        )
     }
 
-    fn try_resource_candidate(
+    fn try_cached_resource_candidate(
         &mut self,
+        context: McSynthesisContext<'_>,
         excluded: &BTreeSet<Qubit>,
         requirement: AncillaRequirement,
         count: usize,
+        algorithm: DecompositionAlgorithm,
         synthesize: impl FnOnce(&[Qubit]) -> Result<Vec<ValueOperation>, CompilerError>,
     ) -> Result<Option<Vec<ValueOperation>>, CompilerError> {
         let request = ResourceRequest {
@@ -656,7 +844,13 @@ impl<'a> McGateDecomposer<'a> {
         // Synthesis primitives are pure. Generate from the prospective qubits
         // before committing so a rejected candidate cannot allocate ancillas
         // or invalidate later previews.
-        let operations = match synthesize(plan.qubits()) {
+        let signature = match requirement {
+            AncillaRequirement::CleanZero => ResourceSignature::clean(algorithm, count),
+            AncillaRequirement::Dirty => ResourceSignature::dirty(algorithm, count),
+        };
+        let operations = match self.cached_synthesis(context, plan.qubits(), signature, || {
+            synthesize(plan.qubits())
+        }) {
             Ok(operations) => operations,
             Err(CompilerError::TransformFailed { .. }) => return Ok(None),
             Err(error) => return Err(error),
@@ -675,12 +869,46 @@ impl<'a> McGateDecomposer<'a> {
         }
         let lease = self
             .resources
-            .commit(&mut self.target, plan)
+            .commit(&mut self.resource_circuit, plan)
             .map_err(resource_invariant_failed)?;
         self.resources
             .release(&lease)
             .map_err(resource_invariant_failed)?;
         Ok(Some(operations))
+    }
+
+    fn cached_synthesis(
+        &mut self,
+        context: McSynthesisContext<'_>,
+        ancillas: &[Qubit],
+        resource: ResourceSignature,
+        synthesize: impl FnOnce() -> Result<Vec<ValueOperation>, CompilerError>,
+    ) -> Result<Vec<ValueOperation>, CompilerError> {
+        let request = McGateRuleRequest {
+            gate: context.gate,
+            control_count: context.controls.len(),
+            target_count: context.targets.len(),
+            params: context.params,
+            resource,
+        };
+        if let Some(operations) = self.rule_cache.instantiate_mc_gate(
+            request,
+            context.controls,
+            context.targets,
+            ancillas,
+        )? {
+            return Ok(operations);
+        }
+
+        let operations = synthesize()?;
+        self.rule_cache.insert_mc_gate(
+            request,
+            context.controls,
+            context.targets,
+            ancillas,
+            &operations,
+        )?;
+        Ok(operations)
     }
 
     /// Resolves source-table parameters into value-level synthesis parameters.
@@ -717,87 +945,6 @@ impl<'a> McGateDecomposer<'a> {
                     CompilerError::InvalidInput(format!("missing parameter index {index}"))
                 }),
         }
-    }
-
-    /// Interns source parameters into the target circuit's parameter table.
-    ///
-    /// Preserved operations may still reference source parameters; after this
-    /// step all parameter indices are local to the rebuilt circuit.
-    fn remap_source_params(
-        &mut self,
-        params: &[CircuitParam],
-    ) -> Result<SmallVec<[CircuitParam; 1]>, CompilerError> {
-        let values = self.resolve_source_params(params)?;
-        values
-            .into_iter()
-            .map(|value| self.intern_value_param(value))
-            .collect()
-    }
-
-    /// Converts a synthesized value-level operation into target storage form.
-    ///
-    /// MC synthesis primitives are expected to emit only flat quantum
-    /// operations. Recursive classical control is handled by
-    /// [`Self::rebuild_control_flow`], not by primitive synthesis.
-    fn intern_value_operation(
-        &mut self,
-        operation: ValueOperation,
-    ) -> Result<Operation, CompilerError> {
-        let instruction = match operation.instruction {
-            ValueInstruction::Instruction(inst) => inst,
-            ValueInstruction::ClassicalControl(_) => {
-                return Err(CompilerError::InvariantViolation(
-                    "synthesis produced unexpected classical control".into(),
-                ));
-            }
-        };
-        Ok(Operation {
-            instruction,
-            qubits: operation.qubits,
-            params: operation
-                .params
-                .into_iter()
-                .map(|value| self.intern_value_param(value))
-                .collect::<Result<_, _>>()?,
-            label: None,
-        })
-    }
-
-    fn intern_value_param(&mut self, value: ParameterValue) -> Result<CircuitParam, CompilerError> {
-        match value {
-            ParameterValue::Fixed(value) => {
-                if !value.is_finite() {
-                    return Err(CompilerError::InvalidInput(format!(
-                        "non-finite parameter value {value}"
-                    )));
-                }
-                Ok(CircuitParam::Fixed(if value == 0.0 { 0.0 } else { value }))
-            }
-            ParameterValue::Param(parameter) => {
-                let (index, _) = self.target.add_parameter(parameter);
-                Ok(CircuitParam::Index(index as u32))
-            }
-        }
-    }
-
-    /// Appends a rebuilt top-level operation through `Circuit::append`.
-    ///
-    /// `Circuit::append` accepts value-level parameters. Convert target-table
-    /// indices back to values so append enforces the same validation path as
-    /// user construction.
-    fn append_top_level(&mut self, operation: Operation) -> Result<(), CompilerError> {
-        let params = operation
-            .params
-            .iter()
-            .map(|param| target_param_to_value(&self.target, param))
-            .collect::<Result<Vec<_>, _>>()?;
-        self.target.append(
-            operation.instruction,
-            operation.qubits,
-            params,
-            operation.label.as_deref(),
-        )?;
-        Ok(())
     }
 }
 
@@ -893,23 +1040,4 @@ fn resource_input_failed(error: ResourceError) -> CompilerError {
 
 fn resource_invariant_failed(error: ResourceError) -> CompilerError {
     CompilerError::InvariantViolation(format!("ancillary-resource bookkeeping failed: {error}"))
-}
-
-fn target_param_to_value(
-    circuit: &Circuit,
-    param: &CircuitParam,
-) -> Result<ParameterValue, CompilerError> {
-    match param {
-        CircuitParam::Fixed(value) => Ok(ParameterValue::Fixed(*value)),
-        CircuitParam::Index(index) => circuit
-            .parameters()
-            .get_index(*index as usize)
-            .cloned()
-            .map(ParameterValue::Param)
-            .ok_or_else(|| {
-                CompilerError::InvariantViolation(format!(
-                    "multi-controlled-gate decomposition produced missing target parameter index {index}"
-                ))
-            }),
-    }
 }

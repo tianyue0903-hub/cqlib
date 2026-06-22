@@ -113,6 +113,28 @@ fn normal_workflow_reports_no_change_for_stable_circuit() {
 }
 
 #[test]
+fn normal_workflow_keeps_measurement_circuit_through_definition_stage() {
+    let mut circuit = Circuit::new(2);
+    circuit
+        .measure_bits([Qubit::new(0), Qubit::new(1)])
+        .unwrap();
+
+    let result = run_workflow(&circuit, CompileMode::Normal);
+
+    assert_eq!(result.circuit.operations().len(), 1);
+    assert_eq!(
+        result.circuit.classical_values(),
+        circuit.classical_values()
+    );
+    assert!(
+        result
+            .steps
+            .iter()
+            .any(|step| step.name == "decompose.definitions" && !step.changed)
+    );
+}
+
+#[test]
 fn normal_workflow_reports_staged_order() {
     let mut circuit = Circuit::new(1);
     circuit.h(Qubit::new(0)).unwrap();

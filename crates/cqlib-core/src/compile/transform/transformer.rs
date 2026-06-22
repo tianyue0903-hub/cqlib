@@ -12,6 +12,7 @@
 
 use crate::circuit::Circuit;
 use crate::compile::CompilerError;
+use crate::compile::transform::analysis::CircuitAnalysis;
 
 /// Common output shape for compiler transforms over a circuit.
 #[derive(Debug, Clone)]
@@ -42,5 +43,13 @@ pub trait Transformer {
     fn name(&self) -> &'static str;
 
     /// Applies the transform to `circuit`.
-    fn transform(&self, circuit: &Circuit) -> Result<TransformResult, CompilerError>;
+    ///
+    /// Callers may provide precomputed [`CircuitAnalysis`] to avoid repeated
+    /// structural scans across workflow stages. When `analysis` is `None`, the
+    /// transform must derive any required facts itself.
+    fn transform(
+        &self,
+        circuit: &Circuit,
+        analysis: Option<&CircuitAnalysis>,
+    ) -> Result<TransformResult, CompilerError>;
 }

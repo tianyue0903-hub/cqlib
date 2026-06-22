@@ -38,15 +38,19 @@
 use super::unitary_1q::synthesize_numeric_1q_unitary;
 use super::unitary_2q::{TwoQubitUnitaryDecomposeBasis, synthesize_numeric_2q_unitary};
 use crate::circuit::{
-    Circuit, CircuitParam, ClassicalControlOp, ControlBody, ForOp, IfOp, Instruction, Operation,
-    Parameter, ParameterValue, StandardGate, SwitchCase, SwitchOp, UnitaryGate, ValueOperation,
-    WhileOp,
+    Circuit, CircuitParam, ClassicalControlOp, Instruction, Operation, Parameter, ParameterValue,
+    StandardGate, UnitaryGate, ValueClassicalControlOp, ValueControlBody, ValueInstruction,
+    ValueOperation, ValueSwitchCase,
 };
 use crate::compile::CompilerError;
-use crate::compile::transform::{TransformResult, Transformer};
+use crate::compile::transform::decompose::rule::{
+    DecompositionRuleCache, DecompositionRuleStats, NumericUnitaryRuleRequest,
+};
+use crate::compile::transform::rebuild::{CircuitRebuildContext, ClassicalRemap};
+use crate::compile::transform::{CircuitAnalysis, TransformResult, Transformer};
 use ndarray::Array2;
 use num_complex::Complex64;
-use smallvec::{SmallVec, smallvec};
+use smallvec::smallvec;
 use std::borrow::Cow;
 
 const SYNTHESIS_NAME: &str = "decompose.unitary";
@@ -100,7 +104,25 @@ impl Transformer for DecomposeUnitaries {
         SYNTHESIS_NAME
     }
 
-    fn transform(&self, circuit: &Circuit) -> Result<TransformResult, CompilerError> {
+    fn transform(
+        &self,
+        circuit: &Circuit,
+        analysis: Option<&CircuitAnalysis>,
+    ) -> Result<TransformResult, CompilerError> {
+        let local_analysis;
+        let analysis = match analysis {
+            Some(analysis) => analysis,
+            None => {
+                local_analysis = CircuitAnalysis::analyze(circuit);
+                &local_analysis
+            }
+        };
+        if !analysis.has_unitary_gates {
+            return Ok(TransformResult {
+                circuit: circuit.clone(),
+                changed: false,
+            });
+        }
         let result = decompose_unitaries_transform(circuit, self.config)?;
         if result.changed {
             Ok(result)
@@ -141,16 +163,30 @@ fn decompose_unitaries_transform(
     circuit: &Circuit,
     config: UnitaryDecomposeConfig,
 ) -> Result<TransformResult, CompilerError> {
+    decompose_unitaries_transform_with_rule_stats(circuit, config).map(|(result, _)| result)
+}
+
+/// Rewrites supported matrix-backed unitary operations and returns runtime rule stats.
+///
+/// This diagnostic entry point exposes pass-local decomposition-rule reuse for
+/// numeric unitary synthesis. Matrix cache keys are bit-exact.
+pub fn decompose_unitaries_with_rule_stats(
+    circuit: &Circuit,
+    config: UnitaryDecomposeConfig,
+) -> Result<(TransformResult, DecompositionRuleStats), CompilerError> {
+    decompose_unitaries_transform_with_rule_stats(circuit, config)
+}
+
+fn decompose_unitaries_transform_with_rule_stats(
+    circuit: &Circuit,
+    config: UnitaryDecomposeConfig,
+) -> Result<(TransformResult, DecompositionRuleStats), CompilerError> {
     let decomposer = UnitaryDecomposer {
         source: circuit,
-        target: Circuit::from_operations(
-            circuit.qubits(),
-            Vec::<ValueOperation>::new(),
-            Some(circuit.classical_vars().to_vec()),
-            Some(circuit.classical_values().to_vec()),
-        )?,
+        rebuild: CircuitRebuildContext::new(circuit),
         top_phase: circuit.global_phase(),
         config,
+        rule_cache: DecompositionRuleCache::default(),
         changed: false,
     };
     decomposer.run()
@@ -158,56 +194,52 @@ fn decompose_unitaries_transform(
 
 struct UnitaryDecomposer<'a> {
     source: &'a Circuit,
-    target: Circuit,
+    rebuild: CircuitRebuildContext,
     top_phase: Parameter,
     config: UnitaryDecomposeConfig,
+    rule_cache: DecompositionRuleCache,
     changed: bool,
 }
 
-enum SequenceTarget<'a> {
-    TopLevel,
-    ControlFlowBody(&'a mut Vec<Operation>),
-}
-
 struct Decomposition {
-    operations: Vec<Operation>,
+    operations: Vec<ValueOperation>,
     phase_delta: f64,
 }
 
 impl<'a> UnitaryDecomposer<'a> {
-    fn run(mut self) -> Result<TransformResult, CompilerError> {
+    fn run(mut self) -> Result<(TransformResult, DecompositionRuleStats), CompilerError> {
+        let root_classical = self.rebuild.root_classical().clone();
+        let mut operations = Vec::with_capacity(self.source.operations().len());
         let phase_delta =
-            self.apply_sequence(self.source.operations(), SequenceTarget::TopLevel)?;
+            self.apply_sequence(self.source.operations(), &root_classical, &mut operations)?;
         if phase_delta.abs() > PHASE_EPS {
             self.top_phase = self.top_phase + Parameter::from(phase_delta);
         }
-        self.target.set_global_phase(self.top_phase);
-        Ok(TransformResult {
-            circuit: self.target,
-            changed: self.changed,
-        })
+        let circuit = self
+            .rebuild
+            .finish(self.source.qubits(), operations, self.top_phase)?;
+        let stats = self.rule_cache.stats();
+        Ok((
+            TransformResult {
+                circuit,
+                changed: self.changed,
+            },
+            stats,
+        ))
     }
 
     fn apply_sequence(
         &mut self,
         source_operations: &[Operation],
-        mut target: SequenceTarget<'_>,
+        classical_remap: &ClassicalRemap,
+        output: &mut Vec<ValueOperation>,
     ) -> Result<f64, CompilerError> {
         let mut phase_delta = 0.0;
 
         for operation in source_operations {
-            let decomposition = self.decompose_operation(operation)?;
+            let decomposition = self.decompose_operation(operation, classical_remap)?;
             phase_delta += decomposition.phase_delta;
-            match &mut target {
-                SequenceTarget::TopLevel => {
-                    for operation in decomposition.operations {
-                        self.append_top_level(operation)?;
-                    }
-                }
-                SequenceTarget::ControlFlowBody(output) => {
-                    output.extend(decomposition.operations);
-                }
-            }
+            output.extend(decomposition.operations);
         }
 
         Ok(phase_delta)
@@ -216,14 +248,19 @@ impl<'a> UnitaryDecomposer<'a> {
     fn decompose_operation(
         &mut self,
         operation: &Operation,
+        classical_remap: &ClassicalRemap,
     ) -> Result<Decomposition, CompilerError> {
         match &operation.instruction {
             Instruction::UnitaryGate(gate) => self.decompose_unitary_gate(gate, operation),
             Instruction::ClassicalControl(control) => {
-                self.decompose_control_flow(operation, control)
+                self.decompose_control_flow(operation, control, classical_remap)
             }
             _ => Ok(Decomposition {
-                operations: vec![self.remap_preserved_operation(operation)?],
+                operations: vec![self.rebuild.remap_preserved_operation(
+                    self.source,
+                    operation,
+                    classical_remap,
+                )?],
                 phase_delta: 0.0,
             }),
         }
@@ -233,99 +270,109 @@ impl<'a> UnitaryDecomposer<'a> {
         &mut self,
         operation: &Operation,
         control: &ClassicalControlOp,
+        classical_remap: &ClassicalRemap,
     ) -> Result<Decomposition, CompilerError> {
         let instruction = match control {
             ClassicalControlOp::If(op) => {
-                let then_body = self.rebuild_body(op.then_body().operations())?;
+                let then_body = self.rebuild_body(op.then_body().operations(), classical_remap)?;
                 let else_body = op
                     .else_body()
-                    .map(|body| self.rebuild_body(body.operations()))
+                    .map(|body| self.rebuild_body(body.operations(), classical_remap))
                     .transpose()?;
-                Instruction::ClassicalControl(ClassicalControlOp::If(
-                    IfOp::new(
-                        op.condition().clone(),
-                        ControlBody::new(then_body),
-                        else_body.map(ControlBody::new),
-                    )
-                    .map_err(CompilerError::Circuit)?,
-                ))
+                ValueClassicalControlOp::If {
+                    condition: classical_remap.remap_expr(op.condition())?,
+                    then_body: ValueControlBody::new(then_body),
+                    else_body: else_body.map(ValueControlBody::new),
+                }
             }
             ClassicalControlOp::While(op) => {
-                let body = self.rebuild_body(op.body().operations())?;
-                Instruction::ClassicalControl(ClassicalControlOp::While(
-                    WhileOp::new(op.condition().clone(), ControlBody::new(body))
-                        .map_err(CompilerError::Circuit)?,
-                ))
+                let body = self.rebuild_body(op.body().operations(), classical_remap)?;
+                ValueClassicalControlOp::While {
+                    condition: classical_remap.remap_expr(op.condition())?,
+                    body: ValueControlBody::new(body),
+                }
             }
             ClassicalControlOp::For(op) => {
-                let body = self.rebuild_body(op.body().operations())?;
-                Instruction::ClassicalControl(ClassicalControlOp::For(
-                    ForOp::new(
-                        op.var(),
-                        op.start().clone(),
-                        op.stop().clone(),
-                        op.step().clone(),
-                        ControlBody::new(body),
-                    )
-                    .map_err(CompilerError::Circuit)?,
-                ))
+                let body = self.rebuild_body(op.body().operations(), classical_remap)?;
+                ValueClassicalControlOp::For {
+                    var: classical_remap.remap_var(op.var())?,
+                    start: classical_remap.remap_expr(op.start())?,
+                    stop: classical_remap.remap_expr(op.stop())?,
+                    step: classical_remap.remap_expr(op.step())?,
+                    body: ValueControlBody::new(body),
+                }
             }
             ClassicalControlOp::Switch(op) => {
                 let cases = op
                     .cases()
                     .iter()
                     .map(|case| {
-                        Ok(SwitchCase::new(
+                        Ok(ValueSwitchCase::new(
                             case.value(),
-                            ControlBody::new(self.rebuild_body(case.body().operations())?),
+                            ValueControlBody::new(
+                                self.rebuild_body(case.body().operations(), classical_remap)?,
+                            ),
                         ))
                     })
                     .collect::<Result<Vec<_>, CompilerError>>()?;
                 let default = op
                     .default()
-                    .map(|body| self.rebuild_body(body.operations()))
+                    .map(|body| self.rebuild_body(body.operations(), classical_remap))
                     .transpose()?
-                    .map(ControlBody::new);
-                Instruction::ClassicalControl(ClassicalControlOp::Switch(
-                    SwitchOp::new(op.target().clone(), cases, default)
-                        .map_err(CompilerError::Circuit)?,
-                ))
+                    .map(ValueControlBody::new);
+                ValueClassicalControlOp::Switch {
+                    target: classical_remap.remap_expr(op.target())?,
+                    cases,
+                    default,
+                }
             }
-            ClassicalControlOp::Break | ClassicalControlOp::Continue => {
-                Instruction::ClassicalControl(control.clone())
-            }
+            ClassicalControlOp::Break => ValueClassicalControlOp::Break,
+            ClassicalControlOp::Continue => ValueClassicalControlOp::Continue,
         };
+        let qubits = instruction.used_qubits().into_iter().collect();
 
         Ok(Decomposition {
-            operations: vec![Operation {
-                instruction,
-                qubits: operation.qubits.clone(),
-                params: self.remap_params(&operation.params)?,
+            operations: vec![ValueOperation {
+                instruction: ValueInstruction::ClassicalControl(instruction),
+                qubits,
+                params: CircuitRebuildContext::resolve_source_params(
+                    self.source,
+                    &operation.params,
+                )?,
                 label: operation.label.clone(),
             }],
             phase_delta: 0.0,
         })
     }
 
-    fn rebuild_body(&mut self, source_body: &[Operation]) -> Result<Vec<Operation>, CompilerError> {
+    fn rebuild_body(
+        &mut self,
+        source_body: &[Operation],
+        classical_remap: &ClassicalRemap,
+    ) -> Result<Vec<ValueOperation>, CompilerError> {
         let mut body = Vec::with_capacity(source_body.len());
         if self.config.recurse_control_flow {
-            let phase_delta =
-                self.apply_sequence(source_body, SequenceTarget::ControlFlowBody(&mut body))?;
+            let phase_delta = self.apply_sequence(source_body, classical_remap, &mut body)?;
             if phase_delta.abs() > PHASE_EPS {
                 body.insert(
                     0,
-                    Operation {
-                        instruction: Instruction::Standard(StandardGate::GPhase),
+                    ValueOperation {
+                        instruction: ValueInstruction::from_instruction(Instruction::Standard(
+                            StandardGate::GPhase,
+                        )),
                         qubits: smallvec![],
-                        params: smallvec![CircuitParam::Fixed(phase_delta)],
+                        params: smallvec![ParameterValue::Fixed(phase_delta)],
                         label: None,
                     },
                 );
             }
         } else {
             for operation in source_body {
-                body.push(self.remap_preserved_operation(operation)?);
+                body.push(self.rebuild.remap_preserved_operation(
+                    self.source,
+                    operation,
+                    classical_remap,
+                )?);
             }
         }
         Ok(body)
@@ -359,6 +406,21 @@ impl<'a> UnitaryDecomposer<'a> {
         }
 
         let matrix = self.numeric_matrix_for_gate(gate, operation)?;
+        let request = NumericUnitaryRuleRequest {
+            num_qubits: gate.num_qubits(),
+            matrix: matrix.as_ref(),
+            two_qubit_basis: self.config.two_qubit_basis,
+        };
+        if let Some((operations, phase_delta)) = self
+            .rule_cache
+            .instantiate_numeric_unitary(request, &operation.qubits)?
+        {
+            return Ok(Decomposition {
+                operations,
+                phase_delta,
+            });
+        }
+
         match gate.num_qubits() {
             1 => {
                 let ([theta, phi, lambda], global_phase) =
@@ -373,21 +435,30 @@ impl<'a> UnitaryDecomposer<'a> {
                     })?;
                 let mut operations = Vec::new();
                 if theta.abs() > ANGLE_EPS || phi.abs() > ANGLE_EPS || lambda.abs() > ANGLE_EPS {
-                    operations.push(Operation {
-                        instruction: Instruction::Standard(StandardGate::U),
+                    operations.push(ValueOperation {
+                        instruction: ValueInstruction::from_instruction(Instruction::Standard(
+                            StandardGate::U,
+                        )),
                         qubits: operation.qubits.clone(),
                         params: smallvec![
-                            CircuitParam::Fixed(theta),
-                            CircuitParam::Fixed(phi),
-                            CircuitParam::Fixed(lambda)
+                            ParameterValue::Fixed(theta),
+                            ParameterValue::Fixed(phi),
+                            ParameterValue::Fixed(lambda)
                         ],
                         label: None,
                     });
                 }
-                Ok(Decomposition {
+                let decomposition = Decomposition {
                     operations,
                     phase_delta: global_phase,
-                })
+                };
+                self.rule_cache.insert_numeric_unitary(
+                    request,
+                    &operation.qubits,
+                    &decomposition.operations,
+                    decomposition.phase_delta,
+                )?;
+                Ok(decomposition)
             }
             2 => {
                 let qubits = [operation.qubits[0], operation.qubits[1]];
@@ -403,10 +474,20 @@ impl<'a> UnitaryDecomposer<'a> {
                         gate.label(),
                     ),
                 })?;
-                Ok(Decomposition {
-                    operations,
+                let decomposition = Decomposition {
+                    operations: operations
+                        .into_iter()
+                        .map(synthesized_operation_to_value)
+                        .collect::<Result<Vec<_>, _>>()?,
                     phase_delta,
-                })
+                };
+                self.rule_cache.insert_numeric_unitary(
+                    request,
+                    &operation.qubits,
+                    &decomposition.operations,
+                    decomposition.phase_delta,
+                )?;
+                Ok(decomposition)
             }
             other => Err(CompilerError::TransformFailed {
                 name: SYNTHESIS_NAME,
@@ -461,125 +542,6 @@ impl<'a> UnitaryDecomposer<'a> {
             })
     }
 
-    fn remap_preserved_operation(
-        &mut self,
-        operation: &Operation,
-    ) -> Result<Operation, CompilerError> {
-        let instruction = match &operation.instruction {
-            Instruction::ClassicalControl(ClassicalControlOp::If(op)) => {
-                let then_body = op
-                    .then_body()
-                    .operations()
-                    .iter()
-                    .map(|inner| self.remap_preserved_operation(inner))
-                    .collect::<Result<Vec<_>, _>>()?;
-                let else_body = op
-                    .else_body()
-                    .map(|body| {
-                        body.operations()
-                            .iter()
-                            .map(|inner| self.remap_preserved_operation(inner))
-                            .collect::<Result<Vec<_>, _>>()
-                    })
-                    .transpose()?;
-                Instruction::ClassicalControl(ClassicalControlOp::If(
-                    IfOp::new(
-                        op.condition().clone(),
-                        ControlBody::new(then_body),
-                        else_body.map(ControlBody::new),
-                    )
-                    .map_err(CompilerError::Circuit)?,
-                ))
-            }
-            Instruction::ClassicalControl(ClassicalControlOp::While(op)) => {
-                let body = op
-                    .body()
-                    .operations()
-                    .iter()
-                    .map(|inner| self.remap_preserved_operation(inner))
-                    .collect::<Result<Vec<_>, _>>()?;
-                Instruction::ClassicalControl(ClassicalControlOp::While(
-                    WhileOp::new(op.condition().clone(), ControlBody::new(body))
-                        .map_err(CompilerError::Circuit)?,
-                ))
-            }
-            Instruction::ClassicalControl(ClassicalControlOp::For(op)) => {
-                let body = op
-                    .body()
-                    .operations()
-                    .iter()
-                    .map(|inner| self.remap_preserved_operation(inner))
-                    .collect::<Result<Vec<_>, _>>()?;
-                Instruction::ClassicalControl(ClassicalControlOp::For(
-                    ForOp::new(
-                        op.var(),
-                        op.start().clone(),
-                        op.stop().clone(),
-                        op.step().clone(),
-                        ControlBody::new(body),
-                    )
-                    .map_err(CompilerError::Circuit)?,
-                ))
-            }
-            Instruction::ClassicalControl(ClassicalControlOp::Switch(op)) => {
-                let cases = op
-                    .cases()
-                    .iter()
-                    .map(|case| {
-                        Ok(SwitchCase::new(
-                            case.value(),
-                            ControlBody::new(
-                                case.body()
-                                    .operations()
-                                    .iter()
-                                    .map(|inner| self.remap_preserved_operation(inner))
-                                    .collect::<Result<Vec<_>, _>>()?,
-                            ),
-                        ))
-                    })
-                    .collect::<Result<Vec<_>, CompilerError>>()?;
-                let default = op
-                    .default()
-                    .map(|body| {
-                        body.operations()
-                            .iter()
-                            .map(|inner| self.remap_preserved_operation(inner))
-                            .collect::<Result<Vec<_>, _>>()
-                    })
-                    .transpose()?
-                    .map(ControlBody::new);
-                Instruction::ClassicalControl(ClassicalControlOp::Switch(
-                    SwitchOp::new(op.target().clone(), cases, default)
-                        .map_err(CompilerError::Circuit)?,
-                ))
-            }
-            Instruction::ClassicalControl(ClassicalControlOp::Break)
-            | Instruction::ClassicalControl(ClassicalControlOp::Continue) => {
-                operation.instruction.clone()
-            }
-            _ => operation.instruction.clone(),
-        };
-
-        Ok(Operation {
-            instruction,
-            qubits: operation.qubits.clone(),
-            params: self.remap_params(&operation.params)?,
-            label: operation.label.clone(),
-        })
-    }
-
-    fn remap_params(
-        &mut self,
-        params: &[CircuitParam],
-    ) -> Result<SmallVec<[CircuitParam; 1]>, CompilerError> {
-        let mut remapped = SmallVec::with_capacity(params.len());
-        for param in params {
-            let parameter = self.resolve_source_param(param)?;
-            remapped.push(self.intern_target_param(parameter)?);
-        }
-        Ok(remapped)
-    }
-
     fn resolve_source_param(&self, param: &CircuitParam) -> Result<Parameter, CompilerError> {
         match param {
             CircuitParam::Fixed(value) => {
@@ -600,53 +562,32 @@ impl<'a> UnitaryDecomposer<'a> {
                 }),
         }
     }
+}
 
-    fn intern_target_param(&mut self, parameter: Parameter) -> Result<CircuitParam, CompilerError> {
-        match ParameterValue::from(parameter) {
-            ParameterValue::Fixed(value) => {
+fn synthesized_operation_to_value(operation: Operation) -> Result<ValueOperation, CompilerError> {
+    let params = operation
+        .params
+        .into_iter()
+        .map(|param| match param {
+            CircuitParam::Fixed(value) => {
                 if !value.is_finite() {
                     return Err(CompilerError::InvalidInput(format!(
-                        "non-finite parameter value {value}"
+                        "non-finite synthesized unitary parameter {value}"
                     )));
                 }
-                Ok(CircuitParam::Fixed(if value == 0.0 { 0.0 } else { value }))
+                Ok(ParameterValue::Fixed(value))
             }
-            ParameterValue::Param(parameter) => {
-                let (index, _) = self.target.add_parameter(parameter);
-                Ok(CircuitParam::Index(index as u32))
-            }
-        }
-    }
-
-    fn append_top_level(&mut self, operation: Operation) -> Result<(), CompilerError> {
-        let mut params = Vec::with_capacity(operation.params.len());
-        for param in &operation.params {
-            match param {
-                CircuitParam::Fixed(value) => params.push(ParameterValue::Fixed(*value)),
-                CircuitParam::Index(index) => {
-                    let parameter = self
-                        .target
-                        .parameters()
-                        .get_index(*index as usize)
-                        .cloned()
-                        .ok_or_else(|| {
-                            CompilerError::InvariantViolation(format!(
-                                "unitary decomposition produced missing target parameter index {index}"
-                            ))
-                        })?;
-                    params.push(ParameterValue::Param(parameter));
-                }
-            }
-        }
-
-        self.target.append(
-            operation.instruction,
-            operation.qubits,
-            params,
-            operation.label.as_deref(),
-        )?;
-        Ok(())
-    }
+            CircuitParam::Index(index) => Err(CompilerError::InvariantViolation(format!(
+                "unitary synthesis produced unexpected parameter index {index}"
+            ))),
+        })
+        .collect::<Result<_, _>>()?;
+    Ok(ValueOperation {
+        instruction: ValueInstruction::from_instruction(operation.instruction),
+        qubits: operation.qubits,
+        params,
+        label: operation.label,
+    })
 }
 
 #[cfg(test)]
@@ -672,7 +613,9 @@ mod tests {
         let mut circuit = Circuit::new(1);
         circuit.h(Qubit::new(0)).unwrap();
 
-        let result = DecomposeUnitaries::default().transform(&circuit).unwrap();
+        let result = DecomposeUnitaries::default()
+            .transform(&circuit, None)
+            .unwrap();
 
         assert!(!result.changed);
         assert_eq!(result.circuit.operations().len(), 1);
@@ -701,6 +644,74 @@ mod tests {
             Instruction::Standard(StandardGate::U)
         )));
         assert_abs_diff_eq!(before, after, epsilon = 1e-8);
+    }
+
+    #[test]
+    fn repeated_numeric_1q_unitary_reuses_runtime_rule() {
+        let gamma = 0.17;
+        let matrix = gate_matrix::u_gate(0.2, -0.3, 0.4) * Complex64::from_polar(1.0, gamma);
+        let first_gate = UnitaryGate::new("first_u", 1, 0)
+            .with_matrix(matrix.clone())
+            .unwrap();
+        let second_gate = UnitaryGate::new("second_u", 1, 0)
+            .with_matrix(matrix)
+            .unwrap();
+        let mut circuit = Circuit::new(2);
+        circuit.unitary(first_gate, vec![Qubit::new(0)]).unwrap();
+        circuit.unitary(second_gate, vec![Qubit::new(1)]).unwrap();
+        let before = circuit_to_matrix(&circuit, None).unwrap();
+
+        let (result, stats) =
+            decompose_unitaries_with_rule_stats(&circuit, UnitaryDecomposeConfig::default())
+                .unwrap();
+        let after = circuit_to_matrix(&result.circuit, None).unwrap();
+
+        assert_eq!(stats.misses, 1);
+        assert_eq!(stats.inserts, 1);
+        assert_eq!(stats.hits, 1);
+        assert!(result.circuit.operations().iter().all(|operation| matches!(
+            operation.instruction,
+            Instruction::Standard(StandardGate::U)
+        )));
+        assert_abs_diff_eq!(before, after, epsilon = 1e-8);
+    }
+
+    #[test]
+    fn decomposes_unitary_inside_runtime_classical_control() {
+        let gate = UnitaryGate::new("runtime_u", 1, 0)
+            .with_matrix(gate_matrix::u_gate(0.3, 0.4, 0.5))
+            .unwrap();
+        let mut circuit = Circuit::new(1);
+        let measured = circuit.measure(Qubit::new(0)).unwrap();
+        circuit
+            .if_(
+                ClassicalExpr::bit_to_bool(measured.expr()).unwrap(),
+                |body| {
+                    body.append(
+                        Instruction::UnitaryGate(Box::new(gate.clone())),
+                        [Qubit::new(0)],
+                        [],
+                        None,
+                    )
+                },
+            )
+            .unwrap();
+
+        let result = decompose_unitaries(&circuit, UnitaryDecomposeConfig::default()).unwrap();
+
+        assert_eq!(result.classical_values().len(), 1);
+        assert!(result.validate().is_ok());
+        let Instruction::ClassicalControl(ClassicalControlOp::If(op)) =
+            &result.operations()[1].instruction
+        else {
+            panic!("expected runtime classical if operation");
+        };
+        assert!(
+            op.then_body()
+                .operations()
+                .iter()
+                .all(|operation| { !matches!(operation.instruction, Instruction::UnitaryGate(_)) })
+        );
     }
 
     #[test]
@@ -749,6 +760,45 @@ mod tests {
         let after = circuit_to_matrix(&decomposed, None).unwrap();
 
         assert!(decomposed.operations().iter().all(|operation| matches!(
+            operation.instruction,
+            Instruction::Standard(StandardGate::U)
+                | Instruction::Standard(StandardGate::RXX)
+                | Instruction::Standard(StandardGate::RYY)
+                | Instruction::Standard(StandardGate::RZZ)
+        )));
+        assert_abs_diff_eq!(before, after, epsilon = 1e-8);
+    }
+
+    #[test]
+    fn repeated_numeric_2q_unitary_reuses_runtime_rule() {
+        let matrix = StandardGate::FSIM
+            .matrix(&[0.23, -0.31])
+            .unwrap()
+            .into_owned();
+        let first_gate = UnitaryGate::new("first_2q", 2, 0)
+            .with_matrix(matrix.clone())
+            .unwrap();
+        let second_gate = UnitaryGate::new("second_2q", 2, 0)
+            .with_matrix(matrix)
+            .unwrap();
+        let mut circuit = Circuit::new(4);
+        circuit
+            .unitary(first_gate, vec![Qubit::new(0), Qubit::new(1)])
+            .unwrap();
+        circuit
+            .unitary(second_gate, vec![Qubit::new(2), Qubit::new(3)])
+            .unwrap();
+        let before = circuit_to_matrix(&circuit, None).unwrap();
+
+        let (result, stats) =
+            decompose_unitaries_with_rule_stats(&circuit, UnitaryDecomposeConfig::default())
+                .unwrap();
+        let after = circuit_to_matrix(&result.circuit, None).unwrap();
+
+        assert_eq!(stats.misses, 1);
+        assert_eq!(stats.inserts, 1);
+        assert_eq!(stats.hits, 1);
+        assert!(result.circuit.operations().iter().all(|operation| matches!(
             operation.instruction,
             Instruction::Standard(StandardGate::U)
                 | Instruction::Standard(StandardGate::RXX)

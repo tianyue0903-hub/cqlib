@@ -134,7 +134,11 @@ impl Transformer for Canonicalizer {
         "canonicalize"
     }
 
-    fn transform(&self, circuit: &Circuit) -> Result<TransformResult, CompilerError> {
+    fn transform(
+        &self,
+        circuit: &Circuit,
+        _analysis: Option<&crate::compile::transform::CircuitAnalysis>,
+    ) -> Result<TransformResult, CompilerError> {
         let result = self.run(circuit)?;
         Ok(TransformResult {
             circuit: result.circuit,
