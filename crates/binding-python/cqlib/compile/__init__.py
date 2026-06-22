@@ -14,11 +14,13 @@
 
 from . import commutation as commutation
 from . import knowledge as knowledge
+from . import sabre as sabre
 from .compiler import CompileMode, CompileResult, WorkflowStepReport, compile
 
 __all__ = [
     "commutation",
     "knowledge",
+    "sabre",
     "CompileMode",
     "WorkflowStepReport",
     "CompileResult",
