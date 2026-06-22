@@ -13,12 +13,73 @@
 use crate::circuit::{PyCircuit, PyInstruction};
 use crate::device::device_impl::PyDevice;
 use crate::device::layout::PyLayout;
+use cqlib_core::circuit::{Instruction, StandardGate};
 use cqlib_core::compile::resource::ResourcePolicy;
 use cqlib_core::compile::{CompileConfig, CompileMode, CompileResult, WorkflowStepReport, compile};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+
+#[derive(FromPyObject)]
+pub enum PyTargetBasisItem {
+    Name(String),
+    Instruction(PyInstruction),
+}
+
+impl PyTargetBasisItem {
+    fn into_instruction(self) -> PyResult<Instruction> {
+        let name = match self {
+            Self::Name(name) => name,
+            Self::Instruction(instruction) => return Ok(instruction.inner),
+        };
+
+        let gate = match name.to_ascii_uppercase().as_str() {
+            "I" => StandardGate::I,
+            "H" => StandardGate::H,
+            "RX" => StandardGate::RX,
+            "RXX" => StandardGate::RXX,
+            "RXY" => StandardGate::RXY,
+            "RY" => StandardGate::RY,
+            "RYY" => StandardGate::RYY,
+            "RZ" => StandardGate::RZ,
+            "RZX" => StandardGate::RZX,
+            "RZZ" => StandardGate::RZZ,
+            "S" => StandardGate::S,
+            "SDG" => StandardGate::SDG,
+            "SWAP" => StandardGate::SWAP,
+            "T" => StandardGate::T,
+            "TDG" => StandardGate::TDG,
+            "U" => StandardGate::U,
+            "X" => StandardGate::X,
+            "XY" => StandardGate::XY,
+            "X2P" => StandardGate::X2P,
+            "X2M" => StandardGate::X2M,
+            "XY2P" => StandardGate::XY2P,
+            "XY2M" => StandardGate::XY2M,
+            "Y" => StandardGate::Y,
+            "Y2P" => StandardGate::Y2P,
+            "Y2M" => StandardGate::Y2M,
+            "Z" => StandardGate::Z,
+            "PHASE" => StandardGate::Phase,
+            "GPHASE" => StandardGate::GPhase,
+            "CX" => StandardGate::CX,
+            "CCX" => StandardGate::CCX,
+            "CY" => StandardGate::CY,
+            "CZ" => StandardGate::CZ,
+            "CRX" => StandardGate::CRX,
+            "CRY" => StandardGate::CRY,
+            "CRZ" => StandardGate::CRZ,
+            "FSIM" => StandardGate::FSIM,
+            _ => {
+                return Err(PyValueError::new_err(format!(
+                    "unknown standard gate in target_basis: {name:?}"
+                )));
+            }
+        };
+        Ok(Instruction::Standard(gate))
+    }
+}
 
 /// Optimization effort selected for the compiler workflow.
 #[pyclass(name = "CompileMode", module = "cqlib.compile")]
@@ -226,19 +287,21 @@ impl PyCompileResult {
 pub fn py_compile(
     circuit: PyRef<'_, PyCircuit>,
     mode: Option<PyCompileMode>,
-    target_basis: Option<Vec<PyInstruction>>,
+    target_basis: Option<Vec<PyTargetBasisItem>>,
     device: Option<PyRef<'_, PyDevice>>,
     initial_layout: Option<PyRef<'_, PyLayout>>,
     seed: Option<u32>,
 ) -> PyResult<PyCompileResult> {
     let config = CompileConfig {
         mode: mode.map_or(CompileMode::Normal, |mode| mode.inner),
-        target_basis: target_basis.map(|basis| {
-            basis
-                .into_iter()
-                .map(|instruction| instruction.inner)
-                .collect()
-        }),
+        target_basis: target_basis
+            .map(|basis| {
+                basis
+                    .into_iter()
+                    .map(PyTargetBasisItem::into_instruction)
+                    .collect()
+            })
+            .transpose()?,
         device: device.map(|device| device.inner.clone()),
         initial_layout: initial_layout.map(|layout| layout.inner.clone()),
         resource_policy: ResourcePolicy::default(),

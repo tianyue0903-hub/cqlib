@@ -149,7 +149,7 @@ def compile(
     circuit: Circuit,
     *,
     mode: CompileMode | None = None,
-    target_basis: list[Instruction] | None = None,
+    target_basis: list[str | Instruction] | None = None,
     device: Device | None = None,
     initial_layout: Layout | None = None,
     seed: int | None = None,
@@ -159,9 +159,9 @@ def compile(
     Args:
         circuit: Logical input circuit. The function does not mutate it.
         mode: Optimization effort. ``None`` selects :meth:`CompileMode.normal`.
-        target_basis: Optional final target instruction basis. The current core
-            workflow accepts standard-gate instructions here, created with
-            :meth:`cqlib.circuit.Instruction.from_standard_gate`.
+        target_basis: Optional final target instruction basis. Entries may be
+            standard-gate names (case-insensitive) or standard-gate instructions
+            created with :meth:`cqlib.circuit.Instruction.from_standard_gate`.
         device: Optional hardware target. When provided, compilation may route
             the circuit through the device topology and may use device native
             gates as the target basis when ``target_basis`` is ``None``.
@@ -198,10 +198,7 @@ def compile(
             circuit = Circuit(2)
             circuit.cx(0, 1)
 
-            basis = [
-                Instruction.from_standard_gate(StandardGate.H),
-                Instruction.from_standard_gate(StandardGate.CZ),
-            ]
+            basis = ["H", Instruction.from_standard_gate(StandardGate.CZ)]
             result = compile(circuit, target_basis=basis)
 
         Compile for a line device::

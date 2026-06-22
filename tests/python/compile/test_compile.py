@@ -337,6 +337,36 @@ def test_compile_target_basis_exact_h_cz_lowering_for_bell():
     assert_unitary_equivalent(source, result.circuit)
 
 
+def test_compile_target_basis_accepts_case_insensitive_gate_names():
+    source = bell_circuit()
+
+    result = compile(source, target_basis=["h", "cZ"])
+
+    assert step(result, "translate.target_basis").changed
+    assert_only_standard_basis(result.circuit, {"H", "CZ"})
+    assert_unitary_equivalent(source, result.circuit)
+
+
+def test_compile_target_basis_accepts_mixed_names_and_instructions():
+    source = bell_circuit()
+
+    result = compile(
+        source,
+        target_basis=["H", instruction(StandardGate.CZ)],
+    )
+
+    assert_only_standard_basis(result.circuit, {"H", "CZ"})
+    assert_unitary_equivalent(source, result.circuit)
+
+
+def test_compile_target_basis_rejects_unknown_names_and_invalid_types():
+    with pytest.raises(ValueError, match="NOT_A_GATE"):
+        compile(bell_circuit(), target_basis=["NOT_A_GATE"])
+
+    with pytest.raises(TypeError):
+        compile(bell_circuit(), target_basis=[42])
+
+
 def test_compile_target_basis_lowers_complex_gate_suite_to_qcis_cz_basis():
     source = two_qubit_suite_without_fsim()
     basis = qcis_cz_basis()
