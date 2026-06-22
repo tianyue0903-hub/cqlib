@@ -44,10 +44,10 @@
 //! assert_eq!(result, Some(Commutation::Exact));
 //! ```
 
-mod algebra;
+pub mod algebra;
 pub mod checker;
-mod matrix;
-mod rules;
+pub mod matrix;
+pub mod rules;
 
 pub use checker::{
     Commutation, CommutationChecker, CommutationConfig, CommutationResult, check_commutation,

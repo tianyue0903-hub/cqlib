@@ -10,6 +10,7 @@
 # copyright notice, and modified files need to carry a notice indicating
 # that they have been altered from the originals.
 
+from . import commutation as commutation
 from .compiler import CompileMode as CompileMode
 from .compiler import CompileResult as CompileResult
 from .compiler import WorkflowStepReport as WorkflowStepReport

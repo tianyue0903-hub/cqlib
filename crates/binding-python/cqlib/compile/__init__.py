@@ -12,9 +12,11 @@
 
 """Compiler pipeline bindings."""
 
+from . import commutation as commutation
 from .compiler import CompileMode, CompileResult, WorkflowStepReport, compile
 
 __all__ = [
+    "commutation",
     "CompileMode",
     "WorkflowStepReport",
     "CompileResult",

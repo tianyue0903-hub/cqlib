@@ -12,6 +12,7 @@
 
 //! Python bindings for the cqlib compiler pipeline.
 
+pub mod commutation;
 pub mod compiler;
 
 pub use compiler::{PyCompileMode, PyCompileResult, PyWorkflowStepReport, py_compile};
@@ -26,6 +27,8 @@ pub(crate) fn register_compile_module(parent: &Bound<'_, PyModule>) -> PyResult<
     m.add_class::<PyWorkflowStepReport>()?;
     m.add_class::<PyCompileResult>()?;
     m.add_function(pyo3::wrap_pyfunction!(py_compile, &m)?)?;
+
+    commutation::register_commutation_module(&m)?;
 
     parent.add_submodule(&m)?;
     parent
