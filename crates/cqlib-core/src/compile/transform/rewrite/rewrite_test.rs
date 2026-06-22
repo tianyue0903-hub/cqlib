@@ -599,6 +599,33 @@ fn rewrites_false_branch_and_while_body() {
 }
 
 #[test]
+fn rewrites_runtime_classical_control_body_preserving_handles() {
+    let mut circuit = Circuit::new(1);
+    let measured = circuit.measure(Qubit::new(0)).unwrap();
+    circuit
+        .if_(
+            ClassicalExpr::bit_to_bool(measured.expr()).unwrap(),
+            |body| {
+                body.x(Qubit::new(0))?;
+                body.x(Qubit::new(0))
+            },
+        )
+        .unwrap();
+
+    let result = KnowledgeRewriter::production().run(&circuit).unwrap();
+
+    assert!(result.changed);
+    assert_eq!(result.circuit.classical_values().len(), 1);
+    assert!(result.circuit.validate().is_ok());
+    let Instruction::ClassicalControl(ClassicalControlOp::If(op)) =
+        &result.circuit.operations()[1].instruction
+    else {
+        panic!("expected runtime classical if operation");
+    };
+    assert!(op.then_body().operations().is_empty());
+}
+
+#[test]
 fn rewrites_control_flow_body_with_valid_rebuilt_parameter_table() {
     let q1 = Qubit::new(1);
     let theta = Parameter::symbol("theta");

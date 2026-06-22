@@ -56,6 +56,7 @@ pub mod analysis;
 pub mod canonicalize;
 pub mod decompose;
 pub mod layout;
+pub mod rebuild;
 pub mod rewrite;
 pub mod routing;
 pub mod transformer;

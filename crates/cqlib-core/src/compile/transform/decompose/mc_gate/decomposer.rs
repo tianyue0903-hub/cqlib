@@ -37,17 +37,17 @@ use super::{
 use crate::circuit::operation::ValueOperation;
 use crate::circuit::value_instruction::ValueInstruction;
 use crate::circuit::{
-    Circuit, CircuitParam, ClassicalControlOp, ControlBody, ForOp, IfOp, Instruction, MCGate,
-    Operation, ParameterValue, Qubit, StandardGate, SwitchCase, SwitchOp, WhileOp,
+    Circuit, CircuitParam, ClassicalControlOp, Instruction, MCGate, Operation, ParameterValue,
+    Qubit, StandardGate, ValueClassicalControlOp, ValueControlBody, ValueSwitchCase,
 };
 use crate::compile::CompilerError;
 use crate::compile::resource::{
     AncillaRequirement, ResourceError, ResourceLimits, ResourceManager, ResourcePolicy,
     ResourceRequest,
 };
+use crate::compile::transform::rebuild::{CircuitRebuildContext, ClassicalRemap};
 use crate::compile::transform::{CircuitAnalysis, TransformResult, Transformer};
 use crate::device::Device;
-use smallvec::SmallVec;
 use std::collections::BTreeSet;
 
 const DECOMPOSE_MC_GATES_NAME: &str = "decompose.mc_gates";
@@ -204,7 +204,8 @@ pub fn decompose_mc_gates_for_device(
 
 struct McGateDecomposer<'a> {
     source: &'a Circuit,
-    target: Circuit,
+    rebuild: CircuitRebuildContext,
+    resource_circuit: Circuit,
     resources: ResourceManager,
     changed: bool,
 }
@@ -215,19 +216,17 @@ impl<'a> McGateDecomposer<'a> {
     /// The target shell is built before resource initialization so the manager
     /// sees exactly the logical qubits that are already occupied.
     fn new(source: &'a Circuit, config: McGateDecomposeConfig) -> Result<Self, CompilerError> {
-        let mut target = Circuit::from_operations(
-            source.qubits(),
-            Vec::<ValueOperation>::new(),
-            Some(source.classical_vars().to_vec()),
-            Some(source.classical_values().to_vec()),
-        )?;
-        target.set_global_phase(source.global_phase());
-        let resources =
-            ResourceManager::from_circuit(&target, config.resource_policy, config.resource_limits)
-                .map_err(resource_input_failed)?;
+        let resource_circuit = Circuit::from_qubits(source.qubits())?;
+        let resources = ResourceManager::from_circuit(
+            &resource_circuit,
+            config.resource_policy,
+            config.resource_limits,
+        )
+        .map_err(resource_input_failed)?;
         Ok(Self {
             source,
-            target,
+            rebuild: CircuitRebuildContext::new(source),
+            resource_circuit,
             resources,
             changed: false,
         })
@@ -239,17 +238,20 @@ impl<'a> McGateDecomposer<'a> {
     /// must all be released when the pass completes.
     fn run(mut self) -> Result<TransformResult, CompilerError> {
         let source = self.source;
+        let root_classical = self.rebuild.root_classical().clone();
+        let mut operations = Vec::with_capacity(source.operations().len());
         for operation in source.operations() {
-            let operations = self.rebuild_operation(operation)?;
-            for operation in operations {
-                self.append_top_level(operation)?;
-            }
+            operations.extend(self.rebuild_operation(operation, &root_classical)?);
         }
         self.resources
-            .verify_idle(&self.target)
+            .verify_idle(&self.resource_circuit)
             .map_err(resource_invariant_failed)?;
+        let qubits = self.resource_circuit.qubits();
+        let circuit = self
+            .rebuild
+            .finish(qubits, operations, source.global_phase())?;
         Ok(TransformResult {
-            circuit: self.target,
+            circuit,
             changed: self.changed,
         })
     }
@@ -261,10 +263,11 @@ impl<'a> McGateDecomposer<'a> {
     fn rebuild_sequence(
         &mut self,
         source_operations: &[Operation],
-    ) -> Result<Vec<Operation>, CompilerError> {
+        classical_remap: &ClassicalRemap,
+    ) -> Result<Vec<ValueOperation>, CompilerError> {
         let mut operations = Vec::with_capacity(source_operations.len());
         for operation in source_operations {
-            operations.extend(self.rebuild_operation(operation)?);
+            operations.extend(self.rebuild_operation(operation, classical_remap)?);
         }
         Ok(operations)
     }
@@ -276,18 +279,20 @@ impl<'a> McGateDecomposer<'a> {
     fn rebuild_operation(
         &mut self,
         operation: &Operation,
-    ) -> Result<Vec<Operation>, CompilerError> {
+        classical_remap: &ClassicalRemap,
+    ) -> Result<Vec<ValueOperation>, CompilerError> {
         match &operation.instruction {
             Instruction::McGate(gate) => self.decompose_mc_operation(gate, operation),
-            Instruction::ClassicalControl(control) => {
-                Ok(vec![self.rebuild_control_flow(operation, control)?])
-            }
-            _ => Ok(vec![Operation {
-                instruction: operation.instruction.clone(),
-                qubits: operation.qubits.clone(),
-                params: self.remap_source_params(&operation.params)?,
-                label: operation.label.clone(),
-            }]),
+            Instruction::ClassicalControl(control) => Ok(vec![self.rebuild_control_flow(
+                operation,
+                control,
+                classical_remap,
+            )?]),
+            _ => Ok(vec![self.rebuild.remap_preserved_operation(
+                self.source,
+                operation,
+                classical_remap,
+            )?]),
         }
     }
 
@@ -300,76 +305,71 @@ impl<'a> McGateDecomposer<'a> {
         &mut self,
         operation: &Operation,
         control: &ClassicalControlOp,
-    ) -> Result<Operation, CompilerError> {
+        classical_remap: &ClassicalRemap,
+    ) -> Result<ValueOperation, CompilerError> {
         let instruction = match control {
             ClassicalControlOp::If(op) => {
-                let then_body = self.rebuild_sequence(op.then_body().operations())?;
+                let then_body =
+                    self.rebuild_sequence(op.then_body().operations(), classical_remap)?;
                 let else_body = op
                     .else_body()
-                    .map(|body| self.rebuild_sequence(body.operations()))
+                    .map(|body| self.rebuild_sequence(body.operations(), classical_remap))
                     .transpose()?;
-                Instruction::ClassicalControl(ClassicalControlOp::If(
-                    IfOp::new(
-                        op.condition().clone(),
-                        ControlBody::new(then_body),
-                        else_body.map(ControlBody::new),
-                    )
-                    .map_err(CompilerError::Circuit)?,
-                ))
+                ValueClassicalControlOp::If {
+                    condition: classical_remap.remap_expr(op.condition())?,
+                    then_body: ValueControlBody::new(then_body),
+                    else_body: else_body.map(ValueControlBody::new),
+                }
             }
             ClassicalControlOp::While(op) => {
-                let body = self.rebuild_sequence(op.body().operations())?;
-                Instruction::ClassicalControl(ClassicalControlOp::While(
-                    WhileOp::new(op.condition().clone(), ControlBody::new(body))
-                        .map_err(CompilerError::Circuit)?,
-                ))
+                let body = self.rebuild_sequence(op.body().operations(), classical_remap)?;
+                ValueClassicalControlOp::While {
+                    condition: classical_remap.remap_expr(op.condition())?,
+                    body: ValueControlBody::new(body),
+                }
             }
             ClassicalControlOp::For(op) => {
-                let body = self.rebuild_sequence(op.body().operations())?;
-                Instruction::ClassicalControl(ClassicalControlOp::For(
-                    ForOp::new(
-                        op.var(),
-                        op.start().clone(),
-                        op.stop().clone(),
-                        op.step().clone(),
-                        ControlBody::new(body),
-                    )
-                    .map_err(CompilerError::Circuit)?,
-                ))
+                let body = self.rebuild_sequence(op.body().operations(), classical_remap)?;
+                ValueClassicalControlOp::For {
+                    var: classical_remap.remap_var(op.var())?,
+                    start: classical_remap.remap_expr(op.start())?,
+                    stop: classical_remap.remap_expr(op.stop())?,
+                    step: classical_remap.remap_expr(op.step())?,
+                    body: ValueControlBody::new(body),
+                }
             }
             ClassicalControlOp::Switch(op) => {
                 let cases = op
                     .cases()
                     .iter()
                     .map(|case| {
-                        Ok(SwitchCase::new(
+                        Ok(ValueSwitchCase::new(
                             case.value(),
-                            ControlBody::new(self.rebuild_sequence(case.body().operations())?),
+                            ValueControlBody::new(
+                                self.rebuild_sequence(case.body().operations(), classical_remap)?,
+                            ),
                         ))
                     })
                     .collect::<Result<Vec<_>, CompilerError>>()?;
                 let default = op
                     .default()
-                    .map(|body| self.rebuild_sequence(body.operations()))
+                    .map(|body| self.rebuild_sequence(body.operations(), classical_remap))
                     .transpose()?
-                    .map(ControlBody::new);
-                Instruction::ClassicalControl(ClassicalControlOp::Switch(
-                    SwitchOp::new(op.target().clone(), cases, default)
-                        .map_err(CompilerError::Circuit)?,
-                ))
+                    .map(ValueControlBody::new);
+                ValueClassicalControlOp::Switch {
+                    target: classical_remap.remap_expr(op.target())?,
+                    cases,
+                    default,
+                }
             }
-            ClassicalControlOp::Break | ClassicalControlOp::Continue => {
-                Instruction::ClassicalControl(control.clone())
-            }
+            ClassicalControlOp::Break => ValueClassicalControlOp::Break,
+            ClassicalControlOp::Continue => ValueClassicalControlOp::Continue,
         };
-        let qubits: SmallVec<[Qubit; 3]> = match &instruction {
-            Instruction::ClassicalControl(cc) => cc.used_qubits().into_iter().collect(),
-            _ => SmallVec::new(),
-        };
-        Ok(Operation {
-            instruction,
+        let qubits = instruction.used_qubits().into_iter().collect();
+        Ok(ValueOperation {
+            instruction: ValueInstruction::ClassicalControl(instruction),
             qubits,
-            params: self.remap_source_params(&operation.params)?,
+            params: CircuitRebuildContext::resolve_source_params(self.source, &operation.params)?,
             label: operation.label.clone(),
         })
     }
@@ -382,18 +382,15 @@ impl<'a> McGateDecomposer<'a> {
         &mut self,
         gate: &MCGate,
         operation: &Operation,
-    ) -> Result<Vec<Operation>, CompilerError> {
+    ) -> Result<Vec<ValueOperation>, CompilerError> {
         self.validate_mc_operation(gate, operation)?;
         let params = self.resolve_source_params(&operation.params)?;
         let num_controls = gate.num_ctrl_qubits();
         let controls = &operation.qubits[..num_controls];
         let targets = &operation.qubits[num_controls..];
-        let values = self.synthesize_mc_gate(*gate.base_gate(), &params, controls, targets)?;
+        let operations = self.synthesize_mc_gate(*gate.base_gate(), &params, controls, targets)?;
         self.changed = true;
-        values
-            .into_iter()
-            .map(|operation| self.intern_value_operation(operation))
-            .collect()
+        Ok(operations)
     }
 
     fn validate_mc_operation(
@@ -693,7 +690,7 @@ impl<'a> McGateDecomposer<'a> {
         }
         let lease = self
             .resources
-            .commit(&mut self.target, plan)
+            .commit(&mut self.resource_circuit, plan)
             .map_err(resource_invariant_failed)?;
         self.resources
             .release(&lease)
@@ -735,87 +732,6 @@ impl<'a> McGateDecomposer<'a> {
                     CompilerError::InvalidInput(format!("missing parameter index {index}"))
                 }),
         }
-    }
-
-    /// Interns source parameters into the target circuit's parameter table.
-    ///
-    /// Preserved operations may still reference source parameters; after this
-    /// step all parameter indices are local to the rebuilt circuit.
-    fn remap_source_params(
-        &mut self,
-        params: &[CircuitParam],
-    ) -> Result<SmallVec<[CircuitParam; 1]>, CompilerError> {
-        let values = self.resolve_source_params(params)?;
-        values
-            .into_iter()
-            .map(|value| self.intern_value_param(value))
-            .collect()
-    }
-
-    /// Converts a synthesized value-level operation into target storage form.
-    ///
-    /// MC synthesis primitives are expected to emit only flat quantum
-    /// operations. Recursive classical control is handled by
-    /// [`Self::rebuild_control_flow`], not by primitive synthesis.
-    fn intern_value_operation(
-        &mut self,
-        operation: ValueOperation,
-    ) -> Result<Operation, CompilerError> {
-        let instruction = match operation.instruction {
-            ValueInstruction::Instruction(inst) => inst,
-            ValueInstruction::ClassicalControl(_) => {
-                return Err(CompilerError::InvariantViolation(
-                    "synthesis produced unexpected classical control".into(),
-                ));
-            }
-        };
-        Ok(Operation {
-            instruction,
-            qubits: operation.qubits,
-            params: operation
-                .params
-                .into_iter()
-                .map(|value| self.intern_value_param(value))
-                .collect::<Result<_, _>>()?,
-            label: None,
-        })
-    }
-
-    fn intern_value_param(&mut self, value: ParameterValue) -> Result<CircuitParam, CompilerError> {
-        match value {
-            ParameterValue::Fixed(value) => {
-                if !value.is_finite() {
-                    return Err(CompilerError::InvalidInput(format!(
-                        "non-finite parameter value {value}"
-                    )));
-                }
-                Ok(CircuitParam::Fixed(if value == 0.0 { 0.0 } else { value }))
-            }
-            ParameterValue::Param(parameter) => {
-                let (index, _) = self.target.add_parameter(parameter);
-                Ok(CircuitParam::Index(index as u32))
-            }
-        }
-    }
-
-    /// Appends a rebuilt top-level operation through `Circuit::append`.
-    ///
-    /// `Circuit::append` accepts value-level parameters. Convert target-table
-    /// indices back to values so append enforces the same validation path as
-    /// user construction.
-    fn append_top_level(&mut self, operation: Operation) -> Result<(), CompilerError> {
-        let params = operation
-            .params
-            .iter()
-            .map(|param| target_param_to_value(&self.target, param))
-            .collect::<Result<Vec<_>, _>>()?;
-        self.target.append(
-            operation.instruction,
-            operation.qubits,
-            params,
-            operation.label.as_deref(),
-        )?;
-        Ok(())
     }
 }
 
@@ -911,23 +827,4 @@ fn resource_input_failed(error: ResourceError) -> CompilerError {
 
 fn resource_invariant_failed(error: ResourceError) -> CompilerError {
     CompilerError::InvariantViolation(format!("ancillary-resource bookkeeping failed: {error}"))
-}
-
-fn target_param_to_value(
-    circuit: &Circuit,
-    param: &CircuitParam,
-) -> Result<ParameterValue, CompilerError> {
-    match param {
-        CircuitParam::Fixed(value) => Ok(ParameterValue::Fixed(*value)),
-        CircuitParam::Index(index) => circuit
-            .parameters()
-            .get_index(*index as usize)
-            .cloned()
-            .map(ParameterValue::Param)
-            .ok_or_else(|| {
-                CompilerError::InvariantViolation(format!(
-                    "multi-controlled-gate decomposition produced missing target parameter index {index}"
-                ))
-            }),
-    }
 }

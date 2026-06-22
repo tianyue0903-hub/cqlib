@@ -743,6 +743,36 @@ fn if_else_and_while_bodies_are_rebuilt_recursively() {
 }
 
 #[test]
+fn runtime_classical_control_body_is_classical_safe() {
+    let mut circuit = Circuit::new(3);
+    let measured = circuit.measure(Qubit::new(0)).unwrap();
+    circuit
+        .if_(
+            ClassicalExpr::bit_to_bool(measured.expr()).unwrap(),
+            |body| {
+                body.append(
+                    Instruction::McGate(Box::new(MCGate::new(2, StandardGate::X))),
+                    [Qubit::new(0), Qubit::new(1), Qubit::new(2)],
+                    Vec::<ParameterValue>::new(),
+                    None,
+                )
+            },
+        )
+        .unwrap();
+
+    let result = decompose_mc_gates(&circuit, McGateDecomposeConfig::default()).unwrap();
+
+    assert_eq!(result.circuit.classical_values().len(), 1);
+    assert!(result.circuit.validate().is_ok());
+    let Instruction::ClassicalControl(ClassicalControlOp::If(op)) =
+        &result.circuit.operations()[1].instruction
+    else {
+        panic!("expected runtime classical if operation");
+    };
+    assert_no_mc_gates(op.then_body().operations());
+}
+
+#[test]
 fn nested_control_flow_bodies_are_rebuilt_to_arbitrary_depth() {
     let mcx = Instruction::McGate(Box::new(MCGate::new(3, StandardGate::X)));
     let mut circuit = Circuit::new(4);

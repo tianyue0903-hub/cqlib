@@ -17,12 +17,12 @@
 //! unitaries or lower standard gates to a target basis.
 
 use crate::circuit::{
-    Circuit, CircuitId, CircuitParam, ClassicalControlOp, ClassicalDataOp, ClassicalType,
-    ClassicalValue, ClassicalVar, Instruction, Operation, Parameter, ParameterValue, Qubit,
-    StandardGate, ValueClassicalControlOp, ValueControlBody, ValueInstruction, ValueOperation,
-    ValueSwitchCase,
+    Circuit, CircuitParam, ClassicalControlOp, Instruction, Operation, Parameter, ParameterValue,
+    Qubit, StandardGate, ValueClassicalControlOp, ValueControlBody, ValueInstruction,
+    ValueOperation, ValueSwitchCase,
 };
 use crate::compile::CompilerError;
+use crate::compile::transform::rebuild::{CircuitRebuildContext, ClassicalRemap};
 use crate::compile::transform::{CircuitAnalysis, TransformResult, Transformer};
 use smallvec::{SmallVec, smallvec};
 use std::collections::{HashMap, HashSet};
@@ -98,33 +98,19 @@ fn expand_definitions_transform(circuit: &Circuit) -> Result<TransformResult, Co
     DefinitionExpander::new(circuit)?.run()
 }
 
-#[derive(Debug, Clone)]
-struct ClassicalRemap {
-    vars: HashMap<ClassicalVar, ClassicalVar>,
-    values: HashMap<ClassicalValue, ClassicalValue>,
-}
-
 struct DefinitionExpander<'a> {
     source: &'a Circuit,
-    target_circuit_id: CircuitId,
-    target_classical_vars: Vec<ClassicalType>,
-    target_classical_values: Vec<ClassicalType>,
-    root_classical: ClassicalRemap,
+    rebuild: CircuitRebuildContext,
     top_phase: Parameter,
     changed: bool,
 }
 
 impl<'a> DefinitionExpander<'a> {
     fn new(source: &'a Circuit) -> Result<Self, CompilerError> {
-        let target_circuit_id = CircuitId::new();
-        let target_classical_vars = source.classical_vars().to_vec();
-        let target_classical_values = source.classical_values().to_vec();
+        let rebuild = CircuitRebuildContext::new(source);
         Ok(Self {
             source,
-            target_circuit_id,
-            target_classical_vars,
-            target_classical_values,
-            root_classical: build_root_classical_remap(source, target_circuit_id),
+            rebuild,
             top_phase: source.global_phase(),
             changed: false,
         })
@@ -133,7 +119,7 @@ impl<'a> DefinitionExpander<'a> {
     fn run(mut self) -> Result<TransformResult, CompilerError> {
         let qubit_map = QubitMap::Identity;
         let symbol_bindings = HashMap::new();
-        let root_classical = self.root_classical.clone();
+        let root_classical = self.rebuild.root_classical().clone();
         let mut operations = Vec::with_capacity(self.source.operations().len());
 
         for operation in self.source.operations() {
@@ -149,13 +135,9 @@ impl<'a> DefinitionExpander<'a> {
             self.top_phase = self.top_phase.clone() + phase;
         }
 
-        let mut target = Circuit::from_operations(
-            self.source.qubits(),
-            operations,
-            Some(self.target_classical_vars),
-            Some(self.target_classical_values),
-        )?;
-        target.set_global_phase(self.top_phase);
+        let target = self
+            .rebuild
+            .finish(self.source.qubits(), operations, self.top_phase)?;
         Ok(TransformResult {
             circuit: target,
             changed: self.changed,
@@ -310,7 +292,7 @@ impl<'a> DefinitionExpander<'a> {
             next_qubit_map.insert(*inner, map_qubit(*callsite, qubit_map)?);
         }
         let next_qubit_map = QubitMap::Mapped(&next_qubit_map);
-        let next_classical_remap = self.allocate_classical_remap(definition);
+        let next_classical_remap = self.rebuild.allocate_classical_instance(definition);
 
         let mut phase = apply_symbol_bindings(definition.global_phase(), &next_symbol_bindings);
         for inner_operation in definition.operations() {
@@ -345,10 +327,7 @@ impl<'a> DefinitionExpander<'a> {
     ) -> Result<Parameter, CompilerError> {
         let instruction = match control {
             ClassicalControlOp::If(op) => ValueClassicalControlOp::If {
-                condition: op
-                    .condition()
-                    .remap_classical_ids(&classical_remap.vars, &classical_remap.values)
-                    .map_err(CompilerError::Circuit)?,
+                condition: classical_remap.remap_expr(op.condition())?,
                 then_body: ValueControlBody::new(self.expand_body(
                     op.then_body().operations(),
                     context,
@@ -373,10 +352,7 @@ impl<'a> DefinitionExpander<'a> {
                     .transpose()?,
             },
             ClassicalControlOp::While(op) => ValueClassicalControlOp::While {
-                condition: op
-                    .condition()
-                    .remap_classical_ids(&classical_remap.vars, &classical_remap.values)
-                    .map_err(CompilerError::Circuit)?,
+                condition: classical_remap.remap_expr(op.condition())?,
                 body: ValueControlBody::new(self.expand_body(
                     op.body().operations(),
                     context,
@@ -387,19 +363,10 @@ impl<'a> DefinitionExpander<'a> {
                 )?),
             },
             ClassicalControlOp::For(op) => ValueClassicalControlOp::For {
-                var: map_classical_var(op.var(), classical_remap)?,
-                start: op
-                    .start()
-                    .remap_classical_ids(&classical_remap.vars, &classical_remap.values)
-                    .map_err(CompilerError::Circuit)?,
-                stop: op
-                    .stop()
-                    .remap_classical_ids(&classical_remap.vars, &classical_remap.values)
-                    .map_err(CompilerError::Circuit)?,
-                step: op
-                    .step()
-                    .remap_classical_ids(&classical_remap.vars, &classical_remap.values)
-                    .map_err(CompilerError::Circuit)?,
+                var: classical_remap.remap_var(op.var())?,
+                start: classical_remap.remap_expr(op.start())?,
+                stop: classical_remap.remap_expr(op.stop())?,
+                step: classical_remap.remap_expr(op.step())?,
                 body: ValueControlBody::new(self.expand_body(
                     op.body().operations(),
                     context,
@@ -410,10 +377,7 @@ impl<'a> DefinitionExpander<'a> {
                 )?),
             },
             ClassicalControlOp::Switch(op) => ValueClassicalControlOp::Switch {
-                target: op
-                    .target()
-                    .remap_classical_ids(&classical_remap.vars, &classical_remap.values)
-                    .map_err(CompilerError::Circuit)?,
+                target: classical_remap.remap_expr(op.target())?,
                 cases: op
                     .cases()
                     .iter()
@@ -517,7 +481,9 @@ impl<'a> DefinitionExpander<'a> {
             .collect::<SmallVec<[ParameterValue; 1]>>();
 
         operations.push(ValueOperation {
-            instruction: remap_value_instruction(&operation.instruction, classical_remap)?,
+            instruction: self
+                .rebuild
+                .remap_non_control_instruction(&operation.instruction, classical_remap)?,
             qubits: map_qubits(&operation.qubits, qubit_map)?,
             params,
             label: operation.label.clone(),
@@ -538,30 +504,6 @@ impl<'a> DefinitionExpander<'a> {
                 Ok(apply_symbol_bindings(resolved, symbol_bindings))
             })
             .collect()
-    }
-
-    fn allocate_classical_remap(&mut self, circuit: &Circuit) -> ClassicalRemap {
-        let var_base = self.target_classical_vars.len();
-        let mut vars = HashMap::with_capacity(circuit.classical_vars().len());
-        for (index, ty) in circuit.classical_vars().iter().copied().enumerate() {
-            self.target_classical_vars.push(ty);
-            vars.insert(
-                ClassicalVar::new(circuit.id(), index as u32, ty),
-                ClassicalVar::new(self.target_circuit_id, (var_base + index) as u32, ty),
-            );
-        }
-
-        let value_base = self.target_classical_values.len();
-        let mut values = HashMap::with_capacity(circuit.classical_values().len());
-        for (index, ty) in circuit.classical_values().iter().copied().enumerate() {
-            self.target_classical_values.push(ty);
-            values.insert(
-                ClassicalValue::new(circuit.id(), index as u32, ty),
-                ClassicalValue::new(self.target_circuit_id, (value_base + index) as u32, ty),
-            );
-        }
-
-        ClassicalRemap { vars, values }
     }
 }
 
@@ -594,93 +536,6 @@ fn map_qubit(qubit: Qubit, qubit_map: &QubitMap<'_>) -> Result<Qubit, CompilerEr
             ))
         }),
     }
-}
-
-fn build_root_classical_remap(source: &Circuit, target_circuit_id: CircuitId) -> ClassicalRemap {
-    let vars = source
-        .classical_vars()
-        .iter()
-        .copied()
-        .enumerate()
-        .map(|(index, ty)| {
-            (
-                ClassicalVar::new(source.id(), index as u32, ty),
-                ClassicalVar::new(target_circuit_id, index as u32, ty),
-            )
-        })
-        .collect();
-    let values = source
-        .classical_values()
-        .iter()
-        .copied()
-        .enumerate()
-        .map(|(index, ty)| {
-            (
-                ClassicalValue::new(source.id(), index as u32, ty),
-                ClassicalValue::new(target_circuit_id, index as u32, ty),
-            )
-        })
-        .collect();
-    ClassicalRemap { vars, values }
-}
-
-fn remap_value_instruction(
-    instruction: &Instruction,
-    classical_remap: &ClassicalRemap,
-) -> Result<ValueInstruction, CompilerError> {
-    match instruction {
-        Instruction::ClassicalControl(_) => Err(CompilerError::InvariantViolation(
-            "classical control must be rebuilt through expand_control_flow".to_string(),
-        )),
-        Instruction::ClassicalData(op) => Ok(ValueInstruction::from_instruction(
-            Instruction::ClassicalData(remap_classical_data_op(op, classical_remap)?),
-        )),
-        _ => Ok(ValueInstruction::from_instruction(instruction.clone())),
-    }
-}
-
-fn remap_classical_data_op(
-    op: &ClassicalDataOp,
-    classical_remap: &ClassicalRemap,
-) -> Result<ClassicalDataOp, CompilerError> {
-    Ok(match op {
-        ClassicalDataOp::Store { target, value } => ClassicalDataOp::Store {
-            target: map_classical_var(*target, classical_remap)?,
-            value: value
-                .remap_classical_ids(&classical_remap.vars, &classical_remap.values)
-                .map_err(CompilerError::Circuit)?,
-        },
-        ClassicalDataOp::MeasureBit { result } => ClassicalDataOp::MeasureBit {
-            result: map_classical_value(*result, classical_remap)?,
-        },
-        ClassicalDataOp::MeasureBits { result } => ClassicalDataOp::MeasureBits {
-            result: map_classical_value(*result, classical_remap)?,
-        },
-    })
-}
-
-fn map_classical_var(
-    var: ClassicalVar,
-    classical_remap: &ClassicalRemap,
-) -> Result<ClassicalVar, CompilerError> {
-    classical_remap.vars.get(&var).copied().ok_or_else(|| {
-        CompilerError::InvariantViolation(format!(
-            "missing classical variable remap for id {}",
-            var.id()
-        ))
-    })
-}
-
-fn map_classical_value(
-    value: ClassicalValue,
-    classical_remap: &ClassicalRemap,
-) -> Result<ClassicalValue, CompilerError> {
-    classical_remap.values.get(&value).copied().ok_or_else(|| {
-        CompilerError::InvariantViolation(format!(
-            "missing classical value remap for id {}",
-            value.index()
-        ))
-    })
 }
 
 fn apply_symbol_bindings(mut parameter: Parameter, map: &HashMap<String, Parameter>) -> Parameter {
@@ -735,9 +590,9 @@ fn fresh_temp_symbol(index: usize, symbol: &str, occupied: &mut HashSet<String>)
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::circuit::ClassicalExpr;
     use crate::circuit::ParameterValue;
     use crate::circuit::gate::{FrozenCircuit, UnitaryGate};
+    use crate::circuit::{ClassicalDataOp, ClassicalExpr};
     use ndarray::array;
     use num_complex::Complex;
     use std::collections::HashMap;

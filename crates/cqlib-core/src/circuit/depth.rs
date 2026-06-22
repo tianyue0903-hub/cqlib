@@ -232,7 +232,6 @@ fn for_loop_iterations(op: &ForOp) -> Option<usize> {
             return Some(0);
         }
         let span = stop.checked_sub(start)?;
-        let step = step; // step > 0
         // ceil(span / step) = (span + step - 1) / step, guarded against overflow.
         let numer = span.checked_add(step.checked_sub(1)?)?;
         let iterations = numer.checked_div(step)?;
