@@ -15,6 +15,7 @@
 pub mod commutation;
 pub mod compiler;
 pub mod knowledge;
+pub mod resource;
 pub mod sabre;
 
 pub use compiler::{PyCompileMode, PyCompileResult, PyWorkflowStepReport, py_compile};
@@ -32,6 +33,7 @@ pub(crate) fn register_compile_module(parent: &Bound<'_, PyModule>) -> PyResult<
 
     commutation::register_commutation_module(&m)?;
     knowledge::register_knowledge_module(&m)?;
+    resource::register_resource_module(&m)?;
     sabre::register_sabre_module(&m)?;
 
     parent.add_submodule(&m)?;

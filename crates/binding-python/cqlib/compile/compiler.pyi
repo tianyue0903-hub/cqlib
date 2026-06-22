@@ -16,6 +16,7 @@ from typing import Optional
 
 from cqlib.circuit import Circuit, Instruction
 from cqlib.device import Device, Layout
+from .resource import ResourcePolicy
 
 class CompileMode:
     """Optimization effort selected for the compiler workflow.
@@ -152,6 +153,7 @@ def compile(
     target_basis: list[str | Instruction] | None = None,
     device: Device | None = None,
     initial_layout: Layout | None = None,
+    resource_policy: ResourcePolicy | None = None
     seed: int | None = None,
 ) -> CompileResult:
     """Compile a circuit with the configured compiler workflow.
@@ -167,6 +169,10 @@ def compile(
             gates as the target basis when ``target_basis`` is ``None``.
         initial_layout: Optional logical-to-physical layout. This is valid only
             when ``device`` is provided.
+        resource_policy: Permissions for compiler-created clean ancillas and
+            dirty borrowing. ``None`` uses the conservative default, which
+            creates no ancillas and does not borrow input qubits. Device
+            capacity remains a separate hard bound.
         seed: Optional deterministic seed for heuristic layout/routing stages.
 
     Returns:
@@ -212,6 +218,18 @@ def compile(
 
             result = compile(circuit, device=Device.line("line-3", 3), seed=7)
             assert any(step.name == "route.sabre" for step in result.steps)
+
+        Permit clean ancillas for multi-controlled-gate synthesis::
+
+            from cqlib.compile import compile
+            from cqlib.compile.resource import ResourcePolicy
+
+            result = compile(
+                circuit,
+                resource_policy=ResourcePolicy(
+                    max_pre_layout_clean_ancillas=2,
+                ),
+            )
     """
     ...
 

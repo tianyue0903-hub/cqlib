@@ -11,6 +11,7 @@
 // that they have been altered from the originals.
 
 use crate::circuit::{PyCircuit, PyInstruction};
+use crate::compile::resource::PyResourcePolicy;
 use crate::device::device_impl::PyDevice;
 use crate::device::layout::PyLayout;
 use cqlib_core::circuit::{Instruction, StandardGate};
@@ -283,13 +284,14 @@ impl PyCompileResult {
 
 /// Compiles a circuit with the configured compiler workflow.
 #[pyfunction(name = "compile")]
-#[pyo3(signature = (circuit, *, mode=None, target_basis=None, device=None, initial_layout=None, seed=None))]
+#[pyo3(signature = (circuit, *, mode=None, target_basis=None, device=None, initial_layout=None, resource_policy=None, seed=None))]
 pub fn py_compile(
     circuit: PyRef<'_, PyCircuit>,
     mode: Option<PyCompileMode>,
     target_basis: Option<Vec<PyTargetBasisItem>>,
     device: Option<PyRef<'_, PyDevice>>,
     initial_layout: Option<PyRef<'_, PyLayout>>,
+    resource_policy: Option<PyResourcePolicy>,
     seed: Option<u32>,
 ) -> PyResult<PyCompileResult> {
     let config = CompileConfig {
@@ -304,7 +306,8 @@ pub fn py_compile(
             .transpose()?,
         device: device.map(|device| device.inner.clone()),
         initial_layout: initial_layout.map(|layout| layout.inner.clone()),
-        resource_policy: ResourcePolicy::default(),
+        resource_policy: resource_policy
+            .map_or_else(ResourcePolicy::default, |policy| policy.inner),
         seed,
     };
 
