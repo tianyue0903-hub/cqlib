@@ -12,9 +12,25 @@
 
 """Reusable compiler transforms."""
 
+from cqlib.circuit import Circuit
+from . import decompose as decompose
 from .canonicalize import CanonicalizeConfig as CanonicalizeConfig
 from .canonicalize import CanonicalizeResult as CanonicalizeResult
 from .canonicalize import Canonicalizer as Canonicalizer
 from .canonicalize import canonicalize_circuit as canonicalize_circuit
+
+class TransformResult:
+    """Common result returned by circuit-to-circuit compiler transforms."""
+
+    @property
+    def circuit(self) -> Circuit:
+        """Transformed circuit owned by this result."""
+        ...
+    @property
+    def changed(self) -> bool:
+        """Whether the transform changed the compiler IR representation."""
+        ...
+    def __copy__(self) -> TransformResult: ...
+    def __deepcopy__(self, memo: dict[int, object]) -> TransformResult: ...
 
 __all__: list[str]

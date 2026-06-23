@@ -14,8 +14,8 @@
 
 mod canonicalize;
 pub mod decompose;
-mod layout;
-mod result;
+pub mod layout;
+pub mod result;
 
 use pyo3::prelude::*;
 

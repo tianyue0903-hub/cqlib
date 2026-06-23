@@ -12,12 +12,18 @@
 
 """Reusable compiler transforms."""
 
+from ..._native import compile as _compile_module
+from . import decompose as decompose
 from .canonicalize import CanonicalizeConfig as CanonicalizeConfig
 from .canonicalize import CanonicalizeResult as CanonicalizeResult
 from .canonicalize import Canonicalizer as Canonicalizer
 from .canonicalize import canonicalize_circuit as canonicalize_circuit
 
+TransformResult = _compile_module.transform.TransformResult
+
 __all__ = [
+    "decompose",
+    "TransformResult",
     "CanonicalizeConfig",
     "Canonicalizer",
     "CanonicalizeResult",
