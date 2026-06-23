@@ -15,8 +15,10 @@ from . import knowledge as knowledge
 from . import resource as resource
 from . import sabre as sabre
 from . import transform as transform
+from .compiler import CompileConfig as CompileConfig
 from .compiler import CompileMode as CompileMode
 from .compiler import CompileResult as CompileResult
+from .compiler import CompilerWorkflow as CompilerWorkflow
 from .compiler import WorkflowStepReport as WorkflowStepReport
 from .compiler import compile as compile
 

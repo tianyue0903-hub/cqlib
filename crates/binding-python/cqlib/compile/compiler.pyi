@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Optional
 
 from cqlib.circuit import Circuit, Instruction
@@ -59,6 +60,78 @@ class CompileMode:
         ...
     def __hash__(self) -> int:
         """Return a hash value for dictionaries and sets."""
+        ...
+
+class CompileConfig:
+    """Immutable compiler workflow configuration snapshot.
+
+    Mutable inputs such as the target basis, device, and initial layout are
+    copied during construction. Properties also return copies, so subsequent
+    caller-side mutations do not change this configuration.
+
+    Validation that depends on multiple fields or on the input circuit is
+    performed when the configuration is used by :class:`CompilerWorkflow` or
+    :func:`compile`.
+    """
+
+    def __init__(
+        self,
+        *,
+        mode: CompileMode | None = None,
+        target_basis: Sequence[str | Instruction] | None = None,
+        device: Device | None = None,
+        initial_layout: Layout | None = None,
+        resource_policy: ResourcePolicy | None = None,
+        seed: int | None = None,
+    ) -> None:
+        """Create an immutable compiler workflow configuration snapshot.
+
+        Args:
+            mode: Optimization effort. ``None`` selects
+                :meth:`CompileMode.normal`.
+            target_basis: Optional explicit target instruction basis. Entries
+                may be case-insensitive standard-gate names or instructions.
+            device: Optional hardware target used for capacity, routing, and
+                native-gate constraints.
+            initial_layout: Optional initial logical-to-physical layout. A
+                target device is required when this is set.
+            resource_policy: Ancillary-resource permissions. ``None`` uses the
+                conservative default policy.
+            seed: Optional deterministic layout/routing seed.
+
+        Raises:
+            ValueError: If a target-basis gate name is unknown.
+        """
+        ...
+    @property
+    def mode(self) -> CompileMode:
+        """Optimization workflow mode."""
+        ...
+    @property
+    def target_basis(self) -> list[Instruction] | None:
+        """Copied explicit target basis, or ``None`` when unspecified."""
+        ...
+    @property
+    def device(self) -> Device | None:
+        """Copied target device, or ``None`` when unspecified."""
+        ...
+    @property
+    def initial_layout(self) -> Layout | None:
+        """Copied initial layout, or ``None`` when unspecified."""
+        ...
+    @property
+    def resource_policy(self) -> ResourcePolicy:
+        """Copied ancillary-resource policy."""
+        ...
+    @property
+    def seed(self) -> int | None:
+        """Deterministic layout/routing seed, or ``None``."""
+        ...
+    def __copy__(self) -> CompileConfig:
+        """Return an independent shallow copy of this snapshot."""
+        ...
+    def __deepcopy__(self, memo: dict) -> CompileConfig:
+        """Return an independent deep copy of this snapshot."""
         ...
 
 class WorkflowStepReport:
@@ -146,14 +219,37 @@ class CompileResult:
         """Return a deep copy of this result."""
         ...
 
+class CompilerWorkflow:
+    """Reusable compiler optimization workflow.
+
+    The workflow owns an immutable configuration snapshot and may be run over
+    multiple circuits. Running it never mutates the input circuit.
+    """
+
+    def __init__(self, config: CompileConfig | None = None) -> None:
+        """Create a workflow, using a default configuration when omitted."""
+        ...
+    @property
+    def config(self) -> CompileConfig:
+        """Return an independent copy of the workflow configuration."""
+        ...
+    def run(self, circuit: Circuit) -> CompileResult:
+        """Compile a circuit without modifying it.
+
+        Raises:
+            ValueError: If the configuration, input circuit, or a transform
+                precondition is invalid.
+        """
+        ...
+
 def compile(
     circuit: Circuit,
     *,
     mode: CompileMode | None = None,
-    target_basis: list[str | Instruction] | None = None,
+    target_basis: Sequence[str | Instruction] | None = None,
     device: Device | None = None,
     initial_layout: Layout | None = None,
-    resource_policy: ResourcePolicy | None = None
+    resource_policy: ResourcePolicy | None = None,
     seed: int | None = None,
 ) -> CompileResult:
     """Compile a circuit with the configured compiler workflow.

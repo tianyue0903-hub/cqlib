@@ -17,7 +17,14 @@ from . import knowledge as knowledge
 from . import resource as resource
 from . import sabre as sabre
 from . import transform as transform
-from .compiler import CompileMode, CompileResult, WorkflowStepReport, compile
+from .compiler import (
+    CompileConfig,
+    CompileMode,
+    CompileResult,
+    CompilerWorkflow,
+    WorkflowStepReport,
+    compile,
+)
 
 __all__ = [
     "commutation",
@@ -26,7 +33,9 @@ __all__ = [
     "sabre",
     "transform",
     "CompileMode",
+    "CompileConfig",
     "WorkflowStepReport",
     "CompileResult",
+    "CompilerWorkflow",
     "compile",
 ]

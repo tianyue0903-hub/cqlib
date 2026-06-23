@@ -19,7 +19,10 @@ pub mod resource;
 pub mod sabre;
 pub mod transform;
 
-pub use compiler::{PyCompileMode, PyCompileResult, PyWorkflowStepReport, py_compile};
+pub use compiler::{
+    PyCompileConfig, PyCompileMode, PyCompileResult, PyCompilerWorkflow, PyWorkflowStepReport,
+    py_compile,
+};
 
 use pyo3::prelude::*;
 
@@ -28,8 +31,10 @@ pub(crate) fn register_compile_module(parent: &Bound<'_, PyModule>) -> PyResult<
     let m = PyModule::new(parent.py(), "compile")?;
 
     m.add_class::<PyCompileMode>()?;
+    m.add_class::<PyCompileConfig>()?;
     m.add_class::<PyWorkflowStepReport>()?;
     m.add_class::<PyCompileResult>()?;
+    m.add_class::<PyCompilerWorkflow>()?;
     m.add_function(pyo3::wrap_pyfunction!(py_compile, &m)?)?;
 
     commutation::register_commutation_module(&m)?;
