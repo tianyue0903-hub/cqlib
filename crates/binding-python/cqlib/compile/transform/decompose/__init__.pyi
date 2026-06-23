@@ -124,6 +124,9 @@ def decompose_mc_gates(
 ) -> TransformResult:
     """Decompose multi-controlled gates using configured resources.
 
+    This entry point does not enforce device capacity. Use
+    :func:`decompose_mc_gates_for_device` when decomposition must fit a device.
+
     Raises:
         ValueError: If decomposition or ancillary-resource validation fails.
     """
@@ -132,14 +135,16 @@ def decompose_mc_gates(
 def decompose_mc_gates_with_rule_stats(
     circuit: Circuit,
     config: McGateDecomposeConfig | None = None,
-) -> tuple[TransformResult, DecompositionRuleStats]: ...
+) -> tuple[TransformResult, DecompositionRuleStats]:
+    """Decompose gates without device-capacity checks and return cache stats."""
+    ...
 
 def decompose_mc_gates_for_device(
     circuit: Circuit,
     device: Device,
     resource_policy: ResourcePolicy | None = None,
 ) -> TransformResult:
-    """Decompose multi-controlled gates while enforcing device capacity.
+    """Decompose multi-controlled gates while enforcing usable device capacity.
 
     Raises:
         ValueError: If the circuit exceeds device capacity or decomposition fails.

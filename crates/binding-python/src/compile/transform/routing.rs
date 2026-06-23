@@ -137,6 +137,10 @@ impl PyRoutedCircuit {
         )
     }
 
+    fn __eq__(&self, other: &Self) -> bool {
+        self.inner == other.inner
+    }
+
     fn __copy__(&self) -> Self {
         self.clone()
     }
@@ -208,6 +212,10 @@ impl PySabreRouteResult {
             self.inner.layout_score(),
             self.inner.diagnostics(),
         )
+    }
+
+    fn __eq__(&self, other: &Self) -> bool {
+        self.inner == other.inner
     }
 
     fn __copy__(&self) -> Self {

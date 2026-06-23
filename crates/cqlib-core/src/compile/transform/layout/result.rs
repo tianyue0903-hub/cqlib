@@ -25,7 +25,7 @@ use crate::device::Layout;
 /// Most production layout entries return a scored result. The score remains
 /// optional so simple adapters or future algorithms can report a valid layout
 /// before a final objective has been evaluated.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct LayoutResult {
     /// Selected logical-to-physical mapping.
     pub layout: Layout,

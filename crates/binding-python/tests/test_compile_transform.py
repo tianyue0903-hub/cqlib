@@ -12,6 +12,8 @@
 
 import copy
 import sys
+import threading
+import time
 
 import pytest
 
@@ -27,9 +29,12 @@ from cqlib.compile.transform import (
     KnowledgeRewriter,
     RewriteConfig,
     RewriteMode,
+    TransformResult,
     canonicalize_circuit,
     rewrite_circuit,
 )
+from cqlib.compile.transform.decompose import expand_definitions
+from cqlib.compile.transform.result import TransformResult as ResultModuleTransformResult
 
 
 def test_transform_module_and_public_types_are_registered() -> None:
@@ -42,6 +47,7 @@ def test_transform_module_and_public_types_are_registered() -> None:
     assert KnowledgeRewriter.__module__ == "cqlib.compile.transform"
     assert KnowledgeRewriteStats.__module__ == "cqlib.compile.transform"
     assert KnowledgeRewriteResult.__module__ == "cqlib.compile.transform"
+    assert TransformResult is ResultModuleTransformResult
 
 
 def test_canonicalize_config_exposes_immutable_options() -> None:
@@ -104,6 +110,52 @@ def test_canonicalization_is_idempotent() -> None:
     assert first.changed is True
     assert second.changed is False
     assert len(second.circuit.operations) == 1
+
+
+def test_transform_results_have_value_equality() -> None:
+    circuit = Circuit(1)
+    circuit.i(0)
+
+    first = canonicalize_circuit(circuit)
+    second = canonicalize_circuit(circuit)
+
+    assert first == second
+    assert first.__eq__(object()) is NotImplemented
+    assert first in [second]
+
+    transform_first = expand_definitions(circuit)
+    transform_second = expand_definitions(circuit)
+    assert transform_first == transform_second
+    assert transform_first.__eq__(object()) is NotImplemented
+
+
+@pytest.mark.parametrize(
+    "run",
+    [canonicalize_circuit, lambda circuit: Canonicalizer().run(circuit)],
+)
+def test_canonicalization_releases_gil(run) -> None:
+    circuit = Circuit(1)
+    for _ in range(20_000):
+        circuit.h(0)
+
+    started = threading.Event()
+    finished = threading.Event()
+    progressed = threading.Event()
+
+    def worker() -> None:
+        started.wait()
+        time.sleep(0.01)
+        if not finished.is_set():
+            progressed.set()
+
+    thread = threading.Thread(target=worker)
+    thread.start()
+    started.set()
+    run(circuit)
+    finished.set()
+    thread.join()
+
+    assert progressed.is_set()
 
 
 def test_zero_round_limit_is_rejected_when_run() -> None:

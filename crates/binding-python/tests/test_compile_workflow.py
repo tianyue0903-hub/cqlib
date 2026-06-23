@@ -11,6 +11,8 @@
 # that they have been altered from the originals.
 
 import copy
+import threading
+import time
 
 import pytest
 
@@ -145,6 +147,37 @@ def test_compile_and_explicit_workflow_have_equivalent_results() -> None:
     explicit_names = [str(operation.instruction) for operation in explicit.circuit.operations]
     assert direct_names == explicit_names == ["H", "CZ", "H"]
     assert [step.name for step in direct.steps] == [step.name for step in explicit.steps]
+    assert direct == explicit
+    assert direct.__eq__(object()) is NotImplemented
+
+
+@pytest.mark.parametrize(
+    "run",
+    [compile, lambda circuit: CompilerWorkflow().run(circuit)],
+)
+def test_compiler_entry_points_release_gil(run) -> None:
+    circuit = Circuit(1)
+    for _ in range(20_000):
+        circuit.h(0)
+
+    started = threading.Event()
+    finished = threading.Event()
+    progressed = threading.Event()
+
+    def worker() -> None:
+        started.wait()
+        time.sleep(0.01)
+        if not finished.is_set():
+            progressed.set()
+
+    thread = threading.Thread(target=worker)
+    thread.start()
+    started.set()
+    run(circuit)
+    finished.set()
+    thread.join()
+
+    assert progressed.is_set()
 
 
 def test_workflow_validates_cross_field_configuration_when_run() -> None:

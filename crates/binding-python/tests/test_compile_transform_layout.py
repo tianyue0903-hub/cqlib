@@ -117,6 +117,8 @@ def test_sabre_layout_is_reproducible_with_a_fixed_seed() -> None:
     assert first.layout.l2p_map == second.layout.l2p_map
     assert first.score == second.score
     assert first.diagnostics == second.diagnostics
+    assert first == second
+    assert first.__eq__(object()) is NotImplemented
     notes = first.diagnostics.notes
     notes.append("caller mutation")
     assert "caller mutation" not in first.diagnostics.notes

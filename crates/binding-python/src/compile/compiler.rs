@@ -443,6 +443,10 @@ impl PyCompileResult {
         )
     }
 
+    fn __eq__(&self, other: &Self) -> bool {
+        self.inner == other.inner
+    }
+
     fn __copy__(&self) -> Self {
         self.clone()
     }
@@ -479,9 +483,10 @@ impl PyCompilerWorkflow {
     }
 
     /// Runs the workflow without modifying the input circuit.
-    fn run(&self, circuit: PyRef<'_, PyCircuit>) -> PyResult<PyCompileResult> {
-        self.inner
-            .run(&circuit.inner)
+    fn run(&self, py: Python<'_>, circuit: PyRef<'_, PyCircuit>) -> PyResult<PyCompileResult> {
+        let circuit = circuit.inner.clone();
+        let config = self.inner.config().clone();
+        py.detach(move || CompilerWorkflow::new(config).run(&circuit))
             .map(PyCompileResult::from)
             .map_err(compiler_error_to_py_err)
     }
@@ -494,7 +499,9 @@ impl PyCompilerWorkflow {
 /// Compiles a circuit with the configured compiler workflow.
 #[pyfunction(name = "compile")]
 #[pyo3(signature = (circuit, *, mode=None, target_basis=None, device=None, initial_layout=None, resource_policy=None, seed=None))]
+#[allow(clippy::too_many_arguments)]
 pub fn py_compile(
+    py: Python<'_>,
     circuit: PyRef<'_, PyCircuit>,
     mode: Option<PyCompileMode>,
     target_basis: Option<Vec<PyTargetBasisItem>>,
@@ -511,8 +518,9 @@ pub fn py_compile(
         resource_policy,
         seed,
     )?;
+    let circuit = circuit.inner.clone();
 
-    compile(&circuit.inner, config)
+    py.detach(move || compile(&circuit, config))
         .map(PyCompileResult::from)
         .map_err(compiler_error_to_py_err)
 }

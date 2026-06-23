@@ -1622,10 +1622,18 @@ fn test_classical_handles_are_rejected_by_other_circuits() {
 fn test_clone_allocates_new_classical_identity_and_remaps_operations() {
     let mut original = Circuit::new(1);
     let original_var = original.var(ClassicalType::Bit);
+    let condition = original.var(ClassicalType::Bool);
     original.measure_into(Qubit::new(0), original_var).unwrap();
+    original
+        .if_(condition.expr(), |body| body.rz(Qubit::new(0), "theta"))
+        .unwrap();
 
     let cloned = original.clone();
     assert_ne!(original.id(), cloned.id());
+    assert_eq!(original, cloned);
+    let mut different = cloned.clone();
+    different.x(Qubit::new(0)).unwrap();
+    assert_ne!(original, different);
     assert!(matches!(
         cloned
             .clone()

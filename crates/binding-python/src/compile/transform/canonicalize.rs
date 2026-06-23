@@ -164,6 +164,10 @@ impl PyCanonicalizeResult {
         )
     }
 
+    fn __eq__(&self, other: &Self) -> bool {
+        self.inner == other.inner
+    }
+
     fn __copy__(&self) -> Self {
         self.clone()
     }
@@ -207,9 +211,10 @@ impl PyCanonicalizer {
     }
 
     /// Canonicalizes a circuit without modifying the input.
-    fn run(&self, circuit: PyRef<'_, PyCircuit>) -> PyResult<PyCanonicalizeResult> {
-        self.inner
-            .run(&circuit.inner)
+    fn run(&self, py: Python<'_>, circuit: PyRef<'_, PyCircuit>) -> PyResult<PyCanonicalizeResult> {
+        let canonicalizer = self.inner.clone();
+        let circuit = circuit.inner.clone();
+        py.detach(move || canonicalizer.run(&circuit))
             .map(PyCanonicalizeResult::from)
             .map_err(compiler_error_to_py_err)
     }
@@ -229,8 +234,12 @@ impl PyCanonicalizer {
 
 /// Canonicalizes a circuit using production defaults.
 #[pyfunction(name = "canonicalize_circuit")]
-pub fn py_canonicalize_circuit(circuit: PyRef<'_, PyCircuit>) -> PyResult<PyCanonicalizeResult> {
-    canonicalize_circuit(&circuit.inner)
+pub fn py_canonicalize_circuit(
+    py: Python<'_>,
+    circuit: PyRef<'_, PyCircuit>,
+) -> PyResult<PyCanonicalizeResult> {
+    let circuit = circuit.inner.clone();
+    py.detach(move || canonicalize_circuit(&circuit))
         .map(PyCanonicalizeResult::from)
         .map_err(compiler_error_to_py_err)
 }

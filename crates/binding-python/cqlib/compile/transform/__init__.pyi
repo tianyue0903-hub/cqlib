@@ -12,7 +12,6 @@
 
 """Reusable compiler transforms."""
 
-from cqlib.circuit import Circuit
 from . import decompose as decompose
 from . import layout as layout
 from . import routing as routing
@@ -40,19 +39,6 @@ from .rewrite import KnowledgeRewriter as KnowledgeRewriter
 from .rewrite import RewriteConfig as RewriteConfig
 from .rewrite import RewriteMode as RewriteMode
 from .rewrite import rewrite_circuit as rewrite_circuit
-
-class TransformResult:
-    """Common result returned by circuit-to-circuit compiler transforms."""
-
-    @property
-    def circuit(self) -> Circuit:
-        """Transformed circuit owned by this result."""
-        ...
-    @property
-    def changed(self) -> bool:
-        """Whether the transform changed the compiler IR representation."""
-        ...
-    def __copy__(self) -> TransformResult: ...
-    def __deepcopy__(self, memo: dict[int, object]) -> TransformResult: ...
+from .result import TransformResult as TransformResult
 
 __all__: list[str]

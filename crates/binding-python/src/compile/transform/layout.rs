@@ -394,6 +394,10 @@ impl PyLayoutResult {
         )
     }
 
+    fn __eq__(&self, other: &Self) -> bool {
+        self.inner == other.inner
+    }
+
     fn __copy__(&self) -> Self {
         self.clone()
     }

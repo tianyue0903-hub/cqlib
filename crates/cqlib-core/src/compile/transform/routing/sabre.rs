@@ -38,7 +38,7 @@ use crate::device::{Device, Layout, LogicalQubit, PhysicalQubit};
 /// This is the result of routing from a caller-supplied layout. It does not
 /// carry layout-selection metadata; callers that also need the layout score
 /// should use [`route_sabre`] which returns [`SabreRouteResult`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct RoutedCircuit {
     circuit: Circuit,
     initial_layout: Layout,
@@ -109,7 +109,7 @@ impl RoutedCircuit {
 ///
 /// Returned by [`route_sabre`]. Wraps a [`RoutedCircuit`] and adds the layout
 /// score so callers can inspect layout quality.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SabreRouteResult {
     routed: RoutedCircuit,
     layout_score: Option<LayoutScore>,

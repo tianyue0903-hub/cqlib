@@ -12,7 +12,6 @@
 
 """Reusable compiler transforms."""
 
-from ..._native import compile as _compile_module
 from . import decompose as decompose
 from . import layout as layout
 from . import routing as routing
@@ -40,8 +39,7 @@ from .rewrite import KnowledgeRewriter as KnowledgeRewriter
 from .rewrite import RewriteConfig as RewriteConfig
 from .rewrite import RewriteMode as RewriteMode
 from .rewrite import rewrite_circuit as rewrite_circuit
-
-TransformResult = _compile_module.transform.TransformResult
+from .result import TransformResult as TransformResult
 
 __all__ = [
     "decompose",

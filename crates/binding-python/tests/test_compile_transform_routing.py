@@ -103,6 +103,9 @@ def test_route_sabre_is_reproducible_for_same_seed() -> None:
     assert first.initial_layout.l2p_map == second.initial_layout.l2p_map
     assert first.final_layout.l2p_map == second.final_layout.l2p_map
     assert first.swap_count == second.swap_count
+    assert first == second
+    assert first.routed == second.routed
+    assert first.__eq__(object()) is NotImplemented
     assert first.diagnostics.operation_count == second.diagnostics.operation_count
 
 

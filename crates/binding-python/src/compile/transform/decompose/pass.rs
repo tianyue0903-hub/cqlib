@@ -69,6 +69,9 @@ pub fn py_decompose_unitaries_with_rule_stats(
 }
 
 /// Decomposes multi-controlled gates using configured ancillary resources.
+///
+/// This entry point has no target device and therefore does not enforce device
+/// capacity. Use `decompose_mc_gates_for_device` when capacity must be checked.
 #[pyfunction(name = "decompose_mc_gates")]
 #[pyo3(signature = (circuit, config=None))]
 pub fn py_decompose_mc_gates(
@@ -84,6 +87,9 @@ pub fn py_decompose_mc_gates(
 }
 
 /// Decomposes multi-controlled gates and returns pass-local rule-cache stats.
+///
+/// This entry point has no target device and therefore does not enforce device
+/// capacity. Use `decompose_mc_gates_for_device` when capacity must be checked.
 #[pyfunction(name = "decompose_mc_gates_with_rule_stats")]
 #[pyo3(signature = (circuit, config=None))]
 pub fn py_decompose_mc_gates_with_rule_stats(
