@@ -24,7 +24,7 @@
 //!
 //! ## Gate Mapping
 //!
-//! Standard gates are mapped to QCIS equivalents:
+//! Standard gates use their QCIS opcode equivalents:
 //! - `SDG` (S dagger) → `SD`
 //! - `TDG` (T dagger) → `TD`
 //! - `Delay` → `I Qn t`, where `t` is a non-negative integer count in 0.5 ns ticks
@@ -56,10 +56,9 @@
 //!
 //! ## Limitations
 //!
-//! - Gates not in the QCIS basis set return errors
+//! - Standard identity and global-phase gates are not represented
 //! - Control flow gates (if/while) are not supported
 //! - Custom gates (CircuitGate, UnitaryGate) require prior compilation
-//! - Symbolic parameters cannot be resolved without binding
 
 use crate::circuit::Circuit;
 use crate::circuit::bit::Qubit;
@@ -80,7 +79,7 @@ const PI_4: f64 = std::f64::consts::PI / 4.0;
 #[derive(Debug)]
 pub enum QcisDumpError {
     IoError(std::io::Error),
-    /// Gate is not supported by QCIS backend and needs compilation
+    /// Gate is not represented by the QCIS circuit format
     UnsupportedGate(String),
     /// Classical data operation is not representable in QCIS.
     UnsupportedClassicalData(String),
@@ -99,12 +98,7 @@ impl std::fmt::Display for QcisDumpError {
             QcisDumpError::UnsupportedGate(g) => {
                 write!(
                     f,
-                    "Unsupported gate '{}': this gate is not natively supported by QCIS backend. ",
-                    g
-                )?;
-                write!(
-                    f,
-                    "Please compile the circuit to QCIS basis gates (X2P, X2M, Y2P, Y2M, XY2P, XY2M, CZ, RZ, X, Y, Z, H, S, SD, T, TD, RX, RY, RXY) and use delay operations for QCIS I instructions before dumping."
+                    "Unsupported gate '{g}': it is not represented by the QCIS circuit format"
                 )
             }
             QcisDumpError::UnsupportedClassicalData(operation) => write!(
@@ -148,8 +142,7 @@ impl From<std::io::Error> for QcisDumpError {
 ///
 /// # Errors
 ///
-/// Returns an error if the circuit contains gates that are not natively supported by QCIS.
-/// The circuit must be compiled to QCIS basis gates before dumping.
+/// Returns an error if the circuit contains instructions not represented by QCIS.
 pub fn dump<P: AsRef<Path>>(circuit: &Circuit, path: P) -> Result<(), QcisDumpError> {
     let content = dumps(circuit)?;
     std::fs::write(path, content)?;
@@ -168,8 +161,7 @@ pub fn to_path<P: AsRef<Path>>(circuit: &Circuit, path: P) -> Result<(), QcisDum
 ///
 /// # Errors
 ///
-/// Returns an error if the circuit contains gates that are not natively supported by QCIS.
-/// The circuit must be compiled to QCIS basis gates before dumping.
+/// Returns an error if the circuit contains instructions not represented by QCIS.
 pub fn dumps(circuit: &Circuit) -> Result<String, QcisDumpError> {
     let mut output = String::new();
     let operations = circuit.operations();
@@ -194,8 +186,7 @@ pub fn to_string(circuit: &Circuit) -> Result<String, QcisDumpError> {
 
 /// Convert a single operation to QCIS format.
 ///
-/// Only QCIS natively supported gates are allowed. All other gates must be
-/// compiled to QCIS basis gates before calling this function.
+/// Instructions without a QCIS circuit-level representation return an error.
 fn operation_to_qcis(op: &Operation, circuit: &Circuit) -> Result<String, QcisDumpError> {
     match &op.instruction {
         Instruction::Standard(gate) => {
@@ -298,12 +289,8 @@ fn format_float(v: f64) -> String {
 
 /// Convert a standard gate to QCIS format.
 ///
-/// Only QCIS natively supported gates are allowed:
-/// - Native gates: X2P, X2M, Y2P, Y2M, XY2P, XY2M, CZ, RZ
-/// - Standard single-qubit: X, Y, Z, H, S, SD, T, TD
-/// - Parameterized: RX, RY, RXY
-///
-/// QCIS `I Qn t` is a delay instruction, not the cqlib identity gate.
+/// QCIS `I Qn t` is a delay instruction, not the cqlib identity gate. Global
+/// phase operations are intentionally not represented.
 fn standard_gate_to_qcis(
     gate: StandardGate,
     qubits: &[Qubit],
@@ -314,40 +301,42 @@ fn standard_gate_to_qcis(
     let param_str = format_params(params, circuit)?;
 
     let gate_name = match gate {
-        // Native QCIS gates
+        StandardGate::H => "H",
+        StandardGate::RX => "RX",
+        StandardGate::RXX => "RXX",
+        StandardGate::RXY => "RXY",
+        StandardGate::RY => "RY",
+        StandardGate::RYY => "RYY",
+        StandardGate::RZ => "RZ",
+        StandardGate::RZX => "RZX",
+        StandardGate::RZZ => "RZZ",
+        StandardGate::S => "S",
+        StandardGate::SDG => "SD",
+        StandardGate::SWAP => "SWAP",
+        StandardGate::T => "T",
+        StandardGate::TDG => "TD",
+        StandardGate::U => "U",
+        StandardGate::X => "X",
+        StandardGate::XY => "XY",
         StandardGate::X2P => "X2P",
         StandardGate::X2M => "X2M",
-        StandardGate::Y2P => "Y2P",
-        StandardGate::Y2M => "Y2M",
         StandardGate::XY2P => "XY2P",
         StandardGate::XY2M => "XY2M",
-        StandardGate::CZ => "CZ",
-        StandardGate::RZ => "RZ",
-
-        // Standard single-qubit gates
-        StandardGate::X => "X",
         StandardGate::Y => "Y",
+        StandardGate::Y2P => "Y2P",
+        StandardGate::Y2M => "Y2M",
         StandardGate::Z => "Z",
-        StandardGate::H => "H",
-        StandardGate::S => "S",
-        // QCIS: use SD
-        StandardGate::SDG => "SD",
-        StandardGate::T => "T",
-        // QCIS: use TD
-        StandardGate::TDG => "TD",
-
-        // Parameterized single-qubit gates
-        StandardGate::RX => "RX",
-        StandardGate::RY => "RY",
-        StandardGate::RXY => "RXY",
-
-        StandardGate::I => {
-            return Err(QcisDumpError::UnsupportedGate("I".to_string()));
-        }
-
-        // All other gates are not natively supported by QCIS
-        _ => {
-            return Err(QcisDumpError::UnsupportedGate(format!("{:?}", gate)));
+        StandardGate::Phase => "PHASE",
+        StandardGate::CX => "CX",
+        StandardGate::CCX => "CCX",
+        StandardGate::CY => "CY",
+        StandardGate::CZ => "CZ",
+        StandardGate::CRX => "CRX",
+        StandardGate::CRY => "CRY",
+        StandardGate::CRZ => "CRZ",
+        StandardGate::FSIM => "FSIM",
+        StandardGate::I | StandardGate::GPhase => {
+            return Err(QcisDumpError::UnsupportedGate(format!("{gate:?}")));
         }
     };
 

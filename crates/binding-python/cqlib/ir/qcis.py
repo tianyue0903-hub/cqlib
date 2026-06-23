@@ -18,10 +18,16 @@ quantum circuit format. Each line represents a gate operation:
     GATE_NAME QUBIT_LIST [PARAMETER_LIST]
 
 Supported Gates:
-    - Native gates: X2P, X2M, Y2P, Y2M, XY2P, XY2M, CZ, RZ, I
-    - Standard gates: X, Y, Z, H, S, SD, T, TD
-    - Parameterized gates: RX, RY, RXY
+    - Single-qubit: H, RX, RXY, RY, RZ, S, SD, T, TD, U, X, XY,
+      X2P, X2M, XY2P, XY2M, Y, Y2P, Y2M, Z, PHASE
+    - Multi-qubit: RXX, RYY, RZX, RZZ, SWAP, CX, CCX, CY, CZ,
+      CRX, CRY, CRZ, FSIM
     - Directives: B (Barrier), M (Measurement)
+    - Delay: I Qn t, where t is a non-negative integer tick count
+
+The standard identity gate and GPHASE are not supported. QCIS ``I`` always
+means delay. ``SDG`` and ``TDG`` are accepted aliases and serialize as ``SD``
+and ``TD``.
 
 Functions:
     loads: Parse a QCIS string into a Circuit.

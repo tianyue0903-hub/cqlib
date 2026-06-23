@@ -32,14 +32,15 @@
 //!
 //! ## Circuit Instructions
 //!
-//! The QCIS instructions represented directly by this module are:
+//! The QCIS instructions represented directly by this module include all
+//! cqlib standard gates except identity and global phase:
 //!
-//! - `X2P Qn`, `X2M Qn`: positive/negative X half rotations.
-//! - `Y2P Qn`, `Y2M Qn`: positive/negative Y half rotations.
-//! - `XY2P Qn phi`, `XY2M Qn phi`: positive/negative half rotations around an
-//!   axis in the XY plane.
-//! - `RZ Qn theta`: virtual Z rotation.
-//! - `CZ Qa Qb`: controlled-Z two-qubit gate.
+//! - Single-qubit gates: `H`, `S`, `SD`, `T`, `TD`, `X`, `X2P`, `X2M`, `Y`,
+//!   `Y2P`, `Y2M`, and `Z`.
+//! - Parameterized single-qubit gates: `RX`, `RXY`, `RY`, `RZ`, `U`, `XY`,
+//!   `XY2P`, `XY2M`, and `PHASE`.
+//! - Multi-qubit gates: `RXX`, `RYY`, `RZX`, `RZZ`, `SWAP`, `CX`, `CCX`, `CY`,
+//!   `CZ`, `CRX`, `CRY`, `CRZ`, and `FSIM`.
 //! - `I Qn t`: delay/no-op on `Qn` for `t` ticks. In QCIS, `t` must be a fixed
 //!   non-negative integer count whose unit is 0.5 ns, so `t = 1` means 0.5 ns.
 //!   This is represented as
@@ -50,15 +51,14 @@
 //!   operations when present.
 //! - `B Qn [Qm ...]` or `Barrier Qn [Qm ...]`: barrier.
 //!
-//! For interoperability, the loader and dumper also accept the following
-//! circuit-level gate spellings when the internal circuit already contains them:
-//! `X`, `Y`, `Z`, `H`, `S`, `SD`, `SDG`, `T`, `TD`, `TDG`, `RX`, `RY`, and
-//! `RXY`. Dagger aliases are normalized when dumping: `SDG` becomes `SD`, and
-//! `TDG` becomes `TD`.
+//! The loader accepts `SDG` and `TDG` as aliases. The dumper normalizes them to
+//! `SD` and `TD`.
 //!
 //! QCIS `I` is not an alias for the cqlib identity gate. To emit `I Qn t`, use
 //! [`Circuit::delay`](crate::circuit::Circuit::delay). A standard identity gate
 //! is rejected by the QCIS dumper to avoid losing the required duration.
+//! `GPHASE` and [`StandardGate::GPhase`](crate::circuit::StandardGate::GPhase)
+//! are also intentionally unsupported.
 //!
 //! ## Entry Points and Errors
 //!
