@@ -15,12 +15,19 @@ import sys
 
 import pytest
 
-from cqlib.circuit import Circuit
+from cqlib.circuit import Circuit, Instruction, StandardGate
+from cqlib.compile.knowledge import RuleKind
 from cqlib.compile.transform import (
     CanonicalizeConfig,
     CanonicalizeResult,
     Canonicalizer,
+    KnowledgeRewriteResult,
+    KnowledgeRewriteStats,
+    KnowledgeRewriter,
+    RewriteConfig,
+    RewriteMode,
     canonicalize_circuit,
+    rewrite_circuit,
 )
 
 
@@ -29,6 +36,11 @@ def test_transform_module_and_public_types_are_registered() -> None:
     assert CanonicalizeConfig.__module__ == "cqlib.compile.transform"
     assert Canonicalizer.__module__ == "cqlib.compile.transform"
     assert CanonicalizeResult.__module__ == "cqlib.compile.transform"
+    assert RewriteMode.__module__ == "cqlib.compile.transform"
+    assert RewriteConfig.__module__ == "cqlib.compile.transform"
+    assert KnowledgeRewriter.__module__ == "cqlib.compile.transform"
+    assert KnowledgeRewriteStats.__module__ == "cqlib.compile.transform"
+    assert KnowledgeRewriteResult.__module__ == "cqlib.compile.transform"
 
 
 def test_canonicalize_config_exposes_immutable_options() -> None:
@@ -98,3 +110,105 @@ def test_zero_round_limit_is_rejected_when_run() -> None:
 
     with pytest.raises(ValueError, match="round_limit must be greater than zero"):
         canonicalizer.run(Circuit(1))
+
+
+def test_rewrite_modes_and_config_expose_immutable_options() -> None:
+    optimize = RewriteMode.optimize()
+    lowering = RewriteMode.lowering()
+    kinds = [RuleKind.cancel(), RuleKind.merge()]
+    h = Instruction.from_standard_gate(StandardGate.H)
+    config = RewriteConfig(
+        max_rounds=3,
+        max_window_ops=7,
+        max_pattern_len=4,
+        recurse_control_flow=False,
+        skip_labeled_ops=False,
+        enabled_kinds=kinds,
+        mode=lowering,
+        target_instructions=[h, h],
+    )
+
+    assert optimize.name == "optimize"
+    assert lowering.name == "lowering"
+    assert lowering == RewriteMode.lowering()
+    assert hash(lowering) == hash(RewriteMode.lowering())
+    assert config.max_rounds == 3
+    assert config.max_window_ops == 7
+    assert config.max_pattern_len == 4
+    assert config.recurse_control_flow is False
+    assert config.skip_labeled_ops is False
+    assert config.enabled_kinds == kinds
+    assert config.mode == lowering
+    assert [instruction.name for instruction in config.target_instructions] == ["H"]
+    assert copy.copy(config) == config
+    assert copy.deepcopy(config) == config
+    assert repr(config).startswith("RewriteConfig(max_rounds=3,")
+
+    with pytest.raises(AttributeError):
+        config.max_rounds = 4
+
+
+def test_lowering_mode_selects_lowering_rule_defaults() -> None:
+    config = RewriteConfig(mode=RewriteMode.lowering())
+
+    assert config == RewriteConfig.lowering()
+    assert RuleKind.decompose() in config.enabled_kinds
+    assert RuleKind.hardware_native() in config.enabled_kinds
+
+
+def test_production_rewrite_does_not_mutate_input_and_reports_stats() -> None:
+    circuit = Circuit(1)
+    circuit.h(0)
+    circuit.h(0)
+
+    result = rewrite_circuit(circuit)
+
+    assert len(circuit.operations) == 2
+    assert len(result.circuit.operations) == 0
+    assert result.changed is True
+    assert result.stats.rules_applied == 1
+    assert result.stats.changed_sequences == 1
+    assert result.stats.rounds_executed >= 1
+    assert result.stats.reached_fixpoint is True
+    assert copy.copy(result.stats) == result.stats
+
+
+def test_rewriter_lowers_to_explicit_target_basis() -> None:
+    circuit = Circuit(2)
+    circuit.cx(0, 1)
+    config = RewriteConfig(
+        mode=RewriteMode.lowering(),
+        target_instructions=[
+            Instruction.from_standard_gate(StandardGate.H),
+            Instruction.from_standard_gate(StandardGate.CZ),
+        ],
+    )
+    rewriter = KnowledgeRewriter(config)
+
+    result = rewriter.run(circuit)
+
+    assert rewriter.config == config
+    assert [
+        operation.instruction.instruction.name for operation in result.circuit.operations
+    ] == ["H", "CZ", "H"]
+    assert result.stats.rules_applied >= 1
+
+
+def test_rewrite_rejects_invalid_configuration_and_unsatisfied_basis() -> None:
+    with pytest.raises(ValueError, match="must not be empty"):
+        RewriteConfig(target_instructions=[])
+    with pytest.raises(ValueError, match="unsupported rewrite target instruction"):
+        RewriteConfig(target_instructions=[Instruction.delay()])
+
+    zero_round_rewriter = KnowledgeRewriter(RewriteConfig(max_rounds=0))
+    with pytest.raises(ValueError, match="max_rounds must be greater than zero"):
+        zero_round_rewriter.run(Circuit(1))
+
+    circuit = Circuit(1)
+    circuit.h(0)
+    config = RewriteConfig(
+        mode=RewriteMode.lowering(),
+        target_instructions=[Instruction.from_standard_gate(StandardGate.CZ)],
+    )
+    with pytest.raises(ValueError, match="target instruction basis not satisfied"):
+        rewrite_circuit(circuit, config)

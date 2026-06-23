@@ -16,6 +16,8 @@ mod canonicalize;
 pub mod decompose;
 pub mod layout;
 pub mod result;
+mod rewrite;
+pub mod routing;
 
 use pyo3::prelude::*;
 
@@ -23,6 +25,10 @@ use canonicalize::{
     PyCanonicalizeConfig, PyCanonicalizeResult, PyCanonicalizer, py_canonicalize_circuit,
 };
 pub(crate) use result::PyTransformResult;
+use rewrite::{
+    PyKnowledgeRewriteResult, PyKnowledgeRewriteStats, PyKnowledgeRewriter, PyRewriteConfig,
+    PyRewriteMode, py_rewrite_circuit,
+};
 
 /// Registers transform bindings as `_native.compile.transform`.
 pub(crate) fn register_transform_module(parent: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -31,11 +37,18 @@ pub(crate) fn register_transform_module(parent: &Bound<'_, PyModule>) -> PyResul
     m.add_class::<PyCanonicalizeConfig>()?;
     m.add_class::<PyCanonicalizer>()?;
     m.add_class::<PyCanonicalizeResult>()?;
+    m.add_class::<PyRewriteMode>()?;
+    m.add_class::<PyRewriteConfig>()?;
+    m.add_class::<PyKnowledgeRewriter>()?;
+    m.add_class::<PyKnowledgeRewriteStats>()?;
+    m.add_class::<PyKnowledgeRewriteResult>()?;
     m.add_class::<PyTransformResult>()?;
     m.add_function(pyo3::wrap_pyfunction!(py_canonicalize_circuit, &m)?)?;
+    m.add_function(pyo3::wrap_pyfunction!(py_rewrite_circuit, &m)?)?;
 
     decompose::register_decompose_module(&m)?;
     layout::register_layout_module(&m)?;
+    routing::register_routing_module(&m)?;
 
     parent.add_submodule(&m)?;
     parent
