@@ -10,7 +10,23 @@
 # copyright notice, and modified files need to carry a notice indicating
 # that they have been altered from the originals.
 
-"""Circuit decomposition transforms and their configurations."""
+"""Circuit decomposition transforms and their configurations.
+
+Use these entry points to lower high-level operations before routing or final
+target-basis translation. Configuration objects make resource permissions and
+chosen decomposition bases explicit at the call site.
+
+Example::
+
+    from cqlib.circuit import Circuit
+    from cqlib.compile.transform.decompose import expand_definitions
+
+    circuit = Circuit(1)
+    circuit.h(0)
+
+    result = expand_definitions(circuit)
+    assert result.circuit is not circuit
+"""
 
 from ...._native import compile as _compile_module
 from . import mc_gate as mc_gate

@@ -15,6 +15,10 @@ class ResourcePolicy:
     a bounded number of clean logical ancillas before layout and optionally to
     borrow input qubits under the stronger dirty-restoration contract.
 
+    The long ``max_pre_layout_clean_ancillas`` keyword is intentionally explicit
+    because it names when the compiler may create clean ancillas. Prefer binding
+    the policy to a local variable when passing it into several compile calls.
+
     Args:
         max_pre_layout_clean_ancillas: Maximum number of clean logical qubits
             the compiler may create. Released qubits remain in this total and

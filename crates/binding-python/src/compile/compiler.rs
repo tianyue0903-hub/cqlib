@@ -24,6 +24,13 @@ use pyo3::prelude::*;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
+/// Python-facing target-basis item accepted by compile configuration builders.
+///
+/// The Python API accepts either case-insensitive standard-gate names for
+/// concise call sites or fully constructed `Instruction` objects when callers
+/// need to pass an instruction value directly. String names are normalized with
+/// ASCII uppercase before matching the standard-gate table; unknown names are
+/// reported as configuration errors.
 #[derive(FromPyObject)]
 pub enum PyTargetBasisItem {
     Name(String),
@@ -84,6 +91,12 @@ impl PyTargetBasisItem {
     }
 }
 
+/// Builds the core compiler configuration from Python-facing optional fields.
+///
+/// This is the shared conversion point for `CompileConfig`, `CompilerWorkflow`,
+/// and `compile`. It applies Python-level defaults, converts target-basis
+/// entries into core instructions, clones mutable device/layout inputs, and
+/// falls back to the conservative default resource policy when none is given.
 fn build_compile_config<'py>(
     mode: Option<PyCompileMode>,
     target_basis: Option<Vec<PyTargetBasisItem>>,

@@ -10,7 +10,23 @@
 # copyright notice, and modified files need to carry a notice indicating
 # that they have been altered from the originals.
 
-"""Reusable compiler transforms."""
+"""Reusable compiler transforms.
+
+Transforms expose focused compiler stages for callers that need more control
+than the end-to-end :func:`cqlib.compile.compile` workflow. Each transform
+returns a result object instead of mutating the input circuit.
+
+Example::
+
+    from cqlib.circuit import Circuit
+    from cqlib.compile.transform import canonicalize_circuit
+
+    circuit = Circuit(1)
+    circuit.h(0)
+
+    result = canonicalize_circuit(circuit)
+    assert result.circuit is not circuit
+"""
 
 from . import decompose as decompose
 from . import layout as layout

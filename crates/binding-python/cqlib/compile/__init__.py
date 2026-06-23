@@ -10,7 +10,24 @@
 # copyright notice, and modified files need to carry a notice indicating
 # that they have been altered from the originals.
 
-"""Compiler pipeline bindings."""
+"""Compiler pipeline bindings.
+
+Use :func:`compile` for the standard end-to-end workflow. The package also
+exposes lower-level transform, routing, resource, and knowledge modules for
+callers that need to assemble or inspect individual compiler stages.
+
+Example::
+
+    from cqlib.circuit import Circuit
+    from cqlib.compile import compile
+
+    circuit = Circuit(2)
+    circuit.h(0)
+    circuit.cx(0, 1)
+
+    result = compile(circuit)
+    assert result.circuit is not circuit
+"""
 
 from . import commutation as commutation
 from . import knowledge as knowledge
