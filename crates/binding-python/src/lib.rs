@@ -13,6 +13,7 @@
 pub mod circuit;
 pub mod compile;
 pub mod device;
+pub mod error_mitigation;
 pub mod ir;
 pub mod qis;
 // pub mod visualization;
@@ -26,6 +27,7 @@ fn binding_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     circuit::register_circuit_module(m)?;
     compile::register_compile_module(m)?;
     device::register_device_module(m)?;
+    error_mitigation::register_error_mitigation_module(m)?;
     ir::register_ir_module(m)?;
     qis::register_qis_module(m)?;
 

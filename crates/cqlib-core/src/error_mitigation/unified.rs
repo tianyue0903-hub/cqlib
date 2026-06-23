@@ -18,19 +18,19 @@ use super::{
 };
 
 /// Method-specific configuration for zero-noise extrapolation.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ZneConfig {
     pub fold_levels: Vec<i32>,
 }
 
 /// Method-specific configuration for virtual distillation.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VirtualDistillationConfig {
     pub copies: usize,
 }
 
 /// Supported error-mitigation methods.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MitigationMethod {
     Zne(ZneConfig),
     VirtualDistillation(VirtualDistillationConfig),
@@ -49,8 +49,51 @@ pub enum RunArgs {
     },
 }
 
+impl PartialEq for RunArgs {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (
+                Self::Zne {
+                    gate_set: lhs_gate_set,
+                    shots: lhs_shots,
+                },
+                Self::Zne {
+                    gate_set: rhs_gate_set,
+                    shots: rhs_shots,
+                },
+            ) => {
+                lhs_shots == rhs_shots
+                    && match (lhs_gate_set, rhs_gate_set) {
+                        (None, None) => true,
+                        (Some(lhs), Some(rhs)) => {
+                            lhs.len() == rhs.len()
+                                && lhs
+                                    .iter()
+                                    .zip(rhs.iter())
+                                    .all(|(lhs, rhs)| lhs.to_string() == rhs.to_string())
+                        }
+                        _ => false,
+                    }
+            }
+            (
+                Self::VirtualDistillation {
+                    shots_numerator: lhs_numerator,
+                    shots_denominator: lhs_denominator,
+                },
+                Self::VirtualDistillation {
+                    shots_numerator: rhs_numerator,
+                    shots_denominator: rhs_denominator,
+                },
+            ) => lhs_numerator == rhs_numerator && lhs_denominator == rhs_denominator,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for RunArgs {}
+
 /// Processing arguments required to produce the final mitigated result.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProcessArgs {
     Zne {
         method: ExtrapolateMethod,
