@@ -102,14 +102,22 @@ fn kak_invalid(reason: impl Into<String>) -> CompilerError {
 ///   * (k2l ⊗ k2r)
 /// ```
 #[derive(Debug, Clone)]
-pub(super) struct KakDecomposition {
+pub struct KakDecomposition {
+    /// Scalar phase multiplying the complete decomposition.
     pub global_phase: f64,
+    /// Left local factor applied after the Cartan interaction.
     pub k1l: Array2<Complex64>,
+    /// Right local factor applied after the Cartan interaction.
     pub k1r: Array2<Complex64>,
+    /// Left local factor applied before the Cartan interaction.
     pub k2l: Array2<Complex64>,
+    /// Right local factor applied before the Cartan interaction.
     pub k2r: Array2<Complex64>,
+    /// Canonical Pauli-XX interaction coordinate.
     pub a: f64,
+    /// Canonical Pauli-YY interaction coordinate.
     pub b: f64,
+    /// Canonical Pauli-ZZ interaction coordinate.
     pub c: f64,
 }
 
@@ -124,7 +132,12 @@ fn max_entry_diff(a: &Array2<Complex64>, b: &Array2<Complex64>) -> f64 {
 }
 
 /// Performs the KAK decomposition of a 4x4 unitary matrix.
-pub(super) fn kak_decompose(matrix: &Array2<Complex64>) -> Result<KakDecomposition, CompilerError> {
+///
+/// # Errors
+///
+/// Returns [`CompilerError`] when the input is not a finite 4x4 unitary or a
+/// numerically valid canonical decomposition cannot be reconstructed.
+pub fn kak_decompose(matrix: &Array2<Complex64>) -> Result<KakDecomposition, CompilerError> {
     validate_input(matrix)?;
 
     let det_u_raw = Mat::from_fn(matrix.nrows(), matrix.ncols(), |row, col| {

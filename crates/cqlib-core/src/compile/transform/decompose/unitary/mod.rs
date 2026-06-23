@@ -50,3 +50,8 @@ pub use decompose::{
     DecomposeUnitaries, UnitaryDecomposeConfig, decompose_unitaries,
     decompose_unitaries_with_rule_stats,
 };
+pub use two_qubit_kak::{KakDecomposition, kak_decompose};
+pub use unitary_1q::{OneQubitUnitaryDecomposition, synthesize_numeric_1q_unitary};
+pub use unitary_2q::{
+    TwoQubitUnitaryDecomposeBasis, TwoQubitUnitarySynthesisResult, synthesize_numeric_2q_unitary,
+};

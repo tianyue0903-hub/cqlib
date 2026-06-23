@@ -13,12 +13,16 @@
 //! Python bindings for reusable compiler transforms.
 
 mod canonicalize;
+pub mod decompose;
+mod layout;
+mod result;
 
 use pyo3::prelude::*;
 
 use canonicalize::{
     PyCanonicalizeConfig, PyCanonicalizeResult, PyCanonicalizer, py_canonicalize_circuit,
 };
+pub(crate) use result::PyTransformResult;
 
 /// Registers transform bindings as `_native.compile.transform`.
 pub(crate) fn register_transform_module(parent: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -27,7 +31,11 @@ pub(crate) fn register_transform_module(parent: &Bound<'_, PyModule>) -> PyResul
     m.add_class::<PyCanonicalizeConfig>()?;
     m.add_class::<PyCanonicalizer>()?;
     m.add_class::<PyCanonicalizeResult>()?;
+    m.add_class::<PyTransformResult>()?;
     m.add_function(pyo3::wrap_pyfunction!(py_canonicalize_circuit, &m)?)?;
+
+    decompose::register_decompose_module(&m)?;
+    layout::register_layout_module(&m)?;
 
     parent.add_submodule(&m)?;
     parent

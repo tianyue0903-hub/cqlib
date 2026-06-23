@@ -32,14 +32,13 @@
 //! approximation.
 
 use super::two_qubit_kak::{KakDecomposition, kak_decompose};
-use super::unitary_1q::synthesize_numeric_1q_unitary;
+use super::unitary_1q::{OneQubitUnitaryDecomposition, synthesize_numeric_1q_unitary};
 use crate::circuit::gate::gate_matrix::rz_gate;
-use crate::circuit::{CircuitParam, Instruction, Operation, Qubit, StandardGate};
+use crate::circuit::{ParameterValue, Qubit, StandardGate, ValueOperation};
 use crate::compile::CompilerError;
 use crate::util::matrix::{c, dagger, mat2};
 use ndarray::Array2;
 use num_complex::Complex64;
-use smallvec::smallvec;
 use std::f64::consts::{FRAC_1_SQRT_2, FRAC_PI_4, PI};
 
 const ANGLE_EPS: f64 = 1e-12;
@@ -54,11 +53,33 @@ pub enum TwoQubitUnitaryDecomposeBasis {
     Cx,
 }
 
-pub(super) fn synthesize_numeric_2q_unitary(
+/// Numeric synthesis result for a two-qubit unitary matrix.
+#[derive(Clone, Debug)]
+pub struct TwoQubitUnitarySynthesisResult {
+    /// Self-contained standard-gate operations implementing the unitary up to
+    /// [`global_phase`](Self::global_phase).
+    pub operations: Vec<ValueOperation>,
+    /// Scalar phase multiplying the emitted operation sequence.
+    pub global_phase: f64,
+}
+
+/// Synthesizes a finite 4x4 unitary matrix into the selected interaction basis.
+///
+/// # Errors
+///
+/// Returns [`CompilerError`] when `matrix` is not a finite 4x4 unitary, the
+/// qubits are not distinct, or the numeric decomposition cannot be validated.
+pub fn synthesize_numeric_2q_unitary(
     matrix: &Array2<Complex64>,
     qubits: [Qubit; 2],
     basis: TwoQubitUnitaryDecomposeBasis,
-) -> Result<(Vec<Operation>, f64), CompilerError> {
+) -> Result<TwoQubitUnitarySynthesisResult, CompilerError> {
+    if qubits[0] == qubits[1] {
+        return Err(CompilerError::InvalidInput(format!(
+            "2q unitary synthesis requires distinct qubits, both are {}",
+            qubits[0]
+        )));
+    }
     let decomp = kak_decompose(matrix)?;
     let mut builder = OperationBuilder::default();
     match basis {
@@ -67,12 +88,15 @@ pub(super) fn synthesize_numeric_2q_unitary(
         }
         TwoQubitUnitaryDecomposeBasis::Cx => emit_cx(&mut builder, &decomp, qubits[0], qubits[1])?,
     }
-    Ok((builder.operations, builder.global_phase))
+    Ok(TwoQubitUnitarySynthesisResult {
+        operations: builder.operations,
+        global_phase: builder.global_phase,
+    })
 }
 
 #[derive(Default)]
 struct OperationBuilder {
-    operations: Vec<Operation>,
+    operations: Vec<ValueOperation>,
     global_phase: f64,
 }
 
@@ -82,22 +106,26 @@ impl OperationBuilder {
         qubit: Qubit,
         matrix: &Array2<Complex64>,
     ) -> Result<(), CompilerError> {
-        let ([theta, phi, lambda], global_phase) = synthesize_numeric_1q_unitary(matrix)?;
+        let OneQubitUnitaryDecomposition {
+            theta,
+            phi,
+            lambda,
+            global_phase,
+        } = synthesize_numeric_1q_unitary(matrix)?;
         self.global_phase += global_phase;
         if theta.abs() <= ANGLE_EPS && phi.abs() <= ANGLE_EPS && lambda.abs() <= ANGLE_EPS {
             return Ok(());
         }
 
-        self.operations.push(Operation {
-            instruction: Instruction::Standard(StandardGate::U),
-            qubits: smallvec![qubit],
-            params: smallvec![
-                CircuitParam::Fixed(theta),
-                CircuitParam::Fixed(phi),
-                CircuitParam::Fixed(lambda)
+        self.operations.push(ValueOperation::from_standard(
+            StandardGate::U,
+            [qubit],
+            [
+                ParameterValue::Fixed(theta),
+                ParameterValue::Fixed(phi),
+                ParameterValue::Fixed(lambda),
             ],
-            label: None,
-        });
+        ));
         Ok(())
     }
 
@@ -106,21 +134,19 @@ impl OperationBuilder {
             return;
         }
 
-        self.operations.push(Operation {
-            instruction: Instruction::Standard(gate),
-            qubits: smallvec![first, second],
-            params: smallvec![CircuitParam::Fixed(theta)],
-            label: None,
-        });
+        self.operations.push(ValueOperation::from_standard(
+            gate,
+            [first, second],
+            [ParameterValue::Fixed(theta)],
+        ));
     }
 
     fn push_cx(&mut self, control: Qubit, target: Qubit) {
-        self.operations.push(Operation {
-            instruction: Instruction::Standard(StandardGate::CX),
-            qubits: smallvec![control, target],
-            params: smallvec![],
-            label: None,
-        });
+        self.operations.push(ValueOperation::from_standard(
+            StandardGate::CX,
+            [control, target],
+            [],
+        ));
     }
 }
 
@@ -385,7 +411,7 @@ impl CxBasisData {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::circuit::{Circuit, Parameter, ParameterValue, UnitaryGate, circuit_to_matrix};
+    use crate::circuit::{Circuit, Instruction, Parameter, UnitaryGate, circuit_to_matrix};
     use approx::assert_abs_diff_eq;
     use ndarray::linalg::kron;
 
@@ -402,32 +428,18 @@ mod tests {
             .unwrap();
         let expected = circuit_to_matrix(&source, None).unwrap();
 
-        let (operations, phase) =
+        let synthesis =
             synthesize_numeric_2q_unitary(matrix, [Qubit::new(0), Qubit::new(1)], basis).unwrap();
-        let mut circuit = Circuit::new(2);
-        for operation in operations {
-            let params = operation
-                .params
-                .iter()
-                .map(|param| match param {
-                    CircuitParam::Fixed(value) => ParameterValue::Fixed(*value),
-                    CircuitParam::Index(index) => {
-                        panic!("numeric 2q synthesis emitted unexpected parameter index {index}")
-                    }
-                })
-                .collect::<Vec<_>>();
-            circuit
-                .append(
-                    operation.instruction,
-                    operation.qubits,
-                    params,
-                    operation.label.as_deref(),
-                )
-                .unwrap();
-        }
-        circuit.set_global_phase(Parameter::from(phase));
+        let mut circuit = Circuit::from_operations(
+            vec![Qubit::new(0), Qubit::new(1)],
+            synthesis.operations,
+            None,
+            None,
+        )
+        .unwrap();
+        circuit.set_global_phase(Parameter::from(synthesis.global_phase));
         let matrix = if circuit.operations().is_empty() {
-            let phase = Complex64::from_polar(1.0, phase);
+            let phase = Complex64::from_polar(1.0, synthesis.global_phase);
             Array2::eye(4).mapv(|value: Complex64| phase * value)
         } else {
             circuit_to_matrix(&circuit, None).unwrap()
@@ -640,5 +652,13 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.to_string().contains("non-finite"));
+
+        let err = synthesize_numeric_2q_unitary(
+            &Array2::eye(4),
+            [Qubit::new(0), Qubit::new(0)],
+            TwoQubitUnitaryDecomposeBasis::PauliRotations,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("distinct qubits"));
     }
 }

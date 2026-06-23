@@ -201,7 +201,7 @@ impl PySabreHeuristicConfig {
 #[pyclass(name = "SabreConfig", module = "cqlib.compile.sabre")]
 #[derive(Clone, Debug)]
 pub struct PySabreConfig {
-    inner: SabreConfig,
+    pub(crate) inner: SabreConfig,
 }
 
 impl From<SabreConfig> for PySabreConfig {

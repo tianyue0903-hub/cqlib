@@ -32,7 +32,7 @@ use pyo3::IntoPyObjectExt;
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 
-fn extract_parameter_value(value: &Bound<'_, PyAny>) -> PyResult<ParameterValue> {
+pub(crate) fn extract_parameter_value(value: &Bound<'_, PyAny>) -> PyResult<ParameterValue> {
     if let Ok(param) = value.extract::<PyParameter>() {
         return Ok(ParameterValue::Param(param.inner));
     }
