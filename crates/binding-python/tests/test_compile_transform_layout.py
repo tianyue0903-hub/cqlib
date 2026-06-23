@@ -16,6 +16,7 @@ import sys
 import pytest
 
 from cqlib.circuit import Circuit
+from cqlib.compile import CompilerConfigError
 from cqlib.compile.sabre import SabreConfig
 from cqlib.compile.transform.layout import (
     LayoutDiagnostics,
@@ -76,7 +77,7 @@ def test_device_aware_objective_factories() -> None:
     automatic = LayoutObjective.auto_from_device(device)
     assert automatic == LayoutObjective.topology_only()
 
-    with pytest.raises(ValueError, match="no usable fidelity data"):
+    with pytest.raises(CompilerConfigError, match="no usable fidelity data"):
         LayoutObjective.fidelity_required(device)
 
     device.default_readout_error = 0.01
@@ -126,15 +127,15 @@ def test_invalid_objective_and_vf2_config_are_rejected_when_run() -> None:
     circuit.cx(0, 1)
     device = Device.line("line-2", 2)
 
-    with pytest.raises(ValueError, match="distance_weight must be finite and non-negative"):
+    with pytest.raises(CompilerConfigError, match="distance_weight must be finite and non-negative"):
         trivial_layout(circuit, device, LayoutObjective(distance_weight=-1.0))
 
-    with pytest.raises(ValueError, match="candidate_limit must be greater than zero"):
+    with pytest.raises(CompilerConfigError, match="candidate_limit must be greater than zero"):
         vf2_perfect_layout(circuit, device, config=Vf2LayoutConfig(candidate_limit=0))
 
 
 def test_layout_rejects_insufficient_physical_capacity() -> None:
-    with pytest.raises(ValueError, match="at least as many usable physical qubits"):
+    with pytest.raises(CompilerConfigError, match="at least as many usable physical qubits"):
         greedy_layout(Circuit(3), Device.line("line-2", 2))
 
 
@@ -142,7 +143,7 @@ def test_layout_rejects_undecomposed_three_qubit_operation() -> None:
     circuit = Circuit(3)
     circuit.ccx(0, 1, 2)
 
-    with pytest.raises(ValueError, match="more than two qubits to be decomposed"):
+    with pytest.raises(CompilerConfigError, match="more than two qubits to be decomposed"):
         trivial_layout(circuit, Device.line("line-3", 3))
 
 
@@ -152,5 +153,5 @@ def test_vf2_reports_when_no_perfect_embedding_exists() -> None:
     circuit.cx(1, 2)
     circuit.cx(0, 2)
 
-    with pytest.raises(ValueError, match="could not find a perfect mapping"):
+    with pytest.raises(CompilerConfigError, match="could not find a perfect mapping"):
         vf2_perfect_layout(circuit, Device.line("line-3", 3))

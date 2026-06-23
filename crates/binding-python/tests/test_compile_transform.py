@@ -16,6 +16,7 @@ import sys
 import pytest
 
 from cqlib.circuit import Circuit, Instruction, StandardGate
+from cqlib.compile import CompilerConfigError
 from cqlib.compile.knowledge import RuleKind
 from cqlib.compile.transform import (
     CanonicalizeConfig,
@@ -108,7 +109,7 @@ def test_canonicalization_is_idempotent() -> None:
 def test_zero_round_limit_is_rejected_when_run() -> None:
     canonicalizer = Canonicalizer(CanonicalizeConfig(round_limit=0))
 
-    with pytest.raises(ValueError, match="round_limit must be greater than zero"):
+    with pytest.raises(CompilerConfigError, match="round_limit must be greater than zero"):
         canonicalizer.run(Circuit(1))
 
 
@@ -195,13 +196,13 @@ def test_rewriter_lowers_to_explicit_target_basis() -> None:
 
 
 def test_rewrite_rejects_invalid_configuration_and_unsatisfied_basis() -> None:
-    with pytest.raises(ValueError, match="must not be empty"):
+    with pytest.raises(CompilerConfigError, match="must not be empty"):
         RewriteConfig(target_instructions=[])
-    with pytest.raises(ValueError, match="unsupported rewrite target instruction"):
+    with pytest.raises(CompilerConfigError, match="unsupported rewrite target instruction"):
         RewriteConfig(target_instructions=[Instruction.delay()])
 
     zero_round_rewriter = KnowledgeRewriter(RewriteConfig(max_rounds=0))
-    with pytest.raises(ValueError, match="max_rounds must be greater than zero"):
+    with pytest.raises(CompilerConfigError, match="max_rounds must be greater than zero"):
         zero_round_rewriter.run(Circuit(1))
 
     circuit = Circuit(1)
@@ -210,5 +211,5 @@ def test_rewrite_rejects_invalid_configuration_and_unsatisfied_basis() -> None:
         mode=RewriteMode.lowering(),
         target_instructions=[Instruction.from_standard_gate(StandardGate.CZ)],
     )
-    with pytest.raises(ValueError, match="target instruction basis not satisfied"):
+    with pytest.raises(CompilerConfigError, match="target instruction basis not satisfied"):
         rewrite_circuit(circuit, config)

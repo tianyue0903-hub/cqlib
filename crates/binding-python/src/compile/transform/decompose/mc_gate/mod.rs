@@ -16,15 +16,12 @@ mod mc_su2;
 mod mcx;
 
 use crate::circuit::PyValueOperation;
+pub(super) use crate::compile::error::compiler_error_to_py_err as compiler_error;
 use cqlib_core::circuit::ValueOperation;
 use pyo3::prelude::*;
 
 pub(super) fn into_py_operations(operations: Vec<ValueOperation>) -> Vec<PyValueOperation> {
     operations.into_iter().map(Into::into).collect()
-}
-
-pub(super) fn compiler_error(error: cqlib_core::compile::CompilerError) -> PyErr {
-    pyo3::exceptions::PyValueError::new_err(error.to_string())
 }
 
 /// Registers exact multi-controlled synthesis primitives.

@@ -13,13 +13,13 @@
 //! Python bindings for knowledge-based local circuit rewrite.
 
 use crate::circuit::{PyCircuit, PyInstruction};
+use crate::compile::error::compiler_error_to_py_err;
 use crate::compile::knowledge::library::PyRuleKind;
 use cqlib_core::compile::knowledge::library::RuleKind;
 use cqlib_core::compile::transform::{
     KnowledgeRewriteResult, KnowledgeRewriteStats, KnowledgeRewriter, RewriteConfig, RewriteMode,
     rewrite_circuit,
 };
-use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -174,7 +174,7 @@ impl PyRewriteConfig {
                         .map(|instruction| instruction.inner)
                         .collect(),
                 )
-                .map_err(|error| PyValueError::new_err(error.to_string()))?;
+                .map_err(compiler_error_to_py_err)?;
         }
 
         Ok(config.into())
@@ -412,7 +412,7 @@ impl PyKnowledgeRewriter {
         let circuit = circuit.inner.clone();
         py.detach(move || rewriter.run(&circuit))
             .map(Into::into)
-            .map_err(|error| PyValueError::new_err(error.to_string()))
+            .map_err(compiler_error_to_py_err)
     }
 
     fn __repr__(&self) -> String {
@@ -440,7 +440,7 @@ pub fn py_rewrite_circuit(
     let config = config.map_or_else(RewriteConfig::production, |config| config.inner);
     py.detach(move || rewrite_circuit(&circuit, config))
         .map(Into::into)
-        .map_err(|error| PyValueError::new_err(error.to_string()))
+        .map_err(compiler_error_to_py_err)
 }
 
 const fn python_bool(value: bool) -> &'static str {

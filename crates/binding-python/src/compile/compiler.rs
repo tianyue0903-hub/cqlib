@@ -11,6 +11,7 @@
 // that they have been altered from the originals.
 
 use crate::circuit::{PyCircuit, PyInstruction};
+use crate::compile::error::{CompilerConfigError, compiler_error_to_py_err};
 use crate::compile::resource::PyResourcePolicy;
 use crate::device::device_impl::PyDevice;
 use crate::device::layout::PyLayout;
@@ -19,7 +20,6 @@ use cqlib_core::compile::resource::ResourcePolicy;
 use cqlib_core::compile::{
     CompileConfig, CompileMode, CompileResult, CompilerWorkflow, WorkflowStepReport, compile,
 };
-use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -75,7 +75,7 @@ impl PyTargetBasisItem {
             "CRZ" => StandardGate::CRZ,
             "FSIM" => StandardGate::FSIM,
             _ => {
-                return Err(PyValueError::new_err(format!(
+                return Err(CompilerConfigError::new_err(format!(
                     "unknown standard gate in target_basis: {name:?}"
                 )));
             }
@@ -483,7 +483,7 @@ impl PyCompilerWorkflow {
         self.inner
             .run(&circuit.inner)
             .map(PyCompileResult::from)
-            .map_err(|error| PyValueError::new_err(error.to_string()))
+            .map_err(compiler_error_to_py_err)
     }
 
     fn __repr__(&self) -> String {
@@ -514,5 +514,5 @@ pub fn py_compile(
 
     compile(&circuit.inner, config)
         .map(PyCompileResult::from)
-        .map_err(|error| PyValueError::new_err(error.to_string()))
+        .map_err(compiler_error_to_py_err)
 }

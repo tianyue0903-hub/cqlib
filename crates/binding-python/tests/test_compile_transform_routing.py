@@ -16,7 +16,7 @@ import sys
 import pytest
 
 from cqlib.circuit import Circuit
-from cqlib.compile import transform
+from cqlib.compile import CompilerConfigError, transform
 from cqlib.compile.sabre import SabreConfig, SabreRoutingDiagnostics
 from cqlib.compile.transform import (
     LayoutObjective,
@@ -110,7 +110,7 @@ def test_route_sabre_rejects_invalid_configuration() -> None:
     circuit = Circuit(2)
     circuit.cx(0, 1)
 
-    with pytest.raises(ValueError, match="routing_trials"):
+    with pytest.raises(CompilerConfigError, match="routing_trials"):
         route_sabre(
             circuit,
             Device.line("line-2", 2),
@@ -122,7 +122,7 @@ def test_route_sabre_rejects_insufficient_device_capacity() -> None:
     circuit = Circuit(2)
     circuit.cx(0, 1)
 
-    with pytest.raises(ValueError, match="2 logical qubits.*1 usable physical qubits"):
+    with pytest.raises(CompilerConfigError, match="2 logical qubits.*1 usable physical qubits"):
         route_sabre(circuit, Device.line("line-1", 1))
 
 
@@ -130,5 +130,5 @@ def test_route_sabre_rejects_undecomposed_three_qubit_gate() -> None:
     circuit = Circuit(3)
     circuit.ccx(0, 1, 2)
 
-    with pytest.raises(ValueError, match="more than two qubits"):
+    with pytest.raises(CompilerConfigError, match="more than two qubits"):
         route_sabre(circuit, Device.line("line-3", 3))

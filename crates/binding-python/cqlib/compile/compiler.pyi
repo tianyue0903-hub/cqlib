@@ -100,7 +100,7 @@ class CompileConfig:
             seed: Optional deterministic layout/routing seed.
 
         Raises:
-            ValueError: If a target-basis gate name is unknown.
+            CompilerConfigError: If a target-basis gate name is unknown.
         """
         ...
     @property
@@ -237,8 +237,11 @@ class CompilerWorkflow:
         """Compile a circuit without modifying it.
 
         Raises:
-            ValueError: If the configuration, input circuit, or a transform
+            CompilerConfigError: If the configuration or a transform
                 precondition is invalid.
+            CompilerTransformError: If a compiler transform cannot complete.
+            CompilerInternalError: If the compiler violates an internal invariant.
+            CircuitError: If circuit structure validation fails.
         """
         ...
 
@@ -276,8 +279,11 @@ def compile(
         changed flag, and workflow step reports.
 
     Raises:
-        ValueError: If the compiler rejects the input configuration or a
-            transform precondition is not satisfied.
+        CompilerConfigError: If the configuration or a transform precondition
+            is invalid.
+        CompilerTransformError: If a compiler transform cannot complete.
+        CompilerInternalError: If the compiler violates an internal invariant.
+        CircuitError: If circuit structure validation fails.
 
     Examples:
         Logical-only compilation::

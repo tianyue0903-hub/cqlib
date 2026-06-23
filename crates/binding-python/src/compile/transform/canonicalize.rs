@@ -11,10 +11,10 @@
 // that they have been altered from the originals.
 
 use crate::circuit::PyCircuit;
+use crate::compile::error::compiler_error_to_py_err;
 use cqlib_core::compile::transform::{
     CanonicalizeConfig, CanonicalizeResult, Canonicalizer, canonicalize_circuit,
 };
-use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
 /// Configuration for circuit canonicalization.
@@ -211,7 +211,7 @@ impl PyCanonicalizer {
         self.inner
             .run(&circuit.inner)
             .map(PyCanonicalizeResult::from)
-            .map_err(|error| PyValueError::new_err(error.to_string()))
+            .map_err(compiler_error_to_py_err)
     }
 
     fn __repr__(&self) -> String {
@@ -232,7 +232,7 @@ impl PyCanonicalizer {
 pub fn py_canonicalize_circuit(circuit: PyRef<'_, PyCircuit>) -> PyResult<PyCanonicalizeResult> {
     canonicalize_circuit(&circuit.inner)
         .map(PyCanonicalizeResult::from)
-        .map_err(|error| PyValueError::new_err(error.to_string()))
+        .map_err(compiler_error_to_py_err)
 }
 
 const fn python_bool(value: bool) -> &'static str {

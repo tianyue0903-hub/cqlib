@@ -11,6 +11,7 @@
 // that they have been altered from the originals.
 
 use crate::circuit::PyCircuit;
+use crate::compile::error::compiler_error_to_py_err;
 use crate::compile::sabre::PySabreConfig;
 use crate::device::device_impl::PyDevice;
 use crate::device::layout::PyLayout;
@@ -20,7 +21,6 @@ use cqlib_core::compile::transform::{
     LayoutDiagnostics, LayoutObjective, LayoutResult, LayoutScore, Vf2EdgeRequirement,
     Vf2LayoutConfig, greedy_layout, sabre_layout, trivial_layout, vf2_perfect_layout,
 };
-use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -63,7 +63,7 @@ fn py_trivial_layout(
     let objective = objective.map_or_else(LayoutObjective::topology_only, |value| value.inner);
     py.detach(move || trivial_layout(&circuit, &device, &objective))
         .map(Into::into)
-        .map_err(|error| PyValueError::new_err(error.to_string()))
+        .map_err(compiler_error_to_py_err)
 }
 
 #[pyfunction(name = "greedy_layout")]
@@ -79,7 +79,7 @@ fn py_greedy_layout(
     let objective = objective.map_or_else(LayoutObjective::topology_only, |value| value.inner);
     py.detach(move || greedy_layout(&circuit, &device, &objective))
         .map(Into::into)
-        .map_err(|error| PyValueError::new_err(error.to_string()))
+        .map_err(compiler_error_to_py_err)
 }
 
 #[pyfunction(name = "vf2_perfect_layout")]
@@ -97,7 +97,7 @@ fn py_vf2_perfect_layout(
     let config = config.map_or_else(Vf2LayoutConfig::default, |value| value.inner);
     py.detach(move || vf2_perfect_layout(&circuit, &device, &objective, &config))
         .map(Into::into)
-        .map_err(|error| PyValueError::new_err(error.to_string()))
+        .map_err(compiler_error_to_py_err)
 }
 
 #[pyfunction(name = "sabre_layout")]
@@ -115,7 +115,7 @@ fn py_sabre_layout(
     let config = config.map_or_else(SabreConfig::default, |value| value.inner);
     py.detach(move || sabre_layout(&circuit, &device, &objective, &config))
         .map(Into::into)
-        .map_err(|error| PyValueError::new_err(error.to_string()))
+        .map_err(compiler_error_to_py_err)
 }
 
 /// Weighted objective used to rank candidate initial layouts.
@@ -166,19 +166,19 @@ impl PyLayoutObjective {
     /// Selects a fidelity-aware objective when the device has usable calibration data.
     #[staticmethod]
     fn auto_from_device(device: PyRef<'_, PyDevice>) -> PyResult<Self> {
-        let physical = build_physical_layout_graph(&device.inner)
-            .map_err(|error| PyValueError::new_err(error.to_string()))?;
+        let physical =
+            build_physical_layout_graph(&device.inner).map_err(compiler_error_to_py_err)?;
         Ok(LayoutObjective::auto_from_physical(&physical).into())
     }
 
     /// Returns a fidelity-aware objective, rejecting devices without usable calibration data.
     #[staticmethod]
     fn fidelity_required(device: PyRef<'_, PyDevice>) -> PyResult<Self> {
-        let physical = build_physical_layout_graph(&device.inner)
-            .map_err(|error| PyValueError::new_err(error.to_string()))?;
+        let physical =
+            build_physical_layout_graph(&device.inner).map_err(compiler_error_to_py_err)?;
         LayoutObjective::fidelity_required(&physical)
             .map(Into::into)
-            .map_err(|error| PyValueError::new_err(error.to_string()))
+            .map_err(compiler_error_to_py_err)
     }
 
     #[getter]

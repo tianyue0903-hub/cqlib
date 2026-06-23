@@ -14,6 +14,7 @@
 
 pub mod commutation;
 pub mod compiler;
+pub mod error;
 pub mod knowledge;
 pub mod resource;
 pub mod sabre;
@@ -30,6 +31,7 @@ use pyo3::prelude::*;
 pub(crate) fn register_compile_module(parent: &Bound<'_, PyModule>) -> PyResult<()> {
     let m = PyModule::new(parent.py(), "compile")?;
 
+    error::register_errors(&m)?;
     m.add_class::<PyCompileMode>()?;
     m.add_class::<PyCompileConfig>()?;
     m.add_class::<PyWorkflowStepReport>()?;

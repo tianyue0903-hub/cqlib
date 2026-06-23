@@ -21,5 +21,22 @@ from .compiler import CompileResult as CompileResult
 from .compiler import CompilerWorkflow as CompilerWorkflow
 from .compiler import WorkflowStepReport as WorkflowStepReport
 from .compiler import compile as compile
+from cqlib.circuit import CqlibError
+
+class CompilerError(CqlibError):
+    """Base class for compiler pipeline failures."""
+    ...
+
+class CompilerConfigError(CompilerError):
+    """The compiler input or configuration is invalid."""
+    ...
+
+class CompilerTransformError(CompilerError):
+    """A compiler transform could not complete its operation."""
+    ...
+
+class CompilerInternalError(CompilerError):
+    """The compiler violated an internal invariant."""
+    ...
 
 __all__: list[str]

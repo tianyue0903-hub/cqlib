@@ -11,13 +11,13 @@
 // that they have been altered from the originals.
 
 use crate::circuit::PyCircuit;
+use crate::compile::error::compiler_error_to_py_err;
 use crate::device::device_impl::PyDevice;
 use crate::device::layout::PyLayout;
 use cqlib_core::compile::sabre::{
     SabreConfig, SabreHeuristicConfig, SabreRoutingDiagnostics, SabreRoutingResult,
     SabreTrialObjective, sabre_route,
 };
-use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -451,5 +451,5 @@ pub fn py_sabre_route(
 
     py.detach(move || sabre_route(&circuit, &device, &initial_layout, &config))
         .map(PySabreRoutingResult::from)
-        .map_err(|error| PyValueError::new_err(error.to_string()))
+        .map_err(compiler_error_to_py_err)
 }

@@ -25,6 +25,12 @@ from .compiler import (
     WorkflowStepReport,
     compile,
 )
+from .._native import compile as _compile_module
+
+CompilerError = _compile_module.CompilerError
+CompilerConfigError = _compile_module.CompilerConfigError
+CompilerTransformError = _compile_module.CompilerTransformError
+CompilerInternalError = _compile_module.CompilerInternalError
 
 __all__ = [
     "commutation",
@@ -37,5 +43,9 @@ __all__ = [
     "WorkflowStepReport",
     "CompileResult",
     "CompilerWorkflow",
+    "CompilerError",
+    "CompilerConfigError",
+    "CompilerTransformError",
+    "CompilerInternalError",
     "compile",
 ]

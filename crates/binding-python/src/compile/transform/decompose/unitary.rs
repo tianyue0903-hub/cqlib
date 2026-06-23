@@ -13,6 +13,7 @@
 use super::config::PyTwoQubitUnitaryDecomposeBasis;
 use crate::circuit::PyValueOperation;
 use crate::circuit::bit::PyIntOrQubit;
+use crate::compile::error::compiler_error_to_py_err;
 use cqlib_core::compile::transform::decompose::unitary::{
     KakDecomposition, OneQubitUnitaryDecomposition, TwoQubitUnitaryDecomposeBasis,
     TwoQubitUnitarySynthesisResult, kak_decompose, synthesize_numeric_1q_unitary,
@@ -21,7 +22,7 @@ use cqlib_core::compile::transform::decompose::unitary::{
 use num_complex::Complex64;
 use numpy::ndarray::Array2;
 use numpy::{PyArray2, PyArrayMethods};
-use pyo3::exceptions::{PyTypeError, PyValueError};
+use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::*;
 
 /// Numeric decomposition of a one-qubit unitary matrix.
@@ -197,7 +198,7 @@ pub fn py_synthesize_numeric_1q_unitary(
     let matrix = extract_complex_matrix(py, matrix)?;
     py.detach(move || synthesize_numeric_1q_unitary(&matrix))
         .map(|inner| PyOneQubitUnitaryDecomposition { inner })
-        .map_err(compiler_error)
+        .map_err(compiler_error_to_py_err)
 }
 
 /// Synthesizes a numeric 4x4 unitary into standard-gate operations.
@@ -217,7 +218,7 @@ pub fn py_synthesize_numeric_2q_unitary(
     });
     py.detach(move || synthesize_numeric_2q_unitary(&matrix, qubits, basis))
         .map(|inner| PyTwoQubitUnitarySynthesisResult { inner })
-        .map_err(compiler_error)
+        .map_err(compiler_error_to_py_err)
 }
 
 /// Computes the canonical KAK decomposition of a numeric 4x4 unitary.
@@ -226,7 +227,7 @@ pub fn py_kak_decompose(py: Python<'_>, matrix: Bound<'_, PyAny>) -> PyResult<Py
     let matrix = extract_complex_matrix(py, matrix)?;
     py.detach(move || kak_decompose(&matrix))
         .map(|inner| PyKakDecomposition { inner })
-        .map_err(compiler_error)
+        .map_err(compiler_error_to_py_err)
 }
 
 fn extract_complex_matrix(py: Python<'_>, matrix: Bound<'_, PyAny>) -> PyResult<Array2<Complex64>> {
@@ -236,10 +237,6 @@ fn extract_complex_matrix(py: Python<'_>, matrix: Bound<'_, PyAny>) -> PyResult<
         PyTypeError::new_err("matrix must be convertible to a two-dimensional complex128 array")
     })?;
     Ok(array.to_owned_array())
-}
-
-fn compiler_error(error: cqlib_core::compile::CompilerError) -> PyErr {
-    PyValueError::new_err(error.to_string())
 }
 
 /// Registers numeric unitary synthesis as `_native.compile.transform.decompose.unitary`.

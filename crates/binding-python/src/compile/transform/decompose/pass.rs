@@ -13,6 +13,7 @@
 use super::PyDecompositionRuleStats;
 use super::config::{PyMcGateDecomposeConfig, PyUnitaryDecomposeConfig};
 use crate::circuit::PyCircuit;
+use crate::compile::error::compiler_error_to_py_err;
 use crate::compile::resource::PyResourcePolicy;
 use crate::compile::transform::PyTransformResult;
 use crate::device::device_impl::PyDevice;
@@ -23,7 +24,6 @@ use cqlib_core::compile::transform::decompose::{
     UnitaryDecomposeConfig, decompose_mc_gates_with_rule_stats,
     decompose_unitaries_with_rule_stats,
 };
-use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
 /// Expands circuit-backed gate definitions without modifying the input.
@@ -35,7 +35,7 @@ pub fn py_expand_definitions(
     let circuit = circuit.inner.clone();
     py.detach(move || DecomposeDefinitions.transform(&circuit, None))
         .map(PyTransformResult::from)
-        .map_err(compiler_error)
+        .map_err(compiler_error_to_py_err)
 }
 
 /// Synthesizes matrix-backed one- and two-qubit unitary gates.
@@ -50,7 +50,7 @@ pub fn py_decompose_unitaries(
     let config = config.map_or_else(UnitaryDecomposeConfig::default, |value| value.inner);
     py.detach(move || DecomposeUnitaries::new(config).transform(&circuit, None))
         .map(PyTransformResult::from)
-        .map_err(compiler_error)
+        .map_err(compiler_error_to_py_err)
 }
 
 /// Synthesizes matrix-backed unitaries and returns pass-local rule-cache stats.
@@ -65,7 +65,7 @@ pub fn py_decompose_unitaries_with_rule_stats(
     let config = config.map_or_else(UnitaryDecomposeConfig::default, |value| value.inner);
     py.detach(move || decompose_unitaries_with_rule_stats(&circuit, config))
         .map(|(result, stats)| (result.into(), stats.into()))
-        .map_err(compiler_error)
+        .map_err(compiler_error_to_py_err)
 }
 
 /// Decomposes multi-controlled gates using configured ancillary resources.
@@ -80,7 +80,7 @@ pub fn py_decompose_mc_gates(
     let config = config.map_or_else(McGateDecomposeConfig::default, |value| value.inner);
     py.detach(move || DecomposeMcGates::new(config).transform(&circuit, None))
         .map(PyTransformResult::from)
-        .map_err(compiler_error)
+        .map_err(compiler_error_to_py_err)
 }
 
 /// Decomposes multi-controlled gates and returns pass-local rule-cache stats.
@@ -95,7 +95,7 @@ pub fn py_decompose_mc_gates_with_rule_stats(
     let config = config.map_or_else(McGateDecomposeConfig::default, |value| value.inner);
     py.detach(move || decompose_mc_gates_with_rule_stats(&circuit, config))
         .map(|(result, stats)| (result.into(), stats.into()))
-        .map_err(compiler_error)
+        .map_err(compiler_error_to_py_err)
 }
 
 /// Decomposes multi-controlled gates while enforcing device capacity.
@@ -112,9 +112,5 @@ pub fn py_decompose_mc_gates_for_device(
     let resource_policy = resource_policy.map_or_else(Default::default, |value| value.inner);
     py.detach(move || decompose_mc_gates_for_device(&circuit, &device, resource_policy))
         .map(PyTransformResult::from)
-        .map_err(compiler_error)
-}
-
-fn compiler_error(error: cqlib_core::compile::CompilerError) -> PyErr {
-    PyValueError::new_err(error.to_string())
+        .map_err(compiler_error_to_py_err)
 }

@@ -13,6 +13,7 @@
 //! Python bindings for device-aware circuit routing transforms.
 
 use crate::circuit::PyCircuit;
+use crate::compile::error::compiler_error_to_py_err;
 use crate::compile::sabre::{PySabreConfig, PySabreRoutingDiagnostics};
 use crate::compile::transform::layout::{PyLayoutObjective, PyLayoutScore};
 use crate::device::device_impl::PyDevice;
@@ -22,7 +23,6 @@ use cqlib_core::compile::transform::LayoutObjective;
 use cqlib_core::compile::transform::routing::{
     RoutedCircuit, SabreRouteResult, route_sabre, route_with_layout,
 };
-use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
 /// Registers routing bindings as `_native.compile.transform.routing`.
@@ -61,7 +61,7 @@ fn py_route_with_layout(
 
     py.detach(move || route_with_layout(&circuit, &device, &initial_layout, &config))
         .map(Into::into)
-        .map_err(|error| PyValueError::new_err(error.to_string()))
+        .map_err(compiler_error_to_py_err)
 }
 
 /// Selects a SABRE initial layout and routes a circuit for a device.
@@ -81,7 +81,7 @@ fn py_route_sabre(
 
     py.detach(move || route_sabre(&circuit, &device, &objective, &config))
         .map(Into::into)
-        .map_err(|error| PyValueError::new_err(error.to_string()))
+        .map_err(compiler_error_to_py_err)
 }
 
 /// A physical circuit produced by routing, plus routing metadata.

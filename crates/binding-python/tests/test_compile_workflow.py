@@ -20,6 +20,10 @@ from cqlib.compile import (
     CompileConfig,
     CompileMode,
     CompileResult,
+    CompilerConfigError,
+    CompilerError,
+    CompilerInternalError,
+    CompilerTransformError,
     CompilerWorkflow,
     WorkflowStepReport,
     compile,
@@ -41,6 +45,23 @@ def test_workflow_types_are_public_compile_types() -> None:
     assert "CompilerWorkflow" in compile_module.__all__
     assert repr(CompileMode.normal()) == "CompileMode.normal()"
     assert repr(CompileMode.enhanced()) == "CompileMode.enhanced()"
+
+
+def test_compiler_errors_are_public_compile_exceptions() -> None:
+    assert CompilerError.__module__ == "cqlib.compile"
+    assert CompilerConfigError.__module__ == "cqlib.compile"
+    assert CompilerTransformError.__module__ == "cqlib.compile"
+    assert CompilerInternalError.__module__ == "cqlib.compile"
+    assert issubclass(CompilerConfigError, CompilerError)
+    assert issubclass(CompilerTransformError, CompilerError)
+    assert issubclass(CompilerInternalError, CompilerError)
+    assert not issubclass(CompilerConfigError, ValueError)
+    assert {
+        "CompilerError",
+        "CompilerConfigError",
+        "CompilerTransformError",
+        "CompilerInternalError",
+    } <= set(compile_module.__all__)
 
 
 def test_compile_config_exposes_immutable_defaults_and_copy_protocol() -> None:
@@ -131,17 +152,17 @@ def test_workflow_validates_cross_field_configuration_when_run() -> None:
         initial_layout=Layout.from_pairs([(0, 0)], physical_count=1),
     )
 
-    with pytest.raises(ValueError, match="initial layout requires a target device"):
+    with pytest.raises(CompilerConfigError, match="initial layout requires a target device"):
         CompilerWorkflow(config).run(Circuit(1))
 
 
 def test_compile_config_rejects_unknown_target_gate_name() -> None:
-    with pytest.raises(ValueError, match="unknown standard gate"):
+    with pytest.raises(CompilerConfigError, match="unknown standard gate"):
         CompileConfig(target_basis=["not-a-gate"])
 
 
 def test_workflow_rejects_non_standard_target_instruction_when_run() -> None:
     config = CompileConfig(target_basis=(Instruction.delay(),))
 
-    with pytest.raises(ValueError, match="unsupported workflow target instruction"):
+    with pytest.raises(CompilerConfigError, match="unsupported workflow target instruction"):
         CompilerWorkflow(config).run(Circuit(1))
