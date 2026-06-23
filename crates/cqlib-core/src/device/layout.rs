@@ -57,7 +57,7 @@ use std::collections::{BTreeMap, BTreeSet};
 /// Auxiliary qubit ownership and lifetime are intentionally outside this type.
 /// From the layout perspective, an auxiliary logical qubit behaves like any
 /// other logical qubit after it is explicitly [`Layout::bind`]ed.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Layout {
     /// Physical qubits available to this layout.
     physical_qubits: BTreeSet<PhysicalQubit>,

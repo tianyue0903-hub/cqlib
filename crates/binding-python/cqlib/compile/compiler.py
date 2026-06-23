@@ -15,13 +15,17 @@
 from .._native import compile as _compile_module
 
 CompileMode = _compile_module.CompileMode
+CompileConfig = _compile_module.CompileConfig
 WorkflowStepReport = _compile_module.WorkflowStepReport
 CompileResult = _compile_module.CompileResult
+CompilerWorkflow = _compile_module.CompilerWorkflow
 compile = _compile_module.compile
 
 __all__ = [
     "CompileMode",
+    "CompileConfig",
     "WorkflowStepReport",
     "CompileResult",
+    "CompilerWorkflow",
     "compile",
 ]

@@ -35,9 +35,31 @@ use num_complex::Complex64;
 
 const UNITARY_EPS: f64 = 1e-8;
 
-pub(super) fn synthesize_numeric_1q_unitary(
+/// Numeric decomposition of a one-qubit unitary matrix.
+///
+/// The represented matrix is
+/// `exp(i * global_phase) * U(theta, phi, lambda)`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct OneQubitUnitaryDecomposition {
+    /// Polar rotation angle of the synthesized `U` gate.
+    pub theta: f64,
+    /// First azimuthal angle of the synthesized `U` gate.
+    pub phi: f64,
+    /// Second azimuthal angle of the synthesized `U` gate.
+    pub lambda: f64,
+    /// Scalar phase multiplying the synthesized `U` gate.
+    pub global_phase: f64,
+}
+
+/// Decomposes a finite 2x2 unitary matrix into Cqlib's `U` convention.
+///
+/// # Errors
+///
+/// Returns [`CompilerError::InvalidInput`] when `matrix` is not 2x2, contains
+/// non-finite entries, is not unitary, or has an invalid determinant.
+pub fn synthesize_numeric_1q_unitary(
     matrix: &Array2<Complex64>,
-) -> Result<([f64; 3], f64), CompilerError> {
+) -> Result<OneQubitUnitaryDecomposition, CompilerError> {
     if matrix.shape() != [2, 2] {
         return Err(CompilerError::InvalidInput(format!(
             "1q unitary synthesis expects a 2x2 matrix, got {}x{}",
@@ -86,7 +108,12 @@ pub(super) fn synthesize_numeric_1q_unitary(
     let lambda = ang1 - ang2;
     let global_phase = 0.5 * det_arg - 0.5 * (phi + lambda);
 
-    Ok(([theta, phi, lambda], global_phase))
+    Ok(OneQubitUnitaryDecomposition {
+        theta,
+        phi,
+        lambda,
+        global_phase,
+    })
 }
 
 #[cfg(test)]
@@ -96,7 +123,13 @@ mod tests {
     use approx::assert_abs_diff_eq;
 
     fn assert_reconstructs(source: &Array2<Complex64>) {
-        let ([theta, phi, lambda], global_phase) = synthesize_numeric_1q_unitary(source).unwrap();
+        let decomposition = synthesize_numeric_1q_unitary(source).unwrap();
+        let OneQubitUnitaryDecomposition {
+            theta,
+            phi,
+            lambda,
+            global_phase,
+        } = decomposition;
         let reconstructed =
             gate_matrix::u_gate(theta, phi, lambda) * Complex64::from_polar(1.0, global_phase);
         assert_abs_diff_eq!(source, &reconstructed, epsilon = 1e-10);
@@ -107,7 +140,12 @@ mod tests {
         let phase = Complex64::from_polar(1.0, -0.2);
         let source = gate_matrix::u_gate(0.8, -0.3, 0.6) * phase;
 
-        let ([theta, phi, lambda], global_phase) = synthesize_numeric_1q_unitary(&source).unwrap();
+        let OneQubitUnitaryDecomposition {
+            theta,
+            phi,
+            lambda,
+            global_phase,
+        } = synthesize_numeric_1q_unitary(&source).unwrap();
         let reconstructed =
             gate_matrix::u_gate(theta, phi, lambda) * Complex64::from_polar(1.0, global_phase);
 
@@ -123,8 +161,12 @@ mod tests {
         ] {
             let source =
                 gate_matrix::u_gate(theta, phi, lambda) * Complex64::from_polar(1.0, global_phase);
-            let ([theta, phi, lambda], global_phase) =
-                synthesize_numeric_1q_unitary(&source).unwrap();
+            let OneQubitUnitaryDecomposition {
+                theta,
+                phi,
+                lambda,
+                global_phase,
+            } = synthesize_numeric_1q_unitary(&source).unwrap();
             let reconstructed =
                 gate_matrix::u_gate(theta, phi, lambda) * Complex64::from_polar(1.0, global_phase);
 

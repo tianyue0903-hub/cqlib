@@ -49,7 +49,8 @@
 //! - Extra whitespace is normalized
 
 use crate::circuit::circuit_param::ParameterValue;
-use crate::circuit::{Circuit, Parameter, Qubit};
+use crate::circuit::gate::Instruction;
+use crate::circuit::{Circuit, Parameter, Qubit, StandardGate};
 use regex::Regex;
 use std::collections::HashSet;
 use std::path::Path;
@@ -204,32 +205,61 @@ impl GateSpec {
 
 /// Get the gate specification for a given gate name.
 fn get_gate_spec(gate_name: &str) -> Option<GateSpec> {
+    if let Some(gate) = standard_gate_from_qcis(gate_name) {
+        return Some(GateSpec::exact(gate.num_qubits(), gate.num_params()));
+    }
+
     match gate_name {
-        // Native QCIS gates
-        "X2P" | "X2M" | "Y2P" | "Y2M" => Some(GateSpec::exact(1, 0)),
-        "XY2P" | "XY2M" => Some(GateSpec::exact(1, 1)),
-        "CZ" => Some(GateSpec::exact(2, 0)),
-        "RZ" => Some(GateSpec::exact(1, 1)),
         // Delay gate with time parameter
         "I" => Some(GateSpec::exact(1, 1)),
-
-        // Standard single-qubit gates
-        "X" | "Y" | "Z" | "H" | "S" | "SD" | "SDG" | "T" | "TD" | "TDG" => {
-            Some(GateSpec::exact(1, 0))
-        }
-
-        // Parameterized single-qubit gates
-        "RX" | "RY" => Some(GateSpec::exact(1, 1)),
-        "RXY" => Some(GateSpec::exact(1, 2)),
-
-        // Multi-qubit gates
         "B" | "Barrier" => Some(GateSpec::min_qubits(1, 0)),
-
-        // Measurement - supports 1 or more qubits
         "M" => Some(GateSpec::min_qubits(1, 0)),
-
         _ => None,
     }
+}
+
+/// Map a QCIS opcode to a cqlib standard gate.
+///
+/// QCIS `I` is reserved for delay, and `GPHASE` is intentionally not part of
+/// the supported QCIS circuit format.
+fn standard_gate_from_qcis(gate_name: &str) -> Option<StandardGate> {
+    Some(match gate_name {
+        "H" => StandardGate::H,
+        "RX" => StandardGate::RX,
+        "RXX" => StandardGate::RXX,
+        "RXY" => StandardGate::RXY,
+        "RY" => StandardGate::RY,
+        "RYY" => StandardGate::RYY,
+        "RZ" => StandardGate::RZ,
+        "RZX" => StandardGate::RZX,
+        "RZZ" => StandardGate::RZZ,
+        "S" => StandardGate::S,
+        "SD" | "SDG" => StandardGate::SDG,
+        "SWAP" => StandardGate::SWAP,
+        "T" => StandardGate::T,
+        "TD" | "TDG" => StandardGate::TDG,
+        "U" => StandardGate::U,
+        "X" => StandardGate::X,
+        "XY" => StandardGate::XY,
+        "X2P" => StandardGate::X2P,
+        "X2M" => StandardGate::X2M,
+        "XY2P" => StandardGate::XY2P,
+        "XY2M" => StandardGate::XY2M,
+        "Y" => StandardGate::Y,
+        "Y2P" => StandardGate::Y2P,
+        "Y2M" => StandardGate::Y2M,
+        "Z" => StandardGate::Z,
+        "PHASE" => StandardGate::Phase,
+        "CX" => StandardGate::CX,
+        "CCX" => StandardGate::CCX,
+        "CY" => StandardGate::CY,
+        "CZ" => StandardGate::CZ,
+        "CRX" => StandardGate::CRX,
+        "CRY" => StandardGate::CRY,
+        "CRZ" => StandardGate::CRZ,
+        "FSIM" => StandardGate::FSIM,
+        _ => return None,
+    })
 }
 
 pub fn load<P: AsRef<Path>>(path: P) -> Result<Circuit> {
@@ -425,74 +455,22 @@ fn process_line(line: &str, c: &mut Circuit, existing_qubits: &mut HashSet<u32>)
     // Ensure circuit has enough qubits (using cached set for efficiency)
     ensure_qubits(c, &qubits, existing_qubits);
 
-    // Helper macro to apply single-qubit gates
-    macro_rules! apply_single_qubit {
-        ($method:ident) => {{
-            if let Some(&q) = qubits.first() {
-                c.$method(q)
-                    .map_err(|e| QcisParseError::InvalidQubitId(format!("{:?}", e)))?;
-            }
-        }};
-    }
-
-    // Helper macro to apply single-qubit gates with one parameter
-    macro_rules! apply_single_qubit_with_param {
-        ($method:ident) => {{
-            if let Some(&q) = qubits.first() {
-                if let Some(param) = params.first() {
-                    c.$method(q, param.clone())
-                        .map_err(|e| QcisParseError::InvalidQubitId(format!("{:?}", e)))?;
-                }
-            }
-        }};
+    if let Some(gate) = standard_gate_from_qcis(gate_name) {
+        c.append(Instruction::Standard(gate), qubits, params, None)
+            .map_err(|e| QcisParseError::InvalidQubitId(format!("{:?}", e)))?;
+        return Ok(());
     }
 
     match gate_name {
-        // Native QCIS gates
-        "X2P" => apply_single_qubit!(x2p),
-        "X2M" => apply_single_qubit!(x2m),
-        "Y2P" => apply_single_qubit!(y2p),
-        "Y2M" => apply_single_qubit!(y2m),
-        "XY2P" => apply_single_qubit_with_param!(xy2p),
-        "XY2M" => apply_single_qubit_with_param!(xy2m),
-        "CZ" => {
-            if qubits.len() == 2 {
-                c.cz(qubits[0], qubits[1])
-                    .map_err(|e| QcisParseError::InvalidQubitId(format!("{:?}", e)))?;
-            }
-        }
-        "RZ" => apply_single_qubit_with_param!(rz),
-        "I" => apply_single_qubit_with_param!(delay),
+        "I" => c
+            .delay(qubits[0], params[0].clone())
+            .map_err(|e| QcisParseError::InvalidQubitId(format!("{:?}", e)))?,
 
         // Barrier
         "B" | "Barrier" => {
             if !qubits.is_empty() {
                 c.barrier(qubits)
                     .map_err(|e| QcisParseError::InvalidQubitId(format!("{:?}", e)))?;
-            }
-        }
-
-        // Standard single-qubit gates
-        "X" => apply_single_qubit!(x),
-        "Y" => apply_single_qubit!(y),
-        "Z" => apply_single_qubit!(z),
-        "H" => apply_single_qubit!(h),
-        "S" => apply_single_qubit!(s),
-        "SD" | "SDG" => apply_single_qubit!(sdg),
-        "T" => apply_single_qubit!(t),
-        "TD" | "TDG" => apply_single_qubit!(tdg),
-
-        // Parameterized single-qubit gates
-        "RX" => apply_single_qubit_with_param!(rx),
-        "RY" => apply_single_qubit_with_param!(ry),
-        "RXY" => {
-            if let Some(&q) = qubits.first() {
-                if params.len() >= 2 {
-                    let theta = params[0].clone();
-                    let phi = params[1].clone();
-                    c.rxy(q, theta, phi)
-                        .map_err(|e| QcisParseError::InvalidQubitId(format!("{:?}", e)))?;
-                }
             }
         }
 

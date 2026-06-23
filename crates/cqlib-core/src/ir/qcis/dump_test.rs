@@ -332,19 +332,31 @@ fn test_roundtrip_load_dump() {
 }
 
 #[test]
-fn test_unsupported_gate_cx() {
+fn test_dump_cx() {
     let mut c = Circuit::new(2);
     let q0 = Qubit::new(0);
     let q1 = Qubit::new(1);
 
     c.cx(q0, q1).unwrap();
 
-    // CX is not natively supported by QCIS
-    let result = dumps(&c);
-    assert!(result.is_err());
-    let err_msg = result.unwrap_err().to_string();
-    assert!(err_msg.contains("CX"));
-    assert!(err_msg.contains("compile"));
+    assert_eq!(dumps(&c).unwrap(), "CX Q0 Q1\n");
+}
+
+#[test]
+fn test_dump_rejects_gphase() {
+    let mut c = Circuit::new(0);
+    c.append(
+        crate::circuit::gate::Instruction::Standard(crate::circuit::gate::StandardGate::GPhase),
+        std::iter::empty::<Qubit>(),
+        [ParameterValue::Fixed(0.1)],
+        None,
+    )
+    .unwrap();
+
+    assert!(matches!(
+        dumps(&c),
+        Err(QcisDumpError::UnsupportedGate(gate)) if gate == "GPhase"
+    ));
 }
 
 #[test]

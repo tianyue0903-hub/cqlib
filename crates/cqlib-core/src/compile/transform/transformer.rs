@@ -15,7 +15,7 @@ use crate::compile::CompilerError;
 use crate::compile::transform::analysis::CircuitAnalysis;
 
 /// Common output shape for compiler transforms over a circuit.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TransformResult {
     /// Transformed circuit.
     pub circuit: Circuit,

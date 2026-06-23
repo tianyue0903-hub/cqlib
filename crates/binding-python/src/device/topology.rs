@@ -109,15 +109,15 @@ impl PyTopology {
     ///     Topology: A new topology instance.
     ///
     /// Example:
-    ///     ```python
-    ///     from cqlib.device import Topology
+    /// ```python
+    /// from cqlib.device import Topology
     ///
-    ///     # Directed line: 0 -> 1 -> 2
-    ///     topology = Topology(
-    ///         qubits=[0, 1, 2],
-    ///         couplings=[(0, 1, "CX"), (1, 2, "CX")]
-    ///     )
-    ///     ```
+    /// # Directed line: 0 -> 1 -> 2
+    /// topology = Topology(
+    ///     qubits=[0, 1, 2],
+    ///     couplings=[(0, 1, "CX"), (1, 2, "CX")]
+    /// )
+    /// ```
     #[new]
     #[pyo3(signature = (qubits, couplings))]
     fn new(
@@ -159,12 +159,12 @@ impl PyTopology {
     ///     ValueError: If fewer than 2 qubits are provided.
     ///
     /// Example:
-    ///     ```python
-    ///     from cqlib.device import Topology
+    /// ```python
+    /// from cqlib.device import Topology
     ///
-    ///     # Creates couplings: 0 -> 1, 1 -> 2, 2 -> 3
-    ///     topology = Topology.line([0, 1, 2, 3])
-    ///     ```
+    /// # Creates couplings: 0 -> 1, 1 -> 2, 2 -> 3
+    /// topology = Topology.line([0, 1, 2, 3])
+    /// ```
     #[staticmethod]
     fn line(qubits: PyIntListOrQubitList) -> PyResult<Self> {
         let qubits: Vec<PhysicalQubit> = <PyIntListOrQubitList as Into<Vec<Qubit>>>::into(qubits)

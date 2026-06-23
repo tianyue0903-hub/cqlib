@@ -35,8 +35,10 @@
 //! rejects unresolved or non-finite unitary parameters, missing matrices,
 //! invalid matrix shapes, and unitary gates acting on three or more qubits.
 
-use super::unitary_1q::synthesize_numeric_1q_unitary;
-use super::unitary_2q::{TwoQubitUnitaryDecomposeBasis, synthesize_numeric_2q_unitary};
+use super::unitary_1q::{OneQubitUnitaryDecomposition, synthesize_numeric_1q_unitary};
+use super::unitary_2q::{
+    TwoQubitUnitaryDecomposeBasis, TwoQubitUnitarySynthesisResult, synthesize_numeric_2q_unitary,
+};
 use crate::circuit::{
     Circuit, CircuitParam, ClassicalControlOp, Instruction, Operation, Parameter, ParameterValue,
     StandardGate, UnitaryGate, ValueClassicalControlOp, ValueControlBody, ValueInstruction,
@@ -423,16 +425,20 @@ impl<'a> UnitaryDecomposer<'a> {
 
         match gate.num_qubits() {
             1 => {
-                let ([theta, phi, lambda], global_phase) =
-                    synthesize_numeric_1q_unitary(matrix.as_ref()).map_err(|source| {
-                        CompilerError::TransformFailed {
-                            name: SYNTHESIS_NAME,
-                            reason: format!(
-                                "one-qubit synthesis failed for UnitaryGate '{}': {source}",
-                                gate.label()
-                            ),
-                        }
-                    })?;
+                let OneQubitUnitaryDecomposition {
+                    theta,
+                    phi,
+                    lambda,
+                    global_phase,
+                } = synthesize_numeric_1q_unitary(matrix.as_ref()).map_err(|source| {
+                    CompilerError::TransformFailed {
+                        name: SYNTHESIS_NAME,
+                        reason: format!(
+                            "one-qubit synthesis failed for UnitaryGate '{}': {source}",
+                            gate.label()
+                        ),
+                    }
+                })?;
                 let mut operations = Vec::new();
                 if theta.abs() > ANGLE_EPS || phi.abs() > ANGLE_EPS || lambda.abs() > ANGLE_EPS {
                     operations.push(ValueOperation {
@@ -462,7 +468,10 @@ impl<'a> UnitaryDecomposer<'a> {
             }
             2 => {
                 let qubits = [operation.qubits[0], operation.qubits[1]];
-                let (operations, phase_delta) = synthesize_numeric_2q_unitary(
+                let TwoQubitUnitarySynthesisResult {
+                    operations,
+                    global_phase,
+                } = synthesize_numeric_2q_unitary(
                     matrix.as_ref(),
                     qubits,
                     self.config.two_qubit_basis,
@@ -475,11 +484,8 @@ impl<'a> UnitaryDecomposer<'a> {
                     ),
                 })?;
                 let decomposition = Decomposition {
-                    operations: operations
-                        .into_iter()
-                        .map(synthesized_operation_to_value)
-                        .collect::<Result<Vec<_>, _>>()?,
-                    phase_delta,
+                    operations,
+                    phase_delta: global_phase,
                 };
                 self.rule_cache.insert_numeric_unitary(
                     request,
@@ -562,32 +568,6 @@ impl<'a> UnitaryDecomposer<'a> {
                 }),
         }
     }
-}
-
-fn synthesized_operation_to_value(operation: Operation) -> Result<ValueOperation, CompilerError> {
-    let params = operation
-        .params
-        .into_iter()
-        .map(|param| match param {
-            CircuitParam::Fixed(value) => {
-                if !value.is_finite() {
-                    return Err(CompilerError::InvalidInput(format!(
-                        "non-finite synthesized unitary parameter {value}"
-                    )));
-                }
-                Ok(ParameterValue::Fixed(value))
-            }
-            CircuitParam::Index(index) => Err(CompilerError::InvariantViolation(format!(
-                "unitary synthesis produced unexpected parameter index {index}"
-            ))),
-        })
-        .collect::<Result<_, _>>()?;
-    Ok(ValueOperation {
-        instruction: ValueInstruction::from_instruction(operation.instruction),
-        qubits: operation.qubits,
-        params,
-        label: operation.label,
-    })
 }
 
 #[cfg(test)]

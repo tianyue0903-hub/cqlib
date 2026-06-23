@@ -11,7 +11,7 @@
 // that they have been altered from the originals.
 
 use super::*;
-use crate::circuit::gate::Instruction;
+use crate::circuit::gate::{Instruction, StandardGate};
 use crate::ir::qcis_dumps;
 use std::error::Error;
 use std::f64::consts::PI;
@@ -438,6 +438,85 @@ fn test_valid_standard_gates() {
         "X Q0\nY Q1\nZ Q2\nH Q3\nS Q4\nSD Q5\nT Q6\nTD Q7\nRX Q8 1\nRY Q9 pi/2\nRXY Q10 1 0.5\n",
         qcis_dumps(&circuit).unwrap()
     );
+}
+
+#[test]
+fn test_all_supported_standard_gates_roundtrip() {
+    let cases = [
+        ("H Q0", StandardGate::H),
+        ("RX Q0 0.1", StandardGate::RX),
+        ("RXX Q0 Q1 0.1", StandardGate::RXX),
+        ("RXY Q0 0.1 0.2", StandardGate::RXY),
+        ("RY Q0 0.1", StandardGate::RY),
+        ("RYY Q0 Q1 0.1", StandardGate::RYY),
+        ("RZ Q0 0.1", StandardGate::RZ),
+        ("RZX Q0 Q1 0.1", StandardGate::RZX),
+        ("RZZ Q0 Q1 0.1", StandardGate::RZZ),
+        ("S Q0", StandardGate::S),
+        ("SD Q0", StandardGate::SDG),
+        ("SWAP Q0 Q1", StandardGate::SWAP),
+        ("T Q0", StandardGate::T),
+        ("TD Q0", StandardGate::TDG),
+        ("U Q0 0.1 0.2 0.3", StandardGate::U),
+        ("X Q0", StandardGate::X),
+        ("XY Q0 0.1", StandardGate::XY),
+        ("X2P Q0", StandardGate::X2P),
+        ("X2M Q0", StandardGate::X2M),
+        ("XY2P Q0 0.1", StandardGate::XY2P),
+        ("XY2M Q0 0.1", StandardGate::XY2M),
+        ("Y Q0", StandardGate::Y),
+        ("Y2P Q0", StandardGate::Y2P),
+        ("Y2M Q0", StandardGate::Y2M),
+        ("Z Q0", StandardGate::Z),
+        ("PHASE Q0 0.1", StandardGate::Phase),
+        ("CX Q0 Q1", StandardGate::CX),
+        ("CCX Q0 Q1 Q2", StandardGate::CCX),
+        ("CY Q0 Q1", StandardGate::CY),
+        ("CZ Q0 Q1", StandardGate::CZ),
+        ("CRX Q0 Q1 0.1", StandardGate::CRX),
+        ("CRY Q0 Q1 0.1", StandardGate::CRY),
+        ("CRZ Q0 Q1 0.1", StandardGate::CRZ),
+        ("FSIM Q0 Q1 0.1 0.2", StandardGate::FSIM),
+    ];
+
+    for (source, expected_gate) in cases {
+        let circuit = loads(source).unwrap_or_else(|error| panic!("{source}: {error}"));
+        let operations = circuit.operations();
+        assert_eq!(operations.len(), 1, "{source}");
+        assert!(
+            matches!(operations[0].instruction, Instruction::Standard(gate) if gate == expected_gate),
+            "{source}"
+        );
+        assert_eq!(qcis_dumps(&circuit).unwrap(), format!("{source}\n"));
+    }
+}
+
+#[test]
+fn test_gphase_is_not_supported() {
+    assert!(matches!(
+        loads("GPHASE 0.1"),
+        Err(QcisParseError::UnknownGate(gate)) if gate == "GPHASE"
+    ));
+}
+
+#[test]
+fn test_new_standard_gate_argument_counts_are_validated() {
+    assert!(matches!(
+        loads("CCX Q0 Q1"),
+        Err(QcisParseError::QubitCountMismatch {
+            gate,
+            expected: 3,
+            actual: 2,
+        }) if gate == "CCX"
+    ));
+    assert!(matches!(
+        loads("FSIM Q0 Q1 0.1"),
+        Err(QcisParseError::ParameterCountMismatch {
+            gate,
+            expected: 2,
+            actual: 1,
+        }) if gate == "FSIM"
+    ));
 }
 
 #[test]

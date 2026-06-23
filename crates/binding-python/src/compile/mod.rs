@@ -12,9 +12,18 @@
 
 //! Python bindings for the cqlib compiler pipeline.
 
+pub mod commutation;
 pub mod compiler;
+pub mod error;
+pub mod knowledge;
+pub mod resource;
+pub mod sabre;
+pub mod transform;
 
-pub use compiler::{PyCompileMode, PyCompileResult, PyWorkflowStepReport, py_compile};
+pub use compiler::{
+    PyCompileConfig, PyCompileMode, PyCompileResult, PyCompilerWorkflow, PyWorkflowStepReport,
+    py_compile,
+};
 
 use pyo3::prelude::*;
 
@@ -22,10 +31,19 @@ use pyo3::prelude::*;
 pub(crate) fn register_compile_module(parent: &Bound<'_, PyModule>) -> PyResult<()> {
     let m = PyModule::new(parent.py(), "compile")?;
 
+    error::register_errors(&m)?;
     m.add_class::<PyCompileMode>()?;
+    m.add_class::<PyCompileConfig>()?;
     m.add_class::<PyWorkflowStepReport>()?;
     m.add_class::<PyCompileResult>()?;
+    m.add_class::<PyCompilerWorkflow>()?;
     m.add_function(pyo3::wrap_pyfunction!(py_compile, &m)?)?;
+
+    commutation::register_commutation_module(&m)?;
+    knowledge::register_knowledge_module(&m)?;
+    resource::register_resource_module(&m)?;
+    sabre::register_sabre_module(&m)?;
+    transform::register_transform_module(&m)?;
 
     parent.add_submodule(&m)?;
     parent

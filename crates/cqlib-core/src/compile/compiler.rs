@@ -97,7 +97,7 @@ pub struct CompileConfig {
 }
 
 /// Result returned by [`compile`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct CompileResult {
     /// Optimized circuit.
     pub circuit: Circuit,

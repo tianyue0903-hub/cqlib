@@ -14,6 +14,9 @@
 
 This module provides type hints for parsing and serializing QCIS programs.
 QCIS is Telecom Quantum's native quantum circuit format.
+
+All cqlib standard gates except identity and global phase are supported. QCIS
+``I Qn t`` represents delay rather than a standard identity gate.
 """
 
 from ..circuit import Circuit
@@ -67,14 +70,17 @@ def load(path: str) -> Circuit:
 def dumps(circuit: Circuit) -> str:
     """Serialize a Circuit to a QCIS string.
 
-    Only gates natively supported by QCIS can be serialized. The circuit
-    must be compiled to QCIS basis gates before dumping.
+    All cqlib standard gates except identity and global phase can be serialized.
+    Custom, unitary, multi-controlled, and control-flow instructions are not
+    represented by QCIS.
 
     Supported Gates:
-        - Native: X2P, X2M, Y2P, Y2M, XY2P, XY2M, CZ, RZ, I
-        - Standard: X, Y, Z, H, S, SD, T, TD
-        - Parameterized: RX, RY, RXY
+        - Single-qubit: H, RX, RXY, RY, RZ, S, SD, T, TD, U, X, XY,
+          X2P, X2M, XY2P, XY2M, Y, Y2P, Y2M, Z, PHASE
+        - Multi-qubit: RXX, RYY, RZX, RZZ, SWAP, CX, CCX, CY, CZ,
+          CRX, CRY, CRZ, FSIM
         - Directives: B (Barrier), M (Measurement)
+        - Delay: I Qn t, where t is a non-negative integer tick count
 
     Args:
         circuit: The Circuit object to serialize.

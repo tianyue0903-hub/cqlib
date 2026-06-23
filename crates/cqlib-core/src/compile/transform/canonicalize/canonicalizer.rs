@@ -28,7 +28,7 @@ use super::ops::{canonicalize_operation_qubits, is_strict_noop, push_operation};
 use super::verify::{VerifyMode, verify_circuit};
 
 /// Result of a canonicalization run.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct CanonicalizeResult {
     /// Canonicalized circuit.
     pub circuit: Circuit,

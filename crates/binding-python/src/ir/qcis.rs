@@ -22,6 +22,9 @@
 //! GATE_NAME QUBIT_LIST [PARAMETER_LIST]
 //! ```
 //!
+//! All cqlib standard gates except identity and global phase are supported.
+//! QCIS `I Qn t` represents a delay, not a standard identity gate.
+//!
 //! # Functions
 //!
 //! | Function | Description |
@@ -48,6 +51,7 @@
 //! ```
 
 use crate::circuit::PyCircuit;
+use cqlib_core::ir::qcis::dump::QcisDumpError;
 use cqlib_core::ir::qcis::load::QcisParseError;
 use cqlib_core::ir::{qcis_dump, qcis_dumps, qcis_load, qcis_loads};
 use pyo3::prelude::*;
@@ -123,8 +127,9 @@ pub fn py_qcis_load(path: &str) -> PyResult<PyCircuit> {
 
 /// Serialize a Circuit to QCIS string.
 ///
-/// Only gates natively supported by QCIS can be serialized. The circuit
-/// must be compiled to QCIS basis gates before dumping.
+/// All cqlib standard gates except identity and global phase can be serialized.
+/// Custom, unitary, multi-controlled, and control-flow instructions are not
+/// represented by QCIS.
 ///
 /// # Arguments
 /// * `circuit` - The circuit to serialize
@@ -133,8 +138,8 @@ pub fn py_qcis_load(path: &str) -> PyResult<PyCircuit> {
 /// QCIS source code string.
 ///
 /// # Errors
-/// Returns `ValueError` if the circuit contains gates not supported by QCIS
-/// (e.g., multi-controlled gates, custom unitary gates).
+/// Returns `ValueError` if the circuit contains instructions not represented by
+/// QCIS (e.g., multi-controlled gates or custom unitary gates).
 ///
 /// # Example
 /// ```python
@@ -179,7 +184,10 @@ pub fn py_qcis_dumps(circuit: &PyCircuit) -> PyResult<String> {
 #[pyfunction(name = "dump")]
 pub fn py_qcis_dump(circuit: &PyCircuit, path: &str) -> PyResult<()> {
     let path_buf = std::path::PathBuf::from(path);
-    qcis_dump(&circuit.inner, &path_buf).map_err(|e| {
-        PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("QCIS dump error: {}", e))
+    qcis_dump(&circuit.inner, &path_buf).map_err(|e| match e {
+        QcisDumpError::IoError(_) => {
+            PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("QCIS dump error: {e}"))
+        }
+        _ => PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("QCIS dump error: {e}")),
     })
 }

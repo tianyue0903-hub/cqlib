@@ -10,13 +10,59 @@
 # copyright notice, and modified files need to carry a notice indicating
 # that they have been altered from the originals.
 
-"""Compiler pipeline bindings."""
+"""Compiler pipeline bindings.
 
-from .compiler import CompileMode, CompileResult, WorkflowStepReport, compile
+Use :func:`compile` for the standard end-to-end workflow. The package also
+exposes lower-level transform, routing, resource, and knowledge modules for
+callers that need to assemble or inspect individual compiler stages.
+
+Example::
+
+    from cqlib.circuit import Circuit
+    from cqlib.compile import compile
+
+    circuit = Circuit(2)
+    circuit.h(0)
+    circuit.cx(0, 1)
+
+    result = compile(circuit)
+    assert result.circuit is not circuit
+"""
+
+from . import commutation as commutation
+from . import knowledge as knowledge
+from . import resource as resource
+from . import sabre as sabre
+from . import transform as transform
+from .compiler import (
+    CompileConfig,
+    CompileMode,
+    CompileResult,
+    CompilerWorkflow,
+    WorkflowStepReport,
+    compile,
+)
+from .._native import compile as _compile_module
+
+CompilerError = _compile_module.CompilerError
+CompilerConfigError = _compile_module.CompilerConfigError
+CompilerTransformError = _compile_module.CompilerTransformError
+CompilerInternalError = _compile_module.CompilerInternalError
 
 __all__ = [
+    "commutation",
+    "knowledge",
+    "resource",
+    "sabre",
+    "transform",
     "CompileMode",
+    "CompileConfig",
     "WorkflowStepReport",
     "CompileResult",
+    "CompilerWorkflow",
+    "CompilerError",
+    "CompilerConfigError",
+    "CompilerTransformError",
+    "CompilerInternalError",
     "compile",
 ]

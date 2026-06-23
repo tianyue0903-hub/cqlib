@@ -191,6 +191,24 @@ impl RewriteConfig {
         self.mode
     }
 
+    /// Returns the rule categories enabled by this configuration.
+    pub fn enabled_kinds(&self) -> &[RuleKind] {
+        &self.enabled_kinds
+    }
+
+    /// Returns the configured target instruction basis in insertion order.
+    pub fn target_instruction_basis(&self) -> Option<Vec<Instruction>> {
+        self.target_instructions.as_ref().map(|instructions| {
+            instructions
+                .iter()
+                .map(|instruction| match instruction {
+                    TargetInstruction::Standard(gate) => Instruction::Standard(*gate),
+                    TargetInstruction::McGate(gate) => Instruction::McGate(Box::new(gate.clone())),
+                })
+                .collect()
+        })
+    }
+
     pub(super) fn target_instructions(&self) -> Option<&[TargetInstruction]> {
         self.target_instructions.as_deref()
     }

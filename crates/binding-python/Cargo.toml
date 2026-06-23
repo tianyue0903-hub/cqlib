@@ -8,10 +8,10 @@ license.workspace = true
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [lib]
 name = "_native"
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-pyo3 = { version = "0.27", features = ["extension-module", "abi3-py310", "num-complex", "chrono"] }
+pyo3 = { version = "0.27", features = ["abi3-py310", "num-complex", "chrono"] }
 chrono = "0.4"
 cqlib-core = { path = "../cqlib-core", version = '0.1.0' }
 num-complex.workspace = true
@@ -21,4 +21,3 @@ time.workspace = true
 
 [features]
 default = []
-extension-module = ["pyo3/extension-module"]

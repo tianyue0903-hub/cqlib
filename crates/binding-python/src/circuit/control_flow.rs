@@ -544,7 +544,7 @@ mod tests {
 
     #[test]
     fn control_reports_value_reads_through_python_wrapper() {
-        let value = ClassicalValue::new(CircuitId::default(), 0, ClassicalType::Bool);
+        let value = ClassicalValue::new(CircuitId::default(), 0, ClassicalType::Bit);
         let control = PyClassicalControlOp::from(ValueClassicalControlOp::If {
             condition: value.expr().to_bool().unwrap(),
             then_body: ValueControlBody::new(vec![]),
